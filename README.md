@@ -66,12 +66,14 @@ The recommended way to run QBench is using the provided Docker container.
 2. **Start Container**:
    **Important**: Run this command from the root of the cloned repository (where you are now), as it mounts the current directory (`$(pwd)`) to the container.
    ```bash
-   docker run -dt --gpus all \
-     --shm-size=8g \
-     -v "$(pwd)":/app \
-     -v /data/imagenet:/data/imagenet \
-     --name qbench \
-     qbench
+    docker run -dt --gpus all \
+      --shm-size=8g \
+      --user $(id -u):$(id -g) \
+      -e HOME=/tmp \
+      -v "$(pwd)":/app \
+      -v /data/imagenet:/data/imagenet \
+      --name qbench \
+      qbench
    ```
    *Note: Replace `/data/imagenet` with your actual ImageNet dataset path.*
 
@@ -79,6 +81,14 @@ The recommended way to run QBench is using the provided Docker container.
    ```bash
    docker exec -it qbench bash
    ```
+
+   **Fixing "I have no name!" Prompt (Optional)**:
+   If you see `I have no name!` in the prompt, it's because the container doesn't know your host user. You can fix it by creating a matching user inside the container (run this from your **host** terminal):
+   ```bash
+   docker exec -u 0 qbench bash -c "groupadd -g $(id -g) qbench_user || true && useradd -u $(id -u) -g $(id -g) -m -s /bin/bash qbench_user"
+   ```
+   Or any other username instead of `qbench_user`.
+   Then exit and re-enter the container.
 
 ### 3. Configure
 QBench uses a flexible configuration system.

@@ -2,6 +2,6 @@
   source: torchvision
   weights: IMAGENET1K_V1
 
-- name: mobilenet_v2
+- name: vit_b_16
   source: torchvision
   weights: IMAGENET1K_V1

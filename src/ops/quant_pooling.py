@@ -1,9 +1,5 @@
-import torch
-import torch.nn as nn
-from ..registry.op_registry import OpRegistry
-from .quant_base import QuantizedLayerMixin
-
-@OpRegistry.register("QuantMaxPool2d", original_cls=nn.MaxPool2d)
+#not supported yet
+# @OpRegistry.register("QuantMaxPool2d", original_cls=nn.MaxPool2d)
 class QuantMaxPool2d(nn.MaxPool2d, QuantizedLayerMixin):
     """
     Quantized MaxPool2d layer.

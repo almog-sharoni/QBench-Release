@@ -1,9 +1,5 @@
-import torch
-import torch.nn as nn
-from ..registry.op_registry import OpRegistry
-from .quant_base import quantize_tensor
-
-@OpRegistry.register("QuantSoftmax", original_cls=nn.Softmax)
+#not supported yet
+# @OpRegistry.register("QuantSoftmax", original_cls=nn.Softmax)
 class QuantSoftmax(nn.Softmax):
     """
     Quantized Softmax operation.

@@ -6,7 +6,8 @@ import math
 from ..registry.op_registry import OpRegistry
 from .quant_base import QuantizedLayerMixin
 
-@OpRegistry.register("DecomposedMultiheadAttention", original_cls=nn.MultiheadAttention)
+#not supported yet
+# @OpRegistry.register("DecomposedMultiheadAttention", original_cls=nn.MultiheadAttention) 
 class DecomposedMultiheadAttention(nn.Module, QuantizedLayerMixin):
     """
     A decomposed MultiheadAttention module that uses nn.Linear for projections

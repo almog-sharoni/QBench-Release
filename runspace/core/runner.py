@@ -143,6 +143,15 @@ class Runner:
                 yaml.dump(config, f, default_flow_style=False)
             print(f"Config saved to {config_path}")
 
+            # Generate Quantization Graph
+            try:
+                from src.utils.graph_viz import generate_quantization_graph
+                graph_path = os.path.join(output_dir, "quant_graph.svg")
+                print(f"Generating quantization graph at {graph_path}...")
+                generate_quantization_graph(model, graph_path, model_name=model_name)
+            except Exception as e:
+                print(f"Failed to generate graph: {e}")
+
             # Check evaluation mode
             eval_mode = config.get('evaluation', {}).get('mode', 'compare')
 
