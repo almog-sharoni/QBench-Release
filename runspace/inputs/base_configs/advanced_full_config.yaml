@@ -32,9 +32,9 @@ quantization:
 
   # --- Weight Quantization ---
   # Mode: tensor, channel, chunk
-  weight_mode: channel
+  weight_mode: tensor
   # Chunk size for 'chunk' mode
-  weight_chunk_size: 64
+  # weight_chunk_size: 64
 
   # --- Activation Quantization (ReLU, Softmax, etc.) ---
   # Mode: tensor, channel, chunk
@@ -44,24 +44,24 @@ quantization:
 
   # --- Layer-Specific Overrides ---
   # Override settings for specific layers by name
-  layers:
-    layer1.0.conv1:
-      mode: tensor
-      weight_mode: tensor
-    fc:
-      format: int8
-      weight_mode: tensor
+  # layers:
+  #   layer1.0.conv1:
+  #     mode: tensor
+  #     weight_mode: tensor
+  #   fc:
+  #     format: int8
+  #     weight_mode: tensor
 
 dataset:
   name: imagenet
   path: /data/imagenet/val
-  batch_size: 32
+  batch_size: 128
   num_workers: 4
 
 evaluation:
-  # Mode: evaluation (accuracy), compare_only (layer stats), both
-  mode: both
+  # Mode: evaluate (quantized only), compare (reference vs quantized)
+  mode: compare
   # Number of batches to compare (false or -1 for all)
-  compare_batches: 5
+  compare_batches: -1
   # Limit total samples (optional)
-  max_samples: 1000
+  # max_samples: 1000

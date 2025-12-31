@@ -35,8 +35,6 @@ See [CONFIG_GUIDE.md](CONFIG_GUIDE.md) for a detailed reference.
 - **Accuracy**: Top-1/Top-5 Accuracy on ImageNet/Imagenette.
 - **Layer-Wise Comparison**: MSE and Cosine Similarity vs. FP32 reference.
 - **Compliance Checking**: Verifies that all quantized values (weights, inputs, internal stats) strictly adhere to the target format's representable values.
-    - Configurable via `src/eval/compliance_config.yaml`.
-    - Generates detailed reports on parameter failures.
 
 ## Structure
 
@@ -45,59 +43,89 @@ See [CONFIG_GUIDE.md](CONFIG_GUIDE.md) for a detailed reference.
 - `src/registry`: Central operator registry.
 - `src/eval`: Evaluation logic, metrics, and compliance checkers.
 - `src/configs`: YAML configuration files.
-- `tests`: Scripts for evaluation, debugging, and data preparation.
+- `runspace`: Execution environment for running models and batches.
 
 ## Usage
 
-### 1. Setup Data
-Download and prepare evaluation datasets:
-```bash
-# For Imagenette (Recommended for quick testing)
-python3 tests/download_imagenette.py
+### 1. Setup Environment (Docker)
+The recommended way to run QBench is using the provided Docker container.
 
-# For Tiny ImageNet
-python3 tests/download_tiny_imagenet.py
-```
+1. **Build the Image**:
+   ```bash
+   docker build -t qbench .
+   ```
 
-### 2. Configure
-Edit a configuration file (e.g., `src/configs/fp8_e4m3_chunk128.yaml`) to set your quantization preferences.
-
-```yaml
-quantization:
-  format: "fp8_e4m3"
-  mode: "chunk"
-  chunk_size: 128
-  weight_mode: "tensor"  # Override for weights
-```
-
-### 3. Run Evaluation
-```bash
-python3 tests/run_eval.py --config src/configs/fp8_e4m3_chunk128.yaml
-```
-
-### 4. Run ImageNet Evaluation (Docker)
-To run evaluation on the full ImageNet dataset, use the provided Docker container:
-
-1. **Start Container**:
+2. **Start Container**:
    ```bash
    docker run -dt --gpus all \
      --shm-size=8g \
      -v "$(pwd)":/app \
-     -v /data/shared_data/imagenet:/data/imagenet \
+     -v /path/to/imagenet:/data/imagenet \
      --name qbench \
      qbench
    ```
+   *Note: Replace `/path/to/imagenet` with your actual ImageNet dataset path.*
 
-2. **Run Evaluation**:
+3. **Enter Container**:
    ```bash
-   docker exec qbench python3 tests/run_eval.py --config src/configs/imagenet_fp8.yaml
+   docker exec -it qbench bash
    ```
 
-## Results
-Reports are saved to `reports/<model>/<config_name>/comparison_report.txt`.
+### 2. Configure
+QBench uses a flexible configuration system.
+- **Base Configs**: Located in `runspace/inputs/base_configs/`. Define the quantization parameters (format, mode, etc.).
+- **Models**: Located in `runspace/inputs/models.yaml`. Define the models to evaluate.
 
-The report includes:
+Example Base Config (`runspace/inputs/base_configs/base_config.yaml`):
+```yaml
+adapter:
+  type: generic
+  quantize_first_layer: false
+  quantized_ops: ["-1"]
+
+quantization:
+  format: fp8_e4m3
+  bias: 7
+  calib_method: max
+
+dataset:
+  name: imagenet
+  path: /data/imagenet/val
+  batch_size: 64
+  num_workers: 4
+
+evaluation:
+  mode: compare_only
+  compare_batches: 1
+```
+
+### 3. Run Evaluation
+
+#### Option A: Interactive Mode (Recommended for single runs)
+Use the interactive script to select a configuration and model from a menu.
+
+```bash
+python3 runspace/run_interactive.py
+```
+
+#### Option B: Batch Mode
+Use the `runspace/run_all.py` script to execute a batch of evaluations defined by all base configs and models.
+
+```bash
+python3 runspace/run_all.py
+```
+
+This script reads the configurations and models defined in `runspace/inputs`, generates specific configurations for each combination, and runs the evaluation.
+
+## Results
+Results are organized in the `runspace/outputs` directory.
+
+- **Summary Report**: `runspace/outputs/summary_report.md` (or `.csv`) contains aggregated metrics for all runs.
+- **Detailed Reports**: `runspace/outputs/<base_config>/<model>/<format>/` contains:
+    - `config.yaml`: The exact configuration used.
+    - `comparison_report.txt`: Detailed layer-wise comparison and compliance report.
+
+The summary report includes:
 1.  **Accuracy Metrics**: Top-1/Top-5 accuracy and average certainty.
-2.  **FP8 Compliance Check**: Pass/Fail status for weights and parameters.
-3.  **Layer-Wise Comparison**: MSE, Cosine Similarity, and Input Dynamic Range.
-4.  **Detailed Failures**: Specific examples of non-compliant values if any.
+2.  **Compression Stats**: Weight and Input compression reduction percentages.
+3.  **Status**: Success/Failure of the run.

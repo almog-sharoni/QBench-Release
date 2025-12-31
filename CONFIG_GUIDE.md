@@ -96,8 +96,8 @@ quantization:
 
 | Option | Type | Description | Example |
 | :--- | :--- | :--- | :--- |
-| `mode` | string | Evaluation mode. `evaluation` (accuracy only), `compare_only` (layer stats), or `both`. | `both` |
-| `compare_batches` | int/bool | Number of batches to use for comparison/stats. `false` for all. | `1` |
+| `mode` | string | Evaluation mode. `evaluate` (quantized model accuracy only) or `compare` (reference vs quantized comparison). | `compare` |
+| `compare_batches` | int | Number of batches to use for comparison. `-1` for all. | `1` |
 | `max_samples` | int | Optional limit on number of samples to evaluate. | `1000` |
 
 ---
@@ -135,6 +135,6 @@ dataset:
   num_workers: 4
 
 evaluation:
-  mode: both
+  mode: compare
   compare_batches: 10
 ```
