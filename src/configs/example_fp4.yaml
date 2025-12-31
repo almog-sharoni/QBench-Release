@@ -1,0 +1,61 @@
+model:
+  name: resnet18
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+adapter:
+  type: generic
+  quantize_first_layer: true
+  quantized_ops: ["Conv2d", "Linear", "BatchNorm2d", "ReLU"]
+  input_quantization: false
+
+quantization:
+  format: fp4_e3m0
+  # Global input format (activations)
+  input_format: fp8_e4m3
+  layers:
+    conv1:
+      format: fp8_e4m3
+    fc:
+      format: fp8_e4m3
+    # Keep downsample layers in FP8 as they are sensitive
+    layer1.0.downsample.0:
+      format: fp8_e4m3
+    layer1.1.downsample.0:
+      format: fp8_e4m3
+    layer2.0.downsample.0:
+      format: fp8_e4m3
+    layer3.0.downsample.0:
+      format: fp8_e4m3
+    layer4.0.downsample.0:
+      format: fp8_e4m3
+      
+    # Keep activations in FP8
+    relu:
+      format: fp8_e4m3
+    layer1.0.relu:
+      format: fp8_e4m3
+    layer1.1.relu:
+      format: fp8_e4m3
+    layer2.0.relu:
+      format: fp8_e4m3
+    layer2.1.relu:
+      format: fp8_e4m3
+    layer3.0.relu:
+      format: fp8_e4m3
+    layer3.1.relu:
+      format: fp8_e4m3
+    layer4.0.relu:
+      format: fp8_e4m3
+    layer4.1.relu:
+      format: fp8_e4m3
+
+dataset:
+  name: imagenette
+  path: tests/data/imagenette2-320/val
+  batch_size: 32
+  num_workers: 0
+
+evaluation:
+  mode: compare
+  compare_batches: 1

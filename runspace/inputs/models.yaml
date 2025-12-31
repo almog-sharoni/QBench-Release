@@ -1,0 +1,7 @@
+- name: resnet18
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+- name: mobilenet_v2
+  source: torchvision
+  weights: IMAGENET1K_V1
