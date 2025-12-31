@@ -47,15 +47,24 @@ See [CONFIG_GUIDE.md](CONFIG_GUIDE.md) for a detailed reference.
 
 ## Usage
 
-### 1. Setup Environment (Docker)
+### 1. Clone the Repository
+Start by cloning the repository and navigating into it:
+```bash
+git clone https://github.com/almog-sharoni/QBench-Release.git
+cd QBench-Release
+```
+
+### 2. Setup Environment (Docker)
 The recommended way to run QBench is using the provided Docker container.
 
 1. **Build the Image**:
+   *Note: If the `qbench` image already exists on your system, you do not need to rebuild it.*
    ```bash
    docker build -t qbench .
    ```
 
 2. **Start Container**:
+   **Important**: Run this command from the root of the cloned repository (where you are now), as it mounts the current directory (`$(pwd)`) to the container.
    ```bash
    docker run -dt --gpus all \
      --shm-size=8g \
@@ -71,7 +80,7 @@ The recommended way to run QBench is using the provided Docker container.
    docker exec -it qbench bash
    ```
 
-### 2. Configure
+### 3. Configure
 QBench uses a flexible configuration system.
 - **Base Configs**: Located in `runspace/inputs/base_configs/`. Define the quantization parameters (format, mode, etc.).
 - **Models**: Located in `runspace/inputs/models.yaml`. Define the models to evaluate.
@@ -99,7 +108,7 @@ evaluation:
   compare_batches: 1
 ```
 
-### 3. Run Evaluation
+### 4. Run Evaluation
 
 #### Option A: Interactive Mode (Recommended for single runs)
 Use the interactive script to select a configuration and model from a menu.
