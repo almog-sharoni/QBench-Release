@@ -108,7 +108,7 @@ class LayerComparator:
         # Run FX Coverage Verification BEFORE comparison loop
         # This ensures that if FX tracing leaves Proxies in the modules,
         # they will be overwritten by real data during the comparison loop.
-        self.coverage_report_lines = self._verify_coverage_fx()
+        self.coverage_report_lines, self.unquantized_supported_count = self._verify_coverage_fx()
         
         print(f"Comparing models on {num_batches} batches...")
         
@@ -293,7 +293,15 @@ class LayerComparator:
             
         report_lines.append("-" * 40)
         report_lines.append("\n")
-        return report_lines
+        
+        # Calculate unquantized supported count
+        unquantized_supported_count = 0
+        if 'unquantized_supported_nodes' in locals():
+            unquantized_supported_count = len(unquantized_supported_nodes)
+        elif 'unquantized_supported' in locals():
+            unquantized_supported_count = len(unquantized_supported)
+            
+        return report_lines, unquantized_supported_count
 
     def _compute_layer_metrics(self):
         from src.eval.metrics import compute_mse, compute_cosine_similarity

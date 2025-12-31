@@ -90,6 +90,10 @@ def main():
     summary_path = os.path.join(args.output_dir, args.summary_file)
     aggregator.aggregate(results, summary_path)
     
+    # Generate Markdown version as well
+    summary_md_path = os.path.splitext(summary_path)[0] + '.md'
+    aggregator.aggregate(results, summary_md_path)
+    
     print("Batch run completed.")
 
 if __name__ == "__main__":

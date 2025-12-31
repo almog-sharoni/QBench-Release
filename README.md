@@ -69,11 +69,11 @@ The recommended way to run QBench is using the provided Docker container.
    docker run -dt --gpus all \
      --shm-size=8g \
      -v "$(pwd)":/app \
-     -v /path/to/imagenet:/data/imagenet \
+     -v /data/imagenet:/data/imagenet \
      --name qbench \
      qbench
    ```
-   *Note: Replace `/path/to/imagenet` with your actual ImageNet dataset path.*
+   *Note: Replace `/data/imagenet` with your actual ImageNet dataset path.*
 
 3. **Enter Container**:
    ```bash

@@ -79,6 +79,33 @@ def main():
         
     config = configs[0]
     
+    # 3.5. Ask for number of batches
+    current_batches = config.get('evaluation', {}).get('compare_batches', -1)
+    if current_batches == -1:
+        default_str = "All"
+    else:
+        default_str = str(current_batches)
+        
+    print(f"\nNumber of batches to run (default: {default_str}):")
+    print("Press Enter to use default, or enter a number.")
+    
+    while True:
+        batch_input = input("Batches: ").strip()
+        if not batch_input:
+            break
+        try:
+            new_batches = int(batch_input)
+            if new_batches > 0:
+                if 'evaluation' not in config:
+                    config['evaluation'] = {}
+                config['evaluation']['compare_batches'] = new_batches
+                print(f"Set number of batches to {new_batches}")
+                break
+            else:
+                print("Please enter a positive number.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+        
     # 4. Run
     print("\nStarting execution...")
     runner = Runner()

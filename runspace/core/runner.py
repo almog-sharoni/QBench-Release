@@ -213,6 +213,10 @@ class Runner:
                 
                 if results['status'] != 'NO_QUANT':
                     results['status'] = 'SUCCESS'
+                    # Check for unquantized supported ops
+                    if hasattr(comparator, 'unquantized_supported_count') and comparator.unquantized_supported_count > 0:
+                        results['status'] = f"SUCCESS ({comparator.unquantized_supported_count} Unquantized)"
+                        
                 results['report_path'] = f"{output_dir}/comparison_report.txt"
 
         except Exception as e:
