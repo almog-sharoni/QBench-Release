@@ -7,7 +7,9 @@ adapter:
   quantize_first_layer: false
   # List of operations to replace with quantized versions
   # Use ["-1"] or ["all"] to quantize everything supported
-  quantized_ops: ["Conv2d", "Linear", "BatchNorm2d", "Dropout", "Softmax","LayerNorm","MultiheadAttention"]
+  quantized_ops: ["Conv2d", "Linear", "BatchNorm2d", "Dropout", "ReLU"]
+  # List of operations to EXCLUDE from quantization (useful when quantized_ops is ["all"])
+  excluded_ops: []
 
 quantization:
   # Target format: fp8_e4m3, fp8_e5m2, int8, fp4_e2m1, fp4_e3m0

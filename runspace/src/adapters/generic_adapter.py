@@ -20,6 +20,7 @@ class GenericAdapter(BaseAdapter):
         input_quantization: bool = True,
         quantize_first_layer: bool = False,
         quantized_ops: list = None,
+        excluded_ops: list = None,
         quantization_type: str = "fp8_e4m3",
         quantization_bias: int = None,
         layer_config: dict = None,
@@ -38,6 +39,7 @@ class GenericAdapter(BaseAdapter):
         self.input_quantization = input_quantization
         self.quantize_first_layer = quantize_first_layer
         self.quantized_ops = quantized_ops if quantized_ops is not None else ["Conv2d"]
+        self.excluded_ops = excluded_ops if excluded_ops is not None else []
         self.quantization_type = quantization_type
         self.quantization_bias = quantization_bias
         self.layer_config = layer_config if layer_config is not None else {}
@@ -265,12 +267,18 @@ class GenericAdapter(BaseAdapter):
                 if quantize_all or op_name in self.quantized_ops:
                     should_quantize = True
                     
+                    # Check for exclusions
+                    if op_name in self.excluded_ops:
+                        should_quantize = False
+
                     # Special check for MHA internals
                     if op_name == "MultiheadAttention":
                         # If MHA is requested, we decompose it.
                         # If "Linear" is requested, we also decompose MHA to reach internal Linears.
                         if not should_quantize and "Linear" in self.quantized_ops:
-                            should_quantize = True
+                            # Only re-enable if Linear is NOT excluded
+                            if "Linear" not in self.excluded_ops:
+                                should_quantize = True
             
             if should_quantize:
                 QuantClass = OpRegistry.get_quantized_op(type(module))
