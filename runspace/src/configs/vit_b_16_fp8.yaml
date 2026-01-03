@@ -1,0 +1,29 @@
+# ViT-B/16 FP8 Quantization Config
+
+model:
+  name: vit_b_16
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+adapter:
+  type: generic
+  quantize_first_layer: false
+  quantized_ops: ["Conv2d", "Linear"]
+  input_quantization: false
+  quantization_type: fp8_e4m3
+
+quantization:
+  format: fp8_e4m3
+  bias: 7
+  calib_method: max
+
+dataset:
+  name: imagenette
+  path: tests/data/imagenette2-320/val
+  batch_size: 16
+  num_workers: 8
+
+# Evaluation settings
+evaluation:
+  mode: compare
+  compare_batches: -1

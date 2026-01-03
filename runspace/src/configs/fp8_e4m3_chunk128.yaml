@@ -1,0 +1,34 @@
+model:
+  name: resnet18
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+adapter:
+  type: generic
+  quantize_first_layer: false
+  quantized_ops: ["Conv2d", "Linear", "BatchNorm2d", "ReLU", "MaxPool2d", "AdaptiveAvgPool2d"]
+  input_quantization: false
+
+quantization:
+  format: fp8_e4m3
+  
+  # Input quantization: Chunk mode with size 128
+  mode: chunk
+  chunk_size: 128
+  
+  # Weight quantization: Tensor mode
+  weight_mode: tensor
+
+  # Activation quantization: Tensor mode
+  act_mode: chunk
+  act_chunk_size: 128
+  
+dataset:
+  name: imagenet
+  path: /data/imagenet/val
+  batch_size: 128
+  num_workers: 8
+
+evaluation:
+  mode: compare
+  compare_batches: 1

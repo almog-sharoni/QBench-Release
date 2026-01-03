@@ -1,0 +1,31 @@
+# Example FP8 E5M2 Quantization Config
+# This config demonstrates how to run FP8 E5M2 quantization evaluation on ResNet18
+
+model:
+  name: resnet18
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+adapter:
+  type: generic
+  quantize_first_layer: true
+  quantized_ops: ["Conv2d", "Linear", "BatchNorm2d", "ReLU"]
+  input_quantization: false
+
+quantization:
+  format: fp8_e5m2
+  calib_method: max # placeholder for future support # TODO: implement 
+
+dataset:
+  name: imagenette
+  path: tests/data/imagenette2-320/val
+  batch_size: 128
+  num_workers: 0
+
+# Evaluation settings
+evaluation:
+  # Mode: "eval_only" (run quant model alone), "compare_only" (comparison only), "both"
+  mode: compare
+  
+  # Number of batches for comparison (-1 for all batches)
+  compare_batches: -1
