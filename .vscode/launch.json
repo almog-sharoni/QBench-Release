@@ -3,7 +3,7 @@
     "configurations": [
         {
             "name": "Python: Attach to Container (QBench)",
-            "type": "python",
+            "type": "debugpy",
             "request": "attach",
             "connect": {
                 "host": "172.17.0.4",
@@ -19,7 +19,7 @@
         },
         {
             "name": "Python: Current File",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
@@ -27,7 +27,7 @@
         },
         {
             "name": "Python: Run Interactive",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/runspace/run_interactive.py",
             "console": "integratedTerminal",
@@ -35,7 +35,7 @@
         },
         {
             "name": "Python: Run All",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/runspace/run_all.py",
             "console": "integratedTerminal",
