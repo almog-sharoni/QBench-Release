@@ -1,0 +1,45 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Attach to Container (QBench)",
+            "type": "python",
+            "request": "attach",
+            "connect": {
+                "host": "172.17.0.4",
+                "port": 5678
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}",
+                    "remoteRoot": "/app"
+                }
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: Run Interactive",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/runspace/run_interactive.py",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: Run All",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/runspace/run_all.py",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

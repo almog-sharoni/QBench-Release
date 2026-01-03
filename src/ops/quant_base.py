@@ -1,4 +1,8 @@
 import torch
+try:
+    import torch.fx
+except ImportError:
+    pass
 from ..quantization.quantizer import quantize
 
 def _get_reduce_dims(input: torch.Tensor):
@@ -399,3 +403,7 @@ class QuantizedLayerMixin:
                 self.last_quant_weight = w_decomp.detach()
                 
         return output
+
+# Prevent tracing into quantize_tensor to avoid Proxy errors with dynamic shapes
+if hasattr(torch, 'fx') and hasattr(torch.fx, 'wrap'):
+    torch.fx.wrap('quantize_tensor')

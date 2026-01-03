@@ -1,24 +1,19 @@
 # Advanced Full Configuration Example
 # This configuration file demonstrates all available options in QBench.
 
-model:
-  name: resnet18
-  source: torchvision
-  weights: IMAGENET1K_V1
-
 adapter:
   type: generic
   # Whether to quantize the input of the very first layer (usually the image input)
   quantize_first_layer: false
   # List of operations to replace with quantized versions
   # Use ["-1"] or ["all"] to quantize everything supported
-  quantized_ops: ["Conv2d", "Linear", "BatchNorm2d", "ReLU"]
+  quantized_ops: ["Conv2d", "Linear", "BatchNorm2d", "Dropout", "Softmax","LayerNorm","MultiheadAttention"]
 
 quantization:
   # Target format: fp8_e4m3, fp8_e5m2, int8, fp4_e2m1, fp4_e3m0
   format: fp8_e4m3
   # Optional bias override (default depends on format, e.g., 7 for fp8_e4m3)
-  bias: null
+  bias: 7
   # Calibration method (placeholder for future use)
   calib_method: max
 
@@ -62,6 +57,6 @@ evaluation:
   # Mode: evaluate (quantized only), compare (reference vs quantized)
   mode: compare
   # Number of batches to compare (false or -1 for all)
-  compare_batches: -1
+  compare_batches: 1
   # Limit total samples (optional)
   # max_samples: 1000

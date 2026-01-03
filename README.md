@@ -29,7 +29,7 @@ See [CONFIG_GUIDE.md](CONFIG_GUIDE.md) for a detailed reference.
 - **Linear**: `QuantLinear` (Weights + Inputs)
 - **Normalization**: `QuantBatchNorm2d` (Weights + Inputs + Running Stats)
 - **Pooling**: `QuantMaxPool2d`, `QuantAdaptiveAvgPool2d` (Inputs)
-- **Activations**: `QuantReLU`, `QuantGELU`, `QuantSiLU`, `QuantSoftmax`, etc.
+- **Activations**: `QuantReLU`, `QuantGELU`, `QuantSiLU`, etc.
 
 ### 5. Advanced Evaluation & Compliance
 - **Accuracy**: Top-1/Top-5 Accuracy on ImageNet/Imagenette.

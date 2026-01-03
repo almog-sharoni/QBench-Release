@@ -116,31 +116,30 @@ class LUTActivation:
         return output, q_output
 
 
-# The following block has been disabled for the exercise.
-# @OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True, compliance_status="N/A (FP32 Custom)")
-# class QuantReLU(nn.ReLU, LUTActivation):
-#     """
-#     Quantized ReLU using LUT.
-#     """
-#     def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
-#         super().__init__(inplace=inplace)
-#         self.capture_activations = False
-#         self.last_quant_output_unscaled = None
-#         self.build_lut(nn.functional.relu, q_type=q_type, bias=quantization_bias, quant_mode=quant_mode, chunk_size=chunk_size)
-#     
-#     def forward(self, input: torch.Tensor) -> torch.Tensor:
-#         # User requested modification: instead of quantizing here and use lut to actually forward like this:
-#         # if x<0 than x=0 else x=x (do nothing)
-#         output_quant = nn.functional.relu(input)
-#         
-#         if self.capture_activations:
-#             self.last_quant_input = input.detach()
-#             self.last_quant_output_unscaled = output_quant.detach()
-#         
-#         return output_quant
-# 
-# 
-@OpRegistry.register("QuantReLU6", original_cls=nn.ReLU6, is_activation=True, compliance_status="N/A (FP32 Custom)")
+@OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True, compliance_status="FP32 by intent")
+class QuantReLU(nn.ReLU, LUTActivation):
+    """
+    Quantized ReLU using LUT.
+    """
+    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
+        super().__init__(inplace=inplace)
+        self.capture_activations = False
+        self.last_quant_output_unscaled = None
+        self.build_lut(nn.functional.relu, q_type=q_type, bias=quantization_bias, quant_mode=quant_mode, chunk_size=chunk_size)
+    
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        # User requested modification: instead of quantizing here and use lut to actually forward like this:
+        # if x<0 than x=0 else x=x (do nothing)
+        output_quant = nn.functional.relu(input)
+        
+        if self.capture_activations:
+            self.last_quant_input = input.detach()
+            self.last_quant_output_unscaled = output_quant.detach()
+        
+        return output_quant
+
+
+@OpRegistry.register("QuantReLU6", original_cls=nn.ReLU6, is_activation=True, compliance_status="FP32 by intent")
 class QuantReLU6(nn.ReLU6, LUTActivation):
     """
     Quantized ReLU6 using LUT.
