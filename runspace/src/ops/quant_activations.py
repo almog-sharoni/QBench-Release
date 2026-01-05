@@ -116,8 +116,8 @@ class LUTActivation:
         return output, q_output
 
 
-@OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True, compliance_status="FP32 by intent")
-class QuantReLU(nn.ReLU, LUTActivation):
+@OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True, compliance_status="FP32 activation")
+class QuantReLU(nn.ReLU):
     """
     Quantized ReLU using LUT.
     """
@@ -125,8 +125,7 @@ class QuantReLU(nn.ReLU, LUTActivation):
         super().__init__(inplace=inplace)
         self.capture_activations = False
         self.last_quant_output_unscaled = None
-        self.build_lut(nn.functional.relu, q_type=q_type, bias=quantization_bias, quant_mode=quant_mode, chunk_size=chunk_size)
-    
+
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         # User requested modification: instead of quantizing here and use lut to actually forward like this:
         # if x<0 than x=0 else x=x (do nothing)
@@ -139,8 +138,8 @@ class QuantReLU(nn.ReLU, LUTActivation):
         return output_quant
 
 
-@OpRegistry.register("QuantReLU6", original_cls=nn.ReLU6, is_activation=True, compliance_status="FP32 by intent")
-class QuantReLU6(nn.ReLU6, LUTActivation):
+@OpRegistry.register("QuantReLU6", original_cls=nn.ReLU6, is_activation=True, compliance_status="FP32 activation")
+class QuantReLU6(nn.ReLU6):
     """
     Quantized ReLU6 using LUT.
     """
@@ -148,7 +147,6 @@ class QuantReLU6(nn.ReLU6, LUTActivation):
         super().__init__(inplace=inplace)
         self.capture_activations = False
         self.last_quant_output_unscaled = None
-        self.build_lut(nn.functional.relu6, q_type=q_type, bias=quantization_bias, quant_mode=quant_mode, chunk_size=chunk_size)
     
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         # User requested modification: use standard relu6 instead of lut
@@ -161,70 +159,93 @@ class QuantReLU6(nn.ReLU6, LUTActivation):
         return output_quant
 
 
-@OpRegistry.register("QuantSiLU", original_cls=nn.SiLU, is_activation=True)
-class QuantSiLU(nn.SiLU, LUTActivation):
-    """
-    Quantized SiLU (Swish) using LUT.
-    """
-    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
-        super().__init__(inplace=inplace)
-        self.capture_activations = False
-        self.last_quant_output_unscaled = None
-        self.build_lut(nn.functional.silu, q_type=q_type, bias=quantization_bias, quant_mode=quant_mode, chunk_size=chunk_size)
+# @OpRegistry.register("QuantSiLU", original_cls=nn.SiLU, is_activation=True)
+# class QuantSiLU(nn.SiLU, LUTActivation):
+#     """
+#     Quantized SiLU (Swish) using LUT.
+#     """
+#     def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
+#         super().__init__(inplace=inplace)
+#         self.capture_activations = False
+#         self.last_quant_output_unscaled = None
+#         self.build_lut(nn.functional.silu, q_type=q_type, bias=quantization_bias, quant_mode=quant_mode, chunk_size=chunk_size)
     
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        output_quant, output_unscaled = self.apply_lut(input)
+#     def forward(self, input: torch.Tensor) -> torch.Tensor:
+#         output_quant, output_unscaled = self.apply_lut(input)
         
-        if self.capture_activations:
-            self.last_quant_input = input.detach()
-            self.last_quant_output_unscaled = output_unscaled.detach()
+#         if self.capture_activations:
+#             self.last_quant_input = input.detach()
+#             self.last_quant_output_unscaled = output_unscaled.detach()
         
-        return output_quant
+#         return output_quant
 
 
-@OpRegistry.register("QuantGELU", original_cls=nn.GELU, is_activation=True)
+@OpRegistry.register("QuantGELU", original_cls=nn.GELU, is_activation=True, compliance_status="FP32 activation")
 class QuantGELU(nn.GELU, LUTActivation):
     """
-    Quantized GELU using LUT.
+    Quantized GELU using a piecewise approximation with a small LUT.
+    
+    Approximation:
+      if x <= -A: y = 0
+      if x >= +A: y = x
+      else:       y = LUT[index(x)]
+      
+    Where index(x) maps [-A, +A] to [0, 255].
     """
-    def __init__(self, approximate: str = 'none', q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
+    def __init__(self, approximate: str = 'none', q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, A: float = 3.0):
         super().__init__(approximate=approximate)
         self.capture_activations = False
         self.last_quant_output_unscaled = None
+        self.A = A
         
-        # Handle approximate argument for the functional call
-        def gelu_fn(x):
-            return nn.functional.gelu(x, approximate=approximate)
+        # Build the specific LUT for this approximation
+        self.build_piecewise_lut(A)
+        
+    def build_piecewise_lut(self, A):
+        # L = 256, domain = [-A, +A]
+        L = 256
+        
+        # Bin midpoints
+        # x_i = -A + ( (i + 0.5) / L ) * (2*A) for i = 0..255
+        i = torch.arange(L, dtype=torch.float32)
+        x_i = -A + ((i + 0.5) / L) * (2 * A)
+        
+        # Calculate GELU(x_i)
+        lut_values = nn.functional.gelu(x_i, approximate=self.approximate)
+        
+        # Continuity enforcement
+        # Force LUT[0] = 0
+        lut_values[0] = 0.0
+        # Force LUT[255] = A
+        lut_values[255] = A
+        
+        self.register_buffer('piecewise_lut', lut_values)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        # Input x (FP32)
+        x = input
+        A = self.A
+        
+        # Calculate index for LUT region
+        # t = (x + A) / (2*A)
+        # We clamp t to [0, 1] to ensure safety against Inf and to keep index in bounds
+        t = (x + A) / (2 * A)
+        t = torch.clamp(t, 0.0, 1.0)
+        i = torch.floor(t * 255.0).long()
+        
+        # LUT lookup
+        y_lut = self.piecewise_lut[i]
+        
+        # Apply piecewise logic
+        # if x <= -A: y = 0
+        # if x >= +A: y = x
+        # else:       y = LUT[i]
+        
+        y = torch.where(x <= -A, torch.tensor(0.0, device=x.device, dtype=x.dtype),
+                        torch.where(x >= A, x, y_lut))
+        
+        if self.capture_activations:
+            self.last_quant_input = input.detach()
+            self.last_quant_output_unscaled = y.detach()
             
-        self.build_lut(gelu_fn, q_type=q_type, bias=quantization_bias, quant_mode=quant_mode, chunk_size=chunk_size)
-    
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        output_quant, output_unscaled = self.apply_lut(input)
-        
-        if self.capture_activations:
-            self.last_quant_input = input.detach()
-            self.last_quant_output_unscaled = output_unscaled.detach()
-        
-        return output_quant
-
-
-@OpRegistry.register("QuantHardswish", original_cls=nn.Hardswish, is_activation=True)
-class QuantHardswish(nn.Hardswish, LUTActivation):
-    """
-    Quantized Hardswish using LUT.
-    """
-    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
-        super().__init__(inplace=inplace)
-        self.capture_activations = False
-        self.last_quant_output_unscaled = None
-        self.build_lut(nn.functional.hardswish, q_type=q_type, bias=quantization_bias, quant_mode=quant_mode, chunk_size=chunk_size)
-    
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        output_quant, output_unscaled = self.apply_lut(input)
-        
-        if self.capture_activations:
-            self.last_quant_input = input.detach()
-            self.last_quant_output_unscaled = output_unscaled.detach()
-        
-        return output_quant
-
+        return y
