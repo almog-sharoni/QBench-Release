@@ -359,6 +359,7 @@ class LayerComparator:
                     'count': 0,
                     'weight_count': 0,
                     'xmax_count': 0,
+                    'xmax_count': 0,
                     'type': module.__class__.__name__
                 }
             
@@ -483,9 +484,9 @@ class LayerComparator:
                 return f"{RED}{padded}{RESET}"
 
         report_lines.append("--- FP8 Compliance Check (Value-Based) ---")
-        # Header: Layer(40) | Type(20) | Weight Check(20) | Input Check(20)
-        report_lines.append(f"{'Layer':<40} | {'Type':<20} | {'Weight Check':<20} | {'Input Check':<20}")
-        report_lines.append("-" * 110)
+        # Header: Layer(40) | Type(20) | Shape(15) | Weight Check(20) | Input Check(20)
+        report_lines.append(f"{'Layer':<40} | {'Type':<20} | {'Shape':<15} | {'Weight Check':<20} | {'Input Check':<20}")
+        report_lines.append("-" * 125)
         
         # Import FP8/FP4/INT8 table getters and compliance checker
         from ..quantization.quantizer import (
@@ -588,9 +589,22 @@ class LayerComparator:
                     # So we mark it as N/A (FP32).
                     input_str = f"{'N/A (FP32 Input)':<20}"
                 
-                report_lines.append(f"{name:<40} | {layer_type:<20} | {weight_str} | {input_str}")
-        report_lines.append("-" * 110)
-        report_lines.append("-" * 110)
+                # Get Shape
+                shape_str = "N/A"
+                if name in self.ref_activations:
+                    shape_str = str(tuple(self.ref_activations[name].shape[1:]))
+                else:
+                    # Fallback to internal capture
+                    if hasattr(module, 'last_quant_input') and module.last_quant_input is not None:
+                         shape_str = str(tuple(module.last_quant_input.shape[1:]))
+                    elif hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
+                         shape_str = str(tuple(module.last_quant_input_unscaled.shape[1:]))
+                    elif hasattr(module, 'last_quant_output_unscaled') and module.last_quant_output_unscaled is not None:
+                         shape_str = str(tuple(module.last_quant_output_unscaled.shape[1:]))
+
+                report_lines.append(f"{name:<40} | {layer_type:<20} | {shape_str:<15} | {weight_str} | {input_str}")
+        report_lines.append("-" * 125)
+        report_lines.append("-" * 125)
         report_lines.append("\n")
         
         # Detailed Parameter Compliance Table

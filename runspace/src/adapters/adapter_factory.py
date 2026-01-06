@@ -49,6 +49,7 @@ def create_adapter(config: dict) -> BaseAdapter:
     quantize_first_layer = adapter_config.get('quantize_first_layer', False)
     quantized_ops = adapter_config.get('quantized_ops', ['Conv2d'])
     excluded_ops = adapter_config.get('excluded_ops', [])
+    fold_layers = adapter_config.get('fold_layers', False)
     # input_quantization is now True by default, unless explicitly disabled in adapter config (which we removed from base config but keep support for overrides if needed, or just force True as per request)
     # User said "we asking id to quant inputs - this shouldnt be a question". So we default to True.
     input_quantization = adapter_config.get('input_quantization', True)
@@ -94,7 +95,8 @@ def create_adapter(config: dict) -> BaseAdapter:
             weight_mode=weight_mode,
             weight_chunk_size=weight_chunk_size,
             act_mode=act_mode,
-            act_chunk_size=act_chunk_size
+            act_chunk_size=act_chunk_size,
+            fold_layers=fold_layers
         )
     
     else:
@@ -146,7 +148,7 @@ def validate_config(config: dict):
     # Define allowed keys
     schema = {
         'model': ['name', 'source', 'weights'],
-        'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'quantization_type', 'layers'],
+        'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'quantization_type', 'layers', 'fold_layers'],
         'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size'], # 'type' and 'enabled' for backward compat/fp4 example
         'dataset': ['name', 'path', 'batch_size', 'num_workers'],
         'dataset': ['name', 'path', 'batch_size', 'num_workers'],

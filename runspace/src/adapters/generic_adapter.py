@@ -30,7 +30,8 @@ class GenericAdapter(BaseAdapter):
         weight_mode: str = "channel",
         weight_chunk_size: int = None,
         act_mode: str = "tensor",
-        act_chunk_size: int = None
+        act_chunk_size: int = None,
+        fold_layers: bool = False
     ):
         super().__init__()
         self.model_name = model_name
@@ -50,6 +51,7 @@ class GenericAdapter(BaseAdapter):
         self.weight_chunk_size = weight_chunk_size
         self.act_mode = act_mode
         self.act_chunk_size = act_chunk_size
+        self.fold_layers = fold_layers
         self.model = self.build_model(quantized=True)
 
     def _load_base_model(self) -> nn.Module:
@@ -136,6 +138,72 @@ class GenericAdapter(BaseAdapter):
         for module in model.modules():
             if hasattr(module, 'calibrate_weights'):
                 module.calibrate_weights()
+
+    def _fold_layers(self, model: nn.Module):
+        """
+        Folds (fuses) layers like Conv+BN or Linear+BN.
+        This is done before quantization to improve efficiency and accuracy.
+        """
+        import torch.quantization
+        
+        # Fusion requires eval mode
+        model.eval()
+        
+        # Find pairs to fuse
+        # We iterate over the model and look for Conv2d/Linear followed by BatchNorm
+        # This is a heuristic that works for many standard models (ResNet, etc.)
+        # For more complex graphs, a graph traversal (FX) would be better.
+        
+        modules_to_fuse = []
+        
+        # Helper to traverse and find sequences
+        # We look at named_modules to find adjacent layers in the definition
+        # This works for ResNet BasicBlock where conv is followed by bn
+        
+        # Strategy: Iterate over named_modules. Keep track of the "previous" module.
+        # If prev is Conv and curr is BN, and they are "connected" (heuristic: same parent or sequential), fuse.
+        
+        # Better Strategy for standard models:
+        # Iterate over all sub-modules. If a module is a Sequential or has a forward that executes sequentially,
+        # we can inspect its children.
+        
+        # Let's try a global search on named_modules which is flattened.
+        # We need to be careful about the names.
+        # e.g. layer1.0.conv1, layer1.0.bn1
+        
+        named_modules = list(model.named_modules())
+        
+        i = 0
+        while i < len(named_modules) - 1:
+            name_curr, mod_curr = named_modules[i]
+            name_next, mod_next = named_modules[i+1]
+            
+            # Check for Conv2d + BatchNorm2d
+            if isinstance(mod_curr, nn.Conv2d) and isinstance(mod_next, nn.BatchNorm2d):
+                # Check if they are likely connected
+                # Heuristic: names share a prefix and are likely sequential
+                # e.g. ...conv1 and ...bn1
+                # or just trusting the order in named_modules for standard torchvision models
+                
+                # Verify they are in the same container or adjacent
+                # For ResNet: layer1.0.conv1, layer1.0.bn1 -> fused
+                
+                # We simply add them to the list
+                modules_to_fuse.append([name_curr, name_next])
+                i += 2 # Skip next since we consumed it
+                continue
+                
+            # Check for Linear + BatchNorm1d
+            if isinstance(mod_curr, nn.Linear) and isinstance(mod_next, nn.BatchNorm1d):
+                modules_to_fuse.append([name_curr, name_next])
+                i += 2
+                continue
+                
+            i += 1
+            
+        if modules_to_fuse:
+            # print(f"Fusing layers: {modules_to_fuse}")
+            torch.quantization.fuse_modules(model, modules_to_fuse, inplace=True)
 
     def _replace_layers(self, model: nn.Module):
         """Replace standard layers with quantized versions."""
@@ -302,6 +370,10 @@ class GenericAdapter(BaseAdapter):
         model = self._load_base_model()
         
         if quantized:
+            # Fold layers if requested (before quantization)
+            if self.fold_layers:
+                self._fold_layers(model)
+
             # Replace layers with quantized versions
             self._replace_layers(model)
             
