@@ -9,9 +9,10 @@ class OpRegistry:
     _activation_ops = set() # Set of quantized op names that are activations
     _compliance_status = {} # Mapping from op_name -> status message (if custom)
     _supported_functions = set() # Set of supported functional operations (e.g. F.conv2d)
+    _under_construction_ops = set() # Set of ops marked as under construction
 
     @classmethod
-    def register(cls, op_name: str, original_cls=None, is_activation=False, compliance_status=None):
+    def register(cls, op_name: str, original_cls=None, is_activation=False, compliance_status=None, under_construction=False):
         def decorator(cls_impl):
             cls._registry[op_name] = cls_impl
             if original_cls:
@@ -20,6 +21,8 @@ class OpRegistry:
                 cls._activation_ops.add(op_name)
             if compliance_status:
                 cls._compliance_status[op_name] = compliance_status
+            if under_construction:
+                cls._under_construction_ops.add(op_name)
             return cls_impl
         return decorator
 
@@ -63,6 +66,11 @@ class OpRegistry:
     def get_compliance_status(cls, op_name: str):
         """Returns the custom compliance status for an op, or None."""
         return cls._compliance_status.get(op_name)
+
+    @classmethod
+    def is_under_construction(cls, op_name: str):
+        """Checks if the given op is marked as under construction."""
+        return op_name in cls._under_construction_ops
 
 # Populate standard supported functions
 import torch

@@ -5,7 +5,7 @@ from ..registry.op_registry import OpRegistry
 from .quant_base import QuantizedLayerMixin
 from ..quantization.quantizer import quantize
 
-@OpRegistry.register("QuantLayerNorm", original_cls=nn.LayerNorm)
+@OpRegistry.register("QuantLayerNorm", original_cls=nn.LayerNorm, under_construction=True)
 class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
     """
     Quantized LayerNorm layer.

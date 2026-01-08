@@ -469,6 +469,7 @@ class LayerComparator:
         # 2. FP8 Compliance Check
         GREEN = "\033[92m"
         RED = "\033[91m"
+        ORANGE = "\033[33m"
         RESET = "\033[0m"
 
         def format_status(passed, count, width, examples=None):
@@ -533,11 +534,17 @@ class LayerComparator:
                 else:
                     valid_values = valid_values_fp8_e4m3
                 
+                # Check for Under Construction Status
+                is_under_construction = OpRegistry.is_under_construction(layer_type)
+                under_construction_str = f"{RED}{'🚧 UNDER CONSTRUCTION':<20}{RESET}"
+
                 # Check Parameters (Weights + Stats)
                 weight_str = f"{'N/A':<20}"
                 
+                if is_under_construction:
+                     weight_str = under_construction_str
                 # 1. Weights (Main Table)
-                if hasattr(module, 'weight_fp8') and module.weight_fp8 is not None:
+                elif hasattr(module, 'weight_fp8') and module.weight_fp8 is not None:
                     passed, inv_count, examples = check_fp8_compliance(module.weight_fp8.float(), valid_values)
                     weight_str = format_status(passed, inv_count, 20, examples)
                     if not passed:
@@ -568,19 +575,27 @@ class LayerComparator:
                 
                 # Check Inputs
                 input_str = f"{'N/A (No Capture)':<20}"
+                
+                # Check for custom compliance status in registry
+                custom_status = OpRegistry.get_compliance_status(module.__class__.__name__)
+                
+                if is_under_construction:
+                    if custom_status:
+                        # Append under construction to custom status
+                        input_str = f"{ORANGE}{custom_status}{RESET} {RED}🚧 UNDER CONSTRUCTION{RESET}"
+                    else:
+                        input_str = under_construction_str
+                elif custom_status:
+                     # Just custom status (Orange)
+                     input_str = f"{ORANGE}{custom_status:<20}{RESET}"
                 # Prefer internal unscaled capture for Quant layers
-                if hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
+                elif hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
                     input_passed, i_inv_count, i_examples = check_fp8_compliance(module.last_quant_input_unscaled, valid_values)
                     input_str = format_status(input_passed, i_inv_count, 20, i_examples)
                 # Check output for activation layers (they quantize output, not input)
                 elif hasattr(module, 'last_quant_output_unscaled') and module.last_quant_output_unscaled is not None:
-                    # Check for custom compliance status in registry
-                    custom_status = OpRegistry.get_compliance_status(module.__class__.__name__)
-                    if custom_status:
-                         input_str = f"{custom_status:<20}"
-                    else:
-                        input_passed, i_inv_count, i_examples = check_fp8_compliance(module.last_quant_output_unscaled, valid_values)
-                        input_str = format_status(input_passed, i_inv_count, 20, i_examples)
+                    input_passed, i_inv_count, i_examples = check_fp8_compliance(module.last_quant_output_unscaled, valid_values)
+                    input_str = format_status(input_passed, i_inv_count, 20, i_examples)
                 # Fallback to hook capture
                 elif name in self.quant_activations:
                     # We captured the raw input, which is likely FP32 in a simulated quantization setup.
