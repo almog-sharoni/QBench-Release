@@ -52,13 +52,13 @@ quantization:
 dataset:
   name: imagenet
   path: /data/imagenet/val
-  batch_size: 256
-  num_workers: 8
+  batch_size: 1
+  num_workers: 4
 
 evaluation:
   # Mode: evaluate (quantized only), compare (reference vs quantized)
   mode: compare
   # Number of batches to compare (false or -1 for all)
-  compare_batches: -1
+  compare_batches: 1
   # Limit total samples (optional)
   # max_samples: 1000
