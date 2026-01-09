@@ -7,4 +7,5 @@ from .quant_softmax import *
 from .quant_mha import *
 from .quant_ln import *
 from .quant_dropout import *
+from .quant_stochastic_depth import *
 # from .quant_pooling import *

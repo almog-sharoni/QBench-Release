@@ -5,3 +5,7 @@
 - name: vit_b_16
   source: torchvision
   weights: IMAGENET1K_V1
+
+- name: swin_t
+  source: torchvision
+  weights: IMAGENET1K_V1
