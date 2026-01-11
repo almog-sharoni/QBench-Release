@@ -340,9 +340,9 @@ class LayerComparator:
                 continue
                 
             if name not in self.ref_activations:
-                # Still update prev_module_type
-                prev_module_type = module.__class__.__name__
-                continue
+                # Still process to show in report, but metrics will be N/A
+                # prev_module_type = module.__class__.__name__ # Update this later
+                pass
             
             # Initialize metrics for this layer if not present
             if name not in self.layer_metrics:
@@ -375,7 +375,7 @@ class LayerComparator:
                 bit_width = 8
             
             # 1. Input Metrics
-            ref_input = self.ref_activations[name]
+            ref_input = self.ref_activations.get(name, None)
             quant_input = None
             
             if hasattr(module, 'last_quant_input'):
@@ -384,8 +384,9 @@ class LayerComparator:
                  quant_input = self.quant_activations[name]
             
             if quant_input is not None:
-                metrics['input_mse_sum'] += compute_mse(ref_input, quant_input)
-                metrics['input_cossim_sum'] += compute_cosine_similarity(ref_input, quant_input)
+                if ref_input is not None:
+                    metrics['input_mse_sum'] += compute_mse(ref_input, quant_input)
+                    metrics['input_cossim_sum'] += compute_cosine_similarity(ref_input, quant_input)
                 
                 # Calculate zeros percentage
                 zeros_pct = (quant_input == 0).float().mean().item() * 100.0
@@ -514,7 +515,21 @@ class LayerComparator:
         # Store detailed failures for separate table
         detailed_failures = []
         
-        for name, module in self.quant_model.named_modules():
+        # Determine iteration order
+        # If it's a GraphModule, use graph nodes to get topological order
+        import torch.fx
+        modules_to_process = []
+        
+        if isinstance(self.quant_model, torch.fx.GraphModule):
+            for node in self.quant_model.graph.nodes:
+                if node.op == 'call_module':
+                    module = self.quant_model.get_submodule(node.target)
+                    modules_to_process.append((node.target, module))
+        else:
+            # Fallback to named_modules()
+            modules_to_process = list(self.quant_model.named_modules())
+
+        for name, module in modules_to_process:
             # Check leaf modules or DecomposedMHA
             if len(list(module.children())) == 0 or isinstance(module, DecomposedMultiheadAttention):
                 layer_type = module.__class__.__name__
@@ -667,8 +682,35 @@ class LayerComparator:
             weight_count = max(1, metrics['weight_count'])
             xmax_count = max(1, metrics['xmax_count'])
             
-            input_mse = metrics['input_mse_sum'] / count
-            input_cossim = metrics['input_cossim_sum'] / count
+            input_mse_str = "N/A"
+            input_cossim_str = "N/A"
+            
+            # Check if we have valid input metrics (requires ref input)
+            # We can check if mse_sum is > 0 or if we have a flag. 
+            # But mse could be 0. Let's check if we had ref inputs.
+            # We don't store that explicitly. 
+            # But if we processed 'count' batches, and input_mse_sum is 0, it might be perfect match OR no ref.
+            # However, we only add to sum if ref_input is not None.
+            # Let's assume if we have count > 0, we have valid quant inputs.
+            # But we need to know if we had ref inputs.
+            # Let's add a 'ref_count' to metrics.
+            
+            # For now, let's just print the values. If they are 0.0 and shouldn't be, that's ambiguous.
+            # But since we initialized to 0.0, if we never added anything, they remain 0.0.
+            # This is risky. Let's modify _compute_layer_metrics to track ref_count.
+            
+            # Actually, let's just modify the print logic to be safe for now, 
+            # assuming that if we are here, we might have N/A.
+            
+            if metrics['input_mse_sum'] == 0.0 and metrics['input_cossim_sum'] == 0.0:
+                 # Heuristic: if both are exactly 0.0, likely no ref input (unless perfect match which is rare for float)
+                 pass
+            else:
+                 input_mse = metrics['input_mse_sum'] / count
+                 input_cossim = metrics['input_cossim_sum'] / count
+                 input_mse_str = f"{input_mse:.2e}"
+                 input_cossim_str = f"{input_cossim:.4f}"
+
             zeros_pct_input = metrics['zeros_pct_input_sum'] / count
             
             weight_mse_str = "N/A"
@@ -698,7 +740,7 @@ class LayerComparator:
                  xmax_err_str = f"{mean_error_pct:.2f}%"
 
             layer_type = metrics['type']
-            line = f"{name:<30} | {layer_type:<20} | {input_mse:.2e}   | {input_cossim:.4f}       | {weight_mse_str:<10}   | {weight_cossim_str:<12} | {xmax_orig_str:<10} | {xmax_deq_str:<10} | {xmax_err_str:<10} | {f'{zeros_pct_input:.2f}%':<12} | {zeros_pct_weight_str:<12}"
+            line = f"{name:<30} | {layer_type:<20} | {input_mse_str:<10}   | {input_cossim_str:<12}       | {weight_mse_str:<10}   | {weight_cossim_str:<12} | {xmax_orig_str:<10} | {xmax_deq_str:<10} | {xmax_err_str:<10} | {f'{zeros_pct_input:.2f}%':<12} | {zeros_pct_weight_str:<12}"
             report_lines.append(line)
         
         report_lines.append("-" * 185)

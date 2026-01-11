@@ -3,7 +3,11 @@ import torch.nn as nn
 import torchvision.models as models
 from .base_adapter import BaseAdapter
 from ..registry.op_registry import OpRegistry
-import src.ops # Ensure all ops are registered
+try:
+    import src.ops # Ensure all ops are registered
+except ImportError:
+    from .. import ops
+
 
 
 class GenericAdapter(BaseAdapter):
@@ -15,6 +19,7 @@ class GenericAdapter(BaseAdapter):
     def __init__(
         self,
         model_name: str = "resnet18",
+        model: nn.Module = None,
         model_source: str = "torchvision",
         weights: str = None,
         input_quantization: bool = True,
@@ -35,6 +40,7 @@ class GenericAdapter(BaseAdapter):
     ):
         super().__init__()
         self.model_name = model_name
+        self.base_model_instance = model
         self.model_source = model_source
         self.weights = weights
         self.input_quantization = input_quantization
@@ -55,7 +61,12 @@ class GenericAdapter(BaseAdapter):
         self.model = self.build_model(quantized=True)
 
     def _load_base_model(self) -> nn.Module:
-        """Load the base model from the specified source."""
+        """Loads the base model from torchvision or other sources."""
+        if self.base_model_instance is not None:
+            # Return a copy to ensure we don't modify the original instance
+            import copy
+            return copy.deepcopy(self.base_model_instance)
+            
         if self.model_source == "torchvision":
             return self._load_torchvision_model()
         else:
@@ -255,8 +266,8 @@ class GenericAdapter(BaseAdapter):
             if 'act_chunk_size' in layer_conf:
                 act_chunk_size = layer_conf['act_chunk_size']
         
-        # Case 1: MHA # special case (implmented at c)
-        if QuantClass.__name__ == "DecomposedMultiheadAttention":
+        # Case 1: Custom from_native factory (e.g. MHA, BasicConv2d)
+        if hasattr(QuantClass, 'from_native'):
              return QuantClass.from_native(module, q_type=q_type, quantization_bias=bias)
 
         # Case 2: Layer with weights (Conv, Linear, BN) - In-place class swap
@@ -379,6 +390,124 @@ class GenericAdapter(BaseAdapter):
             
             # Calibrate weights (pre-compute scales)
             self._calibrate_model(model)
+            
+            # FX-based Functional Quantization
+            # This handles functional calls like F.relu that are not modules
+            try:
+                # _fx_quantize returns the modified model (GraphModule) if changes were made
+                fx_model = self._fx_quantize(model)
+                if fx_model is not None:
+                    model = fx_model
+            except Exception as e:
+                print(f"Warning: FX quantization failed: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        return model
+
+    def _fx_quantize(self, model: nn.Module):
+        """
+        Uses torch.fx to replace functional operations with quantized modules.
+        """
+        import torch.fx
+        import torch.nn.functional as F
+        
+        # We only want to trace if we have functional ops to replace.
+        # Currently we target activations.
+        
+        # Get supported functional ops from registry
+        # We need to map function -> quantized module class
+        # OpRegistry stores original_cls -> quantized_cls
+        # We need a mapping for functions.
+        
+        # For now, we hardcode the mapping for common activations as per OpRegistry logic
+        # Ideally OpRegistry should support function registration with target class.
+        
+        func_map = {
+            F.relu: "QuantReLU",
+            torch.relu: "QuantReLU",
+            F.relu6: "QuantReLU6",
+            F.gelu: "QuantGELU",
+            F.silu: "QuantSiLU",
+            F.hardswish: "QuantHardswish",
+        }
+        
+        # Filter by requested quantized ops
+        target_funcs = {}
+        for func, op_name in func_map.items():
+            if "-1" in self.quantized_ops or "all" in self.quantized_ops or op_name in self.quantized_ops:
+                # Check exclusions
+                if op_name not in self.excluded_ops:
+                    target_funcs[func] = op_name
+
+        if not target_funcs:
+            return
+
+        # Trace the model
+        # We use a custom tracer to ensure we don't trace into existing quantized modules
+        class QuantTracer(torch.fx.Tracer):
+            def is_leaf_module(self, m: torch.nn.Module, module_qualified_name: str) -> bool:
+                # Treat all registered quantized ops as leaves
+                if type(m) in OpRegistry.get_supported_ops().values():
+                    return True
+                return super().is_leaf_module(m, module_qualified_name)
+        
+        tracer = QuantTracer()
+        try:
+            graph = tracer.trace(model)
+        except Exception as e:
+            print(f"FX Trace failed: {e}")
+            return
+
+        gm = torch.fx.GraphModule(model, graph)
+        modified = False
+        
+        for node in list(graph.nodes):
+            if node.op == 'call_function' and node.target in target_funcs:
+                op_name = target_funcs[node.target]
+                QuantClass = OpRegistry.get(op_name)
+                
+                # Create new module instance
+                # We use the same config as the adapter
+                kwargs = {'q_type': self.quantization_type}
+                if self.quantization_bias is not None:
+                    kwargs['quantization_bias'] = self.quantization_bias
+                
+                # Add specific args if needed (e.g. inplace)
+                # We pass them to the module init if supported, or rely on forward kwargs
+                # QuantReLU supports inplace in init
+                if 'inplace' in node.kwargs:
+                    kwargs['inplace'] = node.kwargs['inplace']
+                
+                new_mod = QuantClass(**kwargs)
+                
+                # Add module to GraphModule
+                new_mod_name = f"{node.name}_quant_{op_name.lower()}"
+                gm.add_module(new_mod_name, new_mod)
+                
+                # Replace node
+                with graph.inserting_after(node):
+                    new_node = graph.call_module(new_mod_name, args=node.args, kwargs=node.kwargs)
+                    node.replace_all_uses_with(new_node)
+                
+                # Erase old node
+                graph.erase_node(node)
+                
+                modified = True
+        
+        if modified:
+            gm.recompile()
+            # We need to update the model reference in the adapter
+            # But self.model is set in __init__. build_model returns the model.
+            # We are modifying 'model' in-place? No, GraphModule is a new module.
+            # We need to return the new GraphModule or update the passed model variable.
+            # Since we can't update the local variable 'model' in the caller easily if we just return it,
+            # we should copy the state or just return gm.
+            
+            # However, build_model returns 'model'. We should update 'model' to be 'gm'.
+            # But we can't reassign the argument.
+            # We will handle this by returning gm from this function and updating in build_model.
+            return gm
         
         return model
 

@@ -9,11 +9,13 @@ adapter:
   # Use ["-1"] or ["all"] to quantize everything supported
   quantized_ops: ["all"]
   # List of operations to EXCLUDE from quantization (useful when quantized_ops is ["all"])
-  excluded_ops: ["LayerNorm"]
+  excluded_ops: [""]
+  # Whether to fold layers (e.g. Conv+BN) before quantization
+  # fold_layers: true
 
 quantization:
   # Target format: fp8_e4m3, fp8_e5m2, int8, fp4_e2m1, fp4_e3m0
-  format: int8
+  format: fp8_e5m2
   # Optional bias override (default depends on format, e.g., 7 for fp8_e4m3)
   bias: 7
   # Calibration method (placeholder for future use)
@@ -52,8 +54,8 @@ quantization:
 dataset:
   name: imagenet
   path: /data/imagenet/val
-  batch_size: 256
-  num_workers: 8
+  batch_size: 1
+  num_workers: 4
 
 evaluation:
   # Mode: evaluate (quantized only), compare (reference vs quantized)
@@ -61,5 +63,6 @@ evaluation:
   # Number of batches to compare (false or -1 for all)
   compare_batches: 1
   generate_graph_svg: false
+
   # Limit total samples (optional)
   # max_samples: 1000
