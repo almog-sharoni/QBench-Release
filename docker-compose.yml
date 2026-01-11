@@ -1,0 +1,23 @@
+version: "3.8"
+services:
+  qbench:
+    build: .
+    container_name: qbench-yarden
+    restart: always
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+    shm_size: '8gb'
+    # Adding fallbacks (:-1000) so it works even if variables are missing
+    user: "${USER_ID:-1000}:${GROUP_ID:-1000}"
+    environment:
+      - HOME=/home/ubuntu
+    volumes:
+      - .:/app
+      - /data/imagenet:/data/imagenet
+    tty: true
+    stdin_open: true

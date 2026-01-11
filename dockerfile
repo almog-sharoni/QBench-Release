@@ -5,12 +5,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl wget ca-certificates build-essential graphviz \
- && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 RUN python -m pip install --no-cache-dir --upgrade pip && \
     python -m pip uninstall -y pynvml || true && \
     python -m pip install --no-cache-dir \
-      numpy matplotlib pandas scikit-learn pyyaml tqdm optuna pytest nvidia-ml-py pydot
+    numpy matplotlib pandas scikit-learn pyyaml tqdm optuna pytest nvidia-ml-py pydot
 
 WORKDIR /app
+# fixes color issues in some terminals
+ENV HOME=/home/ubuntu
+
 CMD ["/bin/bash"]
