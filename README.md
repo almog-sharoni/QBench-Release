@@ -57,25 +57,19 @@ cd QBench-Release
 ### 2. Setup Environment (Docker)
 The recommended way to run QBench is using the provided Docker container.
 
-1. **Build the Image**:
-   *Note: If the `qbench` image already exists on your system, you do not need to rebuild it.*
+1. **create .env file**:
+   *set USER_ID and GROUP_ID to correct values by running ```id```*
    ```bash
-   docker build -t qbench .
+   # .env
+   USER_ID=1000
+   GROUP_ID=1000
    ```
 
-2. **Start Container**:
-   **Important**: Run this command from the root of the cloned repository (where you are now), as it mounts the current directory (`$(pwd)`) to the container.
+2. **Build and run the Image**:
+   *Note: If the `qbench` image already exists on your system, you do not need to rebuild it.*
    ```bash
-    docker run -dt --gpus all \
-      --shm-size=8g \
-      --user $(id -u):$(id -g) \
-      -e HOME=/tmp \
-      -v "$(pwd)":/app \
-      -v /data/imagenet:/data/imagenet \
-      --name qbench \
-      qbench
+   docker compose up -d --build
    ```
-   *Note: Replace `/data/imagenet` with your actual ImageNet dataset path.*
 
 3. **Enter Container**:
    ```bash

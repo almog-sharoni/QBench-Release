@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
+import torchvision.models.detection
+import torchvision.models.segmentation
 from .base_adapter import BaseAdapter
 from ..registry.op_registry import OpRegistry
 import src.ops # Ensure all ops are registered
@@ -62,26 +64,36 @@ class GenericAdapter(BaseAdapter):
             raise ValueError(f"Unsupported model source: {self.model_source}")
 
     def _load_torchvision_model(self) -> nn.Module:
-        """Load a model from torchvision.models."""
-        if not hasattr(models, self.model_name):
-            raise ValueError(
-                f"Model '{self.model_name}' not found in torchvision.models. "
-                f"Available models include: resnet18, resnet50, vgg16, mobilenet_v3_large, etc."
-            )
-        
-        model_fn = getattr(models, self.model_name)
-        
-        # Handle weights parameter
-        if self.weights:
-            # Try to get weights enum (e.g., ResNet18_Weights.IMAGENET1K_V1)
-            weights_enum = self._get_weights_enum()
-            if weights_enum:
-                return model_fn(weights=weights_enum)
+            """Load a model from torchvision.models (including detection/segmentation)."""
+            
+            # 1. Search for the model function in specific namespaces
+            if hasattr(models, self.model_name):
+                model_fn = getattr(models, self.model_name)
+            elif hasattr(models.detection, self.model_name):
+                model_fn = getattr(models.detection, self.model_name)
+            elif hasattr(models.segmentation, self.model_name):
+                model_fn = getattr(models.segmentation, self.model_name)
             else:
-                # Fall back to weights=True for legacy compatibility
-                return model_fn(weights=True)
-        else:
-            return model_fn(weights=None)
+                raise ValueError(
+                    f"Model '{self.model_name}' not found in torchvision.models, .detection, or .segmentation.\n"
+                    f"Ensure torchvision is up to date."
+                )
+            
+            # 2. Handle weights parameter
+            if self.weights:
+                # Try to get weights enum (e.g., ResNet18_Weights.IMAGENET1K_V1)
+                weights_enum = self._get_weights_enum()
+                if weights_enum:
+                    return model_fn(weights=weights_enum)
+                else:
+                    # Fall back to weights=True (or pretrained=True) for legacy compatibility
+                    # Note: Some older detection models might expect 'pretrained=True' instead of 'weights'
+                    try:
+                        return model_fn(weights=True)
+                    except TypeError:
+                        return model_fn(pretrained=True)
+            else:
+                return model_fn(weights=None)
 
     def _get_weights_enum(self):
         """Get the weights enum for the model if available."""

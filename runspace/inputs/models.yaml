@@ -9,3 +9,7 @@
 - name: resnet152
   source: torchvision
   weights: IMAGENET1K_V1
+
+- name: ssdlite320_mobilenet_v3_large
+  source: torchvision
+  weights: COCO_V1
