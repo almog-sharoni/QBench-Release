@@ -240,7 +240,6 @@ class Runner:
             results['exec_error'] = str(e)
         
         finally:
-            # Cleanup to free memory
             print(f"Cleaning up memory for {model_name}...")
             if 'model' in locals(): del model
             if 'ref_model' in locals(): del ref_model
