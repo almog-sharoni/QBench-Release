@@ -45,3 +45,32 @@ class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
         # print(f"DEBUG: LN out min={out.min()}, max={out.max()}, q_type={self.q_type}, bias={self.quantization_bias}")
         
         return out
+
+try:
+    from torchvision.models.convnext import LayerNorm2d
+    
+    @OpRegistry.register("QuantLayerNorm2d", original_cls=LayerNorm2d, under_construction=True)
+    class QuantLayerNorm2d(QuantLayerNorm):
+        """
+        Quantized LayerNorm2d layer (from ConvNext).
+        Expects input (N, C, H, W), normalizes over C.
+        """
+        def __init__(self, normalized_shape, eps=1e-6, elementwise_affine=True, device=None, dtype=None, q_type="fp8_e4m3", quantization_bias: int = None):
+            # LayerNorm2d in ConvNext takes normalized_shape as int (channels) or list
+            # We pass it to QuantLayerNorm which expects it.
+            super().__init__(normalized_shape, eps=eps, elementwise_affine=elementwise_affine, device=device, dtype=dtype, q_type=q_type, quantization_bias=quantization_bias)
+
+        def forward(self, input: torch.Tensor) -> torch.Tensor:
+            # Input: (N, C, H, W)
+            # Permute to (N, H, W, C) for LayerNorm
+            x = input.permute(0, 2, 3, 1)
+            
+            # Use QuantLayerNorm forward
+            out = super().forward(x)
+            
+            # Permute back to (N, C, H, W)
+            out = out.permute(0, 3, 1, 2)
+            return out
+
+except ImportError:
+    pass

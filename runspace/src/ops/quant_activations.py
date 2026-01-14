@@ -126,7 +126,7 @@ class QuantReLU(nn.ReLU):
         self.capture_activations = False
         self.last_quant_output_unscaled = None
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
+    def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
         # User requested modification: instead of quantizing here and use lut to actually forward like this:
         # if x<0 than x=0 else x=x (do nothing)
         output_quant = nn.functional.relu(input)
@@ -148,7 +148,7 @@ class QuantReLU6(nn.ReLU6):
         self.capture_activations = False
         self.last_quant_output_unscaled = None
     
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
+    def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
         # User requested modification: use standard relu6 instead of lut
         output_quant = nn.functional.relu6(input)
         
@@ -192,7 +192,7 @@ class QuantGELU(nn.GELU, LUTActivation):
       
     Where index(x) maps [-A, +A] to [0, 255].
     """
-    def __init__(self, approximate: str = 'none', q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, A: float = 3.0):
+    def __init__(self, approximate: str = 'none', q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, A: float = 4.0):
         super().__init__(approximate=approximate)
         self.capture_activations = False
         self.last_quant_output_unscaled = None

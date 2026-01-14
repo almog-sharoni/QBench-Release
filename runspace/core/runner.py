@@ -144,13 +144,17 @@ class Runner:
             print(f"Config saved to {config_path}")
 
             # Generate Quantization Graph
-            try:
-                from src.utils.graph_viz import generate_quantization_graph
-                graph_path = os.path.join(output_dir, "quant_graph.svg")
-                print(f"Generating quantization graph at {graph_path}...")
-                generate_quantization_graph(model, graph_path, model_name=model_name)
-            except Exception as e:
-                print(f"Failed to generate graph: {e}")
+            generate_graph = config.get('evaluation', {}).get('generate_graph_svg', True)
+            if generate_graph:
+                try:
+                    from src.utils.graph_viz import generate_quantization_graph
+                    graph_path = os.path.join(output_dir, "quant_graph.svg")
+                    print(f"Generating quantization graph at {graph_path}...")
+                    generate_quantization_graph(model, graph_path, model_name=model_name)
+                except Exception as e:
+                    print(f"Failed to generate graph: {e}")
+            else:
+                print("Skipping graph generation (disabled in config)")
 
             # Check evaluation mode
             eval_mode = config.get('evaluation', {}).get('mode', 'compare')

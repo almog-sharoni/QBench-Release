@@ -99,6 +99,7 @@ quantization:
 | `mode` | string | Evaluation mode. `evaluate` (quantized model accuracy only) or `compare` (reference vs quantized comparison). | `compare` |
 | `compare_batches` | int | Number of batches to use for comparison. `-1` for all. | `1` |
 | `max_samples` | int | Optional limit on number of samples to evaluate. | `1000` |
+| `generate_graph_svg` | bool | Whether to generate the quantization graph SVG. Default: `true`. | `true` |
 
 ---
 

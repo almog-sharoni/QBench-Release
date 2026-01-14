@@ -152,7 +152,7 @@ def validate_config(config: dict):
         'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size'], # 'type' and 'enabled' for backward compat/fp4 example
         'dataset': ['name', 'path', 'batch_size', 'num_workers'],
         'dataset': ['name', 'path', 'batch_size', 'num_workers'],
-        'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples'] # dataset/batch_size allowed here too?
+        'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg'] # dataset/batch_size allowed here too?
     }
     
     # Check top-level keys
