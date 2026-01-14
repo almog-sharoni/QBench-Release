@@ -28,7 +28,7 @@ def calculate_scale(max_val: torch.Tensor, q_type: str, bias: int = None):
         elif q_type == 'int8':
             bias = 0
         else:
-            bias = 7 # Default for e4m3
+            bias = 8 # Default for e4m3
             
     if q_type == 'int8':
         # power-of-two scale so it can use the same log2/floor/pow2 (shift) hardware

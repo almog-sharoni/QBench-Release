@@ -47,28 +47,30 @@ class QuantBatchNorm2d(nn.BatchNorm2d, QuantizedLayerMixin):
              mode = getattr(self, 'weight_mode', 'tensor')
              chunk_size = getattr(self, 'weight_chunk_size', None)
              
-             rm_quant, rm_unscaled, _ = quantize_tensor(self.running_mean, q_type=self.q_type, bias=self.quantization_bias, mode=mode, chunk_size=chunk_size, return_unscaled=True)
+             # rm_quant, rm_unscaled, _ = quantize_tensor(self.running_mean, q_type=self.q_type, bias=self.quantization_bias, mode=mode, chunk_size=chunk_size, return_unscaled=True)
              
              if getattr(self, 'capture_activations', False):
-                 if self.q_type == 'fp8_e4m3' and hasattr(torch, 'float8_e4m3fn'):
-                     self.last_quant_rm = rm_unscaled.to(torch.float8_e4m3fn)
-                 elif self.q_type == 'fp8_e5m2' and hasattr(torch, 'float8_e5m2'):
-                     self.last_quant_rm = rm_unscaled.to(torch.float8_e5m2)
-                 else:
-                     self.last_quant_rm = rm_unscaled
+                 # if self.q_type == 'fp8_e4m3' and hasattr(torch, 'float8_e4m3fn'):
+                 #     self.last_quant_rm = rm_unscaled.to(torch.float8_e4m3fn)
+                 # elif self.q_type == 'fp8_e5m2' and hasattr(torch, 'float8_e5m2'):
+                 #     self.last_quant_rm = rm_unscaled.to(torch.float8_e5m2)
+                 # else:
+                 #     self.last_quant_rm = rm_unscaled
+                 self.last_quant_rm = self.running_mean
              
         if self.running_var is not None:
              mode = getattr(self, 'weight_mode', 'tensor')
              chunk_size = getattr(self, 'weight_chunk_size', None)
-             rv_quant, rv_unscaled, _ = quantize_tensor(self.running_var, q_type=self.q_type, bias=self.quantization_bias, mode=mode, chunk_size=chunk_size, return_unscaled=True)
+             # rv_quant, rv_unscaled, _ = quantize_tensor(self.running_var, q_type=self.q_type, bias=self.quantization_bias, mode=mode, chunk_size=chunk_size, return_unscaled=True)
 
              if getattr(self, 'capture_activations', False):
-                 if self.q_type == 'fp8_e4m3' and hasattr(torch, 'float8_e4m3fn'):
-                     self.last_quant_rv = rv_unscaled.to(torch.float8_e4m3fn)
-                 elif self.q_type == 'fp8_e5m2' and hasattr(torch, 'float8_e5m2'):
-                     self.last_quant_rv = rv_unscaled.to(torch.float8_e5m2)
-                 else:
-                     self.last_quant_rv = rv_unscaled
+                 # if self.q_type == 'fp8_e4m3' and hasattr(torch, 'float8_e4m3fn'):
+                 #     self.last_quant_rv = rv_unscaled.to(torch.float8_e4m3fn)
+                 # elif self.q_type == 'fp8_e5m2' and hasattr(torch, 'float8_e5m2'):
+                 #     self.last_quant_rv = rv_unscaled.to(torch.float8_e5m2)
+                 # else:
+                 #     self.last_quant_rv = rv_unscaled
+                 self.last_quant_rv = self.running_var
 
         return F.batch_norm(
             input_fp8, 
