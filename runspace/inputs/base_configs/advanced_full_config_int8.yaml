@@ -18,12 +18,14 @@ quantization:
   # bias:
   # Calibration method (placeholder for future use)
   calib_method: max
+  # Rounding mode: nearest, truncate
+  rounding: nearest
 
   # --- Input Quantization (Conv2d, Linear) ---
   # Mode: tensor (per-tensor), channel (per-channel), chunk (per-block)
   mode: chunk
   # Chunk size for 'chunk' mode
-  chunk_size: 128
+  chunk_size: 32
   # Optional input format override (e.g., quantize inputs to int8 while weights are fp8)
   input_format: null
 
@@ -59,7 +61,7 @@ evaluation:
   # Mode: evaluate (quantized only), compare (reference vs quantized)
   mode: compare
   # Number of batches to compare (false or -1 for all)
-  compare_batches: 1
+  compare_batches: -1
   generate_graph_svg: false
   # Limit total samples (optional)
   # max_samples: 1000

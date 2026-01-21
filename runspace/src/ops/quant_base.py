@@ -4,9 +4,12 @@ try:
 except ImportError:
     pass
 from ..quantization.quantizer import quantize
+from ..quantization.constants import get_quantization_bias
 
 def _get_reduce_dims(input: torch.Tensor):
     return tuple(range(input.dim()))
+
+  
 
 def calculate_scale(max_val: torch.Tensor, q_type: str, bias: int = None):
     """
@@ -19,21 +22,13 @@ def calculate_scale(max_val: torch.Tensor, q_type: str, bias: int = None):
         Scale factor
     """
     if bias is None:
-        if q_type == 'fp8_e5m2':
-            bias = 15
-        elif q_type == 'fp4_e2m1':
-            bias = 1
-        elif q_type == 'fp4_e3m0':
-            bias = 3
-        elif q_type == 'int8':
-            bias = 0
-        else:
-            bias = 8 # Default for e4m3
+        bias = get_quantization_bias(q_type)
             
-    if q_type == 'int8':
+    if q_type in ['int8', 'int4']:
         # power-of-two scale so it can use the same log2/floor/pow2 (shift) hardware
-        e = torch.floor(torch.log2(max_val)) - torch.floor(torch.log2(torch.tensor(127.0, device=max_val.device))) #TODO: Check this
-        # equivalently: e = floor(log2(max_val / 127.0))
+        e = torch.floor(torch.log2(max_val)) - bias #TODO: Check this
+        # For int8: equivalently: e = floor(log2(max_val / 127.0))
+        # For int4: equivalently: e = floor(log2(max_val / 7.0))
         s = torch.pow(2.0, e)
     else:
         e = torch.floor(torch.log2(max_val)) - bias
@@ -41,7 +36,7 @@ def calculate_scale(max_val: torch.Tensor, q_type: str, bias: int = None):
     return s
 
 
-def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', bias: int = None, return_unscaled: bool = False, return_scale: bool = False, mode: str = 'tensor', chunk_size: int = None):
+def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', bias: int = None, return_unscaled: bool = False, return_scale: bool = False, mode: str = 'tensor', chunk_size: int = None, rounding: str = 'nearest'):
     """
     Quantizes a tensor to FP8.
     Args:
@@ -53,14 +48,15 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', bias: int = N
         return_scale: If True, returns (quantized_tensor, scale) or (quantized_tensor, unscaled, scale) if return_unscaled is True
         mode: Quantization mode ('tensor', 'channel', 'chunk')
         chunk_size: Size of chunk for 'chunk' mode
+        rounding: Rounding mode ('nearest' or 'truncate')
     Returns:
         Quantized tensor (scaled back to original range)
     """
-    # Check for FP8 support
-    if q_type == 'fp8_e4m3' and not hasattr(torch, 'float8_e4m3fn'):
-            raise RuntimeError("FP8 E4M3 support (torch.float8_e4m3fn) is required.")
-    if q_type == 'fp8_e5m2' and not hasattr(torch, 'float8_e5m2'):
-            raise RuntimeError("FP8 E5M2 support (torch.float8_e5m2) is required.")
+    # # Check for FP8 support
+    # if q_type == 'fp8_e4m3' and not hasattr(torch, 'float8_e4m3fn'):
+    #         raise RuntimeError("FP8 E4M3 support (torch.float8_e4m3fn) is required.")
+    # if q_type == 'fp8_e5m2' and not hasattr(torch, 'float8_e5m2'):
+    #         raise RuntimeError("FP8 E5M2 support (torch.float8_e5m2) is required.")
     # FP4 types are manually implemented, so no check needed
 
     s = None
@@ -148,16 +144,19 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', bias: int = N
     
     # Quantize to FP8 (simulated)
     # Capture unscaled quantized values (as float for simulation/verification)
-    input_fp8_unscaled = quantize(input_scaled, q_type=q_type, bias=bias)
+    input_fp8_unscaled = quantize(input_scaled, q_type=q_type, bias=bias, rounding=rounding)
     input_fp8 = input_fp8_unscaled * s
     
     if return_unscaled:
         if return_scale:
-            return input_fp8, input_fp8_unscaled, max_val, s
+            # Return both broadcastable scale and packed/original scales
+            s_packed = s_chunk if mode == 'chunk' else s
+            return input_fp8, input_fp8_unscaled, max_val, s, s_packed
         return input_fp8, input_fp8_unscaled, max_val
         
     if return_scale:
-        return input_fp8, s
+        s_packed = s_chunk if mode == 'chunk' else s
+        return input_fp8, s, s_packed
         
     return input_fp8, max_val
 
@@ -175,27 +174,17 @@ class QuantizedLayerMixin:
         # Check support based on q_type
         q_type = getattr(self, 'q_type', 'fp8_e4m3')
         
-        if q_type == 'fp8_e4m3' and not hasattr(torch, 'float8_e4m3fn'):
-             raise RuntimeError("FP8 E4M3 support (torch.float8_e4m3fn) is required for calibration.")
-        if q_type == 'fp8_e5m2' and not hasattr(torch, 'float8_e5m2'):
-             raise RuntimeError("FP8 E5M2 support (torch.float8_e5m2) is required for calibration.")
+        # if q_type == 'fp8_e4m3' and not hasattr(torch, 'float8_e4m3fn'):
+        #      raise RuntimeError("FP8 E4M3 support (torch.float8_e4m3fn) is required for calibration.")
+        # if q_type == 'fp8_e5m2' and not hasattr(torch, 'float8_e5m2'):
+        #      raise RuntimeError("FP8 E5M2 support (torch.float8_e5m2) is required for calibration.")
 
         if not hasattr(self, 'weight') or self.weight is None:
             return
 
-        # Default bias: 7 for E4M3, 15 for E5M2
         bias = getattr(self, 'quantization_bias', None)
         if bias is None:
-             if q_type == 'fp8_e5m2':
-                 bias = 15
-             elif q_type == 'fp4_e2m1':
-                 bias = 1
-             elif q_type == 'fp4_e3m0':
-                 bias = 3
-             elif q_type == 'int8':
-                 bias = 0
-             else:
-                 bias = 7
+            bias = get_quantization_bias(q_type)
 
         # Calculate max per output channel (dim 0)
         # Flatten all dims except 0: [out_channels, -1]
@@ -203,6 +192,7 @@ class QuantizedLayerMixin:
         # Use weight_mode and weight_chunk_size
         mode = getattr(self, 'weight_mode', 'channel') # Default to channel for weights
         chunk_size = getattr(self, 'weight_chunk_size', None)
+        rounding = getattr(self, 'rounding', 'nearest') # Default to nearest for weights
         
         # We can reuse quantize_tensor logic to get scale and quantized weight
         # But we need to be careful about the "channel" definition.
@@ -220,22 +210,19 @@ class QuantizedLayerMixin:
         if mode == 'chunk':
              # Use quantize_tensor for chunking
              # It handles arbitrary shapes
-             w_quant, scale = quantize_tensor(self.weight, q_type=q_type, bias=bias, return_scale=True, mode='chunk', chunk_size=chunk_size)
-             self.weight_scale = scale
-             # w_quant is already scaled back (simulated).
-             # We need to store the quantized integer/fp8 form?
-             # quantize_tensor returns dequantized float.
-             # We need the unscaled version to store as weight_fp8.
-             # Let's call with return_unscaled=True
-             _, w_unscaled, _, scale = quantize_tensor(self.weight, q_type=q_type, bias=bias, return_unscaled=True, return_scale=True, mode='chunk', chunk_size=chunk_size)
-             self.weight_scale = scale
-             
+             # Modified to return scales (broadcast and packed)
+             _, w_unscaled, _, scale_b, scale_p = quantize_tensor(self.weight, q_type=q_type, bias=bias, return_unscaled=True, return_scale=True, mode='chunk', chunk_size=chunk_size, rounding=rounding)
+             self.weight_scale = scale_b
+             self.weight_scale_packed = scale_p
              if q_type == 'int8':
                  self.weight_fp8 = w_unscaled.to(torch.int8)
-             elif q_type == 'fp8_e4m3':
-                 self.weight_fp8 = w_unscaled.to(torch.float8_e4m3fn)
-             elif q_type == 'fp8_e5m2':
-                 self.weight_fp8 = w_unscaled.to(torch.float8_e5m2)
+             elif q_type == 'int4':
+                 # Store as int8 (no native int4 type), but values are in [-8, 7]
+                 self.weight_fp8 = w_unscaled.to(torch.int8)
+             elif q_type in ['fp8_e4m3', 'fp8_e5m2']:
+                 # Use custom quantize to ensure no inf/nan and consistent behavior
+                 # w_unscaled is already quantized by quantize_tensor, just store as float32
+                 self.weight_fp8 = w_unscaled
              else:
                  self.weight_fp8 = w_unscaled # FP4 simulated
                  
@@ -266,14 +253,9 @@ class QuantizedLayerMixin:
         # We store the quantized version (as fp8 type)
         w_scaled = self.weight / self.weight_scale
         
-        if q_type == 'fp8_e4m3':
-            # Clamp to valid range to avoid NaNs (max 448)
-            w_scaled = w_scaled.clamp(-448.0, 448.0)
-            self.weight_fp8 = w_scaled.to(torch.float8_e4m3fn)
-        elif q_type == 'fp8_e5m2':
-            # E5M2 has Inf, so clamping is less critical but good for safety if we want to avoid Inf
-            # Max normal is 57344.
-            self.weight_fp8 = w_scaled.to(torch.float8_e5m2)
+        if q_type in ['fp8_e4m3', 'fp8_e5m2']:
+            # Use custom quantize to ensure no inf/nan and consistent behavior
+            self.weight_fp8 = quantize(w_scaled, q_type=q_type, bias=bias, rounding=rounding)
         elif q_type in ['fp4_e2m1', 'fp4_e3m0']:
             # FP4 types are stored as FP32 (simulated) or we could pack them if we had a packer.
             # For now, we store them as FP32 but with values quantized to FP4.
@@ -283,7 +265,7 @@ class QuantizedLayerMixin:
             
             # Recalculate w_scaled using quantize function to ensure it snaps to valid values
             # Note: quantize() returns float32 tensor with valid FP4 values.
-            self.weight_fp8 = quantize(w_scaled, q_type=q_type, bias=bias)
+            self.weight_fp8 = quantize(w_scaled, q_type=q_type, bias=bias, rounding=rounding)
         elif q_type == 'int8':
             # Store as int8
             # w_scaled is float, we need to round and clamp
@@ -295,8 +277,17 @@ class QuantizedLayerMixin:
             # Let's store as int8 to be true to the type.
             w_quant = quantize(w_scaled, q_type='int8') # Returns float with int values
             self.weight_fp8 = w_quant.to(torch.int8)
+        elif q_type == 'int4':
+            # Store as int8 (no native int4 type), but values are in [-8, 7]
+            w_quant = quantize(w_scaled, q_type='int4') # Returns float with int values
+            self.weight_fp8 = w_quant.to(torch.int8)
         else:
             raise ValueError(f"Unsupported q_type: {q_type}")
+
+        # Capture weight and weight_scale if capture_activations is enabled
+        if getattr(self, 'capture_activations', False):
+            self.last_quant_weight = (self.weight_fp8.float() * self.weight_scale).detach()
+            self.last_quant_weight_scale = self.weight_scale.detach()
 
     def quantize_input(self, input: torch.Tensor):
         """
@@ -310,6 +301,7 @@ class QuantizedLayerMixin:
         bias = getattr(self, 'quantization_bias', None)
         mode = getattr(self, 'input_mode', getattr(self, 'quant_mode', 'tensor')) # Use input_mode if set, else quant_mode
         chunk_size = getattr(self, 'input_chunk_size', getattr(self, 'chunk_size', None))
+        rounding = getattr(self, 'rounding', 'nearest') # Default to nearest for inputs
         
         # Check if input quantization is enabled
         if not getattr(self, 'input_quantization', True):
@@ -332,12 +324,14 @@ class QuantizedLayerMixin:
             
             return input
             
-        input_fp8, input_fp8_unscaled, max_val = quantize_tensor(input, q_type=q_type, bias=bias, return_unscaled=True, mode=mode, chunk_size=chunk_size)
+        input_fp8, input_fp8_unscaled, max_val, scale_b, scale_p = quantize_tensor(input, q_type=q_type, bias=bias, return_unscaled=True, return_scale=True, mode=mode, chunk_size=chunk_size, rounding=rounding)
         
         if capture:
             self.last_quant_input_unscaled = input_fp8_unscaled.detach()
             self.last_quant_input = input_fp8.detach()
             self.last_quant_input_max = max_val.detach()
+            self.last_quant_input_scale = scale_b.detach()
+            self.last_quant_input_scale_packed = scale_p.detach()
             
             # Calculate dequantized max
             # We need to re-calculate max from the quantized-then-dequantized tensor
@@ -367,9 +361,9 @@ class QuantizedLayerMixin:
                 # Do NOT quantize to FP8. Just cast to float for the operation.
                 input_fp8 = input.float()
             else:
-                input_fp8, _ = self.quantize_input(input.float())
+                input_fp8 = self.quantize_input(input.float())
         else:
-            input_fp8, _ = self.quantize_input(input)
+            input_fp8 = self.quantize_input(input)
 
         # 2. Handle Weights
         # We need to temporarily replace self.weight with the dequantized version

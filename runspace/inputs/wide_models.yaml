@@ -1,0 +1,31 @@
+- name: vgg11
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+- name: vgg13
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+- name: vgg16
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+- name: vgg19
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+- name: vgg11_bn
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+- name: vgg13_bn
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+- name: vgg16_bn
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+- name: vgg19_bn
+  source: torchvision
+  weights: IMAGENET1K_V1

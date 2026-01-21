@@ -9,3 +9,11 @@
 - name: resnet152
   source: torchvision
   weights: IMAGENET1K_V1
+
+- name: gpt2
+  source: transformers
+  weights: DEFAULT
+
+- name: vgg16
+  source: torchvision
+  weights: IMAGENET1K_V1

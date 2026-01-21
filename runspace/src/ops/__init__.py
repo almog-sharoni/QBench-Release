@@ -7,4 +7,7 @@ from .quant_softmax import *
 from .quant_mha import *
 from .quant_ln import *
 from .quant_dropout import *
+from .quant_embedding import *
+from .quant_conv1d import *
+from .quant_newgelu import *
 # from .quant_pooling import *

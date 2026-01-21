@@ -77,7 +77,7 @@ class LUTActivation:
 
         # Dynamic Quantization
         # We need to scale input to target range.
-        input_fp8, input_fp8_unscaled, max_val, s = quantize_tensor(
+        input_fp8, input_fp8_unscaled, max_val, s, s_packed = quantize_tensor(
             input, 
             q_type=self.q_type, 
             bias=self.bias, 
@@ -124,6 +124,7 @@ class QuantReLU(nn.ReLU):
     def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
         super().__init__(inplace=inplace)
         self.capture_activations = False
+        self.quantization_bias = quantization_bias
         self.last_quant_output_unscaled = None
 
     def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -146,6 +147,7 @@ class QuantReLU6(nn.ReLU6):
     def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
         super().__init__(inplace=inplace)
         self.capture_activations = False
+        self.quantization_bias = quantization_bias
         self.last_quant_output_unscaled = None
     
     def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -195,6 +197,7 @@ class QuantGELU(nn.GELU, LUTActivation):
     def __init__(self, approximate: str = 'none', q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, A: float = 4.0):
         super().__init__(approximate=approximate)
         self.capture_activations = False
+        self.quantization_bias = quantization_bias
         self.last_quant_output_unscaled = None
         self.A = A
         

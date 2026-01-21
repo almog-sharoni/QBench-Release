@@ -71,12 +71,12 @@ class QuantSoftmax(nn.Softmax):
         sum_exp = exp_val.sum(dim=dim, keepdim=True)
         sum_exp = torch.clamp(sum_exp, min=1e-12)
         
-        # 6 Reciprocal via Newton–Raphson
+        # 6 Reciprocal 
         # 6.1 Seed
         r = 1.0 / sum_exp
         
-        # 6.2 Newton–Raphson iterations
-        r = r * (2.0 - sum_exp * r)
+        # # 6.2 Newton–Raphson iterations // currently using div
+        # r = r * (2.0 - sum_exp * r)
         
         # 7 Normalization and Output
         prob = exp_val * r

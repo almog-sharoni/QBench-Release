@@ -36,7 +36,9 @@ class GenericAdapter(BaseAdapter):
         weight_chunk_size: int = None,
         act_mode: str = "tensor",
         act_chunk_size: int = None,
-        fold_layers: bool = False
+        fold_layers: bool = False,
+        simulate_tf32_accum: bool = False,
+        rounding: str = "nearest"
     ):
         super().__init__()
         self.model_name = model_name
@@ -57,7 +59,11 @@ class GenericAdapter(BaseAdapter):
         self.weight_chunk_size = weight_chunk_size
         self.act_mode = act_mode
         self.act_chunk_size = act_chunk_size
+        self.act_mode = act_mode
+        self.act_chunk_size = act_chunk_size
         self.fold_layers = fold_layers
+        self.simulate_tf32_accum = simulate_tf32_accum
+        self.rounding = rounding
         self.model = self.build_model(quantized=True)
 
     def _load_base_model(self) -> nn.Module:
@@ -237,6 +243,7 @@ class GenericAdapter(BaseAdapter):
         weight_chunk_size = self.weight_chunk_size
         act_mode = self.act_mode
         act_chunk_size = self.act_chunk_size
+        rounding = self.rounding
         
         # Check for layer-specific config
         if name in self.layer_config:
@@ -265,6 +272,8 @@ class GenericAdapter(BaseAdapter):
                 act_mode = layer_conf['act_mode']
             if 'act_chunk_size' in layer_conf:
                 act_chunk_size = layer_conf['act_chunk_size']
+            if 'rounding' in layer_conf:
+                rounding = layer_conf['rounding']
         
         # Case 1: Custom from_native factory (e.g. MHA, BasicConv2d)
         if hasattr(QuantClass, 'from_native'):
@@ -287,9 +296,14 @@ class GenericAdapter(BaseAdapter):
             module.input_chunk_size = input_chunk_size
             module.weight_mode = weight_mode
             module.weight_chunk_size = weight_chunk_size
+            module.rounding = rounding
             
             module.register_buffer('weight_scale', None)
             module.register_buffer('weight_fp8', None)
+            
+            # Set TF32 simulation flag if supported (QuantConv2d)
+            if QuantClass.__name__ == "QuantConv2d":
+                module.simulate_tf32_accum = self.simulate_tf32_accum
             
             # Handle first layer logic
             if isinstance(module, nn.Conv2d):

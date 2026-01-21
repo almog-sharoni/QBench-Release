@@ -3,7 +3,7 @@ import os
 import sys
 
 def main():
-    input_path = 'runspace/outputs/summary_report.csv'
+    input_path = 'runspace/outputs/interactive_summary_report.csv'
     
     if not os.path.exists(input_path):
         print(f"Error: File not found: {input_path}")
@@ -43,9 +43,11 @@ def main():
     sorted_types = sorted(list(all_types))
     
     # Header
-    header = ['model', 'ref_acc1', 'ref_acc5']
+    header = ['model', 'ref_acc1']
     for t in sorted_types:
         header.append(f"acc1_{t}")
+    header.append('ref_acc5')
+    for t in sorted_types:
         header.append(f"acc5_{t}")
     
     output_path = 'runspace/outputs/transposed_summary_report.csv'
@@ -55,13 +57,18 @@ def main():
     with open(output_path, 'w') as f:
         f.write(','.join(header) + '\n')
         for model in sorted(data.keys()):
-            row_items = [model, data[model]['ref_acc1'], data[model]['ref_acc5']]
+            row_items = [model, data[model]['ref_acc1']]
             for t in sorted_types:
                 if t in data[model]['configs']:
                     row_items.append(data[model]['configs'][t]['acc1'])
-                    row_items.append(data[model]['configs'][t]['acc5'])
                 else:
                     row_items.append('')
+            
+            row_items.append(data[model]['ref_acc5'])
+            for t in sorted_types:
+                if t in data[model]['configs']:
+                    row_items.append(data[model]['configs'][t]['acc5'])
+                else:
                     row_items.append('')
             f.write(','.join(row_items) + '\n')
 
@@ -75,13 +82,18 @@ def main():
         f.write('| ' + ' | '.join(['---'] * len(header)) + ' |\n')
         
         for model in sorted(data.keys()):
-            row_items = [model, data[model]['ref_acc1'], data[model]['ref_acc5']]
+            row_items = [model, data[model]['ref_acc1']]
             for t in sorted_types:
                 if t in data[model]['configs']:
                     row_items.append(data[model]['configs'][t]['acc1'])
-                    row_items.append(data[model]['configs'][t]['acc5'])
                 else:
                     row_items.append('')
+            
+            row_items.append(data[model]['ref_acc5'])
+            for t in sorted_types:
+                if t in data[model]['configs']:
+                    row_items.append(data[model]['configs'][t]['acc5'])
+                else:
                     row_items.append('')
             f.write('| ' + ' | '.join(row_items) + ' |\n')
 
@@ -90,13 +102,18 @@ def main():
     # Also print to stdout as before (optional, but good for verification)
     print(','.join(header))
     for model in sorted(data.keys()):
-        row_items = [model, data[model]['ref_acc1'], data[model]['ref_acc5']]
+        row_items = [model, data[model]['ref_acc1']]
         for t in sorted_types:
             if t in data[model]['configs']:
                 row_items.append(data[model]['configs'][t]['acc1'])
-                row_items.append(data[model]['configs'][t]['acc5'])
             else:
                 row_items.append('')
+        
+        row_items.append(data[model]['ref_acc5'])
+        for t in sorted_types:
+            if t in data[model]['configs']:
+                row_items.append(data[model]['configs'][t]['acc5'])
+            else:
                 row_items.append('')
         print(','.join(row_items))
 

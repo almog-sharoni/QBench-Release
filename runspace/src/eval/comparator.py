@@ -5,9 +5,11 @@ import yaml
 import os
 from src.ops.quant_conv import QuantConv2d
 from src.registry.op_registry import OpRegistry
+from src.quantization.quantizer import quantize
+from src.ops.quant_base import calculate_scale
 
 class LayerComparator:
-    def __init__(self, ref_model, quant_model, model_name="model", quant_type="quant", adapter=None, device=None, output_dir=None):
+    def __init__(self, ref_model, quant_model, model_name="model", quant_type="quant", adapter=None, device=None, output_dir=None, save_histograms=False):
         self.ref_model = ref_model
         self.quant_model = quant_model
         self.model_name = model_name
@@ -15,6 +17,7 @@ class LayerComparator:
         self.adapter = adapter
         self.device = device if device else torch.device("cpu")
         self.output_dir = output_dir
+        self.save_histograms = save_histograms
         self.ref_activations = {}
         self.ref_weights = {}
         self.hooks = []
@@ -142,7 +145,8 @@ class LayerComparator:
                 ref_inputs = ref_inputs.to(self.device)
                 # ref_targets = ref_targets.to(self.device) # Targets are same
                 quant_inputs = quant_inputs.to(self.device)
-                quant_targets = quant_targets.to(self.device)
+                if quant_targets is not None:
+                    quant_targets = quant_targets.to(self.device)
                 targets = quant_targets # Use quant targets (should be same)
                 
                 # Run Ref Model
@@ -151,6 +155,12 @@ class LayerComparator:
                 
                 # Run Quant Model
                 quant_outputs = self.quant_model(quant_inputs)
+                
+                # Extract logits if necessary (for SLMs)
+                if hasattr(ref_outputs, 'logits'):
+                    ref_outputs = ref_outputs.logits
+                if hasattr(quant_outputs, 'logits'):
+                    quant_outputs = quant_outputs.logits
                 
                 # Update Metrics
                 self.ref_metrics.update(ref_outputs, targets)
@@ -359,8 +369,9 @@ class LayerComparator:
                     'count': 0,
                     'weight_count': 0,
                     'xmax_count': 0,
-                    'xmax_count': 0,
-                    'type': module.__class__.__name__
+                    'type': module.__class__.__name__,
+                    'input_scales': [],
+                    'weight_scales': []
                 }
             
             metrics = self.layer_metrics[name]
@@ -385,8 +396,9 @@ class LayerComparator:
             
             if quant_input is not None:
                 if ref_input is not None:
-                    metrics['input_mse_sum'] += compute_mse(ref_input, quant_input)
-                    metrics['input_cossim_sum'] += compute_cosine_similarity(ref_input, quant_input)
+                    if ref_input.is_floating_point():
+                        metrics['input_mse_sum'] += compute_mse(ref_input, quant_input)
+                        metrics['input_cossim_sum'] += compute_cosine_similarity(ref_input, quant_input)
                 
                 # Calculate zeros percentage
                 zeros_pct = (quant_input == 0).float().mean().item() * 100.0
@@ -424,6 +436,24 @@ class LayerComparator:
                  metrics['xmax_deq_sum'] += dequant_max.item()
                  metrics['xmax_err_sum'] += mean_error_pct
                  metrics['xmax_count'] += 1
+
+            # 4. Captured Scales (for chunk-wise reporting)
+            if hasattr(module, 'last_quant_input_scale_packed'):
+                metrics['input_scales'].append(module.last_quant_input_scale_packed.detach().cpu())
+            elif hasattr(module, 'last_quant_input_scale'):
+                metrics['input_scales'].append(module.last_quant_input_scale.detach().cpu())
+            
+            if hasattr(module, 'last_quant_weight_scale_packed'):
+                metrics['weight_scales'].append(module.last_quant_weight_scale_packed.detach().cpu())
+            elif hasattr(module, 'last_quant_weight_scale'):
+                metrics['weight_scales'].append(module.last_quant_weight_scale.detach().cpu())
+            elif hasattr(module, 'weight_scale_packed'):
+                 if not metrics['weight_scales']:
+                    metrics['weight_scales'].append(module.weight_scale_packed.detach().cpu())
+            elif hasattr(module, 'weight_scale'):
+                # Weight scale might not change per batch, but we capture it once
+                if not metrics['weight_scales']:
+                    metrics['weight_scales'].append(module.weight_scale.detach().cpu())
             
             # Update prev_module_type for next iteration
             prev_module_type = module.__class__.__name__
@@ -456,8 +486,13 @@ class LayerComparator:
         report_lines.append(f"Accuracy Source: {acc_source}")
         report_lines.append(f"{'Metric':<20} | {'Reference (FP32)':<20} | {f'Quantized ({self.quant_type})':<20}")
         report_lines.append("-" * 66)
-        report_lines.append(f"{'Top-1 Accuracy':<20} | {ref_acc['acc1']:.2f}%{'':<13} | {quant_acc['acc1']:.2f}%")
-        report_lines.append(f"{'Top-5 Accuracy':<20} | {ref_acc['acc5']:.2f}%{'':<13} | {quant_acc['acc5']:.2f}%")
+        ref_metrics = self.ref_metrics.compute()
+        quant_metrics = self.quant_metrics.compute()
+        
+        report_lines.append(f"{'Top-1 Accuracy':<20} | {ref_metrics['acc1']:.2f}%{'':<12} | {quant_metrics['acc1']:.2f}%")
+        report_lines.append(f"{'Top-5 Accuracy':<20} | {ref_metrics['acc5']:.2f}%{'':<12} | {quant_metrics['acc5']:.2f}%")
+        if 'ppl' in ref_metrics and ref_metrics['ppl'] is not None:
+            report_lines.append(f"{'Perplexity':<20} | {ref_metrics['ppl']:.2f}{'':<13} | {quant_metrics['ppl']:.2f}")
         report_lines.append(f"{'Avg Certainty':<20} | {ref_certainty:.4f}{'':<14} | {quant_certainty:.4f}")
         
         # Compression Stats
@@ -744,6 +779,38 @@ class LayerComparator:
             report_lines.append(line)
         
         report_lines.append("-" * 185)
+        report_lines.append("\n")
+
+        # 5. Chunk-wise Scale Factors (Exponents)
+        report_lines.append("--- Chunk-wise Scale Factors (Log2 Exponents) ---")
+        report_lines.append(f"{'Layer':<30} | {'Type':<15} | {'Source':<10} | {'Num Chunks':<10} | {'Min Exp':<12} | {'Max Exp':<12} | {'Mean Exp':<12} | {'Detailed Exponents (if few)'}")
+        report_lines.append("-" * 140)
+
+        for name, metrics in self.layer_metrics.items():
+            for source, scales_list in [('Input', metrics['input_scales']), ('Weight', metrics['weight_scales'])]:
+                if not scales_list:
+                    continue
+                
+                # Use the last captured scale for summary
+                scales = scales_list[-1]
+                num_chunks = scales.numel()
+                
+                if num_chunks > 1: # Only show for multi-chunk (or per-channel)
+                    # Convert scales to exponents (log2)
+                    log_scales = torch.log2(scales)
+                    min_e = int(torch.round(log_scales.min()).item())
+                    max_e = int(torch.round(log_scales.max()).item())
+                    mean_e = log_scales.mean().item()
+                    
+                    detailed = ""
+                    if num_chunks <= 8:
+                        flat_exps = torch.round(log_scales.flatten()).int()
+                        detailed = ", ".join([f"{e.item():d}" for e in flat_exps])
+                    
+                    report_lines.append(f"{name:<30} | {metrics['type']:<15} | {source:<10} | {num_chunks:<10} | {min_e:<12d} | {max_e:<12d} | {mean_e:<12.2f} | {detailed}")
+
+        report_lines.append("-" * 140)
+        report_lines.append("\n")
         
         # Print Report (with colors)
         report_str = "\n".join(report_lines)
@@ -767,6 +834,201 @@ class LayerComparator:
         with open(report_path, "w") as f:
             f.write(strip_ansi(report_str))
         print(f"Report saved to {report_path}")
+
+        if self.save_histograms:
+            self._save_histograms(report_dir)
+
+    def _save_histograms(self, report_dir):
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print("Warning: matplotlib not found. Skipping histogram generation.")
+            return
+
+        hist_dir = os.path.join(report_dir, "histogram")
+        os.makedirs(hist_dir, exist_ok=True)
+        print(f"Saving histograms to {hist_dir}...")
+        
+        from src.ops.quant_mha import DecomposedMultiheadAttention
+
+        # Max values for x-axis scaling
+        max_vals = {
+            'fp8_e4m3': 512,
+            'fp8_e5m2': 58368,
+            'fp4_e2m1': 16,
+            'fp4_e3m0': 64,
+            'int8': 128
+        }
+
+        for name, module in self.quant_model.named_modules():
+            # Check if leaf or DecomposedMHA
+            if len(list(module.children())) > 0 and not isinstance(module, DecomposedMultiheadAttention):
+                continue
+
+            # Determine q_type for weights and inputs
+            weight_q_type = getattr(module, 'q_type', 'fp8_e4m3')
+            input_q_type = getattr(module, 'input_q_type', weight_q_type)  # Falls back to weight q_type if not specified
+            
+            # Handle potential variations in q_type string
+            weight_limit = 448  # Default
+            for key, val in max_vals.items():
+                if key in weight_q_type:
+                    weight_limit = val
+                    break
+            
+            input_limit = 448  # Default
+            for key, val in max_vals.items():
+                if key in input_q_type:
+                    input_limit = val
+                    break
+            
+            # Collect Data
+            ref_input = self.ref_activations.get(name, None)
+            ref_weight = self.ref_weights.get(name, None)
+            
+            quant_input_unscaled = None
+            quant_weight_unscaled = None
+            
+            ref_input_scaled = None
+            ref_weight_scaled = None
+
+            # Get settings from module
+            bias = getattr(module, 'quantization_bias', None)
+            rounding = getattr(module, 'rounding', 'nearest')
+
+            # 1. Process Input Data (Scale to Format Range)
+            if ref_input is not None:
+                if hasattr(module, 'last_quant_input_max'):
+                    input_max = module.last_quant_input_max
+                    input_scale = calculate_scale(input_max, input_q_type, bias)
+                    
+                    # Scale Reference to Format Range (e.g., 0-448)
+                    ref_input_scaled = ref_input / input_scale
+                    # Quantize (Unscaled)
+                    quant_input_unscaled = quantize(ref_input_scaled, q_type=input_q_type, bias=bias, rounding=rounding)
+                else:
+                    # Fallback
+                    if hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
+                        quant_input_unscaled = module.last_quant_input_unscaled
+                    elif hasattr(module, 'last_quant_input') and module.last_quant_input is not None:
+                        # If we only have dequantized, we need to guess the scale or just show dequantized
+                        quant_input_unscaled = module.last_quant_input
+
+            # 2. Process Weight Data (Scale to Format Range)
+            if ref_weight is not None:
+                if hasattr(module, 'weight_scale') and module.weight_scale is not None:
+                    weight_scale = module.weight_scale
+                    # Scale Reference to Format Range
+                    ref_weight_scaled = ref_weight / weight_scale
+                    # Quantize (Unscaled)
+                    quant_weight_unscaled = quantize(ref_weight_scaled, q_type=weight_q_type, bias=bias, rounding=rounding)
+                else:
+                    # Fallback
+                    if hasattr(module, 'weight_fp8') and module.weight_fp8 is not None:
+                        quant_weight_unscaled = module.weight_fp8
+                    elif hasattr(module, 'weight') and module.weight is not None:
+                        quant_weight_unscaled = module.weight
+
+            # Ensure all data is on CPU numpy for plotting
+            def to_numpy(data):
+                if data is None:
+                    return None
+                if torch.is_tensor(data):
+                    return data.detach().cpu().float().numpy()
+                return data
+
+            ref_input_plot = to_numpy(ref_input_scaled)
+            quant_input_plot = to_numpy(quant_input_unscaled)
+            ref_weight_plot = to_numpy(ref_weight_scaled)
+            quant_weight_plot = to_numpy(quant_weight_unscaled)
+
+            if quant_input_plot is None and quant_weight_plot is None and ref_input_plot is None and ref_weight_plot is None:
+                continue
+
+            # Plot
+            try:
+                # Create format string for title
+                if weight_q_type == input_q_type:
+                    format_str = weight_q_type
+                else:
+                    # Show W#A# notation (e.g., W4A8 for fp4 weights, fp8 inputs)
+                    weight_bits = '4' if 'fp4' in weight_q_type else ('8' if 'fp8' in weight_q_type or 'int8' in weight_q_type else '?')
+                    input_bits = '4' if 'fp4' in input_q_type else ('8' if 'fp8' in input_q_type or 'int8' in input_q_type else '?')
+                    format_str = f"W{weight_bits}A{input_bits} (Weight:{weight_q_type}, Input:{input_q_type})"
+                
+                fig, axes = plt.subplots(3, 2, figsize=(14, 15))
+                fig.suptitle(f"Layer: {name} ({module.__class__.__name__})\nFormat: {format_str}\nRounding: {rounding}")
+
+                # Helper to plot
+                def plot_hist(ax, data, title, x_limit, color='blue'):
+                    if data is not None:
+                        flat_data = data.flatten()
+                        d_min = flat_data.min()
+                        d_max = flat_data.max()
+                        
+                        ax.hist(flat_data, bins=100, log=True, color=color, alpha=0.7)
+                        ax.set_title(f"{title}\n(Min: {d_min:.2e}, Max: {d_max:.2e})")
+                        ax.set_xlabel("Value (Format Units)")
+                        ax.set_ylabel("Count (Log Scale)")
+                        ax.set_xlim(-x_limit, x_limit)
+                        ax.grid(True, alpha=0.3)
+                    else:
+                        ax.text(0.5, 0.5, "No Data", ha='center', va='center')
+                        ax.axis('off')
+
+                # 1. Reference Input (Top Left)
+                plot_hist(axes[0, 0], ref_input_plot, f"Reference Input (Scaled to {input_q_type})", input_limit, color='green')
+
+                # 2. Quantized Input (Top Right)
+                plot_hist(axes[0, 1], quant_input_plot, f"Quantized Input ({input_q_type}, unscaled)", input_limit, color='blue')
+
+                # 3. Reference Weight (Middle Left)
+                plot_hist(axes[1, 0], ref_weight_plot, f"Reference Weight (Scaled to {weight_q_type})", weight_limit, color='green')
+
+                # 4. Quantized Weight (Middle Right)
+                plot_hist(axes[1, 1], quant_weight_plot, f"Quantized Weight ({weight_q_type}, unscaled)", weight_limit, color='blue')
+
+                # 5. Input Scale Exponents (Bottom Left)
+                input_scales = getattr(module, 'last_quant_input_scale_packed', getattr(module, 'last_quant_input_scale', None))
+                if input_scales is not None:
+                    input_exps = to_numpy(torch.log2(input_scales))
+                    # For exponents, we don't need the same x_limit/log scale fixed as data
+                    axes[2, 0].hist(input_exps.flatten(), bins=max(10, min(50, input_exps.size)), color='purple', alpha=0.7)
+                    axes[2, 0].set_title(f"Input Scale Exponents (Log2)\nMin: {input_exps.min():.1f}, Max: {input_exps.max():.1f}")
+                    axes[2, 0].set_xlabel("Exponent")
+                    axes[2, 0].grid(True, alpha=0.3)
+                else:
+                    axes[2, 0].text(0.5, 0.5, "No Input Scales", ha='center', va='center')
+                    axes[2, 0].axis('off')
+
+                # 6. Weight Scale Exponents (Bottom Right)
+                weight_scales = getattr(module, 'weight_scale_packed', getattr(module, 'weight_scale', None))
+                if weight_scales is not None:
+                    weight_exps = to_numpy(torch.log2(weight_scales))
+                    axes[2, 1].hist(weight_exps.flatten(), bins=max(10, min(50, weight_exps.size)), color='purple', alpha=0.7)
+                    axes[2, 1].set_title(f"Weight Scale Exponents (Log2)\nMin: {weight_exps.min():.1f}, Max: {weight_exps.max():.1f}")
+                    axes[2, 1].set_xlabel("Exponent")
+                    axes[2, 1].grid(True, alpha=0.3)
+                else:
+                    axes[2, 1].text(0.5, 0.5, "No Weight Scales", ha='center', va='center')
+                    axes[2, 1].axis('off')
+
+                # Save
+                safe_name = name.replace('.', '_').replace('/', '_')
+                if weight_q_type != input_q_type:
+                    # Add format suffix for mixed precision
+                    weight_bits = '4' if 'fp4' in weight_q_type else '8'
+                    input_bits = '4' if 'fp4' in input_q_type else '8'
+                    filename = f"{safe_name}_W{weight_bits}A{input_bits}.png"
+                else:
+                    filename = f"{safe_name}.png"
+                
+                plt.tight_layout()
+                plt.savefig(os.path.join(hist_dir, filename))
+                plt.close(fig)
+            except Exception as e:
+                print(f"Failed to save histogram for {name}: {e}")
+                plt.close('all')
 
     def close(self):
         for hook in self.hooks:

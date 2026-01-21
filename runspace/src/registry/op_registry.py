@@ -14,6 +14,7 @@ class OpRegistry:
     @classmethod
     def register(cls, op_name: str, original_cls=None, is_activation=False, compliance_status=None, under_construction=False):
         def decorator(cls_impl):
+            # print(f"DEBUG: Registering {op_name} (original={original_cls}) in OpRegistry {id(cls)}")
             cls._registry[op_name] = cls_impl
             if original_cls:
                 cls._supported_ops[original_cls] = cls_impl

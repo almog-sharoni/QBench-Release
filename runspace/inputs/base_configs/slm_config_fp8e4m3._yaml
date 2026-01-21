@@ -1,0 +1,52 @@
+# SLM Configuration Example (FP8 E4M3)
+# Optimized for Small Language Models (e.g., GPT-2)
+
+adapter:
+  type: slm
+  # Whether to quantize the input of the very first layer (usually embeddings)
+  quantize_first_layer: false
+  # List of operations to replace with quantized versions
+  quantized_ops: ["all"]
+  # List of operations to EXCLUDE from quantization
+  excluded_ops: []
+  # Whether to fold layers (e.g. Conv+BN) before quantization (not typically used for SLMs)
+  fold_layers: false
+
+quantization:
+  # Target format: fp8_e4m3, fp8_e5m2, int8, fp4_e2m1, fp4_e3m0
+  format: fp8_e4m3
+  # Optional bias override (default depends on format, e.g., 7 for fp8_e4m3)
+  # bias: 7
+  # Calibration method
+  calib_method: max
+
+  # --- Input Quantization (Linear, Conv1D) ---
+  # Mode: tensor (per-tensor), channel (per-channel), chunk (per-block)
+  mode: chunk
+  # Chunk size for 'chunk' mode (important for SLMs)
+  chunk_size: 128
+  
+  # --- Weight Quantization ---
+  # Mode: tensor, channel, chunk
+  weight_mode: tensor
+  # Chunk size for 'chunk' mode
+  # weight_chunk_size: 64
+
+  # --- Activation Quantization (GELU, Softmax, etc.) ---
+  # Mode: tensor, channel, chunk
+  act_mode: tensor
+  # Chunk size for 'chunk' mode
+  act_chunk_size: null
+
+dataset:
+  name: wikitext
+  path: wikitext-2-raw-v1
+  batch_size: 4
+  num_workers: 0 # Datasets library handles loading
+
+evaluation:
+  # Mode: evaluate (quantized only), compare (reference vs quantized)
+  mode: compare
+  # Number of batches to compare (false or -1 for all)
+  compare_batches: 1
+  generate_graph_svg: false

@@ -11,6 +11,7 @@ if PROJECT_ROOT not in sys.path:
 
 from runspace.core.config_factory import ConfigFactory
 from runspace.core.runner import Runner
+from runspace.core.report_aggregator import ReportAggregator
 
 def load_models_list(path: str) -> list:
     with open(path, 'r') as f:
@@ -21,20 +22,41 @@ def load_models_list(path: str) -> list:
         else:
             raise ValueError("Models list must be JSON or YAML")
 
-def get_user_selection(options: list, name: str):
+def get_user_selection(options: list, name: str) -> list:
     print(f"\nAvailable {name}s:")
     for i, opt in enumerate(options):
         print(f"{i + 1}. {opt}")
     
     while True:
         try:
-            choice = int(input(f"\nSelect a {name} (1-{len(options)}): "))
-            if 1 <= choice <= len(options):
-                return options[choice - 1]
-            else:
-                print(f"Invalid choice. Please enter a number between 1 and {len(options)}.")
+            user_input = input(f"\nSelect {name}s (comma-separated, e.g. 1,3 or 'all'): ").strip()
+            if user_input.lower() == 'all':
+                return options
+                
+            selections = []
+            parts = user_input.split(',')
+            valid = True
+            
+            for part in parts:
+                part = part.strip()
+                if not part:
+                    continue
+                    
+                choice = int(part)
+                if 1 <= choice <= len(options):
+                    selections.append(options[choice - 1])
+                else:
+                    print(f"Invalid choice '{choice}'. Please enter numbers between 1 and {len(options)}.")
+                    valid = False
+                    break
+            
+            if valid and selections:
+                return selections
+            elif not selections:
+                 print("No valid selection made.")
+                 
         except ValueError:
-            print("Invalid input. Please enter a number.")
+            print("Invalid input. Please enter numbers separated by commas.")
 
 def main():
     print("=== QBench Interactive Run ===\n")
@@ -46,48 +68,90 @@ def main():
         sys.exit(1)
         
     base_config_files = glob.glob(os.path.join(base_configs_dir, '*.yaml'))
-    if not base_config_files:
-        print(f"Error: No base config files found in {base_configs_dir}")
+    
+    if base_config_files:
+        base_config_names = sorted([os.path.basename(f) for f in base_config_files])
+    else:
+        print(f"Warning: No base config files found in {base_configs_dir}. Using default list.")
+        base_config_names = [
+            "advanced_full_config_fp8e4m3.yaml",
+            "advanced_full_config_fp8e5m2.yaml",
+            "advanced_full_config_int8.yaml",
+            "slm_config_fp8e4m3.yaml",
+            "tf32_accum_config.yaml"
+        ]
+    selected_base_config_names = get_user_selection(base_config_names, "Base Config")
+    
+    # 2. List Model Files
+    inputs_dir = os.path.join(PROJECT_ROOT, 'runspace/inputs')
+    # Find all yaml files in inputs dir, excluding base_configs directory
+    model_files = []
+    for f in glob.glob(os.path.join(inputs_dir, '*.yaml')):
+        model_files.append(os.path.basename(f))
+        
+    if not model_files:
+        print(f"Error: No model list files found in {inputs_dir}")
         sys.exit(1)
         
-    base_config_names = [os.path.basename(f) for f in base_config_files]
-    selected_base_config_name = get_user_selection(base_config_names, "Base Config")
-    selected_base_config_path = os.path.join(base_configs_dir, selected_base_config_name)
+    selected_model_file = get_user_selection(model_files, "Models List File")
+    # If user selected multiple (which get_user_selection supports), we just take the first one or merge?
+    # get_user_selection returns a list.
+    # For model list file, we probably just want one file to load models from, or we can load from all selected.
+    # Let's assume user picks one for simplicity, or handle multiple.
     
-    # 2. List Models
-    models_path = os.path.join(PROJECT_ROOT, 'runspace/inputs/models.yaml')
-    if not os.path.exists(models_path):
-        print(f"Error: Models list not found at {models_path}")
-        sys.exit(1)
+    # Actually, get_user_selection returns a list. Let's support merging models from multiple files.
+    
+    all_models = []
+    for m_file in selected_model_file:
+        m_path = os.path.join(inputs_dir, m_file)
+        all_models.extend(load_models_list(m_path))
         
-    models = load_models_list(models_path)
-    model_names = [m['name'] for m in models]
-    selected_model_name = get_user_selection(model_names, "Model")
+    if not all_models:
+        print("Error: No models found in selected files.")
+        sys.exit(1)
+
+    model_names = [m['name'] for m in all_models]
+    # Remove duplicates if any
+    model_names = sorted(list(set(model_names)))
     
-    # Find selected model config
-    selected_model_config = next(m for m in models if m['name'] == selected_model_name)
+    selected_model_names = get_user_selection(model_names, "Model")
     
-    # 3. Generate Config
-    print(f"\nGenerating configuration for {selected_model_name} using {selected_base_config_name}...")
+    # Filter selected models
+    # We need to handle potential duplicates in all_models list if multiple files have same model
+    # We take the first occurrence
+    selected_models = []
+    seen_names = set()
+    for m in all_models:
+        if m['name'] in selected_model_names and m['name'] not in seen_names:
+            selected_models.append(m)
+            seen_names.add(m['name'])
+    
+    # 3. Generate Configs
+    print(f"\nGenerating configurations...")
     factory = ConfigFactory()
-    # Create a single config list (factory returns a list)
-    configs = factory.create_configs(selected_base_config_path, [selected_model_config], base_config_path=selected_base_config_path)
+    all_configs = []
     
-    if not configs:
+    for base_config_name in selected_base_config_names:
+        base_config_path = os.path.join(base_configs_dir, base_config_name)
+        print(f"Processing {base_config_name}...")
+        configs = factory.create_configs(base_config_path, selected_models, base_config_path=base_config_path)
+        all_configs.extend(configs)
+    
+    if not all_configs:
         print("Error: Failed to generate configuration.")
         sys.exit(1)
         
-    config = configs[0]
-    
-    # 3.5. Ask for number of batches
-    current_batches = config.get('evaluation', {}).get('compare_batches', -1)
+    # 3.5. Ask for number of batches (apply to all)
+    # We check the first config for default
+    first_config = all_configs[0]
+    current_batches = first_config.get('evaluation', {}).get('compare_batches', -1)
     if current_batches == -1:
         default_str = "All"
     else:
         default_str = str(current_batches)
         
-    print(f"\nNumber of batches to run (default: {default_str}):")
-    print("Press Enter to use default, or enter a number.")
+    print(f"\nNumber of batches to run for all configs (default: {default_str}):")
+    print("Press Enter to use default, enter a positive number, or -1 for all.")
     
     while True:
         batch_input = input("Batches: ").strip()
@@ -95,30 +159,45 @@ def main():
             break
         try:
             new_batches = int(batch_input)
-            if new_batches > 0:
-                if 'evaluation' not in config:
-                    config['evaluation'] = {}
-                config['evaluation']['compare_batches'] = new_batches
-                print(f"Set number of batches to {new_batches}")
+            if new_batches > 0 or new_batches == -1:
+                for config in all_configs:
+                    if 'evaluation' not in config:
+                        config['evaluation'] = {}
+                    config['evaluation']['compare_batches'] = new_batches
+                
+                batch_msg = "ALL" if new_batches == -1 else str(new_batches)
+                print(f"Set number of batches to {batch_msg}")
                 break
             else:
-                print("Please enter a positive number.")
+                print("Please enter a positive number or -1.")
         except ValueError:
             print("Invalid input. Please enter a number.")
         
-    # 4. Run
-    print("\nStarting execution...")
+    # 4. Run Batch
+    print(f"\nStarting execution of {len(all_configs)} configurations...")
     runner = Runner()
-    result = runner.run_single(config)
+    # We use run_batch which returns a list of results
+    # We need to define an output root. We'll use the default 'runspace/outputs'
+    output_root = os.path.join(PROJECT_ROOT, 'runspace/outputs')
+    results = runner.run_batch(all_configs, output_root=output_root)
     
     print("\n=== Execution Completed ===")
-    print(f"Status: {result['status']}")
-    if result['status'] == 'SUCCESS':
-        print(f"Top-1 Accuracy: {result.get('acc1', 0):.2f}%")
-        print(f"Top-5 Accuracy: {result.get('acc5', 0):.2f}%")
-        print(f"Report: {result.get('report_path', 'N/A')}")
+    
+    # 5. Aggregate Reports
+    if len(results) > 0:
+        print("Aggregating results...")
+        aggregator = ReportAggregator()
+        summary_path = os.path.join(output_root, 'interactive_summary_report.csv')
+        aggregator.aggregate(results, summary_path)
+        
+        # Generate Markdown version
+        summary_md_path = os.path.splitext(summary_path)[0] + '.md'
+        aggregator.aggregate(results, summary_md_path)
+        
+        print(f"Summary Report: {summary_path}")
+        print(f"Markdown Report: {summary_md_path}")
     else:
-        print(f"Error: {result.get('exec_error', 'Unknown error')}")
+        print("No results to aggregate.")
 
 if __name__ == "__main__":
     main()

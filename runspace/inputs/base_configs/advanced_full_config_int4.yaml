@@ -15,7 +15,7 @@ adapter:
 
 quantization:
   # Target format: fp8_e4m3, fp8_e5m2, int8, fp4_e2m1, fp4_e3m0
-  format: fp8_e5m2
+  format: int4
   # Optional bias override (default depends on format, e.g., 7 for fp8_e4m3)
   # bias: 7
   # Calibration method (placeholder for future use)
@@ -46,9 +46,9 @@ quantization:
   # --- Layer-Specific Overrides ---
   # Override settings for specific layers by name
   # layers:
-  #   layer1.0.conv1:
-  #     mode: tensor
-  #     weight_mode: tensor
+    # layer1.0.conv1:
+    #   mode: tensor
+    #   weight_mode: tensor
   #   fc:
   #     format: int8
   #     weight_mode: tensor
@@ -57,14 +57,14 @@ dataset:
   name: imagenet
   path: /data/imagenet/val
   batch_size: 32
-  num_workers: 4
+  num_workers: 8
 
 evaluation:
   # Mode: evaluate (quantized only), compare (reference vs quantized)
   mode: compare
   # Number of batches to compare (false or -1 for all)
-  compare_batches: -1
+  compare_batches: 1
   generate_graph_svg: false
-
+  save_histograms: true
   # Limit total samples (optional)
   # max_samples: 1000

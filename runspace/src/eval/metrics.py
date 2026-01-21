@@ -7,11 +7,44 @@ class MetricsEngine:
         self.correct_5 = 0
         self.total = 0
         self.total_certainty = 0.0
+        self.total_loss = 0.0
+        self.total_tokens = 0
 
     def update(self, predictions, targets):
-        # predictions: [batch, num_classes]
-        # targets: [batch]
+        # predictions: [batch, num_classes] OR [batch, seq_len, num_classes]
+        # targets: [batch] OR [batch, seq_len]
         
+        import torch.nn.functional as F
+        
+        # Check for sequence output (SLM)
+        if predictions.dim() == 3:
+            # Shift logits and labels for next token prediction
+            # Logits: [..., :-1, :]
+            # Labels: [..., 1:]
+            shift_logits = predictions[..., :-1, :].contiguous()
+            shift_labels = targets[..., 1:].contiguous()
+            
+            # Flatten
+            flat_logits = shift_logits.view(-1, shift_logits.size(-1))
+            flat_labels = shift_labels.view(-1)
+            
+            # Calculate Loss (CrossEntropy) for Perplexity
+            # We need to accumulate total loss and total tokens
+            loss = F.cross_entropy(flat_logits, flat_labels, reduction='sum')
+            self.total_loss += loss.item()
+            self.total_tokens += flat_labels.numel()
+            
+            # Use flattened for accuracy
+            predictions = flat_logits
+            targets = flat_labels
+        
+        # Certainty
+        self.total_certainty += compute_certainty(predictions) * predictions.size(0)
+        self.total += predictions.size(0)
+        
+        if targets is None:
+            return
+
         # Top-1
         _, pred_1 = predictions.topk(1, 1, True, True)
         self.correct_1 += pred_1.eq(targets.view(-1, 1)).sum().item()
@@ -19,21 +52,19 @@ class MetricsEngine:
         # Top-5
         _, pred_5 = predictions.topk(5, 1, True, True)
         self.correct_5 += pred_5.eq(targets.view(-1, 1).expand_as(pred_5)).sum().item()
-        
-        # Certainty
-        self.total_certainty += compute_certainty(predictions) * targets.size(0)
-        
-        self.total += targets.size(0)
 
     def compute(self):
         if self.total == 0:
-            return {"acc1": 0.0, "acc5": 0.0, "certainty": 0.0}
+            return {"acc1": 0.0, "acc5": 0.0, "certainty": 0.0, "ppl": 0.0}
             
         acc1 = 100.0 * self.correct_1 / self.total
         acc5 = 100.0 * self.correct_5 / self.total
         certainty = self.total_certainty / self.total
         
-        return {"acc1": acc1, "acc5": acc5, "certainty": certainty}
+        import math
+        ppl = math.exp(self.total_loss / self.total_tokens) if self.total_tokens > 0 else 0.0
+        
+        return {"acc1": acc1, "acc5": acc5, "certainty": certainty, "ppl": ppl}
 
 def compute_mse(tensor_a, tensor_b):
     """Computes Mean Squared Error between two tensors."""

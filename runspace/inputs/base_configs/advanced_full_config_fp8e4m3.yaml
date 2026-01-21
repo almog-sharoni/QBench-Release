@@ -17,9 +17,11 @@ quantization:
   # Target format: fp8_e4m3, fp8_e5m2, int8, fp4_e2m1, fp4_e3m0
   format: fp8_e4m3
   # Optional bias override (default depends on format, e.g., 7 for fp8_e4m3)
-  bias: 7
+  # bias: 7
   # Calibration method (placeholder for future use)
   calib_method: max
+  # Rounding mode: nearest, truncate
+  rounding: nearest
 
   # --- Input Quantization (Conv2d, Linear) ---
   # Mode: tensor (per-tensor), channel (per-channel), chunk (per-block)
@@ -31,9 +33,9 @@ quantization:
 
   # --- Weight Quantization ---
   # Mode: tensor, channel, chunk
-  weight_mode: tensor
+  weight_mode: chunk
   # Chunk size for 'chunk' mode
-  # weight_chunk_size: 64
+  weight_chunk_size: 128
 
   # --- Activation Quantization (ReLU, Softmax, etc.) ---
   # Mode: tensor, channel, chunk
@@ -54,7 +56,7 @@ quantization:
 dataset:
   name: imagenet
   path: /data/imagenet/val
-  batch_size: 64
+  batch_size: 32
   num_workers: 8
 
 evaluation:
@@ -63,5 +65,7 @@ evaluation:
   # Number of batches to compare (false or -1 for all)
   compare_batches: 1
   generate_graph_svg: false
+  save_histograms: true
+
   # Limit total samples (optional)
   # max_samples: 1000

@@ -28,6 +28,33 @@ class Runner:
         """Setup the data loader from config."""
         dataset_config = config.get('dataset', {})
         
+        # Check for SLM adapter
+        if config.get('adapter', {}).get('type') == 'slm':
+            print("SLM Adapter detected. Loading wikitext-2 dataset...")
+            try:
+                from datasets import load_dataset
+                # Load wikitext-2 raw test split
+                dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+                # Filter out empty lines
+                dataset = dataset.filter(lambda x: len(x['text'].strip()) > 0)
+                print(f"Loaded {len(dataset)} samples from wikitext-2.")
+            except Exception as e:
+                print(f"Error loading wikitext-2: {e}")
+                print("Falling back to dummy text dataset.")
+                class DummyTextDataset(torch.utils.data.Dataset):
+                    def __init__(self, length=100):
+                        self.length = length
+                        self.data = ["Hello, my name is", "The quick brown fox", "Once upon a time", "In a galaxy far far away"]
+                    def __len__(self):
+                        return self.length
+                    def __getitem__(self, idx):
+                        return {'text': self.data[idx % len(self.data)]}
+                
+                dataset = DummyTextDataset(length=100)
+
+            batch_size = dataset_config.get('batch_size', 4) # Default to smaller batch for SLM
+            return DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
         # Get dataset path
         path = dataset_config.get('path', 'tests/data/imagenette2-320/val')
         if not os.path.isabs(path):
@@ -189,7 +216,8 @@ class Runner:
                     quant_type=quant_format.replace('_', ''), 
                     adapter=adapter, 
                     device=self.device,
-                    output_dir=output_dir
+                    output_dir=output_dir,
+                    save_histograms=config.get('evaluation', {}).get('save_histograms', False)
                 )
                 
                 # Determine number of batches

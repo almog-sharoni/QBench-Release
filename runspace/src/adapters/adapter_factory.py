@@ -69,7 +69,14 @@ def create_adapter(config: dict) -> BaseAdapter:
     weight_mode = quantization_config.get('weight_mode', 'channel') # Default weights to channel
     weight_chunk_size = quantization_config.get('weight_chunk_size', None)
     act_mode = quantization_config.get('act_mode', 'tensor') # Default activations to tensor
+
     act_chunk_size = quantization_config.get('act_chunk_size', None)
+    
+    # Extract rounding mode
+    rounding = quantization_config.get('rounding', 'nearest')
+    
+    # Extract TF32 simulation flag
+    simulate_tf32_accum = quantization_config.get('simulate_tf32_accum', False)
     
     # Extract layer-specific config
     # Can be in quantization.layers or adapter.layers (prefer quantization.layers)
@@ -96,13 +103,40 @@ def create_adapter(config: dict) -> BaseAdapter:
             weight_chunk_size=weight_chunk_size,
             act_mode=act_mode,
             act_chunk_size=act_chunk_size,
-            fold_layers=fold_layers
+            fold_layers=fold_layers,
+            simulate_tf32_accum=simulate_tf32_accum,
+            rounding=rounding
         )
     
+    elif adapter_type == 'slm':
+        from .slm_adapter import SLMAdapter
+        return SLMAdapter(
+            model_name=model_name,
+            model_source=model_source,
+            weights=weights,
+            input_quantization=input_quantization,
+            quantize_first_layer=quantize_first_layer,
+            quantized_ops=quantized_ops,
+            excluded_ops=excluded_ops,
+            quantization_type=quantization_type,
+            quantization_bias=quantization_bias,
+            layer_config=layer_config,
+            input_quantization_type=input_quantization_type,
+            quant_mode=quant_mode,
+            chunk_size=chunk_size,
+            weight_mode=weight_mode,
+            weight_chunk_size=weight_chunk_size,
+            act_mode=act_mode,
+            act_chunk_size=act_chunk_size,
+            fold_layers=fold_layers,
+            simulate_tf32_accum=simulate_tf32_accum,
+            rounding=rounding
+        )
+
     else:
         raise ValueError(
             f"Unknown adapter type: '{adapter_type}'. "
-            f"Available types: 'generic', 'resnet'"
+            f"Available types: 'generic', 'resnet', 'slm'"
         )
 
 
@@ -149,10 +183,9 @@ def validate_config(config: dict):
     schema = {
         'model': ['name', 'source', 'weights'],
         'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'quantization_type', 'layers', 'fold_layers'],
-        'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size'], # 'type' and 'enabled' for backward compat/fp4 example
+        'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding'], # 'type' and 'enabled' for backward compat/fp4 example
         'dataset': ['name', 'path', 'batch_size', 'num_workers'],
-        'dataset': ['name', 'path', 'batch_size', 'num_workers'],
-        'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg'] # dataset/batch_size allowed here too?
+        'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms'] # dataset/batch_size allowed here too?
     }
     
     # Check top-level keys
