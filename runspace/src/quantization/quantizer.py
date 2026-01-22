@@ -296,10 +296,15 @@ FP4_E2M1_MANT_BITS = 1
 FP4_E3M0_MANT_BITS = 0
 
 # Shifts
-MANT_SHIFT_E4M3 = FP32_MANT_BITS - FP8_E4M3_MANT_BITS  # 20
-MANT_SHIFT_E5M2 = FP32_MANT_BITS - FP8_E5M2_MANT_BITS  # 21
-MANT_SHIFT_E2M1 = FP32_MANT_BITS - FP4_E2M1_MANT_BITS  # 22
-MANT_SHIFT_E3M0 = FP32_MANT_BITS - FP4_E3M0_MANT_BITS  # 23
+MANT_SHIFT_E4M3 = FP32_MANT_BITS - 3
+MANT_SHIFT_E5M2 = FP32_MANT_BITS - 2
+MANT_SHIFT_E2M5 = FP32_MANT_BITS - 5
+MANT_SHIFT_E3M4 = FP32_MANT_BITS - 4
+MANT_SHIFT_E1M6 = FP32_MANT_BITS - 6
+MANT_SHIFT_E6M1 = FP32_MANT_BITS - 1
+MANT_SHIFT_E7M0 = FP32_MANT_BITS - 0
+MANT_SHIFT_E2M1 = FP32_MANT_BITS - 1
+MANT_SHIFT_E3M0 = FP32_MANT_BITS - 0
 
 
 # ============================================================================
@@ -321,17 +326,31 @@ def quantize(tensor: torch.Tensor, q_type: str = "fp8_e4m3", bias: int = None, v
         Quantized tensor with values constrained to valid FP8 values
     """
     if q_type == "fp8_e4m3":
-        # Always use custom implementation (no inf/nan support)
-        result = quantize_fp8_e4m3(tensor, bias=bias, rounding=rounding)
+        # exp=15, mant=6 max value (no NaN support, clamp to max)
+        result = quantize_fp8_generic(tensor, exp_bits=4, mant_bits=3, bias=bias, rounding=rounding, clip_max_exp=15, clip_max_mant=6)
         if validate and (bias is None or bias == 7):
-            assert_fp8_valid(result, q_type="fp8_e4m3", bias=bias)
+             assert_fp8_valid(result, q_type="fp8_e4m3", bias=bias)
         return result
 
     elif q_type == "fp8_e5m2":
-        # Always use custom implementation (no inf/nan support)
-        result = quantize_fp8_e5m2(tensor, bias=bias, rounding=rounding)
+        # exp=30, mant=3 max value (clamp to max normal, no Inf)
+        result = quantize_fp8_generic(tensor, exp_bits=5, mant_bits=2, bias=bias, rounding=rounding, clip_max_exp=30, clip_max_mant=3)
         if validate:
-            assert_fp8_valid(result, q_type="fp8_e5m2", bias=bias)
+             assert_fp8_valid(result, q_type="fp8_e5m2", bias=bias)
+        return result
+        
+    elif q_type in ["fp8_e2m5", "fp8_e3m4", "fp8_e1m6", "fp8_e6m1", "fp8_e7m0", "fp8_e0m7"]:
+        # ... (rest unchanged)
+        # Parse bits from string
+        # fp8_eXmY
+        try:
+            exp_bits = int(q_type.split('_e')[1].split('m')[0])
+            mant_bits = int(q_type.split('m')[1])
+        except:
+             raise ValueError(f"Could not parse format {q_type}")
+             
+        result = quantize_fp8_generic(tensor, exp_bits, mant_bits, bias=bias, rounding=rounding)
+        # TODO: Add validation if needed
         return result
 
     elif q_type == "fp4_e2m1":
@@ -359,7 +378,6 @@ def quantize(tensor: torch.Tensor, q_type: str = "fp8_e4m3", bias: int = None, v
         return result
 
     elif q_type == "tf32":
-        # TF32 simulation (no validation needed as it's just reduced precision FP32)
         return quantize_tf32(tensor)
 
     else:
@@ -459,11 +477,22 @@ def quantize_tf32(tensor: torch.Tensor) -> torch.Tensor:
     return final_i32.view(torch.float32).view(orig_shape)
 
 
-def quantize_fp8_e4m3(tensor: torch.Tensor, bias: int = None, rounding: str = "nearest") -> torch.Tensor:
+
+
+
+def quantize_fp8_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, bias: int = None, rounding: str = "nearest", clip_max_exp: int = None, clip_max_mant: int = None) -> torch.Tensor:
     """
-    Hardware-friendly FP8 E4M3 quantization (fully vectorized).
+    Generic FP8 quantization for any E/M split.
+    Uses 'No Inf/NaN' policy (clamps to max representable).
     
-    NOTE: No inf/nan support. Overflow and inf/nan inputs are clamped to max value.
+    Args:
+        tensor: Input tensor
+        exp_bits: Number of exponent bits
+        mant_bits: Number of mantissa bits
+        bias: Exponent bias (optional)
+        rounding: Rounding mode
+        clip_max_exp: Optional override for max allowable exponent (raw integer value)
+        clip_max_mant: Optional override for max allowable mantissa at max exponent
     """
     orig_shape = tensor.shape
     tensor_flat = tensor.contiguous().view(-1)
@@ -474,14 +503,26 @@ def quantize_fp8_e4m3(tensor: torch.Tensor, bias: int = None, rounding: str = "n
     mant32 = i32 & 0x7FFFFF
     
     if bias is None:
-        bias = 7
+        # Default bias: 2^(E-1) - 1. For E=0, bias=0.
+        if exp_bits == 0:
+            bias = 0
+        else:
+            bias = (1 << (exp_bits - 1)) - 1
 
+    # Re-bias exponent
     fp8_exp = exp32.int() - (127 - bias)
+    
     mant_full = mant32 | 0x800000
     is_fp32_sub = (exp32 == 0)
     mant_full = torch.where(is_fp32_sub, mant32, mant_full)
     
-    shift = torch.full_like(fp8_exp, MANT_SHIFT_E4M3)
+    # Calculate shift
+    # FP32 mantissa = 23 bits. FP8 mantissa = M bits.
+    # Shift = 23 - M
+    mant_shift_val = 23 - mant_bits
+    shift = torch.full_like(fp8_exp, mant_shift_val)
+    
+    # Subnormal handling
     is_fp8_sub = fp8_exp < 1
     shift = torch.where(is_fp8_sub, shift + (1 - fp8_exp), shift)
     shift = torch.clamp(shift, max=31)
@@ -494,89 +535,90 @@ def quantize_fp8_e4m3(tensor: torch.Tensor, bias: int = None, rounding: str = "n
 
     mant_shifted = mant_rounded >> shift
     
-    overflow = mant_shifted >= 16
+    # Overflow check
+    overflow_threshold = 1 << (mant_bits + 1)
+    overflow = mant_shifted >= overflow_threshold
     mant_shifted = torch.where(overflow, mant_shifted >> 1, mant_shifted)
     fp8_exp = torch.where(overflow, fp8_exp + 1, fp8_exp)
     
-    is_normal = mant_shifted >= 8
+    # Store
+    implicit_one = 1 << mant_bits
+    
+    # Special handling for Exp=0 (no normal numbers)
+    if exp_bits > 0:
+        is_normal = mant_shifted >= implicit_one
+    else:
+        is_normal = torch.zeros_like(mant_shifted, dtype=torch.bool)
+    
     stored_exp = torch.where(is_normal, fp8_exp, torch.zeros_like(fp8_exp))
-    stored_mant = torch.where(is_normal, mant_shifted & 0x7, mant_shifted)
+    mask = (1 << mant_bits) - 1
+    stored_mant = torch.where(is_normal, mant_shifted & mask, mant_shifted)
     
-    # Clamp overflow to max value (exp=15, mant=6) instead of NaN (exp=15, mant=7)
-    is_overflow = (stored_exp > 15) | ((stored_exp == 15) & (stored_mant > 6))
-    stored_exp = torch.where(is_overflow, torch.full_like(stored_exp, 15), stored_exp)
-    stored_mant = torch.where(is_overflow, torch.full_like(stored_mant, 6), stored_mant)
+    # Clamp to Max Value
+    # Max Exp = 2^E - 1 (since we assume no NaN/Inf)
+    if exp_bits > 0:
+        if clip_max_exp is not None:
+            max_exp_val = clip_max_exp
+        else:
+            max_exp_val = (1 << exp_bits) - 1
+            
+        if clip_max_mant is not None:
+             max_mant_val = clip_max_mant
+        else:
+             max_mant_val = mask
+
+        # If we overflowed beyond max representable
+        # Logic: If exp > max_exp, clamp. 
+        # OR if exp == max_exp AND mant > max_mant, clamp.
+        is_overflow = (stored_exp > max_exp_val) | ((stored_exp == max_exp_val) & (stored_mant > max_mant_val))
+        
+        stored_exp = torch.where(is_overflow, torch.full_like(stored_exp, max_exp_val), stored_exp)
+        stored_mant = torch.where(is_overflow, torch.full_like(stored_mant, max_mant_val), stored_mant)
+    else:
+        # For E=0, max value is just max mantissa (all 1s)
+        max_exp_val = 0
+        stored_exp = torch.zeros_like(stored_exp)
+        
+        # Check if we exceeded max mantissa bits? 
+        if clip_max_mant is not None:
+             limit_mant = clip_max_mant
+        else:
+             limit_mant = mask
+             
+        stored_mant = torch.clamp(stored_mant, max=limit_mant)
+        
     
-    # Handle NaN/Inf input: clamp to max value (exp=15, mant=6)
+    # Handle NaN/Inf input (clamp to max)
     is_nan_inf = (exp32 == 255)
-    stored_exp = torch.where(is_nan_inf, torch.full_like(stored_exp, 15), stored_exp)
-    stored_mant = torch.where(is_nan_inf, torch.full_like(stored_mant, 6), stored_mant)
     
-    result = _fp8_e4m3_to_float_vectorized(sign, stored_exp, stored_mant, bias=bias)
+    # Use computed max values for clamping NaNs/Infs too
+    # If exp_bits=0, max_exp_val is 0.
+    # If exp_bits>0, it's what we computed above.
+    stored_exp = torch.where(is_nan_inf, torch.full_like(stored_exp, max_exp_val), stored_exp)
+    
+    target_mant_clamp = max_mant_val if exp_bits > 0 else (clip_max_mant if clip_max_mant is not None else mask)
+    stored_mant = torch.where(is_nan_inf, torch.full_like(stored_mant, target_mant_clamp), stored_mant)
+    
+    # Convert back to float
+    result = _fp8_generic_to_float_vectorized(sign, stored_exp, stored_mant, exp_bits, mant_bits, bias)
     return result.view(orig_shape)
 
+def _fp8_generic_to_float_vectorized(sign: torch.Tensor, exp: torch.Tensor, mant: torch.Tensor, exp_bits: int, mant_bits: int, bias: int) -> torch.Tensor:
+    """Convert generic FP8 fields to float32."""
+    if mant_bits > 0:
+        div_factor = float(1 << mant_bits)
+        m_val = mant.float() / div_factor
+        m_val = torch.where(exp > 0, m_val + 1.0, m_val)
+    else:
+        # e.g. E7M0. Mantissa is 0. Normal implies 1.0. Subnormal implies 0.0.
+        m_val = torch.where(exp > 0, torch.ones_like(exp, dtype=torch.float), torch.zeros_like(exp, dtype=torch.float))
 
-def quantize_fp8_e5m2(tensor: torch.Tensor, bias: int = None, rounding: str = "nearest") -> torch.Tensor:
-    """
-    Hardware-friendly FP8 E5M2 quantization.
-    Bias: 15 (default) or custom
-    Mantissa: 2 bits
+    e_val = exp.float() - float(bias)
+    e_val = torch.where(exp == 0, torch.full_like(e_val, 1.0 - float(bias)), e_val)
     
-    NOTE: No inf/nan support. Overflow and inf/nan inputs are clamped to max value.
-    """
-    orig_shape = tensor.shape
-    tensor_flat = tensor.contiguous().view(-1)
-    
-    i32 = tensor_flat.view(torch.int32)
-    sign = (i32 >> 31) & 0x1
-    exp32 = (i32 >> 23) & 0xFF
-    mant32 = i32 & 0x7FFFFF
-    
-    if bias is None:
-        bias = 15
-
-    # Re-bias exponent: new_exp = old_exp - 127 + bias
-    fp8_exp = exp32.int() - (127 - bias)
-    
-    mant_full = mant32 | 0x800000
-    is_fp32_sub = (exp32 == 0)
-    mant_full = torch.where(is_fp32_sub, mant32, mant_full)
-    
-    # Shift for 2 bits mantissa
-    shift = torch.full_like(fp8_exp, MANT_SHIFT_E5M2)
-    is_fp8_sub = fp8_exp < 1
-    shift = torch.where(is_fp8_sub, shift + (1 - fp8_exp), shift)
-    shift = torch.clamp(shift, max=31)
-    
-    if rounding == "nearest":
-        round_bit = (1 << (shift - 1).clamp(min=0))
-        mant_rounded = mant_full + round_bit
-    else: # truncate
-        mant_rounded = mant_full
-
-    mant_shifted = mant_rounded >> shift
-    
-    # Overflow check (mantissa has 2 bits, so >= 4 is overflow)
-    overflow = mant_shifted >= 4
-    mant_shifted = torch.where(overflow, mant_shifted >> 1, mant_shifted)
-    fp8_exp = torch.where(overflow, fp8_exp + 1, fp8_exp)
-    
-    is_normal = mant_shifted >= 2 # Implicit 1
-    stored_exp = torch.where(is_normal, fp8_exp, torch.zeros_like(fp8_exp))
-    stored_mant = torch.where(is_normal, mant_shifted & 0x3, mant_shifted)
-    
-    # Clamp to max normal value (exp=30, mant=3) instead of inf (exp=31)
-    is_overflow = stored_exp >= 31
-    stored_exp = torch.where(is_overflow, torch.full_like(stored_exp, 30), stored_exp)
-    stored_mant = torch.where(is_overflow, torch.full_like(stored_mant, 3), stored_mant)
-    
-    # Handle NaN/Inf input: clamp to max value (exp=30, mant=3)
-    is_nan_inf = (exp32 == 255)
-    stored_exp = torch.where(is_nan_inf, torch.full_like(stored_exp, 30), stored_exp)
-    stored_mant = torch.where(is_nan_inf, torch.full_like(stored_mant, 3), stored_mant)
-    
-    result = _fp8_e5m2_to_float_vectorized(sign, stored_exp, stored_mant, bias=bias)
-    return result.view(orig_shape)
+    result = m_val * torch.pow(2.0, e_val)
+    result = torch.where(sign == 1, -result, result)
+    return result
 
 
 def quantize_fp4_e2m1(tensor: torch.Tensor, bias: int = None, rounding: str = "nearest") -> torch.Tensor:
@@ -702,17 +744,73 @@ def quantize_fp4_e3m0(tensor: torch.Tensor, bias: int = None, rounding: str = "n
     return result.view(orig_shape)
 
 
-def quantize_int8(tensor: torch.Tensor) -> torch.Tensor:
+def quantize_int8(tensor: torch.Tensor, rounding: str = "nearest") -> torch.Tensor:
     """
     INT8 quantization (symmetric).
     Assumes tensor is already scaled to [-127, 127] range.
     Rounds to nearest integer and clamps to [-127, 127].
+    
+    Args:
+        tensor: Input tensor
+        rounding: "nearest" or "truncate"
     """
-    # Round to nearest integer
-    result = torch.round(tensor)
-    # Clamp to valid range [-127, 127]
-    result = torch.clamp(result, -127.0, 127.0)
-    return result
+    return quantize_int8_manual(tensor, rounding=rounding)
+
+def quantize_int8_manual(tensor: torch.Tensor, rounding: str = "nearest") -> torch.Tensor:
+    """
+    Manual INT8 quantization using bitwise operations (simulating hardware).
+    """
+    orig_shape = tensor.shape
+    tensor_flat = tensor.contiguous().view(-1)
+    
+    i32 = tensor_flat.view(torch.int32)
+    sign = (i32 >> 31) & 0x1
+    exp32 = (i32 >> 23) & 0xFF
+    mant32 = i32 & 0x7FFFFF
+    
+    # 1.M * 2^(E-127)
+    # We want Integer Value. 
+    # Mantissa represents 1.M * 2^23 (if we treat 1.M as 1M...M)
+    # Value = (Mant_Int * 2^-23) * 2^(E-127) = Mant_Int * 2^(E - 150)
+    # To get integer: Shift Right by (150 - E)
+    
+    # Handle normal vs subnormal (exp=0)
+    # Normals: Implicit 1 at bit 23
+    mant_full = mant32 | 0x800000
+    # Subnormals: No implicit 1. Effective exp is same as E=1 for shift purposes (-126)
+    # Formula above for E=1: 1 - 150 = -149.
+    # Subnormal val: 0.M * 2^-126 = M * 2^-23 * 2^-126 = M * 2^-149.
+    # So for Exp=0, we use shift corresponding to E=1 (149), and no implicit 1.
+    
+    is_subnormal = (exp32 == 0)
+    mant_full = torch.where(is_subnormal, mant32, mant_full)
+    
+    # Calculate shift
+    # Shift = 150 - E
+    # For subnormals (E=0), Shift = 149.
+    eff_exp = torch.where(is_subnormal, torch.ones_like(exp32), exp32.int())
+    shift = 150 - eff_exp
+    
+    # Clamp shift to 0 (for large inputs > 2^23, though they will be clamped anyway)
+    shift = torch.clamp(shift, min=0, max=31) 
+    
+    if rounding == "nearest":
+        # Add 0.5 (1 << (shift - 1))
+        round_bit = (1 << (shift - 1).clamp(min=0))
+        mant_rounded = mant_full + round_bit
+    else:
+        mant_rounded = mant_full
+        
+    int_val = mant_rounded >> shift
+    
+    # Apply sign
+    # 2s complement negation: ~x + 1 or just -x since we are in signed int container
+    int_val = torch.where(sign == 1, -int_val.float(), int_val.float())
+    
+    # Clamp to [-127, 127]
+    result = torch.clamp(int_val, -127.0, 127.0)
+    
+    return result.view(orig_shape)
 
 
 def quantize_int4(tensor: torch.Tensor) -> torch.Tensor:
@@ -730,37 +828,7 @@ def quantize_int4(tensor: torch.Tensor) -> torch.Tensor:
     return result
 
 
-def _fp8_e4m3_to_float_vectorized(sign: torch.Tensor, exp: torch.Tensor, mant: torch.Tensor, bias: int = 7) -> torch.Tensor:
-    """
-    Convert FP8 E4M3 fields to float32.
-    
-    NOTE: No NaN support. All values are normal or subnormal.
-    """
-    m_val = mant.float() / 8.0
-    m_val = torch.where(exp > 0, m_val + 1.0, m_val)
-    
-    e_val = exp.float() - float(bias)
-    e_val = torch.where(exp == 0, torch.full_like(e_val, 1.0 - float(bias)), e_val)
-    
-    result = m_val * torch.pow(2.0, e_val)
-    result = torch.where(sign == 1, -result, result)
-    return result
 
-def _fp8_e5m2_to_float_vectorized(sign: torch.Tensor, exp: torch.Tensor, mant: torch.Tensor, bias: int = 15) -> torch.Tensor:
-    """
-    Convert FP8 E5M2 fields to float32.
-    
-    NOTE: No Inf/NaN support. All values are normal or subnormal.
-    """
-    m_val = mant.float() / 4.0
-    m_val = torch.where(exp > 0, m_val + 1.0, m_val)
-    
-    e_val = exp.float() - float(bias)
-    e_val = torch.where(exp == 0, torch.full_like(e_val, 1.0 - float(bias)), e_val)
-    
-    result = m_val * torch.pow(2.0, e_val)
-    result = torch.where(sign == 1, -result, result)
-    return result
 
 def _fp4_e2m1_to_float_vectorized(sign: torch.Tensor, exp: torch.Tensor, mant: torch.Tensor, bias: int = 1) -> torch.Tensor:
     """Convert FP4 E2M1 fields to float32."""

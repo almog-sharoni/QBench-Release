@@ -193,6 +193,102 @@ class QuantizedLayerMixin:
         mode = getattr(self, 'weight_mode', 'channel') # Default to channel for weights
         chunk_size = getattr(self, 'weight_chunk_size', None)
         rounding = getattr(self, 'rounding', 'nearest') # Default to nearest for weights
+        chunk_formats = getattr(self, 'chunk_formats', None) # Per-chunk format list
+        
+        if chunk_formats is not None and chunk_size is not None:
+            # Flatten weight
+            if self.weight.dim() > 1:
+                flat_weight = self.weight.flatten(1)
+                batch_size = self.weight.shape[0]
+            else:
+                flat_weight = self.weight.flatten(0)
+                batch_size = 1
+            
+            num_elements = flat_weight.shape[-1]
+            pad_len = 0
+            if num_elements % chunk_size != 0:
+                pad_len = chunk_size - (num_elements % chunk_size)
+                flat_weight = torch.nn.functional.pad(flat_weight, (0, pad_len))
+            
+            num_chunks = flat_weight.shape[-1] // chunk_size
+            chunked = flat_weight.view(batch_size, num_chunks, chunk_size)
+            
+            # chunk_formats handling
+            total_chunks = batch_size * num_chunks
+            
+            # Align chunk_formats
+            final_formats = []
+            if len(chunk_formats) == total_chunks:
+                final_formats = chunk_formats
+            elif len(chunk_formats) == num_chunks:
+                # Broadcast across batch
+                final_formats = []
+                for _ in range(batch_size):
+                    final_formats.extend(chunk_formats)
+            else:
+                print(f"Warning: chunk_formats length ({len(chunk_formats)}) mismatch. Expected {total_chunks} or {num_chunks}.")
+                # Fallback: use first format
+                final_formats = [chunk_formats[0]] * total_chunks
+                
+            # Flatten chunks for processing: [total_chunks, chunk_size]
+            chunked_flat = chunked.view(-1, chunk_size)
+            
+            quantized_flat = torch.zeros_like(chunked_flat)
+            scale_flat = torch.zeros_like(chunked_flat) # Expanded scale
+            
+            # Group by format to vectorize quantization
+            unique_fmts = set(final_formats)
+            
+            for fmt in unique_fmts:
+                # Find indices for this format
+                indices = [i for i, f in enumerate(final_formats) if f == fmt]
+                
+                if not indices:
+                    continue
+                    
+                indices_tensor = torch.tensor(indices, device=self.weight.device)
+                
+                # Extract sub-tensor
+                sub_chunks = chunked_flat[indices_tensor] # [M, chunk_size]
+                
+                # Calculate scale
+                max_val = sub_chunks.abs().amax(dim=1, keepdim=True).clamp(min=1e-9)
+                bias = get_quantization_bias(fmt)
+                scale = calculate_scale(max_val, fmt, bias) # [M, 1]
+                
+                # Quantize
+                scaled = sub_chunks / scale
+                # Note: quantize returns floats for fp8/int8 simulation
+                quant = quantize(scaled, q_type=fmt, bias=bias, rounding=rounding).to(chunked_flat.dtype)
+                
+                # Store back
+                quantized_flat[indices_tensor] = quant
+                
+                # Expand scale to chunk size and store
+                scale_expanded = scale.expand(-1, chunk_size)
+                scale_flat[indices_tensor] = scale_expanded
+
+            # Reshape back to [batch, num_chunks, chunk_size]
+            weight_fp8_chunked = quantized_flat.view(batch_size, num_chunks, chunk_size)
+            weight_scale_chunked = scale_flat.view(batch_size, num_chunks, chunk_size)
+            
+            # Reshape to flat [batch, num_elements_padded]
+            weight_fp8_flat = weight_fp8_chunked.view(batch_size, -1)
+            weight_scale_flat = weight_scale_chunked.view(batch_size, -1)
+            
+            # Remove padding
+            if pad_len > 0:
+                weight_fp8_flat = weight_fp8_flat[:, :num_elements]
+                weight_scale_flat = weight_scale_flat[:, :num_elements]
+            
+            # View as original shape
+            self.weight_fp8 = weight_fp8_flat.view_as(self.weight)
+            self.weight_scale = weight_scale_flat.view_as(self.weight)
+            
+            # Store chunk formats for reference
+            self.weight_chunk_formats = final_formats
+            
+            return
         
         # We can reuse quantize_tensor logic to get scale and quantized weight
         # But we need to be careful about the "channel" definition.
@@ -219,7 +315,7 @@ class QuantizedLayerMixin:
              elif q_type == 'int4':
                  # Store as int8 (no native int4 type), but values are in [-8, 7]
                  self.weight_fp8 = w_unscaled.to(torch.int8)
-             elif q_type in ['fp8_e4m3', 'fp8_e5m2']:
+             elif q_type in ['fp8_e4m3', 'fp8_e5m2', "fp8_e2m5", "fp8_e3m4", "fp8_e1m6", "fp8_e6m1", "fp8_e7m0"]:
                  # Use custom quantize to ensure no inf/nan and consistent behavior
                  # w_unscaled is already quantized by quantize_tensor, just store as float32
                  self.weight_fp8 = w_unscaled
@@ -253,7 +349,7 @@ class QuantizedLayerMixin:
         # We store the quantized version (as fp8 type)
         w_scaled = self.weight / self.weight_scale
         
-        if q_type in ['fp8_e4m3', 'fp8_e5m2']:
+        if q_type in ['fp8_e4m3', 'fp8_e5m2', "fp8_e2m5", "fp8_e3m4", "fp8_e1m6", "fp8_e6m1", "fp8_e7m0"]:
             # Use custom quantize to ensure no inf/nan and consistent behavior
             self.weight_fp8 = quantize(w_scaled, q_type=q_type, bias=bias, rounding=rounding)
         elif q_type in ['fp4_e2m1', 'fp4_e3m0']:

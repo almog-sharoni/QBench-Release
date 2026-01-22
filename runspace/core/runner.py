@@ -106,6 +106,21 @@ class Runner:
         model_config = config.get('model', {})
         model_name = model_config.get('name', 'unknown')
         quant_format = config.get('quantization', {}).get('format', 'fp8')
+        
+        # Check for mixed precision
+        layer_configs = config.get('quantization', {}).get('layers', {})
+        if layer_configs:
+            unique_formats = set()
+            for layer_name, layer_cfg in layer_configs.items():
+                if isinstance(layer_cfg, dict) and 'format' in layer_cfg:
+                    unique_formats.add(layer_cfg['format'])
+            
+            if len(unique_formats) > 1:
+                quant_format = "mixed"
+            elif len(unique_formats) == 1:
+                # If all layers override to the same thing, report that thing
+                quant_format = list(unique_formats)[0]
+        
         meta = config.get('meta', {})
         
         print(f"--- Running {model_name} with {quant_format} ---")
@@ -115,6 +130,7 @@ class Runner:
             'quant_format': quant_format,
             'base_config_path': meta.get('base_config_path', 'N/A'),
             'generated_config_path': meta.get('generated_config_path', 'N/A'),
+            'output_name': config.get('output_name', ''), # Custom identifier
             'status': 'FAILED',
             'acc1': 0.0,
             'acc5': 0.0,
@@ -156,7 +172,18 @@ class Runner:
             
             # Generate Output Directory
             base_config_path = meta.get('base_config_path', '')
-            if base_config_path:
+            output_name = config.get('output_name', '')
+            
+            if output_name:
+                # If explicit output_name is provided, use it directly under output_root or model dir
+                # We want consistency: output_root / model_name / output_name 
+                # (since find_optimal_layer_quant sets output_root = experiment/model)
+                # But Runner standard is output_root/model/variant.
+                # If output_root is already specific (like in the experiment script), we might want just output_root/output_name?
+                # The experiment script passes output_root=model_dir.
+                # So if we do output_root/output_name, it becomes .../resnet18/ref_fp32. This is what we want.
+                output_dir = os.path.join(output_root, output_name)
+            elif base_config_path:
                 base_config_name = os.path.splitext(os.path.basename(base_config_path))[0]
                 output_dir = os.path.join(output_root, base_config_name, model_name, quant_format.replace('_', ''))
             else:

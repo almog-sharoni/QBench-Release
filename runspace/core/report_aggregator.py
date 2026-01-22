@@ -36,7 +36,7 @@ class ReportAggregator:
             self._write_csv(results, output_file + '.csv')
 
     def _write_csv(self, results: List[Dict[str, Any]], output_file: str):
-        fieldnames = ['timestamp', 'model_name', 'quant_format', 'base_config_path', 'generated_config_path', 'status', 'acc1', 'acc5', 'certainty', 'ref_acc1', 'ref_acc5', 'ref_certainty', 'acc_drop', 'weight_comp_red', 'weight_comp_share', 'input_comp_red', 'input_comp_share', 'exec_error', 'report_path']
+        fieldnames = ['timestamp', 'model_name', 'output_name', 'quant_format', 'base_config_path', 'generated_config_path', 'status', 'acc1', 'acc5', 'certainty', 'ref_acc1', 'ref_acc5', 'ref_certainty', 'acc_drop', 'weight_comp_red', 'weight_comp_share', 'input_comp_red', 'input_comp_share', 'exec_error', 'report_path']
         
         file_exists = os.path.isfile(output_file)
         

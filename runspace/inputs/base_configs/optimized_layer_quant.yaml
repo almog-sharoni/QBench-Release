@@ -1,0 +1,63 @@
+adapter:
+  input_quantization: false
+  input_quantization_type: fp32
+  quantized_ops:
+  - Conv2d
+  - Linear
+  type: generic
+evaluation:
+  mode: compare
+model:
+  name: resnet18
+  weights: DEFAULT
+quantization:
+  format: fp8_e4m3
+  layers:
+    conv1:
+      format: fp8_e4m3
+    fc:
+      format: int8
+    layer1.0.conv1:
+      format: fp8_e4m3
+    layer1.0.conv2:
+      format: fp8_e4m3
+    layer1.1.conv1:
+      format: fp8_e4m3
+    layer1.1.conv2:
+      format: fp8_e4m3
+    layer2.0.conv1:
+      format: int8
+    layer2.0.conv2:
+      format: int8
+    layer2.0.downsample.0:
+      format: fp8_e4m3
+    layer2.1.conv1:
+      format: int8
+    layer2.1.conv2:
+      format: int8
+    layer3.0.conv1:
+      format: int8
+    layer3.0.conv2:
+      format: int8
+    layer3.0.downsample.0:
+      format: fp8_e4m3
+    layer3.1.conv1:
+      format: int8
+    layer3.1.conv2:
+      format: int8
+    layer4.0.conv1:
+      format: int8
+    layer4.0.conv2:
+      format: int8
+    layer4.0.downsample.0:
+      format: fp8_e4m3
+    layer4.1.conv1:
+      format: int8
+    layer4.1.conv2:
+      format: int8
+
+dataset:
+  name: imagenet
+  path: /data/imagenet/val
+  batch_size: 64
+  num_workers: 4

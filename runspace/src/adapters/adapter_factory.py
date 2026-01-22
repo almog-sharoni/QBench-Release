@@ -82,6 +82,9 @@ def create_adapter(config: dict) -> BaseAdapter:
     # Can be in quantization.layers or adapter.layers (prefer quantization.layers)
     layer_config = quantization_config.get('layers', adapter_config.get('layers', None))
     
+    # Check if per-chunk format mode is enabled
+    per_chunk_format = quantization_config.get('per_chunk_format', False)
+    
     if adapter_type == 'generic' or adapter_type == 'resnet':
         from .generic_adapter import GenericAdapter
         # For 'resnet' type, we just use GenericAdapter with defaults or config overrides
@@ -105,7 +108,8 @@ def create_adapter(config: dict) -> BaseAdapter:
             act_chunk_size=act_chunk_size,
             fold_layers=fold_layers,
             simulate_tf32_accum=simulate_tf32_accum,
-            rounding=rounding
+            rounding=rounding,
+            per_chunk_format=per_chunk_format
         )
     
     elif adapter_type == 'slm':
@@ -182,15 +186,16 @@ def validate_config(config: dict):
     # Define allowed keys
     schema = {
         'model': ['name', 'source', 'weights'],
-        'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'quantization_type', 'layers', 'fold_layers'],
-        'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding'], # 'type' and 'enabled' for backward compat/fp4 example
+        'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type'],
+        'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format'], # 'type' and 'enabled' for backward compat/fp4 example
         'dataset': ['name', 'path', 'batch_size', 'num_workers'],
         'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms'] # dataset/batch_size allowed here too?
     }
     
     # Check top-level keys
+    allowed_top_level = list(schema.keys()) + ['output_name']  # output_name used by runner
     for key in config:
-        if key not in schema:
+        if key not in allowed_top_level:
             warnings.warn(f"Unknown top-level config key: '{key}'")
             
     # Check nested keys

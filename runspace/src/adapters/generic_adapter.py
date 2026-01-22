@@ -29,6 +29,7 @@ class GenericAdapter(BaseAdapter):
         quantization_type: str = "fp8_e4m3",
         quantization_bias: int = None,
         layer_config: dict = None,
+        per_chunk_format: bool = False,
         input_quantization_type: str = None,
         quant_mode: str = "tensor",
         chunk_size: int = None,
@@ -52,7 +53,11 @@ class GenericAdapter(BaseAdapter):
         self.quantization_type = quantization_type
         self.quantization_bias = quantization_bias
         self.layer_config = layer_config if layer_config is not None else {}
+        self.per_chunk_format = per_chunk_format
         self.input_quantization_type = input_quantization_type
+        
+
+        
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
         self.weight_mode = weight_mode
@@ -246,6 +251,7 @@ class GenericAdapter(BaseAdapter):
         rounding = self.rounding
         
         # Check for layer-specific config
+        layer_conf = {}
         if name in self.layer_config:
             layer_conf = self.layer_config[name]
             # Support both 'type' and 'format' keys for q_type
@@ -254,26 +260,26 @@ class GenericAdapter(BaseAdapter):
             elif 'format' in layer_conf:
                 q_type = layer_conf['format']
                 
-            if 'bias' in layer_conf:
-                bias = layer_conf['bias']
-                
-            if 'input_format' in layer_conf:
-                input_q_type = layer_conf['input_format']
-                
-            if 'mode' in layer_conf:
-                input_mode = layer_conf['mode']
-            if 'chunk_size' in layer_conf:
-                input_chunk_size = layer_conf['chunk_size']
-            if 'weight_mode' in layer_conf:
-                weight_mode = layer_conf['weight_mode']
-            if 'weight_chunk_size' in layer_conf:
-                weight_chunk_size = layer_conf['weight_chunk_size']
-            if 'act_mode' in layer_conf:
-                act_mode = layer_conf['act_mode']
-            if 'act_chunk_size' in layer_conf:
-                act_chunk_size = layer_conf['act_chunk_size']
-            if 'rounding' in layer_conf:
-                rounding = layer_conf['rounding']
+        if 'bias' in layer_conf:
+            bias = layer_conf['bias']
+            
+        if 'input_format' in layer_conf:
+            input_q_type = layer_conf['input_format']
+            
+        if 'mode' in layer_conf:
+            input_mode = layer_conf['mode']
+        if 'chunk_size' in layer_conf:
+            input_chunk_size = layer_conf['chunk_size']
+        if 'weight_mode' in layer_conf:
+            weight_mode = layer_conf['weight_mode']
+        if 'weight_chunk_size' in layer_conf:
+            weight_chunk_size = layer_conf['weight_chunk_size']
+        if 'act_mode' in layer_conf:
+            act_mode = layer_conf['act_mode']
+        if 'act_chunk_size' in layer_conf:
+            act_chunk_size = layer_conf['act_chunk_size']
+        if 'rounding' in layer_conf:
+            rounding = layer_conf['rounding']
         
         # Case 1: Custom from_native factory (e.g. MHA, BasicConv2d)
         if hasattr(QuantClass, 'from_native'):
@@ -297,6 +303,10 @@ class GenericAdapter(BaseAdapter):
             module.weight_mode = weight_mode
             module.weight_chunk_size = weight_chunk_size
             module.rounding = rounding
+            
+            # Per-chunk format configuration
+            if self.per_chunk_format and 'chunk_formats' in layer_conf:
+                module.chunk_formats = layer_conf['chunk_formats']
             
             module.register_buffer('weight_scale', None)
             module.register_buffer('weight_fp8', None)
@@ -373,6 +383,12 @@ class GenericAdapter(BaseAdapter):
                             if "Linear" not in self.excluded_ops:
                                 should_quantize = True
             
+            # Check layer config for fp32 override
+            if should_quantize and full_name in self.layer_config:
+                l_conf = self.layer_config[full_name]
+                if l_conf.get('format') == 'fp32' or l_conf.get('type') == 'fp32':
+                    should_quantize = False
+
             if should_quantize:
                 QuantClass = OpRegistry.get_quantized_op(type(module))
                 new_module = self._create_quantized_module(module, QuantClass, name=full_name)
