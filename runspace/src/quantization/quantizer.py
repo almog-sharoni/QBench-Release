@@ -339,18 +339,39 @@ def quantize(tensor: torch.Tensor, q_type: str = "fp8_e4m3", bias: int = None, v
              assert_fp8_valid(result, q_type="fp8_e5m2", bias=bias)
         return result
         
-    elif q_type in ["fp8_e2m5", "fp8_e3m4", "fp8_e1m6", "fp8_e6m1", "fp8_e7m0", "fp8_e0m7"]:
-        # ... (rest unchanged)
+    elif (q_type.startswith("fp") or q_type.startswith("ufp")) and "_e" in q_type and "m" in q_type:
+        # Generic handling for any fpX/ufpX formats
         # Parse bits from string
-        # fp8_eXmY
         try:
-            exp_bits = int(q_type.split('_e')[1].split('m')[0])
-            mant_bits = int(q_type.split('m')[1])
+            is_signed = q_type.startswith("fp")
+            prefix = "fp" if is_signed else "ufp"
+            
+            # Expected format: [u]fp[bits]_e[exp]m[mant]
+            fpx_part = q_type.split('_')[0] 
+            e_part = q_type.split('_e')[1]
+            exp_bits = int(e_part.split('m')[0])
+            mant_bits = int(e_part.split('m')[1])
+            total_bits_name = int(fpx_part.replace(prefix, ''))
+            
+            # Validation logic
+            # For fp: 1 (S) + E + M
+            # For ufp: 0 (S) + E + M
+            calc_bits = (1 if is_signed else 0) + exp_bits + mant_bits
+            
+            # Warn if name doesn't match bits? (Optional)
+                
         except:
              raise ValueError(f"Could not parse format {q_type}")
+
+        # If unsigned, clamp to non-negative
+        if not is_signed:
+            # For unsigned, we only represent positive numbers. Negative inputs are clipped to 0.
+            tensor = torch.relu(tensor)
              
         result = quantize_fp8_generic(tensor, exp_bits, mant_bits, bias=bias, rounding=rounding)
-        # TODO: Add validation if needed
+        
+        if validate:
+             assert_fp8_valid(result, q_type=q_type, bias=bias)
         return result
 
     elif q_type == "fp4_e2m1":
@@ -382,6 +403,53 @@ def quantize(tensor: torch.Tensor, q_type: str = "fp8_e4m3", bias: int = None, v
 
     else:
         raise ValueError(f"Unsupported quantization type: {q_type}")
+
+
+# ============================================================================
+# Generic FP Table Generator
+# ============================================================================
+
+def _generate_fp_generic_table(device: torch.device = None, total_bits: int = 8, exp_bits: int = 4, mant_bits: int = 3, bias: int = 7, signed: bool = True) -> torch.Tensor:
+    """
+    Generate lookup table for any FP format (S + E + M).
+    If signed=False, S=0.
+    """
+    if device is None:
+        device = torch.device('cpu')
+        
+    cache_key = f"{device}_{'s' if signed else 'u'}fp{total_bits}_e{exp_bits}m{mant_bits}_bias{bias}"
+    if cache_key in _FP8_TABLE_CACHE:
+        return _FP8_TABLE_CACHE[cache_key]
+        
+    num_codes = 1 << total_bits
+    codes = torch.arange(num_codes, dtype=torch.int32, device=device)
+    
+    # Extract fields
+    if signed:
+        # Sign is MSB: [S, E...E, M...M]
+        sign_shift = total_bits - 1
+        exp_shift = mant_bits
+        mant_mask = (1 << mant_bits) - 1
+        exp_mask = (1 << exp_bits) - 1
+        
+        sign = (codes >> sign_shift) & 0x1
+        exp = (codes >> exp_shift) & exp_mask
+        mant = codes & mant_mask
+    else:
+        # Unsigned: [E...E, M...M]
+        # Sign is implicit 0
+        sign = torch.zeros_like(codes)
+        exp_shift = mant_bits
+        mant_mask = (1 << mant_bits) - 1
+        exp_mask = (1 << exp_bits) - 1
+        
+        exp = (codes >> exp_shift) & exp_mask
+        mant = codes & mant_mask
+    
+    values = _fp8_generic_to_float_vectorized(sign, exp, mant, exp_bits, mant_bits, bias)
+    
+    _FP8_TABLE_CACHE[cache_key] = values
+    return values
 
 
 def quantize_tf32(tensor: torch.Tensor) -> torch.Tensor:
@@ -911,7 +979,7 @@ def check_fp8_compliance(tensor: torch.Tensor, valid_table: torch.Tensor = None,
              return False, count, examples
         return True, 0, []
 
-    # For FP8/FP4, we need the table
+    # For FP8/FP4/FP*, we need the table
     if valid_table is None:
         if q_type == "fp8_e4m3":
             valid_table = _generate_fp8_e4m3_table(tensor.device, bias=bias if bias is not None else 7)
@@ -921,6 +989,34 @@ def check_fp8_compliance(tensor: torch.Tensor, valid_table: torch.Tensor = None,
             valid_table = _generate_fp4_e2m1_table(tensor.device, bias=bias if bias is not None else 1)
         elif q_type == "fp4_e3m0":
             valid_table = _generate_fp4_e3m0_table(tensor.device, bias=bias if bias is not None else 3)
+        elif (q_type.startswith("fp") or q_type.startswith("ufp")) and "_e" in q_type and "m" in q_type:
+             # Generic FP generation
+             try:
+                 is_signed = q_type.startswith("fp")
+                 prefix = "fp" if is_signed else "ufp"
+                 
+                 fpx_part = q_type.split('_')[0]
+                 e_part = q_type.split('_e')[1]
+                 exp_bits = int(e_part.split('m')[0])
+                 mant_bits = int(e_part.split('m')[1])
+                 # total_bits = int(fpx_part.replace(prefix, '')) # trust calculation instead
+                 
+                 # Calculate stored bits
+                 # For Signed: S + E + M
+                 # For Unsigned: E + M
+                 # NOTE: The table generator expects the number of bits to ITERATE over.
+                 # If ufp8 implies 7 stored bits (E+M=7), then we iterate 2^7 values.
+                 total_iter_bits = exp_bits + mant_bits
+                 if is_signed:
+                     total_iter_bits += 1
+                     
+                 # Calculate default bias if not provided
+                 if bias is None:
+                     bias = (1 << (exp_bits - 1)) - 1 if exp_bits > 0 else 0
+                 
+                 valid_table = _generate_fp_generic_table(tensor.device, total_iter_bits, exp_bits, mant_bits, bias, signed=is_signed)
+             except:
+                  raise ValueError(f"Could not parse or generate table for format {q_type}")
         else:
              raise ValueError(f"Unknown q_type: {q_type}")
 

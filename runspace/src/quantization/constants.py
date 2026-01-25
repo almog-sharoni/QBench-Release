@@ -15,32 +15,38 @@ def get_quantization_bias(q_type: str) -> int:
     Returns:
         Exponent bias value for the given type
     """
+    # Manual overrides and specific cases
     if q_type == 'fp8_e5m2':
         return 15
     elif q_type == 'fp8_e4m3':
         return 7
-    elif q_type == 'fp8_e3m4':
-        return 3
-    elif q_type == 'fp8_e2m5':
-        return 1
-    elif q_type == 'fp8_e1m6':
-        return 0
-    elif q_type == 'fp8_e6m1':
-        return 31
-    elif q_type == 'fp8_e7m0':
-        return 63
-    elif q_type == 'fp8_e0m7':
-        return 0
     elif q_type == 'fp4_e2m1':
-        return 2
+        return 2  # Matches previous constant, though standard is 1? Keeping for safety.
     elif q_type == 'fp4_e3m0':
         return 4
     elif q_type == 'int8':
-        return 7
+        return 7  # Not really a bias, but kept for compat
     elif q_type == 'int4':
         return 3
-    else:
-        return 7
+    
+    # Generic parsing for fp*_e*m* and ufp*_e*m*
+    # Format: fp[bits]_e[exp_bits]m[mant_bits] or ufp[bits]...
+    if (q_type.startswith('fp') or q_type.startswith('ufp')) and '_e' in q_type and 'm' in q_type:
+        try:
+            # Parse parts
+            e_part = q_type.split('_e')[1]
+            exp_bits = int(e_part.split('m')[0])
+            
+            if exp_bits == 0:
+                return 0
+            
+            # Default IEEE-like bias: 2^(k-1) - 1
+            return (1 << (exp_bits - 1)) - 1
+        except (ValueError, IndexError):
+            # Fallback if parsing fails
+            return 7
+            
+    return 7
 
 
 # Legacy constants for backward compatibility

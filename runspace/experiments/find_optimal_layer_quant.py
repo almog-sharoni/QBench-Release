@@ -25,7 +25,10 @@ from runspace.src.quantization.constants import get_quantization_bias
 from runspace.core.runner import Runner
 from runspace.core.report_aggregator import ReportAggregator
 
-baseline_formats = ['fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6', 'fp8_e6m1', 'fp8_e7m0', 'fp8_e0m7', 'fp4_e2m1', 'fp4_e3m0']
+baseline_formats = [
+    'fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6', 'fp8_e6m1', 'fp8_e7m0', 'fp8_e0m7',
+    'fp7_e3m3', 'fp7_e4m2', 'fp7_e2m4', 'fp7_e5m1', 'fp7_e1m5', 'fp7_e6m0', 'fp7_e0m6',
+]
 
 
 def get_args():
@@ -34,6 +37,7 @@ def get_args():
     parser.add_argument("--weights", type=str, default="DEFAULT", help="Model weights")
     parser.add_argument("--include_fp32", action="store_true", help="Include FP32 in search")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory (default: runspace/experiments/optimal_layer_quant)")
+    parser.add_argument("--models_config", type=str, default=None, help="Path to a YAML file containing a list of models to run")
     
     # Validation / Metric Args
     parser.add_argument("--metrics", type=str, default="l1", help="Comma-separated metrics: l1, mse, sqnr, cosine OR 'all'")
@@ -516,22 +520,58 @@ def plot_chunk_format_distribution(chunk_formats, formats, output_dir, metric):
     plt.savefig(os.path.join(output_dir, f"chunk_format_heatmap_{metric}.png"), dpi=150)
     plt.close()
 
+def get_format_bits(fmt):
+    """
+    Returns the bit width of a quantization format string.
+    """
+    if not fmt: return 32
+    if fmt == 'fp32': return 32
+    if fmt == 'int8': return 8
+    if fmt == 'int4': return 4
+    
+    # Check for fpX_... or ufpX_...
+    # The 'X' usually denotes total container bits in name, but we should parse carefully.
+    # Logic same as quantizer: [u]fp[Total]_e[E]m[M]
+    # For signed: S + E + M. For unsigned: E + M.
+    try:
+        is_signed = fmt.startswith('fp')
+        if '_e' in fmt and 'm' in fmt:
+             parts = fmt.split('_e')[1].split('m')
+             exp = int(parts[0])
+             mant = int(parts[1])
+             
+             bits = exp + mant
+             if is_signed:
+                 bits += 1
+             return bits
+    except:
+        pass
+        
+    # Fallback to name parsing if strict loop failed or different format
+    # fp8 -> 8, fp4 -> 4
+    if fmt.startswith('fp'):
+        try:
+            return int(fmt.split('_')[0].replace('fp',''))
+        except: pass
+    if fmt.startswith('ufp'):
+         try:
+            return int(fmt.split('_')[0].replace('ufp',''))
+         except: pass
+         
+    return 32 # Default high for unknown
+
 def sort_formats(formats):
     """Sort formats by bit width (desc) then exponent size (desc)."""
     def parse_fmt(fmt):
-        if fmt == 'fp32': return (32, 8)
-        if fmt == 'int8': return (8, 0)
-        if fmt == 'int4': return (4, 0)
-        if fmt.startswith('fp8_e'):
-            # fp8_eXmY
-            parts = fmt.split('_e')[1].split('m')
-            exp = int(parts[0])
-            return (8, exp)
-        if fmt.startswith('fp4_e'):
-            parts = fmt.split('_e')[1].split('m')
-            exp = int(parts[0])
-            return (4, exp)
-        return (0, 0)
+        bits = get_format_bits(fmt)
+        
+        # Second key: exp bits for tie breaking? 
+        exp = 0
+        if '_e' in fmt:
+             try:
+                exp = int(fmt.split('_e')[1].split('m')[0])
+             except: pass
+        return (bits, exp)
         
     return sorted(formats, key=parse_fmt, reverse=True)
 
@@ -558,7 +598,7 @@ def plot_chunk_win_rate(win_counts, formats, output_dir, metric, layer_winners=N
         total = win_counts[layer].get('total', 1)
         for j, fmt in enumerate(sorted_formats):
             count = win_counts[layer].get(fmt, 0)
-            data[i, j] = count / total * 100.0 # Percentage
+            data[i, j] = count # Raw count
             
     plt.figure(figsize=(15, 8))
     
@@ -572,7 +612,7 @@ def plot_chunk_win_rate(win_counts, formats, output_dir, metric, layer_winners=N
         plt.bar(layers, data[:, j], bottom=bottom, label=fmt, color=cmap(j))
         bottom += data[:, j]
         
-    plt.ylabel('Percentage of Chunks (%)')
+    plt.ylabel('Number of Chunks')
     plt.title(f'Chunk Format Selection per Layer ({metric.upper()})')
     plt.xticks(rotation=90, fontsize=8)
     
@@ -720,34 +760,7 @@ def calculate_model_error(model, config, metric, global_chunk_size=None):
                 
     return total_error
 
-def main():
-    args = get_args()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    
-    # Parse metrics
-    available_metrics = ['l1', 'mse', 'sqnr', 'cosine']
-    if args.metrics == 'all':
-        metrics = available_metrics
-    else:
-        metrics = [m.strip().lower() for m in args.metrics.split(',')]
-        for m in metrics:
-            if m not in available_metrics:
-                print(f"Warning: Skipping unknown metric '{m}'")
-        metrics = [m for m in metrics if m in available_metrics]
-    
-    if not metrics:
-        print("No valid metrics specified. Defaulting to l1.")
-        metrics = ['l1']
-        
-    print(f"Metrics to analyze: {metrics}")
-    
-    # Base Output Directory
-    if args.output_dir:
-        base_root = args.output_dir
-    else:
-        base_root = os.path.join(PROJECT_ROOT, "runspace/experiments/optimal_layer_quant")
-    
+def process_single_model(args, device, metrics, base_root):
     # Valid model path: base_root / model_name
     model_dir = os.path.join(base_root, args.model_name)
     os.makedirs(model_dir, exist_ok=True)
@@ -860,18 +873,21 @@ def main():
                     valid_fmts = [qt for qt in qt_options if qt in metric_chunk_errors[m]]
                     if not valid_fmts:
                         continue
-                        
-                    err_matrix = np.stack([metric_chunk_errors[m][qt] for qt in valid_fmts])
-                    # Find min index axis 0
+                     
+                    # Sort valid_fmts by bits ASC to allow argmin to pick lowest bits on tie
+                    valid_fmts_sorted = sorted(valid_fmts, key=get_format_bits)
+   
+                    err_matrix = np.stack([metric_chunk_errors[m][qt] for qt in valid_fmts_sorted])
+                    # Find min index axis 0 (returns first occurrence, which is lowest bits due to sort)
                     best_indices = np.argmin(err_matrix, axis=0)
                     
                     # Store per-chunk winners (format names)
-                    chunk_winner_names = [valid_fmts[idx] for idx in best_indices]
+                    chunk_winner_names = [valid_fmts_sorted[idx] for idx in best_indices]
                     record['chunk_winners'][m] = chunk_winner_names
                     
                     # Count wins
                     wins = {'total': len(best_indices)}
-                    for idx, qt in enumerate(valid_fmts):
+                    for idx, qt in enumerate(valid_fmts_sorted):
                         count = np.sum(best_indices == idx)
                         if count > 0:
                             wins[qt] = int(count)
@@ -913,7 +929,7 @@ def main():
             baseline_config = {
                 'model': {'name': args.model_name, 'weights': args.weights},
                 'adapter': {
-                    'type': 'generic', 'quantized_ops': ['Conv2d', 'Linear'],
+                    'type': 'generic', 'quantized_ops': ['-1'],
                     'input_quantization': False
                 },
                 'quantization': {
@@ -953,9 +969,19 @@ def main():
             
             # Find best
             for q_type, val in errs.items():
+                 # Check if better error (strictly)
                  if val < best_error:
                      best_error = val
                      best_type = q_type
+                 # Or if equal error, prefer fewer bits
+                 elif val == best_error:
+                    cur_bits = get_format_bits(best_type) if best_type else 999
+                    new_bits = get_format_bits(q_type)
+                    if new_bits < cur_bits:
+                        best_error = val # Same
+                        best_type = q_type
+                    # If bits are same, maybe prefer lower exponent? (lower range, more precision?)
+                    # For now just bits.
             
             if args.weight_chunk_size and 'chunk_wins' in record:
                 chunk_win_counts[name] = record['chunk_wins'][m]
@@ -1179,6 +1205,8 @@ def main():
             # 2. Calculate Total Error for ALL configs using target_metric (RECALCULATE)
             print(f"Recalculating total errors for all results using metric '{target_metric}'...")
             
+            config_errors = {}
+            
             # Map results by output name
             for res in results:
                 r_name = res.get('output_name', '')
@@ -1226,6 +1254,82 @@ def main():
         aggregator.aggregate(results, summary_md_path)
         
         print(f"Evaluation completed. Summary saved to {summary_path}")
+
+def main():
+    args = get_args()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    # Parse metrics
+    available_metrics = ['l1', 'mse', 'sqnr', 'cosine']
+    if args.metrics == 'all':
+        metrics = available_metrics
+    else:
+        metrics = [m.strip().lower() for m in args.metrics.split(',')]
+        for m in metrics:
+            if m not in available_metrics:
+                print(f"Warning: Skipping unknown metric '{m}'")
+        metrics = [m for m in metrics if m in available_metrics]
+    
+    if not metrics:
+        print("No valid metrics specified. Defaulting to l1.")
+        metrics = ['l1']
+        
+    print(f"Metrics to analyze: {metrics}")
+    
+    # Base Output Directory
+    if args.output_dir:
+        base_root = args.output_dir
+    else:
+        base_root = os.path.join(PROJECT_ROOT, "runspace/experiments/optimal_layer_quant")
+
+    if args.models_config:
+        print(f"Loading models from config: {args.models_config}")
+        with open(args.models_config, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        # Support both {'models': [...]} and direct list [...]
+        if isinstance(config, dict) and 'models' in config:
+            models_list = config['models']
+        elif isinstance(config, list):
+            models_list = config
+        else:
+            print("Error: Invalid models config format. Expected list or dict with 'models' key.")
+            return
+
+        print(f"Found {len(models_list)} models to process.")
+        
+        for model_cfg in models_list:
+            # Extract name and weights
+            if isinstance(model_cfg, str):
+                name = model_cfg
+                weights = "DEFAULT"
+            else:
+                name = model_cfg.get('name')
+                weights = model_cfg.get('weights', 'DEFAULT')
+            
+            if not name:
+                print("Skipping entry without name")
+                continue
+
+            # Update args for this run
+            args.model_name = name
+            args.weights = weights
+            
+            print(f"\n===========================================")
+            print(f"Processing Model: {name}")
+            print(f"===========================================")
+            
+            try:
+                process_single_model(args, device, metrics, base_root)
+            except Exception as e:
+                print(f"Error processing model {name}: {e}")
+                import traceback
+                traceback.print_exc()
+                
+    else:
+        # Single model mode
+        process_single_model(args, device, metrics, base_root)
 
 if __name__ == "__main__":
     main()
