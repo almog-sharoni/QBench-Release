@@ -1,5 +1,6 @@
 import os
 import sys
+from tqdm import tqdm
 import torch
 import yaml
 import time
@@ -23,6 +24,11 @@ class Runner:
     def __init__(self, device=None):
         self.device = device if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Runner initialized on device: {self.device}")
+        
+        # Aggressive cleanup on init
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def setup_data_loader(self, config: dict):
         """Setup the data loader from config."""
@@ -99,7 +105,19 @@ class Runner:
         batch_size = dataset_config.get('batch_size', 32)
         num_workers = dataset_config.get('num_workers', 0)
         
-        return DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        # Optimization: pin_memory for faster host-to-device transfer
+        # persistent_workers to keep workers alive if running multiple passes (good practice)
+        pin_memory = torch.cuda.is_available()
+        persistent_workers = (num_workers > 0)
+        
+        return DataLoader(
+            dataset, 
+            batch_size=batch_size, 
+            shuffle=False, 
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers
+        )
 
     def run_single(self, config: Dict[str, Any], output_root: str = "runspace/outputs") -> Dict[str, Any]:
         """Runs a single configuration and returns the results."""
@@ -219,7 +237,8 @@ class Runner:
                 evaluator = Evaluator(adapter, metrics_engine, device=self.device)
                 
                 # Run full evaluation
-                eval_results = evaluator.evaluate(model, data_loader)
+                max_batches = config.get('evaluation', {}).get('max_batches', -1)
+                eval_results = evaluator.evaluate(model, data_loader, max_batches=max_batches)
                 
                 results['acc1'] = eval_results.get('acc1', 0.0)
                 results['acc5'] = eval_results.get('acc5', 0.0)
@@ -318,3 +337,238 @@ class Runner:
             res = self.run_single(config, output_root=output_root)
             batch_results.append(res)
         return batch_results
+
+    def run_batch_parallel(self, configs: List[Dict[str, Any]], output_root: str = "runspace/outputs") -> List[Dict[str, Any]]:
+        """
+        Runs configs in parallel on the GPU to save data loading time.
+        Handles OOM by automatically splitting variables.
+        """
+        if not configs:
+            return []
+            
+        # Group configs by dataset signature to ensure we can share the dataloader
+        import json
+        groups = {}
+        for cfg in configs:
+            # Create a signature based on dataset config
+            ds_cfg = cfg.get('dataset', {})
+            # We filter relevant keys for signature
+            sig_keys = {'name': ds_cfg.get('name'), 'path': ds_cfg.get('path'), 'batch_size': ds_cfg.get('batch_size')}
+            ds_sig = json.dumps(sig_keys, sort_keys=True)
+            
+            if ds_sig not in groups: groups[ds_sig] = []
+            groups[ds_sig].append(cfg)
+            
+        final_results = []
+        print(f"Parallel Execution: Found {len(groups)} distinct dataset groups.")
+        for i, (sig, group_configs) in enumerate(groups.items()):
+            print(f"Running Group {i+1}/{len(groups)} with {len(group_configs)} configs...")
+            final_results.extend(self._run_parallel_group_safe(group_configs, output_root))
+            
+        return final_results
+
+    def _run_parallel_group_safe(self, configs: List[Dict[str, Any]], output_root: str) -> List[Dict[str, Any]]:
+        """Recursively try to run configs. If OOM, split."""
+        if not configs: return []
+        
+        # Ensure clean slate
+        gc.collect()
+        torch.cuda.empty_cache()
+        
+        try:
+            return self._run_parallel_execution(configs, output_root)
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                print(f"OOM detected with {len(configs)} models. Splitting batch...")
+                torch.cuda.empty_cache()
+                gc.collect()
+                
+                if len(configs) <= 1:
+                     print(f"Error: Single model caused OOM. Marking as failed.")
+                     return [self._create_failed_result(configs[0], f"OOM Error: {str(e)}")]
+                     
+                mid = len(configs) // 2
+                left = configs[:mid]
+                right = configs[mid:]
+                
+                print(f"Retrying with split batches: {len(left)} and {len(right)}")
+                res_left = self._run_parallel_group_safe(left, output_root)
+                
+                torch.cuda.empty_cache()
+                gc.collect()
+                
+                res_right = self._run_parallel_group_safe(right, output_root)
+                return res_left + res_right
+            else:
+                print(f"Unexpected error in parallel batch: {e}")
+                import traceback
+                traceback.print_exc()
+                # Fail all
+                return [self._create_failed_result(c, str(e)) for c in configs]
+
+    def _create_failed_result(self, config, error_msg):
+        model_name = config.get('model', {}).get('name', 'unknown')
+        quant_format = config.get('quantization', {}).get('format', 'fp8')
+        return {
+            'model_name': model_name,
+            'quant_format': quant_format,
+            'output_name': config.get('output_name', ''),
+            'status': 'FAILED',
+            'exec_error': error_msg,
+            'acc1': 0.0, 'acc5': 0.0, 'certainty': 0.0
+        }
+
+    def _setup_single_context(self, config, output_root):
+        """Prepares a single model context for parallel execution."""
+        model_config = config.get('model', {})
+        model_name = model_config.get('name', 'unknown')
+        quant_format = config.get('quantization', {}).get('format', 'fp8')
+        
+        # Determine paths (same logic as run_single)
+        meta = config.get('meta', {})
+        base_config_path = meta.get('base_config_path', '')
+        output_name = config.get('output_name', '')
+        
+        if output_name:
+            output_dir = os.path.join(output_root, output_name)
+        elif base_config_path:
+            base_config_name = os.path.splitext(os.path.basename(base_config_path))[0]
+            output_dir = os.path.join(output_root, base_config_name, model_name, quant_format.replace('_', ''))
+        else:
+            output_dir = os.path.join(output_root, model_name, quant_format.replace('_', ''))
+            
+        result_template = {
+            'model_name': model_name,
+            'quant_format': quant_format,
+            'output_name': output_name,
+            'status': 'FAILED',
+            'acc1': 0.0, 'acc5': 0.0, 'certainty': 0.0,
+            'ref_acc1': 0.0, 'ref_acc5': 0.0
+        }
+        
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Save Config
+            config_path = os.path.join(output_dir, "config.yaml")
+            with open(config_path, 'w') as f:
+                yaml.dump(config, f, default_flow_style=False)
+                
+            # Create adapter & model
+            adapter = create_adapter(config)
+            model = adapter.model
+            model.to(self.device)
+            model.eval()
+            
+            # Check quant layers
+            quant_layer_count = 0
+            for module in model.modules():
+                if 'Quant' in module.__class__.__name__:
+                    quant_layer_count += 1
+            
+            if quant_layer_count == 0:
+                print(f"Warning: No quantized layers found for {model_name} ({output_name})")
+                
+            # Metrics
+            metrics_engine = MetricsEngine()
+            
+            return {
+                'status': 'READY',
+                'model': model,
+                'adapter': adapter,
+                'metrics': metrics_engine,
+                'result': result_template,
+                'output_dir': output_dir,
+                'quant_layer_count': quant_layer_count
+            }
+            
+        except Exception as e:
+            print(f"Error setting up {output_name}: {e}")
+            result_template['exec_error'] = str(e)
+            return {'status': 'FAILED', 'result': result_template}
+
+    def _run_parallel_execution(self, configs, output_root):
+        print(f"--- Loading {len(configs)} models for parallel execution ---")
+        
+        # Suppress torchvision warnings during bulk loading
+        import warnings
+        warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.models._utils")
+        
+        # 1. Setup Models
+        contexts = []
+        for cfg in tqdm(configs, desc="Loading Models"):
+            ctx = self._setup_single_context(cfg, output_root)
+            contexts.append(ctx)
+            
+        active_contexts = [c for c in contexts if c['status'] == 'READY']
+        
+        if not active_contexts:
+            print("No valid models to run.")
+            return [c['result'] for c in contexts]
+            
+        print(f"Successfully loaded {len(active_contexts)} models.")
+        
+        # 2. Setup Data Loader (using first config)
+        loader = self.setup_data_loader(configs[0])
+        if loader is None:
+             raise RuntimeError("Failed to setup data loader")
+             
+        # 3. Execution Loop
+        try:
+            with torch.no_grad():
+                for batch in tqdm(loader, desc=f"Parallel Eval ({len(active_contexts)} models)"):
+                    # Use first adapter for preparation (assuming compatible input pipeline)
+                    adapter = active_contexts[0]['adapter']
+                    inputs, targets = adapter.prepare_batch(batch)
+                    inputs = inputs.to(self.device)
+                    targets = targets.to(self.device)
+                    
+                    for i, ctx in enumerate(active_contexts):
+                        mdl = ctx['model']
+                        adp = ctx['adapter']
+                        
+                        # Forward
+                        outputs = adp.forward(mdl, (inputs, targets))
+                        ctx['metrics'].update(outputs, targets)
+                        
+                        # Optional: clear intermediate tensors if tight on memory?
+                        # outputs usually needed for metrics.
+                        del outputs
+                    
+        except RuntimeError as e:
+            # If OOM happens here, it bubbles up
+            raise e
+        finally:
+             if 'inputs' in locals(): del inputs
+             if 'targets' in locals(): del targets
+             
+        # 4. Finalize
+        results = []
+        for ctx in contexts:
+            if ctx['status'] == 'READY':
+                # Compute metrics
+                m = ctx['metrics'].compute()
+                res = ctx['result']
+                res['acc1'] = m.get('acc1', 0.0)
+                res['acc5'] = m.get('acc5', 0.0)
+                res['certainty'] = m.get('certainty', 0.0)
+                
+                if ctx['quant_layer_count'] == 0:
+                    res['status'] = 'NO_QUANT'
+                else:
+                    res['status'] = 'SUCCESS'
+                    
+                results.append(res)
+                
+                # Cleanup
+                del ctx['model']
+                del ctx['adapter']
+                del ctx['metrics']
+            else:
+                results.append(ctx['result'])
+        
+        # Global Cleanup
+        torch.cuda.empty_cache()
+        gc.collect()
+        
+        return results

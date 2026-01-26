@@ -1,22 +1,22 @@
-- name: alexnet
-  source: torchvision
-  weights: IMAGENET1K_V1
+# - name: alexnet
+#   source: torchvision
+#   weights: IMAGENET1K_V1
 
-- name: convnext_base
-  source: torchvision
-  weights: IMAGENET1K_V1
+# - name: convnext_base
+#   source: torchvision
+#   weights: IMAGENET1K_V1
 
-- name: convnext_large
-  source: torchvision
-  weights: IMAGENET1K_V1
+# - name: convnext_large
+#   source: torchvision
+#   weights: IMAGENET1K_V1
 
-- name: convnext_small
-  source: torchvision
-  weights: IMAGENET1K_V1
+# - name: convnext_small
+#   source: torchvision
+#   weights: IMAGENET1K_V1
 
-- name: convnext_tiny
-  source: torchvision
-  weights: IMAGENET1K_V1
+# - name: convnext_tiny
+#   source: torchvision
+#   weights: IMAGENET1K_V1
 
 - name: densenet121
   source: torchvision

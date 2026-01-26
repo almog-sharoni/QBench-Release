@@ -10,7 +10,7 @@ class Evaluator:
         self.metrics_engine = metrics_engine
         self.device = device if device else torch.device("cpu")
 
-    def evaluate(self, model, data_loader):
+    def evaluate(self, model, data_loader, max_batches=-1):
         """
         Runs evaluation on the given model and data loader.
         """
@@ -28,5 +28,8 @@ class Evaluator:
                 
                 # Update metrics
                 self.metrics_engine.update(outputs, targets)
+
+                if max_batches > 0 and (self.metrics_engine.total / data_loader.batch_size) >= max_batches:
+                    break
         
         return self.metrics_engine.compute()

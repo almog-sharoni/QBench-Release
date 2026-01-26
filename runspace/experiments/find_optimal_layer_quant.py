@@ -24,6 +24,7 @@ from runspace.src.quantization.constants import get_quantization_bias
 # Late import
 from runspace.core.runner import Runner
 from runspace.core.report_aggregator import ReportAggregator
+from runspace.src.registry.op_registry import OpRegistry
 
 baseline_formats = [
     'fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6', 'fp8_e6m1', 'fp8_e7m0', 'fp8_e0m7',
@@ -50,6 +51,9 @@ def get_args():
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers")
     parser.add_argument("--weight_chunk_size", type=int, default=128, help="Weight chunk size (blocks). If set, enables chunked quantization.")
     parser.add_argument("--per_chunk_format", action="store_true", help="Enable per-chunk format selection (each chunk gets its own optimal format)")
+    parser.add_argument("--plot_layers", action="store_true", help="Generate error bar plots for every single layer (warning: slow)")
+    parser.add_argument("--max_batches", type=int, default=-1, help="Max batches to evaluate (default: -1 for all)")
+    parser.add_argument("--force_recalc", action="store_true", help="Force recalculation of layer errors even if results exist")
     
     return parser.parse_args()
 
@@ -262,7 +266,6 @@ def plot_error_histograms(data, formats, output_dir, metric):
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.savefig(os.path.join(output_dir, f"error_histograms_{metric}.png"))
-    plt.savefig(os.path.join(output_dir, f"error_histograms_{metric}.png"))
     plt.close()
 
 def plot_error_boxplot(data, formats, output_dir, metric):
@@ -411,21 +414,95 @@ def plot_accuracy_comparison(results, output_dir):
     ax1.grid(axis='y', alpha=0.3)
     
     # Error Rate (Secondary Axis)
-    # Only plot if we have non-zero errors
-    if any(e > 0 for e in error_vals):
+    # Check if we have 'errors' dictionary in results
+    # Format: res['errors'] = {'l1': val, 'mse': val, ...}
+    
+    # Collect data series for each metric found
+    error_series = {} 
+    valid_metrics = set()
+    
+    # First pass to find all metrics present
+    for res in results:
+        errs = res.get('errors', {})
+        if isinstance(errs, dict):
+            for m, val in errs.items():
+                valid_metrics.add(m)
+    
+    if valid_metrics:
         ax2 = ax1.twinx()
-        # Plot as line with markers or separate bars? 
-        # Line is better to distinguish from bars.
-        line1 = ax2.plot(x, error_vals, color='red', marker='o', linestyle='--', linewidth=2, label='Total Error Metric')
-        ax2.set_ylabel('Total Optimization Error (lower is better)', color='red')
-        ax2.tick_params(axis='y', labelcolor='red')
+        ax2.set_ylabel('Normalized Error (0=Best, 1=Worst)', color='black')
         
-        # Combine legends
-        lines, labels = ax1.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax1.legend(lines + lines2, labels + labels2, loc='upper left')
+        # Color cycle for metrics
+        cmap = plt.get_cmap('Dark2') 
+        
+        lines = []
+        labels = []
+        
+        # Collect all data first
+        metric_data = {}
+        for m in valid_metrics:
+            vals = []
+            for res in results:
+                err_dict = res.get('errors', {})
+                val = err_dict.get(m, float('nan'))
+                vals.append(val)
+            metric_data[m] = np.array(vals)
+
+        for i, m in enumerate(sorted(valid_metrics)):
+            vals = metric_data[m]
+            
+            # Normalize to [0, 1]
+            # Filter NaNs for min/max calculation
+            valid_v = vals[np.isfinite(vals)]
+            
+            normalized_vals = vals.copy()
+            
+            if len(valid_v) > 0:
+                v_min = valid_v.min()
+                v_max = valid_v.max()
+                
+                # Check for zero range
+                if v_max > v_min:
+                    # Apply Min-Max scaling
+                    # Note: We assume "Lower is Better" for the raw values (including -SQNR)
+                    # So normalized 0.0 will correspond to Min Raw (Best)
+                    # and 1.0 will correspond to Max Raw (Worst).
+                    normalized_vals = (vals - v_min) / (v_max - v_min)
+                else:
+                    # Constant value across all models
+                    # Plot as flat line at 0.0 (Best) or 0.5?
+                    # If error is 0 everywhere (ref), it should be at 0.
+                    # If error is massive everywhere, maybe 1?
+                    # Let's put it at 0 to avoid visual clutter.
+                    normalized_vals = np.zeros_like(vals)
+            else:
+                 # All NaNs
+                 pass
+
+            color = cmap(i % 8)
+            label = f"{m.upper()}" # Short label since axis explains "Normalized Error"
+            
+            # Plot
+            # We use only valid points for the line to avoid plotting gaps if possible, or leave gaps for NaNs
+            line = ax2.plot(x, normalized_vals, color=color, marker='.', linestyle='-', linewidth=2, alpha=0.8, label=label)
+            lines.extend(line)
+            labels.append(label)
+
+        # Set fixed range for normalized plot
+        ax2.set_ylim(-0.1, 1.1)
+        
+        # Tick colors
+        ax2.tick_params(axis='y', labelcolor='black')
+
+    # Combine legends and move outside
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    if valid_metrics and lines:
+        ax1.legend(lines1 + lines, labels1 + labels, loc='upper left', bbox_to_anchor=(1.05, 1))
     else:
-        ax1.legend(loc='upper left')
+        ax1.legend(lines1, labels1, loc='upper left', bbox_to_anchor=(1.05, 1))
+    
+    # Adjust layout to make room for legend
+    plt.subplots_adjust(right=0.8)
     
     # Add labels to bars
     def autolabel(rects, ax):
@@ -503,6 +580,28 @@ def plot_chunk_format_distribution(chunk_formats, formats, output_dir, metric):
     
     # Mask negative values (unused chunks)
     masked_matrix = np.ma.masked_where(matrix < 0, matrix)
+    
+    # Resize matrix if too large (visualization only)
+    max_display_width = 1000
+    if masked_matrix.shape[1] > max_display_width:
+        print(f"Downsampling heatmap from {masked_matrix.shape[1]} to {max_display_width} columns...")
+        factor = masked_matrix.shape[1] // max_display_width
+        remainder = masked_matrix.shape[1] % max_display_width
+        
+        # Simple decimation or voting? Voting is better for categorical.
+        # Reshape to [layers, new_width, factor]
+        # We drop the remainder for simplicity in visualization
+        trimmed_width = masked_matrix.shape[1] - remainder
+        reshaped = masked_matrix[:, :trimmed_width].reshape(len(layers), max_display_width, factor)
+        
+        # Mode (majority vote)
+        from scipy import stats
+        # mstats.mode returns (mode, count)
+        # We need to handle masked arrays
+        # Scipy mstats mode is slow. Let's just take the first element (decimation) for speed
+        # or max element?
+        # Decimation is fastest and usually fine for dense patterns.
+        masked_matrix = reshaped[:, :, 0]
     
     # Plot
     im = plt.imshow(masked_matrix, aspect='auto', cmap=cmap, vmin=0, vmax=len(sorted_formats)-1)
@@ -717,8 +816,9 @@ def calculate_model_error(model, config, metric, global_chunk_size=None):
         chunk_size = global_chunk_size
 
     # Iterate layers
+    supported_ops = tuple(OpRegistry.get_supported_ops().keys())
     for name, module in tqdm(model.named_modules(), desc=f"Calc Error ({metric})", leave=False):
-        if isinstance(module, (nn.Conv2d, nn.Linear)):
+        if isinstance(module, supported_ops):
             if not hasattr(module, 'weight') or module.weight is None:
                 continue
             
@@ -760,6 +860,54 @@ def calculate_model_error(model, config, metric, global_chunk_size=None):
                 
     return total_error
 
+def load_cached_results(csv_path, metric, format_col_suffix="_error"):
+    """
+    Load layer results from an existing CSV file.
+    Returns:
+       - results_list: List of dicts matching internal record structure (partial)
+       - successful: Boolean indicating success
+    """
+    print(f"Loading cached results from {csv_path}...")
+    try:
+        results = []
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                layer = row['layer']
+                
+                # Reconstruct metrics dict
+                metrics_data = {}
+                best_error = float(row.get('best_error', float('inf')))
+                
+                # We need to reconstruct the errors for all formats
+                # The CSV has columns like "fp8_e4m3_error"
+                for key, val in row.items():
+                    if key.endswith(format_col_suffix):
+                         fmt = key.replace(format_col_suffix, "")
+                         try:
+                             if val and val != "":
+                                 metrics_data[fmt] = float(val)
+                             else:
+                                 metrics_data[fmt] = float('inf')
+                         except:
+                             metrics_data[fmt] = float('inf')
+                             
+                record = {
+                    'layer': layer,
+                    'shape': row.get('shape', ''),
+                    'max_val': float(row.get('max_val', 0.0)),
+                    'metrics': {metric: metrics_data},
+                    'best_error': best_error
+                }
+                
+                # We don't reconstruct chunk wins from CSV fully yet, 
+                # but for 'Pre-calculate theoretical errors' we just need metrics.
+                results.append(record)
+        return results, True
+    except Exception as e:
+        print(f"Failed to load cached results: {e}")
+        return [], False
+
 def process_single_model(args, device, metrics, base_root):
     # Valid model path: base_root / model_name
     model_dir = os.path.join(base_root, args.model_name)
@@ -790,131 +938,202 @@ def process_single_model(args, device, metrics, base_root):
     
     # Storage for all data:
     # layer_results = [ { 'layer': name, 'shape': ..., 'metrics': { 'l1': {fmt: err}, 'mse': ... } } ]
-    layer_results = []
+    layer_results_map = {} # {layer_name: record_dict}
     
-    print("Analyzing layers...")
-    
-    for name, module in tqdm(model.named_modules(), desc="Layers"):
-        if isinstance(module, (nn.Conv2d, nn.Linear)):
-            if not hasattr(module, 'weight') or module.weight is None:
-                continue
-                
-            w = module.weight.data
-            
-            record = {
-                'layer': name,
-                'shape': str(tuple(w.shape)),
-                'metrics': {m: {} for m in metrics},
-                'chunk_wins': {m: {} for m in metrics},
-                'chunk_winners': {m: [] for m in metrics},  # Per-chunk winner format names
-                'max_val': 0.0
-            }
-            
-            # 1. Quantize and Calc Errors
-            max_val_global = 0.0
-            
-            metric_chunk_errors = {m: {} for m in metrics}
-            
-            for q_type in qt_options:
-                try:
-                    # Dequantize once
-                    w_deq, mv = get_quantized_weight(w, q_type, chunk_size=args.weight_chunk_size)
-                    max_val_global = max(max_val_global, mv)
-                    
-                    # Calculate overall error
-                    for m in metrics:
-                        err = calculate_error(w, w_deq, m)
-                        record['metrics'][m][q_type] = err
-                        
-                    # Calculate chunk errors if needed
-                    if args.weight_chunk_size:
-                        w_chunked, _, _ = get_chunked_tensor(w, args.weight_chunk_size)
-                        w_deq_chunked, _, _ = get_chunked_tensor(w_deq, args.weight_chunk_size)
-                        
-                        # diff [N, C, size]
-                        diff = w_chunked - w_deq_chunked
-                        
-                        for m in metrics:
-                            # Calculate per-chunk error
-                            # Flatten last dim to compute error per chunk vector
-                            if m == 'l1':
-                                chunk_errs = diff.abs().sum(dim=-1).view(-1)
-                            elif m == 'mse':
-                                chunk_errs = diff.pow(2).mean(dim=-1).view(-1)
-                            elif m == 'sqnr':
-                                # SQNR per chunk
-                                sig = w_chunked.pow(2).sum(dim=-1).view(-1)
-                                noise = diff.pow(2).sum(dim=-1).view(-1)
-                                # Avoid log0
-                                noise = torch.clamp(noise, min=1e-12)
-                                chunk_errs = -10 * torch.log10(sig / noise) # Negative SQNR for min
-                            elif m == 'cosine':
-                                # Cosine per chunk
-                                # dim=-1 is vector dim
-                                sim = torch.nn.functional.cosine_similarity(w_chunked, w_deq_chunked, dim=-1)
-                                chunk_errs = (1.0 - sim).view(-1)
-                            
-                            metric_chunk_errors[m][q_type] = chunk_errs.cpu().numpy()
-                        
-                except Exception as e:
-                    # print(f"Error {q_type} on {name}: {e}")
-                    for m in metrics:
-                        record['metrics'][m][q_type] = float('inf') # Error flag
-            
-            # Save metric_chunk_errors to record for later analysis
-            if args.weight_chunk_size:
-                record['chunk_errors'] = metric_chunk_errors
-                        
-            # Process Chunk Wins
-            if args.weight_chunk_size:
-                for m in metrics:
-                    # metric_chunk_errors[m] is {qt: np.array(num_chunks)}
-                    # Create matrix [num_formats, num_chunks]
-                    valid_fmts = [qt for qt in qt_options if qt in metric_chunk_errors[m]]
-                    if not valid_fmts:
-                        continue
-                     
-                    # Sort valid_fmts by bits ASC to allow argmin to pick lowest bits on tie
-                    valid_fmts_sorted = sorted(valid_fmts, key=get_format_bits)
-   
-                    err_matrix = np.stack([metric_chunk_errors[m][qt] for qt in valid_fmts_sorted])
-                    # Find min index axis 0 (returns first occurrence, which is lowest bits due to sort)
-                    best_indices = np.argmin(err_matrix, axis=0)
-                    
-                    # Store per-chunk winners (format names)
-                    chunk_winner_names = [valid_fmts_sorted[idx] for idx in best_indices]
-                    record['chunk_winners'][m] = chunk_winner_names
-                    
-                    # Count wins
-                    wins = {'total': len(best_indices)}
-                    for idx, qt in enumerate(valid_fmts_sorted):
-                        count = np.sum(best_indices == idx)
-                        if count > 0:
-                            wins[qt] = int(count)
-                    
-                    record['chunk_wins'][m] = wins
-                        
-            
-            record['max_val'] = max_val_global
-            layer_results.append(record)
-    
-    # 2. Process Results Per Metric
+    # Check what needs calculation
+    metrics_to_calc = []
     configs_to_run = []
     
+    # Always add Ref and Baselines if we are evaling (but we manage duplicates later)
+    # We construct the base configs list later, here we just check metrics cache.
+    
+    for m in metrics:
+        metric_dir = os.path.join(model_dir, m)
+        csv_path = os.path.join(metric_dir, "layer_errors.csv")
+        config_path = os.path.join(metric_dir, "optimized_config.yaml")
+        
+        is_cached = False
+        if not args.force_recalc and os.path.exists(csv_path) and os.path.exists(config_path):
+            cached_results, success = load_cached_results(csv_path, m)
+            if success:
+                print(f"Metric {m} found in cache. Skipping calculation.")
+                is_cached = True
+                
+                # Merge into layer_results_map
+                for res in cached_results:
+                    lname = res['layer']
+                    if lname not in layer_results_map:
+                        layer_results_map[lname] = {
+                            'layer': lname,
+                            'shape': res['shape'],
+                            'max_val': res['max_val'],
+                            'metrics': {},
+                            'chunk_wins': {},
+                            'chunk_winners': {}
+                        }
+                    # Merge metric data
+                    layer_results_map[lname]['metrics'][m] = res['metrics'][m]
+                
+                # Load config to run
+                try:
+                    with open(config_path, 'r') as f:
+                        opt_cfg = yaml.safe_load(f)
+                    opt_cfg['output_name'] = f"optimized_{m}"
+                    configs_to_run.append(opt_cfg)
+                except Exception as e:
+                     print(f"Warning: Failed to load config for cached metric {m}: {e}")
+            else:
+                metrics_to_calc.append(m)
+        else:
+            metrics_to_calc.append(m)
+            
+    if not metrics_to_calc:
+        print("All metrics cached. Skipping layer analysis.")
+    else:
+        print(f"Analyzing layers for metrics: {metrics_to_calc}...")
+        
+        supported_ops = tuple(OpRegistry.get_supported_ops().keys())
+        for name, module in tqdm(model.named_modules(), desc="Layers"):
+            if isinstance(module, supported_ops):
+                if not hasattr(module, 'weight') or module.weight is None:
+                    continue
+                    
+                w = module.weight.data
+                
+                # Get or create record
+                if name not in layer_results_map:
+                    layer_results_map[name] = {
+                        'layer': name,
+                        'shape': str(tuple(w.shape)),
+                        'max_val': 0.0,
+                        'metrics': {},
+                        'chunk_wins': {},
+                        'chunk_winners': {}
+                    }
+                record = layer_results_map[name]
+                
+                # Init metric placeholders for NEW metrics
+                for m in metrics_to_calc:
+                    if m not in record['metrics']:
+                        record['metrics'][m] = {}
+                        record['chunk_wins'][m] = {}
+                        record['chunk_winners'][m] = []
+                
+                # 1. Quantize and Calc Errors
+                max_val_global = record['max_val']
+                
+                metric_chunk_errors = {m: {} for m in metrics_to_calc}
+                
+                for q_type in qt_options:
+                    try:
+                        # Dequantize once
+                        w_deq, mv = get_quantized_weight(w, q_type, chunk_size=args.weight_chunk_size)
+                        max_val_global = max(max_val_global, mv)
+                        
+                        # Calculate overall error for required metrics
+                        for m in metrics_to_calc:
+                            err = calculate_error(w, w_deq, m)
+                            record['metrics'][m][q_type] = err
+                            
+                        # Calculate chunk errors if needed
+                        if args.weight_chunk_size:
+                            w_chunked, _, _ = get_chunked_tensor(w, args.weight_chunk_size)
+                            w_deq_chunked, _, _ = get_chunked_tensor(w_deq, args.weight_chunk_size)
+                            
+                            # diff [N, C, size]
+                            diff = w_chunked - w_deq_chunked
+                            
+                            for m in metrics_to_calc:
+                                # Calculate per-chunk error
+                                # Flatten last dim to compute error per chunk vector
+                                if m == 'l1':
+                                    chunk_errs = diff.abs().sum(dim=-1).view(-1)
+                                elif m == 'mse':
+                                    chunk_errs = diff.pow(2).mean(dim=-1).view(-1)
+                                elif m == 'sqnr':
+                                    # SQNR per chunk
+                                    sig = w_chunked.pow(2).sum(dim=-1).view(-1)
+                                    noise = diff.pow(2).sum(dim=-1).view(-1)
+                                    # Avoid log0
+                                    noise = torch.clamp(noise, min=1e-12)
+                                    chunk_errs = -10 * torch.log10(sig / noise) # Negative SQNR for min
+                                elif m == 'cosine':
+                                    # Cosine per chunk
+                                    # dim=-1 is vector dim
+                                    sim = torch.nn.functional.cosine_similarity(w_chunked, w_deq_chunked, dim=-1)
+                                    chunk_errs = (1.0 - sim).view(-1)
+                                
+                                metric_chunk_errors[m][q_type] = chunk_errs.cpu().numpy()
+                            
+                    except Exception as e:
+                        # print(f"Error {q_type} on {name}: {e}")
+                        for m in metrics_to_calc:
+                            record['metrics'][m][q_type] = float('inf') # Error flag
+                
+                # Save metric_chunk_errors to record for later analysis
+                if args.weight_chunk_size:
+                    record['chunk_errors'] = metric_chunk_errors
+                            
+                # Process Chunk Wins
+                if args.weight_chunk_size:
+                    for m in metrics_to_calc:
+                        # metric_chunk_errors[m] is {qt: np.array(num_chunks)}
+                        # Create matrix [num_formats, num_chunks]
+                        valid_fmts = [qt for qt in qt_options if qt in metric_chunk_errors[m]]
+                        if not valid_fmts:
+                            continue
+                         
+                        # Sort valid_fmts by bits ASC to allow argmin to pick lowest bits on tie
+                        valid_fmts_sorted = sorted(valid_fmts, key=get_format_bits)
+       
+                        err_matrix = np.stack([metric_chunk_errors[m][qt] for qt in valid_fmts_sorted])
+                        # Find min index axis 0 (returns first occurrence, which is lowest bits due to sort)
+                        best_indices = np.argmin(err_matrix, axis=0)
+                        
+                        # Store per-chunk winners (format names)
+                        chunk_winner_names = [valid_fmts_sorted[idx] for idx in best_indices]
+                        record['chunk_winners'][m] = chunk_winner_names
+                        
+                        # Count wins
+                        wins = {'total': len(best_indices)}
+                        for idx, qt in enumerate(valid_fmts_sorted):
+                            count = np.sum(best_indices == idx)
+                            if count > 0:
+                                wins[qt] = int(count)
+                        
+                        record['chunk_wins'][m] = wins
+                            
+                record['max_val'] = max_val_global
+    
+    # Flatten layer_results_map to list (preserve order if we can, but named_modules order matters)
+    # We used named_modules order for insertion, so looping through map might be arbitrary?
+    # Python 3.7+ dicts preserve insertion order.
+    layer_results = list(layer_results_map.values())
+    
+    # 2. Process Results Per Metric
+    # configs_to_run already populated with cached configs
+    
     # Always add Ref and Baselines if we are evaling
+    eval_config = {'mode': 'evaluate'}
+    if args.max_batches > 0:
+        eval_config['max_batches'] = args.max_batches
+        
     if args.run_eval:
         dataset_base = {
             'name': args.dataset_name,
             'path': args.dataset_path,
             'batch_size': args.batch_size,
+            'batch_size': args.batch_size,
             'num_workers': args.num_workers
         }
+        
+        # eval_config already defined above
         
         # 1. Ref FP32
         ref_config = {
             'model': {'name': args.model_name, 'weights': args.weights},
             'adapter': {'type': 'generic', 'quantized_ops': []},
-            'evaluation': {'mode': 'evaluate'},
+            'evaluation': eval_config,
             'dataset': dataset_base,
             'output_name': "ref_fp32"
         }
@@ -937,13 +1156,15 @@ def process_single_model(args, device, metrics, base_root):
                     'weight_mode': 'chunk' if args.weight_chunk_size else 'channel',
                     'weight_chunk_size': args.weight_chunk_size
                 },
-                'evaluation': {'mode': 'evaluate'},
+                'evaluation': eval_config,
                 'dataset': dataset_base,
                 'output_name': f"baseline_{fmt}"
             }
             configs_to_run.append(baseline_config)
 
-    for m in metrics:
+    # Only process metrics that we calculated in this run
+    # For cached metrics, we already appended the config and loaded results
+    for m in metrics_to_calc:
         print(f"\n--- Processing Metric: {m} ---")
         metric_dir = os.path.join(model_dir, m)
         os.makedirs(metric_dir, exist_ok=True)
@@ -1009,10 +1230,11 @@ def process_single_model(args, device, metrics, base_root):
                     }
             
             # Generate Layer Plot
-            try:
-                plot_layer_error_bar(name, errs, qt_options, hist_dir, m)
-            except Exception as e:
-                pass # Squelch
+            if args.plot_layers:
+                try:
+                    plot_layer_error_bar(name, errs, qt_options, hist_dir, m)
+                except Exception as e:
+                    pass # Squelch
                 
             # CSV Row
             row = {
@@ -1104,7 +1326,7 @@ def process_single_model(args, device, metrics, base_root):
                 'input_quantization_type': 'fp32'
             },
             'quantization': quant_config,
-            'evaluation': {'mode': 'evaluate'},
+            'evaluation': eval_config,
             'dataset': dataset_base if args.run_eval else {
                  'name': args.dataset_name, 'path': args.dataset_path, 
                  'batch_size': args.batch_size, 'num_workers': args.num_workers
@@ -1123,128 +1345,121 @@ def process_single_model(args, device, metrics, base_root):
             run_config['output_name'] = f"optimized_{m}"
             configs_to_run.append(run_config)
 
-    # 3. Run Evaluation
+    # 3. Compute Theoretical Errors for all Configs (Pre-calc)
+    # We do this from layer_results to avoid expensive re-calculation
+    print("Pre-calculating theoretical errors from layer analysis...")
+    precalc_errors = {} # output_name -> {metric: total_error}
+    
+    # helper to sum errors
+    def get_total_error(fmt_map, metric_name):
+        # fmt_map: {layer_name: format}
+        total = 0.0
+        for record in layer_results:
+            lname = record['layer']
+            fmt = fmt_map.get(lname)
+            if fmt:
+                val = record['metrics'][metric_name].get(fmt, 0.0)
+                # Handle SQNR
+                if metric_name == 'sqnr': val = -val
+                total += val
+        return total
+
+    # 3.1 Ref & Baselines
+    if args.run_eval:
+        # Ref
+        precalc_errors["ref_fp32"] = {m: 0.0 for m in metrics}
+        
+        # Baselines
+        for fmt in baseline_formats:
+            b_name = f"baseline_{fmt}"
+            # map is just fmt for all layers
+            fmt_map = {r['layer']: fmt for r in layer_results}
+            
+            b_errs = {}
+            for m in metrics:
+                b_errs[m] = get_total_error(fmt_map, m)
+            precalc_errors[b_name] = b_errs
+
+    # 3.2 Optimized Configs
+    # We need to reconstruct the layer map for each optimized metric
+    # We can do this by re-running the selection logic briefly
+    for m_opt in metrics:
+        opt_name = f"optimized_{m_opt}"
+        
+        # Determine selection for this metric
+        sel_map = {}
+        for record in layer_results:
+            errs = record['metrics'][m_opt]
+            # Find best
+            best_val = float('inf')
+            best_fmt = None
+            for q_type, val in errs.items():
+                 if val < best_val:
+                     best_val = val
+                     best_fmt = q_type
+                 elif val == best_val:
+                     # Tie-break (same as main loop)
+                     if get_format_bits(q_type) < get_format_bits(best_fmt if best_fmt else 'fp32'):
+                         best_val = val
+                         best_fmt = q_type
+            if best_fmt:
+                sel_map[record['layer']] = best_fmt
+                
+        # Calculate errors for ALL metrics based on this selection
+        # (e.g. what is the MSE of the model optimized for L1?)
+        opt_errs = {}
+        for m in metrics:
+            opt_errs[m] = get_total_error(sel_map, m)
+        precalc_errors[opt_name] = opt_errs
+
+    # 4. Run Evaluation
     if args.run_eval and configs_to_run:
         print("\n--- Starting Evaluation Batch ---")
         
-        # Deduplicate configs to avoid running exact same setup twice
+        # Deduplicate configs
         final_configs = []
-        config_signatures = {} # signature -> output_name
-        skipped_map = {} # skipped_name -> original_name
+        config_signatures = {} 
+        skipped_map = {} 
         
         for cfg in configs_to_run:
-            # Signature based on determining factors
             sig_dict = {
                 'model': cfg.get('model'),
                 'adapter': cfg.get('adapter'),
                 'quantization': cfg.get('quantization')
             }
-            # Use JSON dump for distinct signature
             signature = json.dumps(sig_dict, sort_keys=True)
             
             if signature in config_signatures:
                 existing_name = config_signatures[signature]
                 current_name = cfg['output_name']
-                print(f"Config '{current_name}' is duplicate of '{existing_name}'. Skipping execution.")
                 skipped_map[current_name] = existing_name
             else:
                 config_signatures[signature] = cfg['output_name']
                 final_configs.append(cfg)
 
         runner = Runner()
-        results = runner.run_batch(final_configs, output_root=model_dir)
+        print("Using Parallel Execution for Evaluation Phase...")
+        results = runner.run_batch_parallel(final_configs, output_root=model_dir)
 
-        # Re-hydrate skipped results for reporting
+        # Re-hydrate skipped results
         if skipped_map:
-            # Index current results
             results_map = {r.get('output_name'): r for r in results}
-            
             for skipped, original in skipped_map.items():
                 if original in results_map:
-                    print(f"Restoring result for '{skipped}' from '{original}'")
                     res_clone = results_map[original].copy()
                     res_clone['output_name'] = skipped
                     results.append(res_clone)
 
-        # Output root for runner is where it creates subfolders.
-        # If we pass model_dir, it will create model_dir/output_name/...
-        # Our output_name is "optimized_l1", "ref_fp32".
-        # So structure: experiments/optimal_layer_quant/resnet18/ref_fp32/...
-        # Also we have experiments/optimal_layer_quant/resnet18/l1/optimized_config.yaml
-        # This is fine. The Runner outputs (logs, graphs) will be alongside the metric folders.
-        
         # Aggregate
         aggregator = ReportAggregator()
         summary_path = os.path.join(model_dir, "evaluation_summary.csv")
         aggregator.aggregate(results, summary_path)
         
-        # Add total_error to results based on the BEST ACCURACY model's metric
-        # 1. Find the winner
-        if results:
-            sorted_res = sorted(results, key=lambda x: x.get('acc1', 0.0), reverse=True)
-            winner = sorted_res[0]
-            winner_name = winner.get('output_name', '')
-            
-            # Determine the metric to use
-            # If winner is 'optimized_l1', metric is 'l1'.
-            # If winner is 'baseline_fp8...', we probably default to 'l1' or similar, 
-            # unless we want to use the metric that *would* have chosen this baseline?
-            # Let's default to 'l1' if not an optimized run.
-            target_metric = 'l1' 
-            if winner_name.startswith('optimized_'):
-                parts = winner_name.split('_')
-                if len(parts) > 1:
-                    target_metric = parts[1] # 'l1', 'mse', etc.
-            
-            print(f"Best model is {winner_name}. Using metric '{target_metric}' for total error comparison.")
-            
-            if target_metric not in metrics:
-                 print(f"Warning: Target metric '{target_metric}' not in calculated metrics {metrics}. Falling back to 'l1'.")
-                 target_metric = 'l1'
-
-            # 2. Calculate Total Error for ALL configs using target_metric (RECALCULATE)
-            print(f"Recalculating total errors for all results using metric '{target_metric}'...")
-            
-            config_errors = {}
-            
-            # Map results by output name
-            for res in results:
-                r_name = res.get('output_name', '')
-                
-                # Find the config for this result
-                # We need to map r_name back to the config object
-                # We have final_configs matching output_names
-                
-                matching_cfg = None
-                for cfg in final_configs:
-                    if cfg['output_name'] == r_name:
-                        matching_cfg = cfg
-                        break
-                
-                if not matching_cfg:
-                     # Could be a skipped config that was restored
-                     # Find in 'skipped_map'? 
-                     # skipped_map[skipped] = original
-                     # checking...
-                     orig_name = skipped_map.get(r_name)
-                     if orig_name:
-                         for cfg in final_configs:
-                             if cfg['output_name'] == orig_name:
-                                 matching_cfg = cfg
-                                 break
-                
-                if matching_cfg:
-                    err = calculate_model_error(model, matching_cfg, target_metric, global_chunk_size=args.weight_chunk_size)
-                    config_errors[r_name] = err
-                else:
-                    print(f"Warning: Could not find config for {r_name}, skipping error calc.")
-                    config_errors[r_name] = 0.0
-
-            # Update results
-            for res in results:
-                name = res.get('output_name', '')
-                if name in config_errors:
-                    res['total_error'] = config_errors[name]
+        # Inject Pre-calculated Errors
+        for res in results:
+            name = res.get('output_name', '')
+            if name in precalc_errors:
+                res['errors'] = precalc_errors[name]
         
         # Plot Accuracy Comparison
         plot_accuracy_comparison(results, model_dir)

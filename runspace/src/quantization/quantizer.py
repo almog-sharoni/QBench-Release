@@ -1028,7 +1028,11 @@ def check_fp8_compliance(tensor: torch.Tensor, valid_table: torch.Tensor = None,
         return True, 0, []
         
     # Chunking to avoid OOM
-    chunk_size = 1024 * 1024 # 1M elements
+    # With N=1M and M=256 (FP8), matrix is 1M * 256 * 4 bytes = 1GB.
+    # This is fine for 1 config, but in parallel setup, multiple processes/threads might stress it?
+    # No, this runs sequentially in main process usually.
+    # However, for broader compatibility and speed, let's reduce chunk size purely for safety.
+    chunk_size = 10000 
     num_chunks = (len(non_nan_vals) + chunk_size - 1) // chunk_size
     
     total_invalid = 0
@@ -1036,6 +1040,10 @@ def check_fp8_compliance(tensor: torch.Tensor, valid_table: torch.Tensor = None,
     
     for i in range(num_chunks):
         chunk = non_nan_vals[i*chunk_size : (i+1)*chunk_size]
+        
+        # Broadcasting [Chunk, 1] - [1, Table] -> [Chunk, Table]
+        # Memory: Chunk * TableSize * 4 bytes
+        # 10k * 256 * 4 = 10MB. Very safe.
         diffs = torch.abs(chunk.unsqueeze(1) - valid_non_nan.unsqueeze(0))
         min_diffs = diffs.min(dim=1).values
         
@@ -1046,17 +1054,21 @@ def check_fp8_compliance(tensor: torch.Tensor, valid_table: torch.Tensor = None,
             total_invalid += count
             if len(examples) < 5:
                 examples.extend(chunk[invalid_mask][:5 - len(examples)].tolist())
-                
+
     if total_invalid > 0:
         return False, total_invalid, examples
         
     return True, 0, []
 
-
 def assert_fp8_valid(tensor: torch.Tensor, rtol: float = 1e-5, q_type: str = "fp8_e4m3", bias: int = None) -> None:
     """
     Assert all values are valid FP8 (vectorized check).
+    Can be disabled via SKIP_FP8_VALIDATION env var.
     """
+    import os
+    if os.environ.get("SKIP_FP8_VALIDATION", "0") == "1":
+        return
+
     passed, count, examples = check_fp8_compliance(tensor, rtol=rtol, q_type=q_type, bias=bias)
     if not passed:
         raise AssertionError(

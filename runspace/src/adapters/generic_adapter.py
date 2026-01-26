@@ -418,6 +418,12 @@ class GenericAdapter(BaseAdapter):
             # Replace layers with quantized versions
             self._replace_layers(model)
             
+            # Optimization: Move model to GPU for calibration if available
+            # This speeds up the heavy quantize_fp8_generic calls significantly
+            if torch.cuda.is_available():
+                device = torch.device('cuda')
+                model.to(device)
+            
             # Calibrate weights (pre-compute scales)
             self._calibrate_model(model)
             
@@ -425,6 +431,8 @@ class GenericAdapter(BaseAdapter):
             # This handles functional calls like F.relu that are not modules
             try:
                 # _fx_quantize returns the modified model (GraphModule) if changes were made
+                # FX tracing relies on symbolic execution. GPU vs CPU shouldn't matter for correctness,
+                # but we should ensure consistency.
                 fx_model = self._fx_quantize(model)
                 if fx_model is not None:
                     model = fx_model
