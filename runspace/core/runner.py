@@ -514,9 +514,12 @@ class Runner:
              raise RuntimeError("Failed to setup data loader")
              
         # 3. Execution Loop
+        max_batches = configs[0].get('evaluation', {}).get('max_batches', -1)
         try:
             with torch.no_grad():
-                for batch in tqdm(loader, desc=f"Parallel Eval ({len(active_contexts)} models)"):
+                for i, batch in enumerate(tqdm(loader, desc=f"Parallel Eval ({len(active_contexts)} models)")):
+                    if max_batches > 0 and i >= max_batches:
+                        break
                     # Use first adapter for preparation (assuming compatible input pipeline)
                     adapter = active_contexts[0]['adapter']
                     inputs, targets = adapter.prepare_batch(batch)

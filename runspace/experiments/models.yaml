@@ -1,6 +1,6 @@
-# - name: alexnet
-#   source: torchvision
-#   weights: IMAGENET1K_V1
+- name: alexnet
+  source: torchvision
+  weights: IMAGENET1K_V1
 
 # - name: convnext_base
 #   source: torchvision

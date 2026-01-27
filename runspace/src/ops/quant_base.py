@@ -36,19 +36,20 @@ def calculate_scale(max_val: torch.Tensor, q_type: str, bias: int = None):
     return s
 
 
-def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', bias: int = None, return_unscaled: bool = False, return_scale: bool = False, mode: str = 'tensor', chunk_size: int = None, rounding: str = 'nearest'):
+def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', bias: int = None, return_unscaled: bool = False, return_scale: bool = False, mode: str = 'tensor', chunk_size: int = None, rounding: str = 'nearest', validate: bool = False, chunk_formats: list = None):
     """
-    Quantizes a tensor to FP8.
+    Quantizes a tensor to FP8 or other supported formats.
     Args:
         input: Input tensor
-        q_type: Quantization type ('fp8_e4m3' or 'fp8_e5m2')
-        bias: Exponent bias (default: 7 for e4m3, 15 for e5m2 if None)
-        bias: Exponent bias (default: 7 for e4m3, 15 for e5m2 if None)
+        q_type: Default quantization type
+        bias: Exponent bias
         return_unscaled: If True, returns (scaled_input, unscaled_input)
-        return_scale: If True, returns (quantized_tensor, scale) or (quantized_tensor, unscaled, scale) if return_unscaled is True
+        return_scale: If True, returns (quantized_tensor, scale) or (quantized_tensor, unscaled, scale)
         mode: Quantization mode ('tensor', 'channel', 'chunk')
         chunk_size: Size of chunk for 'chunk' mode
         rounding: Rounding mode ('nearest' or 'truncate')
+        validate: If True, perform expensive FP8 validation checks
+        chunk_formats: Optional list of formats per chunk. If provided, overrides q_type for chunk mode.
     Returns:
         Quantized tensor (scaled back to original range)
     """
@@ -58,6 +59,131 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', bias: int = N
     # if q_type == 'fp8_e5m2' and not hasattr(torch, 'float8_e5m2'):
     #         raise RuntimeError("FP8 E5M2 support (torch.float8_e5m2) is required.")
     # FP4 types are manually implemented, so no check needed
+    if q_type == 'fp32':
+        max_val = input.abs().max()
+        scale = torch.tensor(1.0, device=input.device)
+        if return_unscaled and return_scale:
+            return input, input, max_val, scale, scale
+        if return_unscaled:
+            return input, input, max_val
+        if return_scale:
+            return input, scale, scale
+        return input, max_val
+    
+    if q_type.startswith('dynamic_oracle'):
+        # Dynamic Oracle Mode: specific for evaluation of upper bound
+        # Format: dynamic_oracle_{metric} (e.g. dynamic_oracle_l1)
+        if chunk_size is None:
+             raise ValueError("chunk_size must be provided for dynamic_oracle mode")
+             
+        # Parse metric
+        parts = q_type.split('_')
+        metric = parts[-1] if len(parts) > 2 else 'l1'
+        
+        # Candidate formats (Standard set)
+        candidates = [
+            'fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6', 
+            'fp8_e6m1', 'fp8_e7m0', 'fp8_e0m7',
+            'fp7_e3m3', 'fp7_e4m2', 'fp7_e2m4', 'fp7_e5m1', 'fp7_e1m5', 
+            'fp7_e6m0', 'fp7_e0m6'
+        ]
+        
+        # Flatten and chunk
+        if input.dim() > 1:
+            flat_input = input.flatten(1)
+            batch_size = input.shape[0]
+        else:
+            flat_input = input.flatten(0)
+            batch_size = 1
+            
+        num_elements = flat_input.shape[-1]
+        pad_len = 0
+        if num_elements % chunk_size != 0:
+            pad_len = chunk_size - (num_elements % chunk_size)
+            flat_input = torch.nn.functional.pad(flat_input, (0, pad_len))
+            
+        num_chunks = flat_input.shape[-1] // chunk_size
+        chunked = flat_input.view(batch_size, num_chunks, chunk_size) # [B, N, C]
+        
+        best_error = torch.full((batch_size, num_chunks), float('inf'), device=input.device)
+        best_dequant = torch.zeros_like(chunked)
+        best_scale = torch.zeros((batch_size, num_chunks, 1), device=input.device)
+        best_fmt_idx = torch.zeros((batch_size, num_chunks), dtype=torch.long, device=input.device)
+        
+        # Naive implementation: Try all, keep best
+        for idx, fmt in enumerate(candidates):
+             # Quantize using existing logic (recursive call? or reimplement simplified)
+             # Reimplement simplified to avoid redundant padding/checks
+             
+             # Scale
+             max_val_c = chunked.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5)
+             bias_val = get_quantization_bias(fmt)
+             s_c = calculate_scale(max_val_c, fmt, bias_val)
+             
+             # Quant/Dequant
+             scaled = chunked / s_c
+             q = quantize(scaled, q_type=fmt, bias=bias_val, rounding=rounding, validate=validate)
+             deq = q * s_c
+             
+             # Error
+             diff = chunked - deq
+             if metric == 'l1':
+                 err = diff.abs().sum(dim=-1) # [B, N]
+             elif metric == 'mse':
+                 err = diff.pow(2).mean(dim=-1)
+             elif metric == 'cosine':
+                  # Cosine per chunk
+                  sim = torch.nn.functional.cosine_similarity(chunked, deq, dim=-1)
+                  err = 1.0 - sim
+             else: # Default l1
+                 err = diff.abs().sum(dim=-1)
+             
+             # Update best
+             mask = err < best_error
+             best_error = torch.where(mask, err, best_error)
+             best_dequant = torch.where(mask.unsqueeze(-1), deq, best_dequant)
+             best_scale = torch.where(mask.unsqueeze(-1), s_c, best_scale)
+             best_fmt_idx = torch.where(mask, torch.tensor(idx, device=input.device), best_fmt_idx)
+
+        # --- Log to Tracker ---
+        try:
+             from runspace.src.tracking.oracle_tracker import OracleTracker
+             tracker = OracleTracker()
+             if tracker.enabled and tracker.current_context:
+                 # Ensure candidates are set at least once per run or globally
+                 if not tracker.candidates:
+                     tracker.set_candidates(candidates)
+                 tracker.log_selection(best_fmt_idx)
+        except ImportError:
+             pass
+             
+        # Reconstruct
+        # Flatten chunks
+        dequant_flat = best_dequant.view(batch_size, -1)
+        scale_flat_packed = best_scale.view(batch_size, -1) # This is [B, Nchunks] -> we need [B, Nchunks*1]? No, packed scale.
+        
+        # Expand scale for return if needed
+        scale_expanded = best_scale.expand(-1, -1, chunk_size).reshape(batch_size, -1)
+        
+        # Remove pad
+        if pad_len > 0:
+            dequant_flat = dequant_flat[:, :num_elements]
+            scale_expanded = scale_expanded[:, :num_elements]
+            # scale_flat_packed is per chunk, so we keep it as is (ignoring partial chunk logic for packed?)
+            
+        output_fp8 = dequant_flat.view_as(input)
+        s = scale_expanded.view_as(input)
+        
+        # For return values
+        max_val = output_fp8.abs().max() # Approx
+        
+        if return_unscaled and return_scale:
+             return output_fp8, output_fp8, max_val, s, scale_flat_packed
+        if return_unscaled:
+             return output_fp8, output_fp8, max_val
+        if return_scale:
+            return output_fp8, s, scale_flat_packed
+        return output_fp8, max_val
 
     s = None
     
@@ -85,7 +211,68 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', bias: int = N
         num_chunks = flat_input.shape[-1] // chunk_size
         chunked = flat_input.view(batch_size, num_chunks, chunk_size)
         
-        # Max per chunk
+        if chunk_formats is not None:
+            # Per-chunk format selection
+            total_chunks = batch_size * num_chunks
+            
+            # Align chunk_formats
+            final_formats = []
+            if len(chunk_formats) == total_chunks:
+                final_formats = chunk_formats
+            elif len(chunk_formats) == num_chunks:
+                # Broadcast across batch
+                for _ in range(batch_size):
+                    final_formats.extend(chunk_formats)
+            else:
+                # Fallback: use first format
+                final_formats = [chunk_formats[0]] * total_chunks
+                
+            chunked_flat = chunked.view(-1, chunk_size)
+            quantized_chunks_flat = torch.zeros_like(chunked_flat)
+            scale_chunks_flat = torch.zeros_like(chunked_flat)
+            
+            unique_fmts = set(final_formats)
+            for fmt in unique_fmts:
+                indices = [i for i, f in enumerate(final_formats) if f == fmt]
+                if not indices: continue
+                
+                idx_tensor = torch.tensor(indices, device=input.device)
+                sub_chunks = chunked_flat[idx_tensor]
+                
+                max_v = sub_chunks.abs().amax(dim=1, keepdim=True).clamp(min=1e-5)
+                bias_v = get_quantization_bias(fmt)
+                scale = calculate_scale(max_v, fmt, bias_v)
+                
+                q = quantize(sub_chunks / scale, q_type=fmt, bias=bias_v, rounding=rounding, validate=validate)
+                quantized_chunks_flat[idx_tensor] = q
+                scale_chunks_flat[idx_tensor] = scale
+                
+            dequant_padded = (quantized_chunks_flat * scale_chunks_flat).view(batch_size, -1)
+            s_padded = scale_chunks_flat.view(batch_size, -1)
+            
+            if num_elements % chunk_size != 0:
+                dequant_flat = dequant_padded[:, :num_elements]
+                s_flat = s_padded[:, :num_elements]
+            else:
+                dequant_flat = dequant_padded
+                s_flat = s_padded
+                
+            output_fp8 = dequant_flat.view_as(input)
+            scale_b = s_flat.view_as(input)
+            
+            # For return, use max from scaled back if needed, but here let's just use approx
+            max_val = output_fp8.abs().max()
+            
+            if return_unscaled:
+                # Return quantized unscaled as well? 
+                # For mixed formats, "unscaled" is inconsistent across chunks.
+                # Returning dequantized result as both quantized and unscaled.
+                return output_fp8, output_fp8, max_val, scale_b, scale_b # simplified scale packed
+            if return_scale:
+                return output_fp8, scale_b, scale_b
+            return output_fp8, max_val
+
+        # Max per chunk (standard single format mode)
         max_val_chunk = chunked.abs().amax(dim=-1, keepdim=True) # [N, num_chunks, 1]
         max_val_chunk = torch.clamp(max_val_chunk, min=1e-5)
         
@@ -144,7 +331,7 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', bias: int = N
     
     # Quantize to FP8 (simulated)
     # Capture unscaled quantized values (as float for simulation/verification)
-    input_fp8_unscaled = quantize(input_scaled, q_type=q_type, bias=bias, rounding=rounding)
+    input_fp8_unscaled = quantize(input_scaled, q_type=q_type, bias=bias, rounding=rounding, validate=validate)
     input_fp8 = input_fp8_unscaled * s
     
     if return_unscaled:
@@ -335,6 +522,11 @@ class QuantizedLayerMixin:
              reduce_dims = tuple(range(self.weight.dim()))
 
         
+        if q_type == 'fp32':
+            self.weight_fp8 = self.weight
+            self.weight_scale = torch.tensor(1.0, device=self.weight.device)
+            return
+
         max_val = self.weight.abs().amax(dim=reduce_dims, keepdim=True)
         
         # Avoid log of 0
@@ -377,6 +569,10 @@ class QuantizedLayerMixin:
             # Store as int8 (no native int4 type), but values are in [-8, 7]
             w_quant = quantize(w_scaled, q_type='int4') # Returns float with int values
             self.weight_fp8 = w_quant.to(torch.int8)
+        elif q_type == 'fp32':
+            # Identity quantization
+            self.weight_fp8 = self.weight
+            self.weight_scale = torch.tensor(1.0, device=self.weight.device)
         else:
             raise ValueError(f"Unsupported q_type: {q_type}")
 
@@ -398,6 +594,7 @@ class QuantizedLayerMixin:
         mode = getattr(self, 'input_mode', getattr(self, 'quant_mode', 'tensor')) # Use input_mode if set, else quant_mode
         chunk_size = getattr(self, 'input_chunk_size', getattr(self, 'chunk_size', None))
         rounding = getattr(self, 'rounding', 'nearest') # Default to nearest for inputs
+        chunk_formats = getattr(self, 'input_chunk_formats', None) # Per-chunk input formats
         
         # Check if input quantization is enabled
         if not getattr(self, 'input_quantization', True):
@@ -420,7 +617,25 @@ class QuantizedLayerMixin:
             
             return input
             
-        input_fp8, input_fp8_unscaled, max_val, scale_b, scale_p = quantize_tensor(input, q_type=q_type, bias=bias, return_unscaled=True, return_scale=True, mode=mode, chunk_size=chunk_size, rounding=rounding)
+        # --- Tracker Context Setup ---
+        tracker_active = False
+        try:
+             if 'dynamic_oracle' in str(q_type) and hasattr(self, 'layer_name'):
+                 from runspace.src.tracking.oracle_tracker import OracleTracker
+                 tracker = OracleTracker()
+                 if tracker.enabled:
+                     # Use run_id if available, else default
+                     run_id = getattr(self, 'run_id', 'default')
+                     tracker.set_context(run_id, self.layer_name)
+                     tracker_active = True
+        except ImportError:
+             pass
+
+        input_fp8, input_fp8_unscaled, max_val, scale_b, scale_p = quantize_tensor(input, q_type=q_type, bias=bias, return_unscaled=True, return_scale=True, mode=mode, chunk_size=chunk_size, rounding=rounding, chunk_formats=chunk_formats)
+        
+        # --- Tracker Cleanup ---
+        if tracker_active:
+            tracker.clear_context()
         
         if capture:
             self.last_quant_input_unscaled = input_fp8_unscaled.detach()

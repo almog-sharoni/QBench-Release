@@ -26,8 +26,8 @@ class LUTActivation:
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
         
-        # For FP4 (simulated), we compute on-the-fly instead of using a LUT
-        if q_type.startswith("fp4"):
+        # For FP4 (simulated) or FP32, we compute on-the-fly instead of using a LUT
+        if q_type.startswith("fp4") or q_type == 'fp32':
             self.activation_fn = activation_fn
             return
 
@@ -71,9 +71,10 @@ class LUTActivation:
         Apply the LUT to the input tensor.
         Input is expected to be a float tensor.
         """
-        # For FP4 (simulated), compute directly
-        if self.q_type.startswith("fp4"):
-            return quantize(self.activation_fn(input), q_type=self.q_type, bias=self.bias)
+        # For FP4 (simulated) or FP32, compute directly
+        if self.q_type.startswith("fp4") or self.q_type == 'fp32':
+            res = self.activation_fn(input)
+            return res, res
 
         # Dynamic Quantization
         # We need to scale input to target range.

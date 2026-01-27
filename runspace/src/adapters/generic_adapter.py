@@ -39,7 +39,9 @@ class GenericAdapter(BaseAdapter):
         act_chunk_size: int = None,
         fold_layers: bool = False,
         simulate_tf32_accum: bool = False,
-        rounding: str = "nearest"
+        rounding: str = "nearest",
+        input_chunk_size: int = None,
+        run_id: str = "default"
     ):
         super().__init__()
         self.model_name = model_name
@@ -55,6 +57,7 @@ class GenericAdapter(BaseAdapter):
         self.layer_config = layer_config if layer_config is not None else {}
         self.per_chunk_format = per_chunk_format
         self.input_quantization_type = input_quantization_type
+        self.run_id = run_id
         
 
         
@@ -69,6 +72,7 @@ class GenericAdapter(BaseAdapter):
         self.fold_layers = fold_layers
         self.simulate_tf32_accum = simulate_tf32_accum
         self.rounding = rounding
+        self.input_chunk_size = input_chunk_size
         self.model = self.build_model(quantized=True)
 
     def _load_base_model(self) -> nn.Module:
@@ -243,12 +247,15 @@ class GenericAdapter(BaseAdapter):
         
         # Default modes
         input_mode = self.quant_mode
-        input_chunk_size = self.chunk_size
+        act_chunk_size = self.act_chunk_size
+        rounding = self.rounding
+        input_chunk_size = self.input_chunk_size if self.input_chunk_size is not None else self.chunk_size
+        
+        # Restore missing assignments
         weight_mode = self.weight_mode
         weight_chunk_size = self.weight_chunk_size
         act_mode = self.act_mode
-        act_chunk_size = self.act_chunk_size
-        rounding = self.rounding
+        
         
         # Check for layer-specific config
         layer_conf = {}
@@ -294,8 +301,7 @@ class GenericAdapter(BaseAdapter):
             # Initialize Mixin state
             module.q_type = q_type
             module.quantization_bias = bias
-            if input_q_type:
-                module.input_q_type = input_q_type
+            module.input_q_type = input_q_type if input_q_type else q_type
             
             module.input_quantization = self.input_quantization
             module.input_mode = input_mode
@@ -396,6 +402,12 @@ class GenericAdapter(BaseAdapter):
                 # If we created a new instance (not in-place swap), we need to set it
                 if new_module is not module:
                     setattr(model, name, new_module)
+                    
+                # Set layer name for tracking/debugging
+                # new_module might be the swapped module or the new instance
+                target_module = new_module if new_module is not None else module
+                target_module.layer_name = full_name
+                target_module.run_id = getattr(self, 'run_id', 'default')
             
             # Recursion
             # If we replaced the module, recurse into the new module (e.g. DecomposedMHA)
