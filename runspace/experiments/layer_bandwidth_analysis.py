@@ -605,6 +605,121 @@ def process_single_model(model_name, weights, dataset_config, args, device):
         plt.savefig(os.path.join(output_dir, 'bandwidth_requirements.png'))
         plt.close()
 
+        # Plot 3: Runtime Bottleneck Analysis (10 Bytes/Cycle) using Stacked Bar Chart
+        # --------------------------------------------------------------------------------
+        
+        TARGET_BW = 1.0 # Bytes/Cycle
+        BYTES_PER_ELEM = 1.0 # Assuming INT8/FP8 for bandwidth constraints analysis
+        
+        # Calculate Times
+        t_inputs = []
+        t_weights = []
+        t_outputs = []
+        t_computes = []
+        layer_labels = []
+        label_colors = []
+        
+        for layer in fused_stats:
+             # Calculate Data Transfer Cycles
+             # T = (Elements * Bytes/Elem) / BW
+             w_count = parse_val(layer['num_weights'])
+             i_count = parse_val(layer['num_inputs'])
+             o_count = parse_val(layer['num_outputs'])
+             
+             t_in = (i_count * BYTES_PER_ELEM) / TARGET_BW
+             t_w = (w_count * BYTES_PER_ELEM) / TARGET_BW
+             t_out = (o_count * BYTES_PER_ELEM) / TARGET_BW
+             t_total_data = t_in + t_w + t_out
+             
+             # Compute Cycles (Already calculated as ceil(MACs / 128))
+             t_comp = layer['cycles']
+             
+             t_inputs.append(t_in)
+             t_weights.append(t_w)
+             t_outputs.append(t_out)
+             t_computes.append(t_comp)
+             layer_labels.append(layer['layer_type'])
+             
+             # Classification using simple rule: Limit is max(Compute, Data)
+             # But usually "Compute Limited" means Compute Time > Data Time
+             # "Bandwidth Limited" means Data Time > Compute Time
+             if t_total_data > t_comp:
+                 label_colors.append('red') # B/W Limited
+             else:
+                 label_colors.append('green') # Compute Limited
+
+        # Plotting
+        plt.figure(figsize=(max(10, len(layer_types)*0.3), 8))
+        x = np.arange(len(layer_types))
+        width = 0.6
+        
+        # We want to show the COMPOSITION of the runtime
+        # If Compute Limited: The bar height is T_compute. But we also want to show underlying data time?
+        # User asked: "bars for inputs, weights, outputs run time separateley" 
+        # This implies stacking them?
+        # AND "mark layers in two colors" - this refers to the layer names on Y axis or X axis labels.
+        # Let's stack Inputs + Weights + Outputs to show "Data Time".
+        # And plot "Compute Time" as a separate bar or overlay?
+        # A common way for bottleneck: 
+        # Bar 1: Stack(In, W, Out) -> Total Data Time
+        # Bar 2: Compute Time 
+        # But this doubles the bars.
+        # User asked for "bars for inputs, weights, outputs run time" -> implies stacking these 3.
+        # And then classification based on sum(these 3) vs Compute.
+        # Let's verify if user implies Compute should also be a bar? "bars for inputs ,weights outputs run time (separatley)"
+        # Maybe: 
+        # Y-Axis: Layer Names.
+        # X-Axis: Time (Cycles).
+        # Bar: Stacked (Input, Weight, Output). 
+        # But where is compute? "run time" usually is max(Data, Compute).
+        # If we only stack Input/Weight/Output, we show Data Time.
+        # If we want to verify coverage, we typically overlay compute or show it side-by-side.
+        # Given constraint "bars for inputs, weights, outputs", I will stack these.
+        # And maybe add a marker for Compute Time? Or a separate bar?
+        # Let's do a grouped bar? 
+        # Group 1: Stacked (In, W, Out)
+        # Group 2: Compute
+        # This clearly shows the bottleneck.
+        
+        plt.figure(figsize=(12, max(8, len(layer_types)*0.4))) # Taller for horizontal bars
+        
+        y_pos = np.arange(len(layer_labels))
+        height = 0.4
+        
+        # Data Transfer Stack
+        p1 = plt.barh(y_pos + height/2, t_inputs, height, label='Input Time', color='skyblue')
+        p2 = plt.barh(y_pos + height/2, t_weights, height, left=t_inputs, label='Weight Time', color='orange')
+        # correct 'left' for 3rd bar is sum of previous two
+        left_for_out = [i+w for i,w in zip(t_inputs, t_weights)]
+        p3 = plt.barh(y_pos + height/2, t_outputs, height, left=left_for_out, label='Output Time', color='lightgreen')
+        
+        # Compute Bar (Side by side)
+        p4 = plt.barh(y_pos - height/2, t_computes, height, label='Compute Time', color='gray', alpha=0.7)
+        
+        plt.xlabel(f'Duration (Cycles) @ {TARGET_BW} B/Cycle (1 B/Elem)')
+        plt.ylabel('Layers')
+        plt.title(f'{model_name} Runtime Bottleneck Analysis\n(Red=B/W Limited, Green=Compute Limited)')
+        
+        plt.yticks(y_pos, [l[:30] for l in layer_labels], fontsize=9)
+        
+        # Color the Y-axis labels
+        ax = plt.gca()
+        y_labels = ax.get_yticklabels()
+        for i, label in enumerate(y_labels):
+            label.set_color(label_colors[i])
+            label.set_fontweight('bold')
+            
+        plt.legend()
+        plt.grid(axis='x', linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        plt.draw()
+        
+        # Invert Y axis to have first layer at top
+        plt.gca().invert_yaxis()
+        
+        plt.savefig(os.path.join(output_dir, 'runtime_bottleneck.png'))
+        plt.close()
+
     # Verify Coverage
     verify_coverage(model, tracker.recorded_layers)
 
