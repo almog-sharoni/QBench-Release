@@ -28,7 +28,7 @@ def get_args():
     parser.add_argument("--dataset_name", type=str, default="imagenet", help="Dataset name")
     parser.add_argument("--dataset_path", type=str, default="/data/imagenet/val", help="Dataset path")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
-    parser.add_argument("--num_workers", type=int, default=8, help="Number of workers")
+    parser.add_argument("--num_workers", type=int, default=0, help="Number of workers (0 is recommended for single-batch analysis)")
     parser.add_argument("--output_dir", type=str, default="runspace/experiments/bandwidth_analysis", help="Output directory")
     parser.add_argument("--limit_batches", type=int, default=1, help="Number of batches to run (1 is usually enough for static shape analysis)")
     parser.add_argument("--exclude_types", type=str, default="BatchNorm2d,ReLU", help="Comma-separated list of layer types to exclude and fuse into previous layer (e.g., 'BatchNorm2d,ReLU')")
@@ -145,18 +145,34 @@ class BandwidthTracker:
                 groups = module.groups
                 ops_per_output = (k_h * k_w * in_c) // groups
                 macs = num_outputs * ops_per_output
+                macs = num_outputs * ops_per_output
             
+            elif isinstance(module, (nn.LayerNorm, nn.GroupNorm, nn.InstanceNorm2d)):
+                 # Normalization: approx 5-10 ops per element (mean, var, sub, div, scale, shift)
+                 # For BW analysis, keeping it simple: 1 Op per element (or just treat as 0 low compute).
+                 # User wants to avoid "Unknown Op" warning.
+                 macs = num_outputs
+                 macs_status = "ok"
+
+            elif isinstance(module, nn.MultiheadAttention):
+                 # MHA: Q, K, V projections + Attention
+                 # Simplified Estimate assuming Q, K, V are linear projections of input dim E
+                 # Total MACs roughly 4 * Num_Outputs * Embed_Dim
+                 # 3 Projections (3 * E^2 * L) + Out Proj (1 * E^2 * L) = 4 * E^2 * L
+                 # Num_Outputs = B * L * E.
+                 # So MACs = 4 * Num_Outputs * E
+                 embed_dim = module.embed_dim
+                 if embed_dim > 0:
+                     macs = 4 * num_outputs * embed_dim
+                 macs_status = "ok"
+
             elif isinstance(module, ResidualAdd):
                 # Element-wise addition: 1 Op per output element
-                # User wants bandwidth calculation: BW = Data / (Ops/128)
-                # We treat Add as 1 Ops. 
-                # Note: This makes it high bandwidth requirement (Memory bound).
                 macs = num_outputs 
                 macs_status = "ok"
 
             elif isinstance(module, (nn.MaxPool2d, nn.AvgPool2d)):
                 # Pooling: kernel_size elements per output.
-                # Ops = Num_Outputs * Kernel_H * Kernel_W
                 k = module.kernel_size
                 if isinstance(k, int):
                     k_h, k_w = k, k
@@ -169,19 +185,16 @@ class BandwidthTracker:
             elif isinstance(module, nn.AdaptiveAvgPool2d):
                 # AdaptiveAvgPool2d: Often used for global average pooling.
                 # Ops approx equal to Num_Inputs (accumulation of all inputs to outputs).
-                # Effectively: Num_Outputs * (Input_H * Input_W) / (Output_H * Output_W) ? 
-                # Simplest robust approximation: Summing all inputs.
                 macs = num_inputs
                 macs_status = "ok"
 
             elif isinstance(module, (nn.BatchNorm2d, nn.ReLU, nn.Dropout, nn.Identity)):
-                # Known to have 0 MACs (arithmetic ops usually not counted as MACs in this context or negligible/different metric)
+                # Known to have 0 MACs
                 macs = 0
                 macs_status = "zero_known"
             
             else:
                 # Unknown operation
-                # Check if it has weights?
                 if num_weights > 0:
                      macs_status = "unknown_weights"
                 else:
@@ -320,7 +333,21 @@ def process_single_model(model_name, weights, dataset_config, args, device):
     
     print("Registering hooks on all leaf modules...")
     for name, module in model.named_modules():
-        if len(list(module.children())) == 0:
+        # Hook if leaf (no children) OR if it is MultiheadAttention (which might have internal helpers but we want to treat as one op context)
+        # Note: If we hook MHA, we should ideally skip its children to avoid double-counting if they are also looped.
+        # But named_modules includes children.
+        # However, BandwidthTracker.get_hook checks 'recorded_layers'. We should ensure we don't record children if parent is MHA.
+        # Better strategy: explicitly check if parent is MHA and skip.
+        # But parent info is not easy in named_modules.
+        
+        # Simplified: Just hook MHA. If children are hooked later, they will be separate entries.
+        # BandwidthTracker uses `recorded_layers` to avoid dups of SAME layer name.
+        # It does not prevent child hooking.
+        # But 'MultiheadAttention' usually encapsulates linear layers that are also named_modules.
+        # If we hook both, we get both entries.
+        
+        should_hook = len(list(module.children())) == 0 or isinstance(module, nn.MultiheadAttention)
+        if should_hook:
             handles.append(module.register_forward_hook(tracker.get_hook(name, module)))
             
     # Run Inference
@@ -718,6 +745,257 @@ def process_single_model(model_name, weights, dataset_config, args, device):
         plt.gca().invert_yaxis()
         
         plt.savefig(os.path.join(output_dir, 'runtime_bottleneck.png'))
+        plt.close()
+
+        # --------------------------------------------------------------------------------
+        # New Analysis: Bandwidth Sensitivity Sweep (0.1 - 3.0 B/C)
+        # --------------------------------------------------------------------------------
+        print("Running Bandwidth Sensitivity Sweep...")
+        
+        bw_points = np.arange(0.1, 3.1, 0.1) # 0.1 to 3.0
+        total_cycles_curve = []
+        
+        # We also want to find the exact cycles at BW=1.0 for the point on the graph
+        cycles_at_1_0 = 0
+        
+        for bw in bw_points:
+            model_total_cycles = 0
+            for layer in fused_stats:
+                # 1. Compute Cycles
+                t_comp = layer['cycles']
+                
+                # 2. Data Limit Cycles @ bw
+                # Data = Inputs + Weights + Outputs (Elements)
+                # Assuming 1 Byte/Element per user request/code context (or use BYTES_PER_ELEM=1.0)
+                # If we want to accept different precisions, we should stick to a standard. 
+                # User said "b/w = 1/10 bytes/cycle to 3 bytes/cycle". This implies Bytes is the unit.
+                # And usually we assume Bytes per element is fixed for the analysis (e.g. 1 Byte/Elem for INT8/FP8)
+                
+                total_data_bytes = (parse_val(layer['num_inputs']) + parse_val(layer['num_weights']) + parse_val(layer['num_outputs'])) * 1.0 
+                
+                t_data = total_data_bytes / bw
+                
+                # Layer Time = max(Compute, Data)
+                model_total_cycles += max(t_comp, t_data)
+            
+            total_cycles_curve.append(model_total_cycles)
+            if np.isclose(bw, 1.0):
+                cycles_at_1_0 = model_total_cycles
+
+        # Plot 4: Bandwidth Sensitivity
+        plt.figure(figsize=(10, 6))
+        plt.plot(bw_points, total_cycles_curve, marker='o', linestyle='-', color='purple', label='Total Execution Time')
+        
+        # Mark BW=1.0
+        idx_1_0 = np.argmin(np.abs(bw_points - 1.0))
+        val_1_0 = total_cycles_curve[idx_1_0]
+        plt.plot(1.0, val_1_0, marker='*', markersize=15, color='red', label='Roof (1.0 B/C)')
+        
+        plt.xlabel('Bandwidth (Bytes/Cycle)')
+        plt.ylabel('Total Estimated Cycles')
+        plt.title(f'{model_name} Performance vs Bandwidth')
+        plt.grid(True, which="both", ls="--", alpha=0.6)
+        plt.legend()
+        plt.savefig(os.path.join(output_dir, 'bandwidth_sensitivity.png'))
+        plt.close()
+
+        # --------------------------------------------------------------------------------
+        # New Analysis: Roofline Model & Histogram
+        # --------------------------------------------------------------------------------
+        # Roofline Plot: 
+        # X: Arithmetic Intensity (Ops/Byte)
+        # Y: Performance (Ops/Cycle)
+        # Roof: Min(Peak_Compute, Intensity * BW)
+        # We assume Peak Compute = 128 Ops/Cycle (from code: macs/128)
+        # We assume Peak BW = 1.0 Byte/Cycle (from user req "roof should be 1 byte/cycle")
+        
+        PEAK_COMPUTE = 128.0
+        PEAK_BW = 1.0
+        
+        intensities = []
+        performances = []
+        layer_names_roof = []
+        required_bws = []
+        
+        for layer in fused_stats:
+            macs = layer['num_macs']
+            total_data_bytes = (parse_val(layer['num_inputs']) + parse_val(layer['num_weights']) + parse_val(layer['num_outputs'])) * 1.0
+            
+            if total_data_bytes > 0:
+                intensity = macs / total_data_bytes
+            else:
+                intensity = 0 # Should not happen usually
+            
+            # Attainable Performance at Peak BW
+            # Time = max(MACs/Peak_Compute, Bytes/Peak_BW)
+            # Perf = MACs / Time
+            time_cycles = max(macs / PEAK_COMPUTE, total_data_bytes / PEAK_BW)
+            if time_cycles > 0:
+                perf = macs / time_cycles
+            else:
+                perf = 0
+            
+            # Required BW to be Compute Bound
+            # MACs/Compute_Peak = Bytes / Req_BW  -> Req_BW = Bytes * Compute_Peak / MACs = Compute_Peak / Intensity
+            if intensity > 0:
+                req_bw = PEAK_COMPUTE / intensity
+            else:
+                req_bw = 0
+                
+            intensities.append(intensity)
+            performances.append(perf)
+            layer_names_roof.append(layer['layer_type'])
+            required_bws.append(req_bw)
+
+        # Plot 5: Roofline Scatter (Classic Memory Wall Style - Linear Scale)
+        plt.figure(figsize=(10, 6))
+        
+        # Determine Ranges (Linear)
+        if intensities:
+            max_intensity = max(intensities)
+            max_perf = max(performances)
+        else:
+            max_intensity = 10.0
+            max_perf = PEAK_COMPUTE
+
+        # X Range: 0 to max observed intensity + buffer
+        # Ensure we show the knee (PEAK / BW)
+        knee_x = PEAK_COMPUTE / PEAK_BW
+        x_limit = max(max_intensity * 1.2, knee_x * 1.5) 
+        
+        x_range = np.linspace(0, x_limit, 200)
+        
+        # 1. Compute Bound Line (Horizontal)
+        y_compute = np.full_like(x_range, PEAK_COMPUTE)
+        
+        # 2. Memory Bound Line (Diagonal): Y = X * BW
+        y_memory = x_range * PEAK_BW
+        
+        # Roof is min of both
+        y_roof = np.minimum(y_compute, y_memory)
+        
+        plt.plot(x_range, y_roof, 'k-', linewidth=2, label=f'Roofline (BW={PEAK_BW} B/C)')
+        
+        # Scatter Layers
+        plt.scatter(intensities, performances, c='blue', alpha=0.6, edgecolors='k', s=50, label='Layers')
+        
+        # Annotations
+        plt.text(x_limit * 0.5, PEAK_COMPUTE * 1.05, 'Compute Roof', fontsize=10, fontweight='bold', color='gray')
+        
+        # Memory Wall text (along the diagonal)
+        # Position at half the knee
+        mid_mem_x = knee_x * 0.5
+        mid_mem_y = mid_mem_x * PEAK_BW
+        if mid_mem_x < x_limit:
+            plt.text(mid_mem_x, mid_mem_y + PEAK_COMPUTE*0.05, 'Memory Wall', fontsize=10, fontweight='bold', color='gray', rotation=45)
+
+        plt.xlabel('Arithmetic Intensity (Ops/Byte)')
+        plt.ylabel('Performance (Ops/Cycle)')
+        plt.title(f'{model_name} Roofline Analysis (Memory Wall Style - Linear, BW={PEAK_BW} B/C)')
+        plt.grid(True, which="both", ls="--", alpha=0.6)
+        plt.xlim(left=0, right=x_limit)
+        plt.ylim(bottom=0, top=PEAK_COMPUTE * 1.3)
+        plt.legend()
+        plt.savefig(os.path.join(output_dir, 'roofline_plot.png'))
+        plt.close()
+        
+        # Plot 6: Required Bandwidth Histogram
+        # "roofline histogram for each model" - usually means histogram of arithmetic intensities or required BW.
+        # Given "calc the points on it based on b/w", likely means distribution of bottlenecks.
+        
+        plt.figure(figsize=(10, 6))
+        # Filter req_bw to reasonable range for histogram (avoid infinity)
+        req_bws_filtered = [b for b in required_bws if b > 0 and b < 1000] # Cap outliers
+        
+        plt.hist(req_bws_filtered, bins=50, color='green', alpha=0.7, edgecolor='black')
+        plt.axvline(x=PEAK_BW, color='red', linestyle='--', linewidth=2, label=f'Available BW ({PEAK_BW} B/C)')
+        
+        plt.xlabel('Required Bandwidth (Bytes/Cycle) to be Compute Bound')
+        plt.ylabel('Number of Layers')
+        plt.title(f'{model_name} Layer Bandwidth Requirements Histogram')
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.grid(axis='y', alpha=0.5)
+        
+        # Add text for % layers bound
+        num_mem_bound = sum(1 for b in req_bws_filtered if b > PEAK_BW)
+        pct_mem_bound = (num_mem_bound / len(req_bws_filtered)) * 100 if req_bws_filtered else 0
+        plt.text(0.95, 0.95, f"{pct_mem_bound:.1f}% Layers Memory Bound", 
+                 transform=plt.gca().transAxes, ha='right', va='top', 
+                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                 
+        plt.savefig(os.path.join(output_dir, 'required_bandwidth_histogram.png'), bbox_inches='tight')
+        plt.close()
+
+        # Plot 7: Layer PE Utilization vs Available Bandwidth
+        # Requested: "byte/cycle vs utilatztion? (of 128 PEs)"
+        # X: Available BW (Bytes/Cycle)
+        # Y: PE Utilization % = min(100%, (BW * Intensity / PEAK_COMPUTE)*100)
+        
+        plt.figure(figsize=(12, 8))
+        
+        # Ranges
+        num_points = 200
+        bw_axis = np.linspace(0.1, 3.0, num_points)
+        
+        # Group color strategy
+        # 1. Identify unique layer types
+        unique_types = sorted(list(set(l['layer_type'] for l in fused_stats)))
+        
+        # 2. Assign Color Map
+        import matplotlib.cm as cm
+        # Use tab10 or tab20 for distinct categorical colors
+        if len(unique_types) <= 10:
+            cmap = cm.get_cmap('tab10')
+        elif len(unique_types) <= 20:
+            cmap = cm.get_cmap('tab20')
+        else:
+            cmap = cm.get_cmap('nipy_spectral') 
+            
+        type_to_color = {t: cmap(i/len(unique_types)) for i, t in enumerate(unique_types)}
+        
+        # Track plotted types for legend
+        plotted_types = set()
+        
+        # Sort stats for drawing order (maybe by intensity so high intensity is on top? or bottom?)
+        fused_stats.sort(key=lambda x: (parse_val(x['num_macs']) / ((parse_val(x['num_inputs']) + parse_val(x['num_weights']) + parse_val(x['num_outputs'])) * 1.0 + 1e-9)), reverse=True)
+
+        for idx, layer in enumerate(fused_stats):
+            macs = layer['num_macs']
+            total_data_bytes = (parse_val(layer['num_inputs']) + parse_val(layer['num_weights']) + parse_val(layer['num_outputs'])) * 1.0
+            
+            if total_data_bytes > 0:
+                intensity = macs / total_data_bytes
+            else:
+                intensity = 0 
+            
+            # Utilization = Performance / Peak
+            y_util = np.minimum(1.0, (bw_axis * intensity) / PEAK_COMPUTE) * 100.0
+            
+            l_type = layer['layer_type']
+            color = type_to_color[l_type]
+            
+            # Label only the first occurrence of each type for the legend
+            label = l_type if l_type not in plotted_types else None
+            if label:
+                plotted_types.add(l_type)
+            
+            plt.plot(bw_axis, y_util, color=color, linewidth=1.5, alpha=0.8, label=label)
+            
+        plt.xlabel('Available Bandwidth (Bytes/Cycle)')
+        plt.ylabel('PE Utilization (%)')
+        plt.title(f'{model_name} Layer PE Utilization vs Bandwidth (128 PEs)')
+        plt.grid(True, which="both", ls="--", alpha=0.6)
+        plt.xlim(0.1, 3.0)
+        plt.ylim(0, 105) # 0 to 100%
+        
+        # Reference Lines
+        plt.axhline(y=100, color='red', linestyle='--', label='Max Utilization')
+        plt.axvline(x=1.0, color='gray', linestyle='--', label='Current BW (1.0 B/C)')
+        
+        # Legend outside - categorized
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small', ncol=1, title="Layer Types")
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'utilization_sensitivity.png'), bbox_inches='tight')
         plt.close()
 
     # Verify Coverage
