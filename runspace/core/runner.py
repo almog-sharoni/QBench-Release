@@ -166,11 +166,35 @@ class Runner:
         }
 
         try:
-            # Setup data
-            data_loader = self.setup_data_loader(config)
-            if data_loader is None:
-                results['error'] = "Data loader failed"
-                return results
+            # Generate Output Directory
+            base_config_path = meta.get('base_config_path', '')
+            output_name = config.get('output_name', '')
+            
+            if output_name:
+                output_dir = os.path.join(output_root, output_name)
+            elif base_config_path:
+                base_config_name = os.path.splitext(os.path.basename(base_config_path))[0]
+                output_dir = os.path.join(output_root, base_config_name, model_name, quant_format.replace('_', ''))
+            else:
+                output_dir = os.path.join(output_root, model_name, quant_format.replace('_', ''))
+            
+            os.makedirs(output_dir, exist_ok=True)
+
+            # Save Config
+            config_path = os.path.join(output_dir, "config.yaml")
+            with open(config_path, 'w') as f:
+                yaml.dump(config, f, default_flow_style=False)
+            print(f"Config saved to {config_path}")
+
+            # Check if GRAPH ONLY mode
+            if config.get('evaluation', {}).get('graph_only', False):
+                print("Running in GRAPH ONLY mode. Skipping data loading.")
+            else:
+                # Setup data
+                data_loader = self.setup_data_loader(config)
+                if data_loader is None:
+                    results['error'] = "Data loader failed"
+                    return results
 
             # Create adapter
             adapter = create_adapter(config)
@@ -188,33 +212,6 @@ class Runner:
                 print(f"Warning: No quantized layers found for {model_name}")
                 results['status'] = 'NO_QUANT'
             
-            # Generate Output Directory
-            base_config_path = meta.get('base_config_path', '')
-            output_name = config.get('output_name', '')
-            
-            if output_name:
-                # If explicit output_name is provided, use it directly under output_root or model dir
-                # We want consistency: output_root / model_name / output_name 
-                # (since find_optimal_layer_quant sets output_root = experiment/model)
-                # But Runner standard is output_root/model/variant.
-                # If output_root is already specific (like in the experiment script), we might want just output_root/output_name?
-                # The experiment script passes output_root=model_dir.
-                # So if we do output_root/output_name, it becomes .../resnet18/ref_fp32. This is what we want.
-                output_dir = os.path.join(output_root, output_name)
-            elif base_config_path:
-                base_config_name = os.path.splitext(os.path.basename(base_config_path))[0]
-                output_dir = os.path.join(output_root, base_config_name, model_name, quant_format.replace('_', ''))
-            else:
-                output_dir = os.path.join(output_root, model_name, quant_format.replace('_', ''))
-            
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # Save Config
-            config_path = os.path.join(output_dir, "config.yaml")
-            with open(config_path, 'w') as f:
-                yaml.dump(config, f, default_flow_style=False)
-            print(f"Config saved to {config_path}")
-
             # Generate Quantization Graph
             generate_graph = config.get('evaluation', {}).get('generate_graph_svg', True)
             if generate_graph:
@@ -223,10 +220,20 @@ class Runner:
                     graph_path = os.path.join(output_dir, "quant_graph.svg")
                     print(f"Generating quantization graph at {graph_path}...")
                     generate_quantization_graph(model, graph_path, model_name=model_name)
+                    
+                    if config.get('evaluation', {}).get('graph_only', False):
+                        results['status'] = 'GRAPH_GENERATED'
+                        print("Graph generation complete. Exiting due to graph-only mode.")
+                        return results
+                        
                 except Exception as e:
                     print(f"Failed to generate graph: {e}")
             else:
                 print("Skipping graph generation (disabled in config)")
+                if config.get('evaluation', {}).get('graph_only', False):
+                     print("Graph-only mode set but graph generation disabled. Nothing to do.")
+                     results['status'] = 'SKIPPED'
+                     return results
 
             # Check evaluation mode
             eval_mode = config.get('evaluation', {}).get('mode', 'compare')

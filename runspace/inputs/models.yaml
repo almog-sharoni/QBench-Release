@@ -1,3 +1,7 @@
+- name: alexnet
+  source: torchvision
+  weights: DEFAULT
+
 - name: resnet18
   source: torchvision
   weights: IMAGENET1K_V1

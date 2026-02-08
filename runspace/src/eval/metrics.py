@@ -68,9 +68,13 @@ class MetricsEngine:
 
 def compute_mse(tensor_a, tensor_b):
     """Computes Mean Squared Error between two tensors."""
-    import torch.nn.functional as F
-    return F.mse_loss(tensor_a, tensor_b).item()
-
+    # import torch.nn.functional as F
+    return compute_mean_pow16_error(tensor_a, tensor_b)
+    
+def compute_mean_pow16_error(tensor_a, tensor_b):
+    delta = tensor_a - tensor_b
+    delta_pow16 = delta.pow(16)
+    return delta_pow16.mean().item()
 def compute_cosine_similarity(tensor_a, tensor_b):
     """Computes Mean Cosine Similarity between two tensors (flattened)."""
     import torch.nn.functional as F

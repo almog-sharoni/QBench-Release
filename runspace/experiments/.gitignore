@@ -1,3 +1,5 @@
 optimal_layer_quant/
+optimal_weight_quant/
+optimal_input_quant/
+bandwidth_analysis/
 backup/
-optimal_layer_quant_inputs/

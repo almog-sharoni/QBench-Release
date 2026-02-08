@@ -5,3 +5,4 @@ __pycache__/
 outputs/
 .env
 tests/
+.cache/

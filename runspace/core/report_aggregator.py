@@ -83,13 +83,13 @@ class ReportAggregator:
                         fmt = res.get('quant_format', 'N/A')
                         gen_conf = os.path.basename(res.get('generated_config_path', 'N/A'))
                         status = res.get('status', 'N/A')
-                        acc1 = f"{res.get('acc1', 0):.2f}%"
-                        acc5 = f"{res.get('acc5', 0):.2f}%"
+                        acc1 = f"{res.get('acc1', 0):.4f}%"
+                        acc5 = f"{res.get('acc5', 0):.4f}%"
                         certainty = f"{res.get('certainty', 0):.4f}"
-                        ref_acc1 = f"{res.get('ref_acc1', 0):.2f}%"
-                        ref_acc5 = f"{res.get('ref_acc5', 0):.2f}%"
+                        ref_acc1 = f"{res.get('ref_acc1', 0):.4f}%"
+                        ref_acc5 = f"{res.get('ref_acc5', 0):.4f}%"
                         ref_certainty = f"{res.get('ref_certainty', 0):.4f}"
-                        acc_drop = f"{res.get('acc_drop', 0):.2f}%"
+                        acc_drop = f"{res.get('acc_drop', 0):.4f}%"
                         
                         w_red = f"{res.get('weight_comp_red', 0):.2f}%"
                         w_share = f"{res.get('weight_comp_share', 0):.1f}%"

@@ -9,6 +9,9 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+if 'TORCH_HOME' not in os.environ:
+    os.environ['TORCH_HOME'] = os.path.join(PROJECT_ROOT, '.cache', 'torch')
+
 from runspace.core.config_factory import ConfigFactory
 from runspace.core.runner import Runner
 from runspace.core.report_aggregator import ReportAggregator

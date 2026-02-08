@@ -447,10 +447,10 @@ class LayerComparator:
                 metrics['weight_scales'].append(module.last_quant_weight_scale_packed.detach().cpu())
             elif hasattr(module, 'last_quant_weight_scale'):
                 metrics['weight_scales'].append(module.last_quant_weight_scale.detach().cpu())
-            elif hasattr(module, 'weight_scale_packed'):
+            elif hasattr(module, 'weight_scale_packed') and module.weight_scale_packed is not None:
                  if not metrics['weight_scales']:
                     metrics['weight_scales'].append(module.weight_scale_packed.detach().cpu())
-            elif hasattr(module, 'weight_scale'):
+            elif hasattr(module, 'weight_scale') and module.weight_scale is not None:
                 # Weight scale might not change per batch, but we capture it once
                 if not metrics['weight_scales']:
                     metrics['weight_scales'].append(module.weight_scale.detach().cpu())
@@ -459,6 +459,7 @@ class LayerComparator:
             prev_module_type = module.__class__.__name__
 
     def _generate_report(self):
+        print("Generating evaluation report... (this might take a moment)")
         from src.eval.metrics import compute_mse, compute_cosine_similarity, compute_min_max, check_fp8_compliance
         from src.quantization.quantizer import get_fp8_e4m3_table, get_fp8_e5m2_table
         from src.ops.quant_base import QuantizedLayerMixin
@@ -850,15 +851,7 @@ class LayerComparator:
         print(f"Saving histograms to {hist_dir}...")
         
         from src.ops.quant_mha import DecomposedMultiheadAttention
-
-        # Max values for x-axis scaling
-        max_vals = {
-            'fp8_e4m3': 512,
-            'fp8_e5m2': 58368,
-            'fp4_e2m1': 16,
-            'fp4_e3m0': 64,
-            'int8': 128
-        }
+        from src.quantization.quantizer import get_q_type_bounds
 
         for name, module in self.quant_model.named_modules():
             # Check if leaf or DecomposedMHA
@@ -869,18 +862,9 @@ class LayerComparator:
             weight_q_type = getattr(module, 'q_type', 'fp8_e4m3')
             input_q_type = getattr(module, 'input_q_type', weight_q_type)  # Falls back to weight q_type if not specified
             
-            # Handle potential variations in q_type string
-            weight_limit = 448  # Default
-            for key, val in max_vals.items():
-                if key in weight_q_type:
-                    weight_limit = val
-                    break
-            
-            input_limit = 448  # Default
-            for key, val in max_vals.items():
-                if key in input_q_type:
-                    input_limit = val
-                    break
+            # Handle limits automatically
+            weight_limit = get_q_type_bounds(weight_q_type)
+            input_limit = get_q_type_bounds(input_q_type)
             
             # Collect Data
             ref_input = self.ref_activations.get(name, None)
@@ -893,19 +877,20 @@ class LayerComparator:
             ref_weight_scaled = None
 
             # Get settings from module
-            bias = getattr(module, 'quantization_bias', None)
+            # Get settings from module
+            # bias = getattr(module, 'quantization_bias', None) # Deprecated
             rounding = getattr(module, 'rounding', 'nearest')
 
             # 1. Process Input Data (Scale to Format Range)
             if ref_input is not None:
                 if hasattr(module, 'last_quant_input_max'):
                     input_max = module.last_quant_input_max
-                    input_scale = calculate_scale(input_max, input_q_type, bias)
+                    input_scale = calculate_scale(input_max, input_q_type)
                     
                     # Scale Reference to Format Range (e.g., 0-448)
                     ref_input_scaled = ref_input / input_scale
                     # Quantize (Unscaled)
-                    quant_input_unscaled = quantize(ref_input_scaled, q_type=input_q_type, bias=bias, rounding=rounding)
+                    quant_input_unscaled = quantize(ref_input_scaled, q_type=input_q_type, rounding=rounding)
                 else:
                     # Fallback
                     if hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
@@ -921,7 +906,7 @@ class LayerComparator:
                     # Scale Reference to Format Range
                     ref_weight_scaled = ref_weight / weight_scale
                     # Quantize (Unscaled)
-                    quant_weight_unscaled = quantize(ref_weight_scaled, q_type=weight_q_type, bias=bias, rounding=rounding)
+                    quant_weight_unscaled = quantize(ref_weight_scaled, q_type=weight_q_type, rounding=rounding)
                 else:
                     # Fallback
                     if hasattr(module, 'weight_fp8') and module.weight_fp8 is not None:

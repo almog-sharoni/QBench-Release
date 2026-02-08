@@ -1,0 +1,66 @@
+# Advanced Full Configuration Example
+# This configuration file demonstrates all available options in QBench.
+
+adapter:
+  type: generic
+  # Whether to quantize the input of the very first layer (usually the image input)
+  quantize_first_layer: false
+  # List of operations to replace with quantized versions
+  # Use ["-1"] or ["all"] to quantize everything supported
+  quantized_ops: ["all"]
+  # List of operations to EXCLUDE from quantization (useful when quantized_ops is ["all"])
+  excluded_ops: [""]
+  # Whether to fold layers (e.g. Conv+BN) before quantization
+  # fold_layers: true
+
+quantization:
+  # Target format: fp8_e4m3, fp8_e5m2, int8, fp4_e2m1, fp4_e3m0
+  format: fp8_e0m7
+  # Optional bias override (default depends on format, e.g., 7 for fp8_e4m3)
+  # bias: 7
+  # Calibration method (placeholder for future use)
+  calib_method: max
+  # Rounding mode: nearest, truncate
+  rounding: nearest
+
+  # --- Input Quantization (Conv2d, Linear) ---
+  # Mode: tensor (per-tensor), channel (per-channel), chunk (per-block)
+  mode: chunk
+  # Chunk size for 'chunk' mode
+  chunk_size: 128
+  # Optional input format override (e.g., quantize inputs to int8 while weights are fp8)
+  input_format: null
+
+  # --- Weight Quantization ---
+  # Mode: tensor, channel, chunk
+  weight_mode: chunk
+  # Chunk size for 'chunk' mode
+  weight_chunk_size: 128
+
+
+  # --- Layer-Specific Overrides ---
+  # Override settings for specific layers by name
+  # layers:
+  #   layer1.0.conv1:
+  #     mode: tensor
+  #     weight_mode: tensor
+  #   fc:
+  #     format: int8
+  #     weight_mode: tensor
+
+dataset:
+  name: imagenet
+  path: /data/imagenet/val
+  batch_size: 64
+  num_workers: 32
+
+evaluation:
+  # Mode: evaluate (quantized only), compare (reference vs quantized)
+  mode: evaluate
+  # Number of batches to compare (false or -1 for all)
+  compare_batches: 1
+  generate_graph_svg: false
+  save_histograms: true
+
+  # Limit total samples (optional)
+  # max_samples: 1000

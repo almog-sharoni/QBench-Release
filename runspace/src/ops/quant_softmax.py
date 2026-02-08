@@ -4,7 +4,7 @@ from ..registry.op_registry import OpRegistry
 from .quant_base import quantize_tensor
 
 # @OpRegistry.register("QuantSoftmax", original_cls=nn.Softmax)
-@OpRegistry.register("QuantSoftmax", original_cls=nn.Softmax,is_activation=True, compliance_status = "treat softmax like activation", under_construction=True)
+# @OpRegistry.register("QuantSoftmax", original_cls=nn.Softmax,is_activation=True, compliance_status = "treat softmax like activation", under_construction=True)
 class QuantSoftmax(nn.Softmax):
     """
     1 Goal and Notation

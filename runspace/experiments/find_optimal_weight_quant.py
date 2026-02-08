@@ -31,7 +31,10 @@ from runspace.core.report_aggregator import ReportAggregator
 from runspace.src.registry.op_registry import OpRegistry
 
 baseline_formats = [
-    'fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6', 'fp8_e6m1', 'fp8_e7m0', 'fp8_e0m7',
+    'fp4_e3m0' , 'fp4_e2m1' , 'fp4_e1m2' , 'fp4_e0m3',
+    'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3', 'ufp4_e0m4'
+    'efp4_e3m0' , 'efp4_e2m1' , 'efp4_e1m2' , 'efp4_e0m3',
+    'fp8_e1m6' , 'fp8_e0m7', 'fp8_e4m3','fp8_e5m2','fp8_e3m4','fp8_e6m1','fp8_e7m0','fp8_e2m5'
 ]
 
 
@@ -44,7 +47,7 @@ def get_args():
     parser.add_argument("--models_config", type=str, default=None, help="Path to a YAML file containing a list of models to run")
     
     # Validation / Metric Args
-    parser.add_argument("--metrics", type=str, default="l1", help="Comma-separated metrics: l1, mse, sqnr, cosine OR 'all'")
+    parser.add_argument("--metrics", type=str, default="l1,mse", help="Comma-separated metrics: l1, mse, sqnr, cosine OR 'all'")
     
     # Experiment Target
     parser.add_argument("--target", type=str, default="weights", choices=['weights', 'inputs'], help="Target to optimize: 'weights' or 'inputs'")
@@ -59,32 +62,48 @@ def get_args():
     parser.add_argument("--per_chunk_format", action="store_true", help="Enable per-chunk format selection (each chunk gets its own optimal format)")
     parser.add_argument("--plot_layers", action="store_true", help="Generate error bar plots for every single layer (warning: slow)")
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of batches to process (default: -1 for all)")
-    parser.add_argument("--baseline_formats", type=str, default="fp8_e4m3,fp8_e2m5,fp8_e0m7", help="Comma-separated list of formats to run as baselines (full eval)")
+    parser.add_argument("--baseline_formats", type=str, default=','.join(baseline_formats), help="Comma-separated list of formats to run as baselines (full eval)")
     parser.add_argument("--skip_layer_wise", action="store_true", help="Skip the layer-wise optimization experiment (only run chunk/baselines)")
     parser.add_argument("--force_recalc", action="store_true", help="Force recalculation of layer errors even if results exist")
+    parser.add_argument("--input_method", type=str, default=None, help="Input quantization method (e.g. 'dynamic_mse', 'dynamic_l1', 'fp8_e4m3')")
     
     return parser.parse_args()
 
-def get_quantized_tensor_sim(tensor, q_type, bias=None, chunk_size=None, chunk_formats=None, mode=None):
+def get_quantized_tensor_sim(tensor, q_type, chunk_size=None, chunk_formats=None, mode=None):
     """
     Returns the dequantized tensor (simulated quantization).
     Returns (tensor_dequant, max_val).
     """
     if chunk_size is not None:
-        # Use quantize_tensor for chunking (validation disabled for performance)
-        w_dequant, max_val = quantize_tensor(tensor, q_type=q_type, bias=bias, mode='chunk', chunk_size=chunk_size, rounding="nearest", validate=False)
-        if isinstance(max_val, torch.Tensor):
-            return w_dequant, max_val.max().item()
-        return w_dequant, max_val
+        # Use simple manual chunking to avoid op registry mismatches
+        w_chunked, original_shape, pad_len = get_chunked_tensor(tensor, chunk_size=chunk_size)
+        
+        # Max per chunk (Abs)
+        max_vals = w_chunked.abs().amax(dim=-1, keepdim=True).clamp(min=1e-9)
+        
+        scale = calculate_scale(max_vals, q_type)
+        
+        scaled = w_chunked / scale
+        quant = quantize(scaled, q_type=q_type, rounding="nearest", validate=False)
+        dequant = quant * scale
+        
+        # Flatten back
+        flat = dequant.view(w_chunked.shape[0], -1)
+        if pad_len > 0:
+            flat = flat[:, :-pad_len]
+            
+        w_dequant = flat.view(original_shape)
+        
+        return w_dequant, max_vals.max().item()
 
     # Standard "Per Channel" or "Per Tensor" logic
     
     # If the user passes 'tensor', we treat as global.
     if mode == 'tensor':
          max_val = tensor.abs().amax(dim=None).clamp(min=1e-9) # Scalar
-         scale = calculate_scale(max_val, q_type, bias)
+         scale = calculate_scale(max_val, q_type)
          t_scaled = tensor / scale
-         t_quant = quantize(t_scaled, q_type=q_type, bias=bias, rounding="nearest", validate=False)
+         t_quant = quantize(t_scaled, q_type=q_type, rounding="nearest", validate=False)
          t_deq = t_quant * scale
          return t_deq, max_val.item()
 
@@ -93,14 +112,15 @@ def get_quantized_tensor_sim(tensor, q_type, bias=None, chunk_size=None, chunk_f
     flat = tensor.view(out_channels, -1)
     
     max_val_per_channel = flat.abs().amax(dim=1, keepdim=True).clamp(min=1e-9)
-    scale = calculate_scale(max_val_per_channel, q_type, bias)
+    scale = calculate_scale(max_val_per_channel, q_type)
     
     scaled = flat / scale
-    quant = quantize(scaled, q_type=q_type, bias=bias, rounding="nearest", validate=False)
+    quant = quantize(scaled, q_type=q_type, rounding="nearest", validate=False)
     dequant = quant * scale
     
     dequant = dequant.view_as(tensor)
     return dequant, max_val_per_channel.max().item()
+
 
 def calculate_error(original, dequantized, metric):
     """
@@ -144,204 +164,19 @@ def calculate_error(original, dequantized, metric):
     else:
         raise ValueError(f"Unknown metric: {metric}")
 
-def plot_error_histograms(data, formats, output_dir, metric):
-    """Generate histograms of errors for each format."""
-    print(f"Generating {metric} histograms...")
-    
-    # Collect errors per format
-    format_errors = {fmt: [] for fmt in formats}
-    for layer_data in data:
-        for fmt in formats:
-            if fmt in layer_data['errors']:
-                err = layer_data['errors'][fmt]
-                
-                # Handling for plotting
-                # SQNR is usually negative in our 'error' metric (minimized -SQNR)
-                # But for plots, maybe show actual SQNR?
-                # Or just show the distribution of the minimization objective
-                
-                # For L1/MSE/Cosine, values >= 0.
-                if metric == 'sqnr':
-                    # Convert back to actual SQNR for plotting? 
-                    # error = -SQNR. So SQNR = -error
-                    val = -err
-                else:
-                    val = err
-                
-                # Filter bad values
-                if np.isfinite(val):
-                    format_errors[fmt].append(val)
-
-    # 1. Combined Histogram
-    plt.figure(figsize=(12, 8))
-    for fmt in formats:
-        # Check if we have data
-        if not format_errors[fmt]:
-            continue
-            
-        vals = np.array(format_errors[fmt])
-        
-        if metric in ['l1', 'mse']:
-             # Avoid log(0)
-             vals = np.maximum(vals, 1e-12)
-             plt.hist(np.log10(vals), bins=30, alpha=0.5, label=fmt)
-             xlabel = f"Log10({metric.upper()} Error)"
-        elif metric == 'cosine':
-             # Cosine distance is 0 to 1 (usually small). Log is fine.
-             vals = np.maximum(vals, 1e-12)
-             plt.hist(np.log10(vals), bins=30, alpha=0.5, label=fmt)
-             xlabel = f"Log10(Cosine Dist)"
-        elif metric == 'sqnr':
-             # SQNR in dB. 
-             # Clip extremely low values for plotting visibility?
-             # Or just let it be.
-             plt.hist(vals, bins=30, alpha=0.5, label=fmt)
-             xlabel = "SQNR (dB)"
-             
-    plt.title(f"{metric.upper()} Distribution by Format")
-    plt.xlabel(xlabel)
-    plt.ylabel("Count (Layers)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.savefig(os.path.join(output_dir, f"error_histograms_{metric}.png"))
-    plt.close()
-
-def plot_error_boxplot(data, formats, output_dir, metric):
-    """Generate boxplot of errors for each format including Optimized."""
-    print(f"Generating {metric} boxplot...")
-    
-    # Collect errors per format
-    # formats list usually contains 'fp8...', 'int8...'.
-    # data is list of layer records.
-    # We want to add 'Optimized' to the plot.
-    
-    plot_labels = formats + ['Optimized']
-    plot_data = []
-    
-    for fmt in plot_labels:
-        vals = []
-        for layer_data in data:
-            if fmt == 'Optimized':
-                val = layer_data.get('best_error', float('inf'))
-            elif fmt in layer_data['errors']:
-                val = layer_data['errors'][fmt]
-            else:
-                continue
-                
-            # Handling for plotting (same as histogram)
-            if metric == 'sqnr':
-                val = -val # Back to dB
-            
-            if np.isfinite(val):
-                vals.append(val)
-        
-        # Log transform for L1/MSE/Cosine if beneficial, or just plot raw/log scale axis
-        # Boxplot handles outliers well, but log scale Y-axis might be better visualization
-        plot_data.append(vals)
-
-    plt.figure(figsize=(14, 8))
-    
-    # Check for empty data
-    valid_data = [d for d in plot_data if len(d) > 0]
-    valid_labels = [l for i, l in enumerate(plot_labels) if len(plot_data[i]) > 0]
-    
-    if not valid_data:
-        print("No valid data for boxplot.")
-        plt.close()
-        return
-
-    # Create boxplot
-    bp = plt.boxplot(valid_data, labels=valid_labels, patch_artist=True)
-    
-    # Coloring
-    colors = ['lightblue'] * len(valid_labels)
-    if 'Optimized' in valid_labels:
-        opt_idx = valid_labels.index('Optimized')
-        colors[opt_idx] = 'lightgreen'
-        
-    for patch, color in zip(bp['boxes'], colors):
-        patch.set_facecolor(color)
-        
-    plt.title(f"{metric.upper()} Error Distribution Comparison")
-    plt.ylabel(f"{metric.upper()} Error")
-    plt.xlabel("Format")
-    plt.xticks(rotation=45)
-    
-    if metric in ['l1', 'mse', 'cosine']:
-        plt.yscale('log')
-        
-    plt.grid(True, axis='y', alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f"error_boxplot_{metric}.png"))
-    plt.close()
-
-def plot_oracle_heatmap(output_dir, stats, candidates, title_suffix=""):
-    """
-    Plots a stacked bar chart of format distribution per layer (Oracle Choices).
-    stats: {layer_name: {'total_counts': np.array(counts)}}
-    candidates: list of format names corresponding to the indices in counts
-    """
-    print(f"Generating Oracle Distribution Plot ({title_suffix})...")
-    
-    layers = sorted(list(stats.keys()))
-    if not layers:
-        return
-        
-    # Sort candidates for consistent plotting
-    # We need to map the original indices to the sorted indices
-    # candidates is the order in which counts are stored (0 to N-1)
-    
-    # Actually, let's just use the provided candidates order if it's consistent, or sort them for display
-    # but we must reorder the counts data if we sort the labels.
-    
-    # Sort formats for display
-    sorted_formats = sort_formats(candidates)
-    
-    # Create a mapping from candidate name to its index in the originally provided 'candidates' list
-    # Because stats['total_counts'] is indexed by the original 'candidates' list
-    fmt_to_idx = {fmt: i for i, fmt in enumerate(candidates)}
-        
-    # Prepare data matrix: [num_layers, num_formats] (sorted columns)
-    data = np.zeros((len(layers), len(sorted_formats)))
-    
-    for i, layer in enumerate(layers):
-        counts = stats[layer].get('total_counts', np.zeros(len(candidates)))
-        # counts matches 'candidates' order.
-        # We need to populate 'data' which matches 'sorted_formats' order
-        for j, fmt in enumerate(sorted_formats):
-            original_idx = fmt_to_idx.get(fmt)
-            if original_idx is not None and original_idx < len(counts):
-                data[i, j] = counts[original_idx]
-            
-    # Plot Stacked Bars
-    plt.figure(figsize=(15, 8))
-    
-    bottom = np.zeros(len(layers))
-    cmap = plt.get_cmap('tab20', len(sorted_formats))
-    
-    for j, fmt in enumerate(sorted_formats):
-        plt.bar(layers, data[:, j], bottom=bottom, label=fmt, color=cmap(j))
-        bottom += data[:, j]
-        
-    plt.ylabel('Number of Chunks')
-    plt.title(f"Dynamic Oracle Format Choices per Layer ({title_suffix})")
-    plt.xticks(rotation=90, fontsize=8)
-    
-    # Legend - Filter only active formats
-    # Check if a column has any non-zero value
-    active_indices = [j for j in range(len(sorted_formats)) if data[:, j].sum() > 0]
-    
-    if active_indices:
-        handles, labels = plt.gca().get_legend_handles_labels()
-        filtered_handles = [handles[j] for j in active_indices]
-        filtered_labels = [labels[j] for j in active_indices]
-        plt.legend(filtered_handles, filtered_labels, bbox_to_anchor=(1.05, 1), loc='upper left')
-    
-    plt.tight_layout()
-    save_path = os.path.join(output_dir, f"oracle_distribution_{title_suffix}.png")
-    plt.savefig(save_path)
-    plt.close()
-    print(f"Saved oracle distribution to {save_path}")
+from runspace.experiments.utils.plotting import (
+    plot_error_histograms,
+    plot_error_boxplot,
+    plot_oracle_heatmap,
+    plot_accuracy_comparison,
+    plot_chunk_format_distribution,
+    plot_chunk_win_rate,
+    plot_layer_error_comparison,
+    get_format_bits,
+    sort_formats,
+    get_chunked_tensor,
+    compute_mean_pow16_error
+)
 
 def plot_layer_error_bar(layer_name, errors, formats, output_dir, metric):
     """Generate a bar chart of errors for a single layer."""
@@ -352,21 +187,16 @@ def plot_layer_error_bar(layer_name, errors, formats, output_dir, metric):
     
     # Transform for plotting if needed
     if metric == 'sqnr':
-        # Visualize actual SQNR (higher is better)
-        # Our stored error is -SQNR.
         values = [-v for v in raw_values]
         ylabel = "SQNR (dB)"
-        # For coloring, we look for MAX value
         best_val = max(values)
     else:
         values = raw_values
         ylabel = f"{metric.upper()} Error"
         best_val = min([v for v in values if v >= 0]) if any(v>=0 for v in values) else 0
 
-    # Plot bars
     bars = plt.bar(formats, values, color='skyblue')
     
-    # Highlight the best
     for i, bar in enumerate(bars):
         if values[i] == best_val:
             bar.set_color('orange')
@@ -380,425 +210,9 @@ def plot_layer_error_bar(layer_name, errors, formats, output_dir, metric):
         
     plt.grid(axis='y', alpha=0.3)
     
-    # Save
     safe_name = layer_name.replace('.', '_')
     plt.savefig(os.path.join(output_dir, f"{safe_name}.png"))
     plt.close()
-
-def plot_accuracy_comparison(results, output_dir):
-    """Generate a grouped bar chart for Acc1 and Acc5 comparison, sorted by Acc1."""
-    print("Generating accuracy comparison plot...")
-    
-    # Sort results by Acc1 (descending)
-    results = sorted(results, key=lambda x: x.get('acc1', 0.0), reverse=True)
-    
-    names = []
-    acc1_vals = []
-    acc5_vals = []
-    error_vals = [] 
-    
-    for res in results:
-        names.append(res.get('output_name', 'Unknown'))
-        acc1_vals.append(res.get('acc1', 0.0))
-        acc5_vals.append(res.get('acc5', 0.0))
-        error_vals.append(res.get('total_error', 0.0)) # Default 0 if not set
-
-    x = np.arange(len(names))
-    width = 0.35
-    
-    fig, ax1 = plt.subplots(figsize=(14, 8))
-    
-    # Accuracy Bars
-    rects1 = ax1.bar(x - width/2, acc1_vals, width, label='Top-1 Acc', color='royalblue')
-    rects2 = ax1.bar(x + width/2, acc5_vals, width, label='Top-5 Acc', color='lightskyblue')
-    
-    ax1.set_ylabel('Accuracy (%)', color='blue')
-    ax1.set_title('Accuracy & Total Error Comparison (Sorted by Top-1 Acc)')
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(names, rotation=45, ha='right')
-    ax1.tick_params(axis='y', labelcolor='blue')
-    ax1.grid(axis='y', alpha=0.3)
-    
-    # Error Rate (Secondary Axis)
-    # Check if we have 'errors' dictionary in results
-    # Format: res['errors'] = {'l1': val, 'mse': val, ...}
-    
-    # Collect data series for each metric found
-    error_series = {} 
-    valid_metrics = set()
-    
-    # First pass to find all metrics present
-    for res in results:
-        errs = res.get('errors', {})
-        if isinstance(errs, dict):
-            for m, val in errs.items():
-                valid_metrics.add(m)
-    
-    if valid_metrics:
-        ax2 = ax1.twinx()
-        ax2.set_ylabel('Normalized Error (0=Best, 1=Worst)', color='black')
-        
-        # Color cycle for metrics
-        cmap = plt.get_cmap('Dark2') 
-        
-        lines = []
-        labels = []
-        
-        # Collect all data first
-        metric_data = {}
-        for m in valid_metrics:
-            vals = []
-            for res in results:
-                err_dict = res.get('errors', {})
-                val = err_dict.get(m, float('nan'))
-                vals.append(val)
-            metric_data[m] = np.array(vals)
-
-        for i, m in enumerate(sorted(valid_metrics)):
-            vals = metric_data[m]
-            
-            # Normalize to [0, 1]
-            # Filter NaNs for min/max calculation
-            valid_v = vals[np.isfinite(vals)]
-            
-            normalized_vals = vals.copy()
-            
-            if len(valid_v) > 0:
-                v_min = valid_v.min()
-                v_max = valid_v.max()
-                
-                # Check for zero range
-                if v_max > v_min:
-                    # Apply Min-Max scaling
-                    # Note: We assume "Lower is Better" for the raw values (including -SQNR)
-                    # So normalized 0.0 will correspond to Min Raw (Best)
-                    # and 1.0 will correspond to Max Raw (Worst).
-                    normalized_vals = (vals - v_min) / (v_max - v_min)
-                else:
-                    # Constant value across all models
-                    # Plot as flat line at 0.0 (Best) or 0.5?
-                    # If error is 0 everywhere (ref), it should be at 0.
-                    # If error is massive everywhere, maybe 1?
-                    # Let's put it at 0 to avoid visual clutter.
-                    normalized_vals = np.zeros_like(vals)
-            else:
-                 # All NaNs
-                 pass
-
-            color = cmap(i % 8)
-            label = f"{m.upper()}" # Short label since axis explains "Normalized Error"
-            
-            # Plot
-            # We use only valid points for the line to avoid plotting gaps if possible, or leave gaps for NaNs
-            line = ax2.plot(x, normalized_vals, color=color, marker='.', linestyle='-', linewidth=2, alpha=0.8, label=label)
-            lines.extend(line)
-            labels.append(label)
-
-        # Set fixed range for normalized plot
-        ax2.set_ylim(-0.1, 1.1)
-        
-        # Tick colors
-        ax2.tick_params(axis='y', labelcolor='black')
-
-    # Combine legends and move outside
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    if valid_metrics and lines:
-        ax1.legend(lines1 + lines, labels1 + labels, loc='upper left', bbox_to_anchor=(1.05, 1))
-    else:
-        ax1.legend(lines1, labels1, loc='upper left', bbox_to_anchor=(1.05, 1))
-    
-    # Adjust layout to make room for legend
-    plt.subplots_adjust(right=0.8)
-    
-    # Add labels to bars
-    def autolabel(rects, ax):
-        for rect in rects:
-            height = rect.get_height()
-            ax.annotate(f'{height:.2f}',
-                        xy=(rect.get_x() + rect.get_width() / 2, height),
-                        xytext=(0, 3),  # 3 points vertical offset
-                        textcoords="offset points",
-                        ha='center', va='bottom', fontsize=8)
-                        
-    autolabel(rects1, ax1)
-    autolabel(rects2, ax1)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "accuracy_comparison.png"))
-    plt.close()
-
-def get_chunked_tensor(tensor, chunk_size):
-    """
-    Reshapes tensor into [N, num_chunks, chunk_size].
-    Returns chunked_tensor, original_shape, padding_length
-    """
-    shape = tensor.shape
-    if tensor.dim() > 1:
-        flat = tensor.flatten(1)
-        batch = shape[0]
-    else:
-        flat = tensor.flatten(0)
-        batch = 1
-        
-    num_elements = flat.shape[-1]
-    pad_len = 0
-    if num_elements % chunk_size != 0:
-        pad_len = chunk_size - (num_elements % chunk_size)
-        flat = torch.nn.functional.pad(flat, (0, pad_len))
-        
-    num_chunks = flat.shape[-1] // chunk_size
-    chunked = flat.view(batch, num_chunks, chunk_size)
-    
-    return chunked, shape, pad_len
-
-def plot_chunk_format_distribution(chunk_formats, formats, output_dir, metric):
-    """
-    Generate a heatmap showing format distribution across chunks for each layer.
-    chunk_formats: {layer_name: [fmt_chunk0, fmt_chunk1, ...]}
-    """
-    print(f"Generating {metric} per-chunk format distribution heatmap...")
-    
-    if not chunk_formats:
-        return
-        
-    # Sort formats to match other plots (consistent coloring)
-    sorted_formats = sort_formats(formats)
-        
-    # Create format to index mapping
-    fmt_to_idx = {fmt: i for i, fmt in enumerate(sorted_formats)}
-    
-    layers = list(chunk_formats.keys())
-    max_chunks = max(len(chunk_formats[layer]) for layer in layers)
-    
-    # Create matrix: [num_layers, max_chunks]
-    matrix = np.full((len(layers), max_chunks), -1, dtype=int)
-    
-    for i, layer in enumerate(layers):
-        for j, fmt in enumerate(chunk_formats[layer]):
-            if fmt in fmt_to_idx:
-                matrix[i, j] = fmt_to_idx[fmt]
-    
-    plt.figure(figsize=(20, max(8, len(layers) * 0.3)))
-    
-    # Create custom colormap
-    cmap = plt.get_cmap('tab20', len(sorted_formats))
-    cmap.set_bad(color='lightgray') # Set color for masked values
-    
-    # Mask negative values (unused chunks)
-    masked_matrix = np.ma.masked_where(matrix < 0, matrix)
-    
-    # Resize matrix if too large (visualization only)
-    max_display_width = 1000
-    if masked_matrix.shape[1] > max_display_width:
-        print(f"Downsampling heatmap from {masked_matrix.shape[1]} to {max_display_width} columns...")
-        factor = masked_matrix.shape[1] // max_display_width
-        remainder = masked_matrix.shape[1] % max_display_width
-        
-        # Simple decimation or voting? Voting is better for categorical.
-        # Reshape to [layers, new_width, factor]
-        # We drop the remainder for simplicity in visualization
-        trimmed_width = masked_matrix.shape[1] - remainder
-        reshaped = masked_matrix[:, :trimmed_width].reshape(len(layers), max_display_width, factor)
-        
-        # Mode (majority vote)
-        from scipy import stats
-        # mstats.mode returns (mode, count)
-        # We need to handle masked arrays
-        # Scipy mstats mode is slow. Let's just take the first element (decimation) for speed
-        # or max element?
-        # Decimation is fastest and usually fine for dense patterns.
-        masked_matrix = reshaped[:, :, 0]
-    
-    # Plot
-    im = plt.imshow(masked_matrix, aspect='auto', cmap=cmap, vmin=0, vmax=len(sorted_formats)-1)
-    
-    # Colorbar
-    cbar = plt.colorbar(im, ticks=range(len(sorted_formats)))
-    cbar.ax.set_yticklabels(sorted_formats)
-    
-    plt.title(f"{metric.upper()} Per-Chunk Format Selection")
-    plt.ylabel("Layers")
-    plt.xlabel("Chunk Index")
-    plt.yticks(range(len(layers)), layers, fontsize=8)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f"chunk_format_heatmap_{metric}.png"), dpi=150)
-    plt.close()
-
-def get_format_bits(fmt):
-    """
-    Returns the bit width of a quantization format string.
-    """
-    if not fmt: return 32
-    if fmt == 'fp32': return 32
-    if fmt == 'int8': return 8
-    if fmt == 'int4': return 4
-    
-    # Check for fpX_... or ufpX_...
-    # The 'X' usually denotes total container bits in name, but we should parse carefully.
-    # Logic same as quantizer: [u]fp[Total]_e[E]m[M]
-    # For signed: S + E + M. For unsigned: E + M.
-    try:
-        is_signed = fmt.startswith('fp')
-        if '_e' in fmt and 'm' in fmt:
-             parts = fmt.split('_e')[1].split('m')
-             exp = int(parts[0])
-             mant = int(parts[1])
-             
-             bits = exp + mant
-             if is_signed:
-                 bits += 1
-             return bits
-    except:
-        pass
-        
-    # Fallback to name parsing if strict loop failed or different format
-    # fp8 -> 8, fp4 -> 4
-    if fmt.startswith('fp'):
-        try:
-            return int(fmt.split('_')[0].replace('fp',''))
-        except: pass
-    if fmt.startswith('ufp'):
-         try:
-            return int(fmt.split('_')[0].replace('ufp',''))
-         except: pass
-         
-    return 32 # Default high for unknown
-
-def sort_formats(formats):
-    """Sort formats by bit width (desc) then exponent size (desc)."""
-    def parse_fmt(fmt):
-        bits = get_format_bits(fmt)
-        
-        # Second key: exp bits for tie breaking? 
-        exp = 0
-        if '_e' in fmt:
-             try:
-                exp = int(fmt.split('_e')[1].split('m')[0])
-             except: pass
-        return (bits, exp)
-        
-    return sorted(formats, key=parse_fmt, reverse=True)
-
-def plot_chunk_win_rate(win_counts, formats, output_dir, metric, layer_winners=None):
-    """
-    Generate a stacked bar chart of chunk 'wins' per layer.
-    win_counts: {layer_name: {fmt: count, 'total': N}}
-    layer_winners: {layer_name: winning_format} (optional)
-    """
-    print(f"Generating {metric} chunk win rate plot...")
-    
-    layers = list(win_counts.keys())
-    if not layers:
-        return
-        
-    # Sort formats
-    sorted_formats = sort_formats(formats)
-
-    # Prepare data
-    # Matrix: [num_layers, num_formats]
-    data = np.zeros((len(layers), len(sorted_formats)))
-    
-    for i, layer in enumerate(layers):
-        total = win_counts[layer].get('total', 1)
-        for j, fmt in enumerate(sorted_formats):
-            count = win_counts[layer].get(fmt, 0)
-            data[i, j] = count # Raw count
-            
-    plt.figure(figsize=(15, 8))
-    
-    # Plot Stacked Bars
-    bottom = np.zeros(len(layers))
-    
-    # Use tab20 colors
-    cmap = plt.get_cmap('tab20', len(sorted_formats))
-    
-    for j, fmt in enumerate(sorted_formats):
-        plt.bar(layers, data[:, j], bottom=bottom, label=fmt, color=cmap(j))
-        bottom += data[:, j]
-        
-    plt.ylabel('Number of Chunks')
-    plt.title(f'Chunk Format Selection per Layer ({metric.upper()})')
-    plt.xticks(rotation=90, fontsize=8)
-    
-    # Clean legend: only formats that appear at least once
-    # Check if a column has any non-zero value
-    active_indices = [j for j in range(len(sorted_formats)) if data[:, j].sum() > 0]
-    
-    handles, labels = plt.gca().get_legend_handles_labels()
-    # Filter legend
-    filtered_handles = [handles[j] for j in active_indices]
-    filtered_labels = [labels[j] for j in active_indices]
-    
-    plt.legend(filtered_handles, filtered_labels, bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f"chunk_win_rate_{metric}.png"))
-    plt.close()
-
-def plot_layer_error_comparison(layer_results, formats, output_dir, metric):
-    """
-    Generate a line plot comparing total error of each format across layers.
-    layer_results: List of dicts containing 'layer' and 'metrics'
-    """
-    print(f"Generating {metric} layer-wise error comparison plot...")
-    
-    if not layer_results:
-        return
-        
-    layers = [res['layer'] for res in layer_results]
-    x = np.arange(len(layers))
-    
-    # Extract errors per format
-    # format_series: {fmt: [err_layer1, err_layer2, ...]}
-    format_series = {fmt: [] for fmt in formats}
-    
-    valid_formats = []
-    
-    for fmt in formats:
-        has_data = False
-        series = []
-        for res in layer_results:
-            err = res['metrics'][metric].get(fmt, float('nan'))
-            
-            # Handling SQNR negative values
-            if metric == 'sqnr':
-                err = -err
-                
-            series.append(err)
-            if np.isfinite(err):
-                has_data = True
-        
-        if has_data:
-            format_series[fmt] = series
-            valid_formats.append(fmt)
-            
-    if not valid_formats:
-        return
-
-    plt.figure(figsize=(14, 8))
-    
-    # Use consistent colormap with chunk plot
-    cmap = plt.get_cmap('tab20')
-    fmt_colors = {fmt: cmap(i % 20) for i, fmt in enumerate(formats)} # Use original formats list for consistent index
-
-    for fmt in valid_formats:
-        vals = np.array(format_series[fmt])
-        # Mask NaNs/Infs for plotting
-        mask = np.isfinite(vals)
-        if metric in ['l1', 'mse', 'cosine']:
-             # Use semilogy for error metrics
-             plt.semilogy(x[mask], vals[mask], label=fmt, color=fmt_colors[fmt], marker='o', markersize=3, linewidth=1.5, alpha=0.7)
-        else:
-             plt.plot(x[mask], vals[mask], label=fmt, color=fmt_colors[fmt], marker='o', markersize=3, linewidth=1.5, alpha=0.7)
-
-    plt.title(f"{metric.upper()} Total Error per Layer")
-    plt.xlabel("Layers")
-    plt.ylabel(f"{metric.upper()} Error" + (" (Log Scale)" if metric != 'sqnr' else " (dB)"))
-    plt.xticks(x, layers, rotation=90, fontsize=8)
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f"layer_error_comparison_{metric}.png"))
 
 
 def load_cached_results(csv_path, metric, format_col_suffix="_error"):
@@ -964,8 +378,9 @@ def process_single_model(args, device, metrics, base_root):
     # Eval config
     eval_config = {'mode': 'evaluate'}
     
-    # NOTE: args.limit_batches now ONLY affects the analysis (input sampling) phase.
-    # Evaluation will run on the full dataset unless explicitly handled otherwise.
+    # Use limit_batches for evaluation if specified
+    if args.limit_batches > 0:
+        eval_config['max_batches'] = args.limit_batches
          
     dataset_base = config['dataset']
 
@@ -997,8 +412,8 @@ def process_single_model(args, device, metrics, base_root):
                 'adapter': {
                     'type': 'generic', 
                     'quantized_ops': ['-1'], # Quantize all supported
-                    'input_quantization': (args.target == 'inputs'), 
-                    'input_quantization_type': fmt if args.target == 'inputs' else 'fp32' 
+                    'input_quantization': True, 
+                    'input_quantization_type': args.input_method if args.input_method else (fmt if args.target == 'inputs' else 'fp32') 
                 },
                 'quantization': {
                     'format': fmt, 
@@ -1017,9 +432,12 @@ def process_single_model(args, device, metrics, base_root):
                 
             configs_to_run.append(b_cfg)
 
-    # Process Metrics
+    # Initialize total_errors_by_config for all metrics upfront
     for m in metrics:
         total_errors_by_config[m] = {"ref_fp32": 0.0}
+
+    # Process Metrics
+    for m in metrics:
         print(f"\n--- Processing Metric: {m} ---")
         metric_dir = os.path.join(model_dir, m)
         os.makedirs(metric_dir, exist_ok=True)
@@ -1060,8 +478,7 @@ def process_single_model(args, device, metrics, base_root):
                         best_error = val
                         best_type = q_type
             
-            # Accumulated optimized errors
-            total_errors_by_config[m][f"optimized_layer_{m}"] = total_errors_by_config[m].get(f"optimized_layer_{m}", 0.0) + best_error
+            pass
             
             # Chunk wins handling
             if args.weight_chunk_size and 'chunk_wins' in record:
@@ -1078,6 +495,15 @@ def process_single_model(args, device, metrics, base_root):
                     layer_config_m[name] = {'input_format': best_type}
                 else:
                     layer_config_m[name] = {'format': best_type}
+                
+                # Cross-Metric Error Calculation for Optimized Layer
+                # We know the best format for metric 'm' is best_type.
+                # We accumulate the error of this format for ALL metrics.
+                out_name_layer = f"optimized_layer_{m}"
+                for m_other in metrics:
+                    err_other = record['metrics'][m_other].get(best_type, float('inf'))
+                    if np.isfinite(err_other):
+                        total_errors_by_config[m_other][out_name_layer] = total_errors_by_config[m_other].get(out_name_layer, 0.0) + err_other
 
             # Per Chunk Config
             if args.per_chunk_format and args.weight_chunk_size:
@@ -1092,9 +518,41 @@ def process_single_model(args, device, metrics, base_root):
                         layer_config_per_chunk[name] = {'input_chunk_formats': c_winners}
                     else:
                         layer_config_per_chunk[name] = {'chunk_formats': c_winners}
+                    
+                    # Normalization Factor for Chunk Errors (to match Layer metrics)
+                    scale_factor = 1.0
+                    if m == 'mse':
+                         scale_factor = args.weight_chunk_size / record['numel']
+                    elif m == 'cosine':
+                         scale_factor = 1.0 / record.get('num_chunks', 1)
+
+                    # Cross-Metric Error Calculation for Optimized Chunk
+                    if 'chunk_cross_errors' in record:
+                         out_name_chunk = f"optimized_chunk_{m}"
+                         for m_other in metrics:
+                              if m in record['chunk_cross_errors'] and m_other in record['chunk_cross_errors'][m]:
+                                   err_chunk = record['chunk_cross_errors'][m][m_other]
+                                   
+                                   # Determine scale factor for TARGET metric
+                                   sf_other = 1.0
+                                   if m_other == 'mse':
+                                        sf_other = args.weight_chunk_size / record['numel']
+                                   elif m_other == 'cosine':
+                                        sf_other = 1.0 / record.get('num_chunks', 1)
+                                   
+                                   if np.isfinite(err_chunk):
+                                        total_errors_by_config[m_other][out_name_chunk] = total_errors_by_config[m_other].get(out_name_chunk, 0.0) + (err_chunk * sf_other)
                 
-                # Best_error for optimized chunk is accumulated during the loop
-                total_errors_by_config[m][f"optimized_chunk_{m}"] = total_errors_by_config[m].get(f"optimized_chunk_{m}", 0.0) + best_error
+                # Best_error for optimized chunk is accumulated using self-cross-error (which is correct Chunk Opt Error)
+                # We multiply by scale_factor to match layer metric scale
+                self_chunk_err = 0.0
+                if 'chunk_cross_errors' in record and m in record['chunk_cross_errors'] and m in record['chunk_cross_errors'][m]:
+                     self_chunk_err = record['chunk_cross_errors'][m][m] * scale_factor
+                elif np.isfinite(best_error):
+                     # Fallback to Layer Opt Error (pessimistic but safe) if chunk error missing
+                     self_chunk_err = best_error
+                
+                total_errors_by_config[m][f"optimized_chunk_{m}"] = total_errors_by_config[m].get(f"optimized_chunk_{m}", 0.0) + self_chunk_err
             
             # Plot Layer
             if args.plot_layers:
@@ -1152,11 +610,15 @@ def process_single_model(args, device, metrics, base_root):
         # Common Config Parts
         base_adapter_config = {
             'type': 'generic', 
-            'input_quantization': (args.target == 'inputs'),
+            'input_quantization': True,
             'quantized_ops': ['Conv2d', 'Linear'],
             'quantize_first_layer': False
-            # 'input_quantization_type': 'fp32' if args.target != 'inputs' else 'fp32' # Base
         }
+        
+        # Apply Input Method Override
+        if args.input_method:
+            base_adapter_config['input_quantization_type'] = args.input_method
+
         if args.target == 'inputs':
             # For inputs, we might want to set base input type if supported, but typically 
             # we rely on 'layers' override.
@@ -1339,6 +801,16 @@ def run_weight_quantization_analysis(args, model, metrics_to_calc, qt_options, l
                 if m not in record['metrics']: 
                     record['metrics'][m] = {}; record['chunk_wins'][m] = {}; record['chunk_winners'][m] = []
 
+            # Store size info for normalization
+            record['numel'] = w.numel()
+            if args.weight_chunk_size:
+                record['num_chunks'] = (w.numel() + args.weight_chunk_size - 1) // args.weight_chunk_size # Approx/Max chunks
+                # Actual chunks might be slightly different due to padding? 
+                # get_chunked_tensor handles padding. 
+                # Let's count actual chunks from the tensor shape if possible, or just use calculation.
+                # get_chunked_tensor returns [B, N_chunks, size].
+                # We can just use the calculated one as it's consistent.
+            
             max_val_global = record['max_val']
             metric_chunk_errors = {m: {} for m in metrics_to_calc}
 
@@ -1379,11 +851,39 @@ def run_weight_quantization_analysis(args, model, metrics_to_calc, qt_options, l
                       err_matrix = np.stack([metric_chunk_errors[m][qt] for qt in valid_fmts_sorted])
                       best_indices = np.argmin(err_matrix, axis=0) # [NumChunks]
                       
-                      record['chunk_winners'][m] = [valid_fmts_sorted[i] for i in best_indices]
+                      winners_fmts = [valid_fmts_sorted[i] for i in best_indices]
+                      record['chunk_winners'][m] = winners_fmts
                       wins = {'total': len(best_indices)}
                       for idx, qt in enumerate(valid_fmts_sorted):
                           wins[qt] = int(np.sum(best_indices == idx))
                       record['chunk_wins'][m] = wins
+                      
+                 # Calculate Chunk Cross-Errors
+                 # Now that we have winners for all metrics, calculate how they perform on OTHER metrics
+                 if 'chunk_winners' in record:
+                      record['chunk_cross_errors'] = {}
+                      for src_m in metrics_to_calc:
+                           if src_m not in record['chunk_winners']: continue
+                           winners = record['chunk_winners'][src_m]
+                           
+                           record['chunk_cross_errors'][src_m] = {}
+                           
+                           for tgt_m in metrics_to_calc:
+                                # Calculate error of 'src_m winners' using 'tgt_m' error data
+                                total_err = 0.0
+                                possible = True
+                                for i, fmt in enumerate(winners):
+                                     if fmt in metric_chunk_errors[tgt_m]:
+                                          total_err += float(metric_chunk_errors[tgt_m][fmt][i])
+                                     else:
+                                          total_err = float('inf')
+                                          possible = False
+                                          break
+                                
+                                if possible:
+                                     record['chunk_cross_errors'][src_m][tgt_m] = total_err
+                                else:
+                                     record['chunk_cross_errors'][src_m][tgt_m] = float('inf')
                       
             record['max_val'] = max_val_global
 
@@ -1646,9 +1146,9 @@ def main():
         base_root = args.output_dir
     else:
         if args.target == 'inputs':
-             base_root = os.path.join(PROJECT_ROOT, "runspace/experiments/optimal_layer_quant_inputs")
+             base_root = os.path.join(PROJECT_ROOT, "runspace/experiments/optimal_weight_quant_inputs")
         else:
-             base_root = os.path.join(PROJECT_ROOT, "runspace/experiments/optimal_layer_quant")
+             base_root = os.path.join(PROJECT_ROOT, "runspace/experiments/optimal_weight_quant")
 
     if args.models_config:
         print(f"Loading models from config: {args.models_config}")
