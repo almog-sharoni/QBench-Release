@@ -32,9 +32,9 @@ from runspace.src.registry.op_registry import OpRegistry
 
 baseline_formats = [
     'fp4_e3m0' , 'fp4_e2m1' , 'fp4_e1m2' , 'fp4_e0m3',
-    'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3', 'ufp4_e0m4'
-    'efp4_e3m0' , 'efp4_e2m1' , 'efp4_e1m2' , 'efp4_e0m3',
-    'fp8_e1m6' , 'fp8_e0m7', 'fp8_e4m3','fp8_e5m2','fp8_e3m4','fp8_e6m1','fp8_e7m0','fp8_e2m5'
+    # 'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3', 'ufp4_e0m4',
+    # 'efp4_e3m0' , 'efp4_e2m1' , 'efp4_e1m2' , 'efp4_e0m3',
+    # 'fp8_e1m6' , 'fp8_e0m7', 'fp8_e4m3','fp8_e5m2','fp8_e3m4','fp8_e6m1','fp8_e7m0','fp8_e2m5'
 ]
 
 
@@ -50,7 +50,7 @@ def get_args():
     parser.add_argument("--metrics", type=str, default="l1,mse", help="Comma-separated metrics: l1, mse, sqnr, cosine OR 'all'")
     
     # Experiment Target
-    parser.add_argument("--target", type=str, default="weights", choices=['weights', 'inputs'], help="Target to optimize: 'weights' or 'inputs'")
+    parser.add_argument("--target", type=str, default="weights", choices=['weights'], help="Target to optimize: 'weights'")
     
     # Evaluation Args
     parser.add_argument("--run_eval", action="store_true", help="Run evaluation on FP32, FP8, and Optimized models")
@@ -65,7 +65,6 @@ def get_args():
     parser.add_argument("--baseline_formats", type=str, default=','.join(baseline_formats), help="Comma-separated list of formats to run as baselines (full eval)")
     parser.add_argument("--skip_layer_wise", action="store_true", help="Skip the layer-wise optimization experiment (only run chunk/baselines)")
     parser.add_argument("--force_recalc", action="store_true", help="Force recalculation of layer errors even if results exist")
-    parser.add_argument("--input_method", type=str, default=None, help="Input quantization method (e.g. 'dynamic_mse', 'dynamic_l1', 'fp8_e4m3')")
     
     return parser.parse_args()
 
@@ -266,8 +265,7 @@ def load_cached_results(csv_path, metric, format_col_suffix="_error"):
 def process_single_model(args, device, metrics, base_root):
     # Valid model path: base_root / model_name
     model_dir = os.path.join(base_root, args.model_name)
-    if args.target == 'inputs':
-        model_dir = model_dir + "_inputs"  # Suffix for inputs
+
     
     os.makedirs(model_dir, exist_ok=True)
     
@@ -294,13 +292,6 @@ def process_single_model(args, device, metrics, base_root):
         return
 
     qt_options = baseline_formats.copy()
-    if args.target == 'inputs':
-        # Add UFP variants for all FP/Baseline inputs
-        ufp_fmts = []
-        # for fmt in qt_options:
-        #     if fmt.startswith('fp'):
-        #          ufp_fmts.append('u' + fmt)
-        # qt_options.extend(ufp_fmts)
         
     if args.include_fp32:
         qt_options.insert(0, 'fp32')
@@ -346,14 +337,10 @@ def process_single_model(args, device, metrics, base_root):
         print(f"Analyzing layers for metrics: {metrics_to_calc}...")
         
         supported_ops = tuple(OpRegistry.get_supported_ops().keys())
-        
-        # --- INPUT QUANTIZATION MODE ---
-        if args.target == 'inputs':
-             run_input_quantization_analysis(args, model, adapter, metrics_to_calc, qt_options, layer_results_map, device, config)
-             
+
         # --- WEIGHT QUANTIZATION MODE ---
-        else:
-             run_weight_quantization_analysis(args, model, metrics_to_calc, qt_options, layer_results_map, supported_ops)
+
+        run_weight_quantization_analysis(args, model, metrics_to_calc, qt_options, layer_results_map, supported_ops)
 
     # ... Shared Post-Processing ...
     
@@ -412,8 +399,8 @@ def process_single_model(args, device, metrics, base_root):
                 'adapter': {
                     'type': 'generic', 
                     'quantized_ops': ['-1'], # Quantize all supported
-                    'input_quantization': True, 
-                    'input_quantization_type': args.input_method if args.input_method else (fmt if args.target == 'inputs' else 'fp32') 
+                    'input_quantization': False, 
+                    # 'input_quantization_type': args.input_method if args.input_method else (fmt if args.target == 'inputs' else 'fp32') 
                 },
                 'quantization': {
                     'format': fmt, 
@@ -423,12 +410,7 @@ def process_single_model(args, device, metrics, base_root):
                 'output_name': f"baseline_{fmt}"
             }
             
-            if args.target == 'inputs':
-                # Force weights to FP32, Inputs to fmt
-                b_cfg['quantization']['format'] = 'fp32' 
-                b_cfg['adapter']['quantized_ops'] = ['-1'] 
-                b_cfg['adapter']['input_quantization'] = True
-                b_cfg['adapter']['input_quantization_type'] = fmt
+
                 
             configs_to_run.append(b_cfg)
 
@@ -490,11 +472,8 @@ def process_single_model(args, device, metrics, base_root):
             if best_type:
                 layer_winners_map[name] = best_type
                 
-                if args.target == 'inputs':
-                    # Configuration for inputs
-                    layer_config_m[name] = {'input_format': best_type}
-                else:
-                    layer_config_m[name] = {'format': best_type}
+
+                layer_config_m[name] = {'format': best_type}
                 
                 # Cross-Metric Error Calculation for Optimized Layer
                 # We know the best format for metric 'm' is best_type.
@@ -507,18 +486,12 @@ def process_single_model(args, device, metrics, base_root):
 
             # Per Chunk Config
             if args.per_chunk_format and args.weight_chunk_size:
-                # Same logic for inputs? "per_chunk_input_format"?
-                # Currently GenericAdapter probably doesn't support 'chunk_formats' for inputs from config easily.
-                # But we'll structure it.
                 if m in record.get('chunk_winners', {}):
                     c_winners = record['chunk_winners'][m]
                     fmt_dist = {f: c_winners.count(f) for f in set(c_winners)}
-                    
-                    if args.target == 'inputs':
-                        layer_config_per_chunk[name] = {'input_chunk_formats': c_winners}
-                    else:
-                        layer_config_per_chunk[name] = {'chunk_formats': c_winners}
-                    
+
+                    layer_config_per_chunk[name] = {'chunk_formats': c_winners}
+                
                     # Normalization Factor for Chunk Errors (to match Layer metrics)
                     scale_factor = 1.0
                     if m == 'mse':
@@ -599,7 +572,7 @@ def process_single_model(args, device, metrics, base_root):
         if args.weight_chunk_size:
             plot_chunk_win_rate(chunk_win_counts, qt_options, metric_dir, m, layer_winners=layer_winners_map)
             # Only plot distribution map if we have static winners (Weights only)
-            if args.target != 'inputs' and args.per_chunk_format and chunk_format_map:
+            if args.per_chunk_format and chunk_format_map:
                 plot_chunk_format_distribution(chunk_format_map, qt_options, metric_dir, m)
             
         # Layer-wise Error Comparison
@@ -610,19 +583,12 @@ def process_single_model(args, device, metrics, base_root):
         # Common Config Parts
         base_adapter_config = {
             'type': 'generic', 
-            'input_quantization': True,
-            'quantized_ops': ['Conv2d', 'Linear'],
+            'input_quantization': False,
+            'quantized_ops': ['-1'],
             'quantize_first_layer': False
         }
         
-        # Apply Input Method Override
-        if args.input_method:
-            base_adapter_config['input_quantization_type'] = args.input_method
 
-        if args.target == 'inputs':
-            # For inputs, we might want to set base input type if supported, but typically 
-            # we rely on 'layers' override.
-            pass
         
         dataset_cfg = dataset_base if args.run_eval else {
              'name': args.dataset_name, 'path': args.dataset_path, 
@@ -645,8 +611,7 @@ def process_single_model(args, device, metrics, base_root):
                 'dataset': dataset_cfg
             }
             
-            # if args.target == 'inputs':
-            #     #  layer_opt_config['quantization']['format'] = 'fp32'
+
 
             layer_cfg_path = os.path.join(metric_dir, "optimized_layer_config.yaml")
             with open(layer_cfg_path, 'w') as f:
@@ -675,8 +640,6 @@ def process_single_model(args, device, metrics, base_root):
                 'dataset': dataset_cfg
             }
             
-            # if args.target == 'inputs':
-            #      chunk_opt_config['quantization']['format'] = 'fp32'
 
             chunk_cfg_path = os.path.join(metric_dir, "optimized_chunk_config.yaml")
             with open(chunk_cfg_path, 'w') as f:
@@ -688,25 +651,6 @@ def process_single_model(args, device, metrics, base_root):
                 run_config['output_name'] = f"optimized_chunk_{m}"
                 configs_to_run.append(run_config)
 
-        # 3. OPTIMIZED ORACLE CONFIG (Dynamic Per-Chunk Runtime)
-        if args.weight_chunk_size and args.target == 'inputs':
-            # Only valid for chunked inputs
-            oracle_config = {
-                'model': {'name': args.model_name, 'weights': args.weights},
-                'adapter': base_adapter_config.copy(),
-                'quantization': {
-                    'format': 'fp32', # Weights FP32
-                    # 'weight_mode': 'chunk', # Not needed for weights if fp32
-                    # 'weight_chunk_size': args.weight_chunk_size, 
-                    # 'layers': layer_config_m 
-                },
-                'evaluation': eval_config,
-                'dataset': dataset_cfg
-            }
-            
-            # Set input quantization to dynamic oracle
-            oracle_config['adapter']['input_quantization_type'] = f"dynamic_oracle_{m}"
-            oracle_config['adapter']['input_chunk_size'] = args.weight_chunk_size # reusing weight chunk size arg for inputs
             
             oracle_cfg_path = os.path.join(metric_dir, "optimized_oracle_config.yaml")
             with open(oracle_cfg_path, 'w') as f:
@@ -895,229 +839,6 @@ class OnlineParams:
         self.chunk_size = chunk_size
         self.layer_stats = {} # name -> {'count': N, 'metrics': {m: {fmt: cum_err}}, 'chunk_errors': {m: tensor}}
 
-def run_input_quantization_analysis(args, model, adapter, metrics_to_calc, qt_options, layer_results_map, device, config):
-    print(f"Starting Input Quantization Analysis with Limit Batches: {args.limit_batches}")
-    
-    # Setup data loader
-    runner = Runner(device)
-    loader = runner.setup_data_loader(config)
-    
-    # tracker
-    tracker = OnlineParams(metrics_to_calc, qt_options, args.weight_chunk_size)
-    
-    hooks = []
-    supported_ops = tuple(OpRegistry.get_supported_ops().keys())
-    
-    batch_limit = args.limit_batches if args.limit_batches > 0 else float('inf')
-    
-    # Shared progress bar container
-    pbar_ctx = {'bar': None}
-    
-    def get_hook(layer_name):
-        def hook(module, input, output):
-            # Input is tuple
-            x = input[0]
-            if not isinstance(x, torch.Tensor): 
-                 if pbar_ctx['bar']: pbar_ctx['bar'].update(1)
-                 return
-            
-            # Update progress (less frequently to reduce overhead)
-            if pbar_ctx['bar']:
-                 pbar_ctx['bar'].update(1)
-
-            # Initialize stats if needed
-            if layer_name not in tracker.layer_stats:
-                tracker.layer_stats[layer_name] = {
-                    'count': 0, 'max_val': 0.0,
-                    'metrics': {m: {fmt: 0.0 for fmt in tracker.formats} for m in tracker.metrics},
-                    'oracle_errors': {m: 0.0 for m in tracker.metrics}, 
-                    'oracle_wins': {m: {fmt: 0 for fmt in tracker.formats} for m in tracker.metrics},
-                    'chunk_count': 0
-                }
-            stats = tracker.layer_stats[layer_name]
-            stats['count'] += x.shape[0]
-            
-            # Pre-calculate chunked tensors if chunking enabled
-            x_chunked = None
-            if tracker.chunk_size:
-                 x_flat = x.flatten(1)
-                 num_el = x_flat.shape[-1]
-                 if num_el % tracker.chunk_size != 0:
-                     pad = tracker.chunk_size - (num_el % tracker.chunk_size)
-                     x_flat = torch.nn.functional.pad(x_flat, (0, pad))
-                     
-                 n_chunks = x_flat.shape[-1] // tracker.chunk_size
-                 x_chunked = x_flat.view(x.shape[0], n_chunks, tracker.chunk_size)
-                 
-                 if stats['chunk_count'] == 0:
-                     stats['chunk_count'] = n_chunks
-            
-            # OPTIMIZATION: Cache quantized tensors to avoid redundant computation
-            # This is the main performance bottleneck - we were quantizing twice per format
-            format_cache = {}
-            
-            for fmt in tracker.formats:
-                 # Quantize ONCE and cache the result
-                 x_deq, max_v = get_quantized_tensor_sim(x, q_type=fmt, chunk_size=tracker.chunk_size, mode='chunk' if tracker.chunk_size else 'tensor')
-                 format_cache[fmt] = (x_deq, max_v)
-                 
-                 # Update max val stats
-                 stats['max_val'] = max(stats['max_val'], max_v)
-                 
-                 # Calculate all metrics using cached result
-                 for m in tracker.metrics:
-                     val = calculate_error(x, x_deq, metric=m)
-                     
-                     if m == 'mse':
-                         stats['metrics'][m][fmt] += val * x.numel()
-                     else:
-                         stats['metrics'][m][fmt] += val
-            
-            # Chunk Error Accumulation - across all chunks and formats
-            if tracker.chunk_size and x_chunked is not None:
-                for m in tracker.metrics:
-                     errs_list = []
-                     for fmt in tracker.formats:
-                         x_deq, _ = format_cache[fmt]
-                         diff = (x - x_deq).flatten(1)
-                         
-                         if diff.shape[-1] != x_chunked.shape[1] * x_chunked.shape[2]:
-                              pad = tracker.chunk_size - (diff.shape[-1] % tracker.chunk_size)
-                              diff = torch.nn.functional.pad(diff, (0, pad))
-                              
-                         diff_chunks = diff.view(x_chunked.shape)
-                         
-                         if m == 'l1':
-                             chunk_err = diff_chunks.abs().sum(dim=2)
-                         elif m == 'mse':
-                             chunk_err = diff_chunks.pow(2).mean(dim=2)
-                         elif m == 'cosine':
-                             x_deq_flat = x_deq.flatten(1)
-                             if x_deq_flat.shape[-1] % tracker.chunk_size != 0:
-                                 x_deq_flat = torch.nn.functional.pad(x_deq_flat, (0, tracker.chunk_size - (x_deq_flat.shape[-1] % tracker.chunk_size)))
-                             x_deq_chunks = x_deq_flat.view(x_chunked.shape)
-                             cos_sim = torch.nn.functional.cosine_similarity(x_chunked, x_deq_chunks, dim=2)
-                             chunk_err = 1.0 - cos_sim
-                         else:
-                             chunk_err = diff_chunks.abs().sum(dim=2)
-                         
-                         # Keep error per chunk per sample: [Batch, NumChunks]
-                         errs_list.append(chunk_err)
-                     
-                     # Stack: [NumFormats, Batch, NumChunks]
-                     errs_stack = torch.stack(errs_list)
-                     
-                     # ORACLE: Find min error per chunk per sample
-                     # [Batch, NumChunks]
-                     min_vals, min_indices = torch.min(errs_stack, dim=0)
-                     
-                     stats['oracle_errors'][m] += min_vals.sum().item()
-                     
-                     # Track Wins (Dynamic Histogram)
-                     for fmt_idx, fmt in enumerate(tracker.formats):
-                         count = (min_indices == fmt_idx).sum().item()
-                         stats['oracle_wins'][m][fmt] += count
-            
-            # Cleanup
-            del x_chunked
-            del format_cache
-            
-        return hook
-
-    # Register hooks (recursive)
-    handles = []
-    registered_counts = 0
-    for name, module in model.named_modules():
-        # Hook on Conv2d / Linear?
-        # If target=inputs, we hook on Quantized Layers (QuantConv, QuantLinear) 
-        # OR standard layers if not quantized yet.
-        # But we want to capture INPUTS to these layers.
-        # If model is already quantized (with 'fp32' type or whatever), we can hook.
-        # We hook into everything in supported_ops
-        if isinstance(module, tuple(OpRegistry.get_supported_ops().values())):
-             # Quantized Module
-             handles.append(module.register_forward_hook(get_hook(name)))
-             registered_counts += 1
-        elif isinstance(module, torch.nn.modules.conv.Conv2d) or isinstance(module, torch.nn.modules.linear.Linear):
-             # Standard Module
-             handles.append(module.register_forward_hook(get_hook(name)))
-             registered_counts += 1
-             
-    print(f"Registered hooks on {registered_counts} layers.")
-
-    # Run
-    # Run
-    print("Running inference to capture/analyze inputs...")
-    
-    # helper Runner not needed, we use raw model
-    model.eval()
-    
-    try:
-        count = 0
-        with torch.no_grad():
-            loader_bar = tqdm(loader, desc="Batches")
-            for batch in loader_bar:
-                if count >= batch_limit:
-                    break
-                    
-                # Reset Layer Progress Bar for this batch
-                pbar_ctx['bar'] = tqdm(total=registered_counts, desc="Layers", leave=False)
-                
-                # Check signature of runner? Runner doesn't have prepare_batch exposed maybe
-                # But GenericAdapter does.
-                # Assuming adapter available in scope? Yes `adapter` passed to function.
-                if adapter is not None:
-                     images, labels = adapter.prepare_batch(batch)
-                else:
-                     images, labels = batch
-                
-                images = images.to(device)
-                
-                # Forward
-                model(images)
-                
-                # Close Layer Progress Bar
-                pbar_ctx['bar'].close()
-                pbar_ctx['bar'] = None
-                
-                count += 1
-    finally:
-        for h in handles: h.remove()
-    
-    # Process Stats into layer_results_map
-    for name, stats in tracker.layer_stats.items():
-        total_samples = stats['count']
-        if total_samples == 0: continue
-        
-        # Init record
-        if name not in layer_results_map:
-             layer_results_map[name] = {
-                    'layer': name, 'shape': "N/A", # Inputs dynamic
-                    'max_val': stats['max_val'], 'metrics': {},
-                    'chunk_wins': {}, 'chunk_winners': {}
-             }
-        record = layer_results_map[name]
-        
-        # Move tensors to CPU once
-        # stats['metrics_t'] is dict of tensors [NumFormats]
-        
-        # Normalize Metrics
-        for m_idx, m in enumerate(tracker.metrics):
-            if m not in record['metrics']: record['metrics'][m] = {}
-            for fmt in tracker.formats:
-                val = stats['metrics'][m][fmt]
-                record['metrics'][m][fmt] = val / total_samples
-            
-            # Oracle Error
-            if tracker.chunk_size:
-                 oracle_val = stats['oracle_errors'][m]
-                 record['metrics'][m][f"dynamic_oracle_{m}"] = oracle_val / total_samples
-                 
-                 # Chunk Wins
-                 record['chunk_wins'][m] = stats['oracle_wins'][m]
-                 # No static chunk_winners for inputs
-                 
-
 
 def main():
     args = get_args()
@@ -1145,10 +866,7 @@ def main():
     if args.output_dir:
         base_root = args.output_dir
     else:
-        if args.target == 'inputs':
-             base_root = os.path.join(PROJECT_ROOT, "runspace/experiments/optimal_weight_quant_inputs")
-        else:
-             base_root = os.path.join(PROJECT_ROOT, "runspace/experiments/optimal_weight_quant")
+        base_root = os.path.join(PROJECT_ROOT, "runspace/experiments/optimal_weight_quant")
 
     if args.models_config:
         print(f"Loading models from config: {args.models_config}")
