@@ -437,7 +437,7 @@ def plot_accuracy_comparison(results, output_dir):
             # Add value annotations
             for j, val in enumerate(vals):
                 if np.isfinite(val):
-                    ax_new.annotate(f'{val:.4g}', 
+                    ax_new.annotate(f'{val:.3g}', 
                                  xy=(x[j], val),
                                  xytext=(0, 5), textcoords='offset points',
                                  ha='center', va='bottom', fontsize=8, color=color, fontweight='bold')
@@ -463,7 +463,7 @@ def plot_accuracy_comparison(results, output_dir):
     def autolabel(rects, ax):
         for rect in rects:
             height = rect.get_height()
-            ax.annotate(f'{height:.4f}',
+            ax.annotate(f'{height:.3f}',
                         xy=(rect.get_x() + rect.get_width() / 2, height),
                         xytext=(0, 3),  # 3 points vertical offset
                         textcoords="offset points",

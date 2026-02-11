@@ -43,12 +43,11 @@ def get_quantization_bias(q_type: str) -> int:
                 return 1
 
             # Default IEEE-like bias: 2^(k-1) - 1
-            return (1 << (exp_bits - 1)) - 1
+            return (1 << (exp_bits)) - 1
         except (ValueError, IndexError):
-            # Fallback if parsing fails
-            return 7
+            raise ValueError(f"Invalid quantization type: {q_type}")
             
-    return 7
+    raise ValueError(f"Invalid quantization type: {q_type}")
 
 
 def get_format_params(q_type: str) -> tuple[int, int]:

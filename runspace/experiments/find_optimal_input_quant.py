@@ -30,14 +30,14 @@ baseline_formats = ['fp32', 'fp8_e4m3', 'fp8_e5m2','fp8_e3m4','fp8_e2m5','fp8_e1
 
 candidate_formats = [
             # Signed FP8 (1 sign bit + 7 bits E/M)
-            'fp8_e0m7','fp8_e1m6'   ,'fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0'
+            'fp8_e0m7','fp8_e1m6'   ,'fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
             # 'fp4_e3m0' , 'fp4_e2m1' , 'fp4_e1m2' , 'fp4_e0m3',
             
             # Unsigned FP8 (0 sign bit + 8 bits E/M) - Fully utilizes 8 bits
             # 'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3', 'ufp4_e0m4'
-            'ufp8_e8m0','ufp8_e7m1','ufp8_e6m2','ufp8_e5m3','ufp8_e4m4','ufp8_e3m5','ufp8_e2m6','ufp8_e1m7','ufp8_e0m8'
+            'ufp8_e8m0','ufp8_e7m1','ufp8_e6m2','ufp8_e5m3','ufp8_e4m4','ufp8_e3m5','ufp8_e2m6','ufp8_e1m7','ufp8_e0m8',
 
-            # Expended FP8
+            # Expended FP8 (Moved to top to test tie-breaking)
             'efp8_e0m7','efp8_e1m6','efp8_e2m5','efp8_e3m4','efp8_e4m3','efp8_e5m2','efp8_e6m1','efp8_e7m0'
         ]
 def get_args():

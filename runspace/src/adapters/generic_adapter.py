@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
+import os
 from .base_adapter import BaseAdapter
 from ..registry.op_registry import OpRegistry
 try:
@@ -99,6 +100,24 @@ class GenericAdapter(BaseAdapter):
         
         # Handle weights parameter
         if self.weights:
+            # Check if weights is a path to a file
+            if isinstance(self.weights, str) and os.path.isfile(self.weights):
+                print(f"Loading custom weights from {self.weights}...")
+                # Load model without weights first
+                model = model_fn(weights=None)
+                try:
+                    state_dict = torch.load(self.weights, map_location='cpu')
+                    # Handle varying state dict formats
+                    if 'state_dict' in state_dict:
+                        state_dict = state_dict['state_dict']
+                    elif 'model' in state_dict:
+                        state_dict = state_dict['model']
+                        
+                    model.load_state_dict(state_dict, strict=False)
+                    return model
+                except Exception as e:
+                    raise RuntimeError(f"Failed to load weights from {self.weights}: {e}")
+
             # Try to get weights enum (e.g., ResNet18_Weights.IMAGENET1K_V1)
             weights_enum = self._get_weights_enum()
             if weights_enum:

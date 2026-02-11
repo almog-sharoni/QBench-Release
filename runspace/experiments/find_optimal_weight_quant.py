@@ -31,10 +31,10 @@ from runspace.core.report_aggregator import ReportAggregator
 from runspace.src.registry.op_registry import OpRegistry
 
 baseline_formats = [
-    'fp4_e3m0' , 'fp4_e2m1' , 'fp4_e1m2' , 'fp4_e0m3',
-    # 'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3', 'ufp4_e0m4',
-    # 'efp4_e3m0' , 'efp4_e2m1' , 'efp4_e1m2' , 'efp4_e0m3',
-    # 'fp8_e1m6' , 'fp8_e0m7', 'fp8_e4m3','fp8_e5m2','fp8_e3m4','fp8_e6m1','fp8_e7m0','fp8_e2m5'
+    'fp4_e1m2' , 'fp4_e2m1' , 'fp4_e3m0' , 
+    # 'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3',
+    'efp4_e3m0' , 'efp4_e2m1' , 'efp4_e1m2' ,
+    # 'fp8_e1m6' , 'fp8_e4m3','fp8_e5m2','fp8_e3m4','fp8_e6m1','fp8_e7m0','fp8_e2m5'
 ]
 
 
@@ -262,6 +262,114 @@ def load_cached_results(csv_path, metric, format_col_suffix="_error"):
         print(f"Failed to load cached results: {e}")
         return [], False
 
+def create_quantized_state_dict(model, layer_results_map, args, metric, use_chunking=False):
+    """
+    Creates a state dict with quantized weights based on the optimal formats found.
+    """
+    print(f"Creating quantized state dict for metric {metric}...")
+    state_dict = model.state_dict()
+    quant_map = {}
+    
+    # Iterate over modules to find weights
+    # We use named_modules to find the exact keys
+    for name, module in model.named_modules():
+        if name in layer_results_map:
+            record = layer_results_map[name]
+            
+            # Determine best format
+            # If chunking enabled and per-chunk format selected
+            best_type = None
+            chunk_formats = None
+            
+            if use_chunking and args.per_chunk_format and args.weight_chunk_size and metric in record.get('chunk_winners', {}):
+                 chunk_formats = record['chunk_winners'][metric]
+            else:
+                 # Standard layer-wise
+                 errs = record['metrics'][metric]
+                 best_err = float('inf')
+                 for qt, err in errs.items():
+                     if err < best_err:
+                         best_err = err
+                         best_type = qt
+                     elif err == best_err:
+                         # Tie break
+                         if get_format_bits(qt) < (get_format_bits(best_type) if best_type else 999):
+                             best_type = qt
+            
+            # Now quantize
+            weight_key = f"{name}.weight"
+            if weight_key in state_dict:
+                w = state_dict[weight_key]
+                
+                if chunk_formats:
+                    # Optimized Vectorized Mixed Chunk Quantization
+                    # 1. Chunk
+                    w_chunked, original_shape, pad_len = get_chunked_tensor(w, chunk_size=args.weight_chunk_size)
+                    
+                    # Flatten chunks to [TotalChunks, ChunkSize]
+                    batch_size, num_chunks, chunk_size = w_chunked.shape
+                    w_chunked_flat = w_chunked.reshape(-1, chunk_size)
+                    total_chunks = w_chunked_flat.shape[0]
+
+                    # 2. Quantize by grouping chunks by format
+                    w_dequant_flat = torch.zeros_like(w_chunked_flat)
+                    
+                    # Limit formats to number of chunks
+                    current_formats = chunk_formats[:total_chunks]
+                    
+                    # Group indices by format
+                    fmt_to_indices = {}
+                    for idx, fmt in enumerate(current_formats):
+                        if fmt not in fmt_to_indices:
+                            fmt_to_indices[fmt] = []
+                        fmt_to_indices[fmt].append(idx)
+                        
+                    # Process each format group (vectorized)
+                    for fmt, indices in fmt_to_indices.items():
+                        if not indices: continue
+                        
+                        # Convert to tensor for indexing
+                        idx_tensor = torch.tensor(indices, device=w.device)
+                        
+                        # Gather chunks
+                        target_chunks = w_chunked_flat[idx_tensor] # [K, ChunkSize]
+                        
+                        # Quantize batch 
+                        # We use default mode which treats dim 0 as channels/independent
+                        # matching the per-chunk behavior
+                        dq_chunks, _ = get_quantized_tensor_sim(target_chunks, fmt)
+                        
+                        # Scatter back
+                        w_dequant_flat[idx_tensor] = dq_chunks
+
+                    # Handle case where we have more chunks than formats
+                    if len(current_formats) < total_chunks:
+                         w_dequant_flat[len(current_formats):] = w_chunked_flat[len(current_formats):]
+
+                    # 3. Reshape back
+                    w_dequant_chunked = w_dequant_flat.view(batch_size, num_chunks, chunk_size)
+                    
+                    # Flatten back to [Batch, FlattenedDim]
+                    flat = w_dequant_chunked.view(batch_size, -1)
+                    if pad_len > 0:
+                        flat = flat[:, :-pad_len]
+                    w_dequant = flat.view(original_shape)
+                    
+                    state_dict[weight_key] = w_dequant
+                    
+                elif best_type:
+                    # Layer-wise
+                    w_dequant, _ = get_quantized_tensor_sim(w, best_type, chunk_size=args.weight_chunk_size)
+                    state_dict[weight_key] = w_dequant
+            
+            # Record format decision
+            if chunk_formats:
+                quant_map[name] = chunk_formats
+            elif best_type:
+                quant_map[name] = best_type
+                    
+    return state_dict, quant_map
+
 def process_single_model(args, device, metrics, base_root):
     # Valid model path: base_root / model_name
     model_dir = os.path.join(base_root, args.model_name)
@@ -403,7 +511,9 @@ def process_single_model(args, device, metrics, base_root):
                     # 'input_quantization_type': args.input_method if args.input_method else (fmt if args.target == 'inputs' else 'fp32') 
                 },
                 'quantization': {
-                    'format': fmt, 
+                    'format': fmt,
+                    'weight_mode': 'chunk',
+                    'weight_chunk_size': args.weight_chunk_size
                 },
                 'evaluation': eval_config,
                 'dataset': dataset_base,
@@ -502,11 +612,16 @@ def process_single_model(args, device, metrics, base_root):
                     # Cross-Metric Error Calculation for Optimized Chunk
                     if 'chunk_cross_errors' in record:
                          out_name_chunk = f"optimized_chunk_{m}"
+                         
+                         # We want to see how the configuration optimized for 'm' performs on ALL metrics
+                         # So for each m_other, we look up the error of 'm' winners on 'm_other'
                          for m_other in metrics:
                               if m in record['chunk_cross_errors'] and m_other in record['chunk_cross_errors'][m]:
                                    err_chunk = record['chunk_cross_errors'][m][m_other]
                                    
-                                   # Determine scale factor for TARGET metric
+                                   # Determine scale factor for TARGET metric (m_other)
+                                   # The error stored in chunk_cross_errors is raw sum/mean from chunks
+                                   # We need to normalize it to match Layer metrics for m_other
                                    sf_other = 1.0
                                    if m_other == 'mse':
                                         sf_other = args.weight_chunk_size / record['numel']
@@ -514,18 +629,30 @@ def process_single_model(args, device, metrics, base_root):
                                         sf_other = 1.0 / record.get('num_chunks', 1)
                                    
                                    if np.isfinite(err_chunk):
+                                        # ACCUMULATE into m_other's entry for this config
                                         total_errors_by_config[m_other][out_name_chunk] = total_errors_by_config[m_other].get(out_name_chunk, 0.0) + (err_chunk * sf_other)
-                
-                # Best_error for optimized chunk is accumulated using self-cross-error (which is correct Chunk Opt Error)
-                # We multiply by scale_factor to match layer metric scale
+
+                # For the CURRENT metric 'm', we also use the value from chunk_cross_errors[m][m]
+                # This ensures consistent scaling.
                 self_chunk_err = 0.0
                 if 'chunk_cross_errors' in record and m in record['chunk_cross_errors'] and m in record['chunk_cross_errors'][m]:
-                     self_chunk_err = record['chunk_cross_errors'][m][m] * scale_factor
+                     # Re-calculate scale factor for 'm'
+                     sf_self = 1.0
+                     if m == 'mse':
+                          sf_self = args.weight_chunk_size / record['numel']
+                     elif m == 'cosine':
+                          sf_self = 1.0 / record.get('num_chunks', 1)
+                     self_chunk_err = record['chunk_cross_errors'][m][m] * sf_self
                 elif np.isfinite(best_error):
-                     # Fallback to Layer Opt Error (pessimistic but safe) if chunk error missing
-                     self_chunk_err = best_error
-                
-                total_errors_by_config[m][f"optimized_chunk_{m}"] = total_errors_by_config[m].get(f"optimized_chunk_{m}", 0.0) + self_chunk_err
+                     self_chunk_err = best_error # Fallback
+
+                # Update the main entry for this config on this metric
+                # overwrite previous value to avoid double counting if the loop above already set it (it does)
+                # actually, the loop above sets total_errors_by_config[m][optimized_chunk_m] when m_other == m
+                # so we don't need to do anything here if the loop covers it.
+                # BUT, let's be safe and ensure the self-metric is correct.
+                # The loop sets it. So we are good.
+
             
             # Plot Layer
             if args.plot_layers:
@@ -584,8 +711,8 @@ def process_single_model(args, device, metrics, base_root):
         base_adapter_config = {
             'type': 'generic', 
             'input_quantization': False,
-            'quantized_ops': ['-1'],
-            'quantize_first_layer': False
+            'quantized_ops': [],
+            'quantize_first_layer': False,
         }
         
 
@@ -597,15 +724,25 @@ def process_single_model(args, device, metrics, base_root):
 
         # 1. OPTIMIZED LAYERS CONFIG (Generate ONLY if NOT skipped)
         if not args.skip_layer_wise:
+            # Create Quantized Weights
+            q_state_dict, q_map = create_quantized_state_dict(model, layer_results_map, args, m, use_chunking=False)
+            q_weights_path = os.path.join(metric_dir, "quantized_weights_layer.pt")
+            torch.save(q_state_dict, q_weights_path)
+            print(f"Saved quantized weights to {q_weights_path}")
+            
+            # Save Map
+            q_map_path = os.path.join(metric_dir, "quantization_map_layer.json")
+            with open(q_map_path, 'w') as f:
+                json.dump(q_map, f, indent=4)
+            print(f"Saved quantization map to {q_map_path}")
+
             # Use layer_config_m (best format per layer)
             layer_opt_config = {
-                'model': {'name': args.model_name, 'weights': args.weights},
+                'model': {'name': args.model_name, 'weights': os.path.abspath(q_weights_path)},
                 'adapter': base_adapter_config.copy(),
                 'quantization': {
-                    'format': 'fp8_e4m3', # Default
-                    'weight_mode': 'chunk' if args.weight_chunk_size else 'channel',
-                    'weight_chunk_size': args.weight_chunk_size,
-                    'layers': layer_config_m
+                    'format': 'fp8_e4m3', # Default dummy
+                    'layers': {} # Empty layers config
                 },
                 'evaluation': eval_config,
                 'dataset': dataset_cfg
@@ -626,15 +763,24 @@ def process_single_model(args, device, metrics, base_root):
         
         # 2. OPTIMIZED CHUNK CONFIG (If Chunking Enabled)
         if args.weight_chunk_size and args.per_chunk_format and layer_config_per_chunk:
+            # Create Quantized Weights (Chunked)
+            q_state_dict_chunk, q_map_chunk = create_quantized_state_dict(model, layer_results_map, args, m, use_chunking=True)
+            q_weights_path_chunk = os.path.join(metric_dir, "quantized_weights_chunk.pt")
+            torch.save(q_state_dict_chunk, q_weights_path_chunk)
+            print(f"Saved chunk-quantized weights to {q_weights_path_chunk}")
+            
+            # Save Map
+            q_map_chunk_path = os.path.join(metric_dir, "quantization_map_chunk.json")
+            with open(q_map_chunk_path, 'w') as f:
+                json.dump(q_map_chunk, f, indent=4)
+            print(f"Saved chunk quantization map to {q_map_chunk_path}")
+
             chunk_opt_config = {
-                'model': {'name': args.model_name, 'weights': args.weights},
+                'model': {'name': args.model_name, 'weights': os.path.abspath(q_weights_path_chunk)},
                 'adapter': base_adapter_config.copy(),
                 'quantization': {
                     'format': 'fp8_e4m3',
-                    'weight_mode': 'chunk',
-                    'weight_chunk_size': args.weight_chunk_size,
-                    'per_chunk_format': True,
-                    'layers': layer_config_per_chunk
+                    'layers': {}
                 },
                 'evaluation': eval_config,
                 'dataset': dataset_cfg
@@ -651,16 +797,6 @@ def process_single_model(args, device, metrics, base_root):
                 run_config['output_name'] = f"optimized_chunk_{m}"
                 configs_to_run.append(run_config)
 
-            
-            oracle_cfg_path = os.path.join(metric_dir, "optimized_oracle_config.yaml")
-            with open(oracle_cfg_path, 'w') as f:
-                yaml.dump(oracle_config, f, default_flow_style=False)
-            print(f"Generated Oracle-Opt config for {m} at {oracle_cfg_path}")
-            
-            if args.run_eval:
-                run_config = oracle_config.copy()
-                run_config['output_name'] = f"optimized_oracle_{m}"
-                configs_to_run.append(run_config)
             
     # Evaluation Logic (same as before)
     # Evaluation Logic (same as before)

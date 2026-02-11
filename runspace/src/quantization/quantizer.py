@@ -400,24 +400,61 @@ def _generate_efp_generic_table(device: torch.device = None, total_bits: int = 8
         sign = torch.zeros_like(codes)
         body = codes
         
-    # EFP logic:
-    # If Sign=0 (Positive):
-    #   Effective Index = Body + 1
-    # Else:
-    #   Effective Index = Body
+    # EFP logic (User Proposal):
+    # 0 -> 0.
+    # Positives 1..Max_Std -> Same.
+    # Negatives -> Same (except -0).
+    # -0 -> Max_Ext.
     
-    eff_index = torch.where(sign == 0, body + 1, body)
+    # Check for Negative Zero code (Sign=1, Body=0 which is Exp=0, Mant=0)
+    # Mask for Body (everything except sign)
+    body_mask = (1 << (total_bits - 1)) - 1
+    body = codes & body_mask
     
-    # Decode Effective Index
-    # eff_index contains (Exp, Mant) packed
-    mant_mask = (1 << mant_bits) - 1
-    mant = eff_index & mant_mask
-    exp = eff_index >> mant_bits
+    is_neg_zero = (sign == 1) & (body == 0)
     
-    # Note: exp might exceed 2^exp_bits-1 (if body + 1 overflows)
-    # _fp_generic_to_float_vectorized handles this mathematically
+    # If Neg Zero -> Max_Ext code
+    # Max_Std code for positive is body_mask in body part? No.
+    # Max_Std code (pos) is just `max_std_code`.
+    # Max_Ext code is `max_std_code + 1`.
     
-    values = _fp_generic_to_float_vectorized(sign, exp, mant, exp_bits, mant_bits, bias)
+    # We need to construct the Exp/Mant for the value we want.
+    max_std_code = (1 << (exp_bits + mant_bits)) - 1
+    limit_ext = max_std_code + 1
+    
+    ext_mant = limit_ext & ((1 << mant_bits) - 1)
+    ext_exp = limit_ext >> mant_bits
+    
+    # Current Exp/Mant from codes
+    # We can rely on `_fp_generic_to_float_vectorized` doing the right thing for standard codes.
+    # But for Neg Zero, we want to inject `ext_exp` and `ext_mant` and Sign=0.
+    
+    # We need to extract exp/mant from `codes` first to have the "standard" values for non-overridden cases
+    # (The existing implementation of this function didn't extract them before this block in the new version? 
+    #  Wait, I need to check the full function context. 'exp' and 'mant' variables might be missing if I replaced too much or they were defined earlier.)
+    
+    # Re-extracting for safety as I might have broken the flow
+    if signed:
+        sign_shift = total_bits - 1
+        exp_shift = mant_bits
+        mant_mask = (1 << mant_bits) - 1
+        exp_mask = (1 << exp_bits) - 1
+        
+        sign = (codes >> sign_shift) & 0x1
+        exp = (codes >> exp_shift) & exp_mask
+        mant = codes & mant_mask
+    else:
+        # Should not happen for EFP (signed)
+        sign = torch.zeros_like(codes)
+        exp = codes # placeholder
+        mant = codes
+        
+    # Override
+    final_sign = torch.where(is_neg_zero, torch.zeros_like(sign), sign)
+    final_exp = torch.where(is_neg_zero, torch.full_like(exp, ext_exp), exp)
+    final_mant = torch.where(is_neg_zero, torch.full_like(mant, ext_mant), mant)
+    
+    values = _fp_generic_to_float_vectorized(final_sign, final_exp, final_mant, exp_bits, mant_bits, bias)
     
     _FP8_TABLE_CACHE[cache_key] = values
     return values
@@ -521,7 +558,7 @@ def quantize_tf32(tensor: torch.Tensor) -> torch.Tensor:
 
 
 
-def quantize_fp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rounding: str = "nearest", clip_max_exp: int = None, clip_max_mant: int = None) -> torch.Tensor:
+def quantize_fp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rounding: str = "nearest", clip_max_exp: int = None, clip_max_mant: int = None, is_efp: bool = False) -> torch.Tensor:
     """
     Generic FP quantization for any E/M split.
     Uses 'No Inf/NaN' policy (clamps to max representable).
@@ -577,6 +614,8 @@ def quantize_fp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rou
     # Overflow check
     overflow_threshold = 1 << (mant_bits + 1)
     overflow = mant_shifted >= overflow_threshold
+    if is_efp and sign == 0:
+        overflow = torch.zeros_like(overflow)
     mant_shifted = torch.where(overflow, mant_shifted >> 1, mant_shifted)
     fp8_exp = torch.where(overflow, fp8_exp + 1, fp8_exp)
     
@@ -668,93 +707,7 @@ def _fp_generic_to_float_vectorized(sign: torch.Tensor, exp: torch.Tensor, mant:
 
 
 def quantize_efp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rounding: str = "nearest") -> torch.Tensor:
-    """
-    Extended FP (EFP) quantization.
-    Positives: [v1, v2, ... vMax, vExt] 
-               Indices shifted: Code 0 -> v1, Code Max -> vExt
-    Negatives: Standard FP behavior [-0, -v1, ...]
-    """
-    orig_shape = tensor.shape
-    tensor_flat = tensor.contiguous().view(-1)
-    
-    i32 = tensor_flat.view(torch.int32)
-    sign_bit = (i32 >> 31) & 0x1
-    exp32 = (i32 >> 23) & 0xFF
-    mant32 = i32 & 0x7FFFFF
-    
-    if exp_bits == 0:
-        bias = 0
-    else:
-        bias = (1 << (exp_bits - 1)) - 1
-
-    # --- Standard FP Quantization Logic (Unclamped) ---
-    fp8_exp = exp32.int() - (127 - bias)
-    
-    mant_full = mant32 | 0x800000
-    is_fp32_sub = (exp32 == 0)
-    mant_full = torch.where(is_fp32_sub, mant32, mant_full)
-    
-    mant_shift_val = 23 - mant_bits
-    shift = torch.full_like(fp8_exp, mant_shift_val)
-    
-    is_fp8_sub = fp8_exp < 1
-    shift = torch.where(is_fp8_sub, shift + (1 - fp8_exp), shift)
-    shift = torch.clamp(shift, max=31)
-    
-    if rounding == "nearest":
-        round_bit = (1 << (shift - 1).clamp(min=0))
-        mant_rounded = mant_full + round_bit
-    else: 
-        mant_rounded = mant_full
-
-    mant_shifted = mant_rounded >> shift
-    
-    overflow_threshold = 1 << (mant_bits + 1)
-    overflow = mant_shifted >= overflow_threshold
-    mant_shifted = torch.where(overflow, mant_shifted >> 1, mant_shifted)
-    fp8_exp = torch.where(overflow, fp8_exp + 1, fp8_exp)
-    
-    implicit_one = 1 << mant_bits
-    
-    # Renormalize subnormal to normal if rounded up
-    is_subnorm_to_norm = (fp8_exp == 0) & (mant_shifted >= implicit_one)
-    fp8_exp = torch.where(is_subnorm_to_norm, torch.ones_like(fp8_exp), fp8_exp)
-    
-    if exp_bits > 0:
-        is_normal = mant_shifted >= implicit_one
-    else:
-        is_normal = torch.zeros_like(mant_shifted, dtype=torch.bool)
-    
-    stored_exp = torch.where(is_normal, fp8_exp, torch.zeros_like(fp8_exp))
-    mask = (1 << mant_bits) - 1
-    stored_mant = torch.where(is_normal, mant_shifted & mask, mant_shifted)
-    
-    # --- EFP Specific Logic ---
-    std_index = (stored_exp << mant_bits) | stored_mant
-    max_std_code = (1 << (exp_bits + mant_bits)) - 1
-    
-    is_positive = (sign_bit == 0)
-    
-    # Limits for EFP Positives: [1, Max+1]
-    limit_efp_max = max_std_code + 1
-    limit_efp_min = 1
-    
-    # Handle NaNs/Infs (Clamp to Max EFP)
-    is_nan_inf = (exp32 == 255)
-    std_index = torch.where(is_nan_inf & is_positive, torch.full_like(std_index, limit_efp_max), std_index)
-    std_index = torch.where(is_nan_inf & (~is_positive), torch.full_like(std_index, max_std_code), std_index)
-
-    # Clamp
-    efp_index = torch.clamp(std_index, min=limit_efp_min, max=limit_efp_max)
-    neg_index = torch.clamp(std_index, min=0, max=max_std_code)
-    
-    final_index = torch.where(is_positive, efp_index, neg_index)
-    
-    # Decode
-    final_mant = final_index & mask
-    final_exp = final_index >> mant_bits
-    
-    return _fp_generic_to_float_vectorized(sign_bit, final_exp, final_mant, exp_bits, mant_bits, bias).view(orig_shape)
+    return quantize_fp_generic(tensor, exp_bits, mant_bits, rounding, is_efp=True)
 
 
 def quantize_int8(tensor: torch.Tensor, rounding: str = "nearest") -> torch.Tensor:
@@ -1067,3 +1020,15 @@ def get_q_type_bounds(q_type: str) -> float:
         return 128.0
 
 
+# if __name__ == "__main__":
+#     num1 = 0.5 + 0.25 + 1
+#     num2 = 0x007F0000
+#     num1 = torch.tensor(num1, dtype=torch.float32)
+#     num2 = torch.tensor(num2, dtype=torch.float32)
+#     print((num1))
+#     print((num2))
+#     result = quantize_fp_generic(torch.tensor([[num1]]), mant_bits = 3, exp_bits = 0, rounding='truncate')
+#     result2 = quantize_fp_generic(torch.tensor([[num2]]), mant_bits = 3, exp_bits = 0, rounding='truncate')
+
+#     print(result.item())
+#     print(int(result2.item()))
