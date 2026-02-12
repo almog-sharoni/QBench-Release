@@ -306,9 +306,18 @@ def quantize(tensor: torch.Tensor, q_type: str = "fp8_e4m3", validate: bool = Fa
             tensor = torch.relu(tensor)
              
         if is_efp:
-            result = quantize_efp_generic(tensor, exp_bits, mant_bits, rounding=rounding)
+            result = quantize_fp_generic(tensor, exp_bits, mant_bits, rounding=rounding, is_efp = True)
         else:
             result = quantize_fp_generic(tensor, exp_bits, mant_bits, rounding=rounding)
+            # result_i32 = quantize_fp_generic_i32(tensor, exp_bits, mant_bits, rounding=rounding)
+            
+            # # result = torch.where(result == result_i32, 100, result)
+            # print(q_type)
+            
+            # print(result)
+
+            # print(result_i32)
+            # exit()
         
         if validate:
              assert_fp8_valid(result, q_type=q_type)
@@ -557,8 +566,71 @@ def quantize_tf32(tensor: torch.Tensor) -> torch.Tensor:
 
 
 
-
 def quantize_fp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rounding: str = "nearest", clip_max_exp: int = None, clip_max_mant: int = None, is_efp: bool = False) -> torch.Tensor:
+    orig_shape = tensor.shape
+    tensor_flat = tensor.contiguous().view(-1)
+
+    f32 = tensor_flat.view(torch.int32)
+    sign = (f32 >> 31) & 0x1
+    exp32 = (f32 >> 23) & 0xFF
+    mant32 = f32 & 0x7FFFFF | (1 << 23)
+    
+    m_mask_number = 127 - 2**exp_bits + 2 - exp32
+
+    m_mask_number = torch.where(m_mask_number < 0, 0, m_mask_number)
+    
+    residue =(mant32 >> (23 - (mant_bits + 1) + m_mask_number) & 0x1) << (23 - mant_bits + m_mask_number)
+
+    mant_trunc = mant32 >> (23 - mant_bits + m_mask_number) << (23-mant_bits + m_mask_number)
+
+    mant_trunc = mant_trunc + residue
+
+
+    mant32 = mant_trunc & 0x7FFFFF
+
+
+    overflow = mant_trunc >> 24 & 0x1
+    underflow = mant_trunc >> 23 & 0x3
+
+    exp32 = torch.where((overflow == 1), exp32 + 1, exp32)
+
+    exp32 = torch.where((underflow == 0), 0, exp32)
+    mant32 = torch.where((underflow == 0), 0, mant32)
+
+    max_value_exp = 0x7F
+    max_value_mant = (0xFFFF_FFFF << (23 - mant_bits)) & 0x7FFFFF
+
+    if not is_efp:
+        mant32 = torch.where((exp32 > max_value_exp), max_value_mant, mant32)
+        exp32 = torch.where((exp32 > max_value_exp), max_value_exp, exp32)
+    else:
+        mant32 = torch.where((exp32 > max_value_exp) & (sign ==1), max_value_mant, mant32)
+        exp32 = torch.where((exp32 > max_value_exp) & (sign ==1), max_value_exp, exp32)
+
+    
+    sign = sign << 31
+    exp32 = exp32 << 23
+
+    
+    # mant32 = mant_trunc
+
+    return (sign | exp32 | mant32).view(torch.float32).view(orig_shape)
+
+    
+        
+    
+
+
+
+
+
+    
+    # # Subnormal handling
+    # is_fp8_sub = fp8_exp < 1
+    # shift = torch.where(is_fp8_sub, shift + (1 - fp8_exp), shift)
+    # shift = torch.clamp(shift, max=31)
+
+def quantize_fp_generic_i32(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rounding: str = "nearest", clip_max_exp: int = None, clip_max_mant: int = None, is_efp: bool = False) -> torch.Tensor:
     """
     Generic FP quantization for any E/M split.
     Uses 'No Inf/NaN' policy (clamps to max representable).
@@ -613,9 +685,9 @@ def quantize_fp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rou
     
     # Overflow check
     overflow_threshold = 1 << (mant_bits + 1)
-    overflow = mant_shifted >= overflow_threshold
-    if is_efp and sign == 0:
-        overflow = torch.zeros_like(overflow)
+    is_efp_t = torch.tensor(is_efp, device=sign.device)  # scalar tensor, broadcastable
+    cond = (sign == 1) | (~is_efp_t)                      # elementwise OR
+    overflow = cond & (mant_shifted >= overflow_threshold)
     mant_shifted = torch.where(overflow, mant_shifted >> 1, mant_shifted)
     fp8_exp = torch.where(overflow, fp8_exp + 1, fp8_exp)
     
@@ -1020,15 +1092,9 @@ def get_q_type_bounds(q_type: str) -> float:
         return 128.0
 
 
-# if __name__ == "__main__":
-#     num1 = 0.5 + 0.25 + 1
-#     num2 = 0x007F0000
-#     num1 = torch.tensor(num1, dtype=torch.float32)
-#     num2 = torch.tensor(num2, dtype=torch.float32)
-#     print((num1))
-#     print((num2))
-#     result = quantize_fp_generic(torch.tensor([[num1]]), mant_bits = 3, exp_bits = 0, rounding='truncate')
-#     result2 = quantize_fp_generic(torch.tensor([[num2]]), mant_bits = 3, exp_bits = 0, rounding='truncate')
-
-#     print(result.item())
-#     print(int(result2.item()))
+if __name__ == "__main__":
+    tensor = torch.arange(-1.99, 1.99, 0.01)
+    quantized = quantize(tensor, q_type="efp4_e3m0")
+    # print(quantized)
+    for x, q in zip(tensor, quantized):
+        print(f"{x.item():.2f}  ->  {q.item():.4f}")

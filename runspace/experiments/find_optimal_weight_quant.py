@@ -23,7 +23,8 @@ if PROJECT_ROOT not in sys.path:
 
 from runspace.src.adapters.adapter_factory import create_adapter
 from runspace.src.ops.quant_base import calculate_scale, quantize_tensor
-from runspace.src.quantization.quantizer import quantize
+from runspace.src.quantization.quantizer import quantize 
+# from runspace.src.quantization.quantizer import quantize_fp_generic_i32 as quantize_i32
 from runspace.src.quantization.constants import get_quantization_bias
 # Late import
 from runspace.core.runner import Runner
@@ -31,10 +32,11 @@ from runspace.core.report_aggregator import ReportAggregator
 from runspace.src.registry.op_registry import OpRegistry
 
 baseline_formats = [
-    'fp4_e1m2' , 'fp4_e2m1' , 'fp4_e3m0' , 
+    # 'fp4_e1m2' , 'fp4_e2m1' ,'fp4_e3m0' ,
     # 'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3',
-    'efp4_e3m0' , 'efp4_e2m1' , 'efp4_e1m2' ,
+    # 'efp4_e3m0' , 'efp4_e2m1' , 'efp4_e1m2' ,
     # 'fp8_e1m6' , 'fp8_e4m3','fp8_e5m2','fp8_e3m4','fp8_e6m1','fp8_e7m0','fp8_e2m5'
+     'fp5_e1m3' , 'fp5_e2m2', 'fp5_e3m1', 'fp5_e4m0'
 ]
 
 
@@ -85,6 +87,8 @@ def get_quantized_tensor_sim(tensor, q_type, chunk_size=None, chunk_formats=None
         scaled = w_chunked / scale
         quant = quantize(scaled, q_type=q_type, rounding="nearest", validate=False)
         dequant = quant * scale
+
+
         
         # Flatten back
         flat = dequant.view(w_chunked.shape[0], -1)

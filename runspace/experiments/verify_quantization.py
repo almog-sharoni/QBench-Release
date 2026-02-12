@@ -147,6 +147,8 @@ def main():
     print("\n--- Starting Verification ---\n")
     
     all_passed = True
+    model_weights_count = 0
+    zeros_count = 0
     
     # Iterate through map as it dictates what should be verified
     for layer_name, fmt_info in quant_map.items():
@@ -184,6 +186,11 @@ def main():
             
             # Flatten to [B*N, C] to match the formats list (which is flat list of all chunks)
             chunked_flat = chunked.reshape(-1, args.chunk_size)
+
+            model_weights_count += chunked_flat.shape[0]
+            # count zeros
+            zeros_count += (chunked_flat == 0).sum().item()
+
             
             formats = fmt_info
             
