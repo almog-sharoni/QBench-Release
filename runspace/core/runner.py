@@ -68,10 +68,14 @@ class Runner:
         else:
             data_dir = path
         
+        # Custom Image Size
+        image_size = dataset_config.get('image_size', 224)
+        resize_size = dataset_config.get('resize_size', 256)
+        
         # Standard ImageNet transforms
         transform = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
+            transforms.Resize(resize_size),
+            transforms.CenterCrop(image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225]),
