@@ -3,3 +3,4 @@ optimal_weight_quant/
 optimal_input_quant/
 bandwidth_analysis/
 backup/
+bandwidth_aware_quant/

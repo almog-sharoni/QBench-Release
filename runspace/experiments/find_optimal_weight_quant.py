@@ -36,7 +36,8 @@ baseline_formats = [
     # 'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3',
     # 'efp4_e3m0' , 'efp4_e2m1' , 'efp4_e1m2' ,
     # 'fp8_e1m6' , 'fp8_e4m3','fp8_e5m2','fp8_e3m4','fp8_e6m1','fp8_e7m0','fp8_e2m5'
-     'fp5_e1m3' , 'fp5_e2m2', 'fp5_e3m1', 'fp5_e4m0'
+    #  'fp5_e1m3' , 'fp5_e2m2', 'fp5_e3m1', 'fp5_e4m0'
+    'fp6_e1m4', 'fp6_e2m3', 'fp6_e3m2', 'fp6_e4m1', 'fp6_e5m0',
 ]
 
 
