@@ -39,7 +39,7 @@ class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
         out = F.layer_norm(input_quant, self.normalized_shape, w_decomp, b, self.eps)
         
         # Quantize Output
-        out = quantize(out, q_type=self.q_type, bias=self.quantization_bias)
+        out = quantize(out, q_type=self.q_type)
         
         # DEBUG
         # print(f"DEBUG: LN out min={out.min()}, max={out.max()}, q_type={self.q_type}, bias={self.quantization_bias}")
