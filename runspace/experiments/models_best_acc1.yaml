@@ -25,9 +25,9 @@
 # - name: mobilenet_v3_large
 #   source: torchvision
 #   weights: DEFAULT
-# - name: regnet_y_128gf
-#   source: torchvision
-#   weights: DEFAULT
+# # - name: regnet_y_128gf
+# #   source: torchvision
+# #   weights: DEFAULT
 # - name: resnet152
 #   source: torchvision
 #   weights: DEFAULT
@@ -40,15 +40,23 @@
 # - name: squeezenet1_1
 #   source: torchvision
 #   weights: DEFAULT
-- name: swin_v2_b
-  source: torchvision
-  weights: DEFAULT
-- name: vgg19_bn
-  source: torchvision
-  weights: DEFAULT
-- name: vit_h_14
-  source: torchvision
-  weights: IMAGENET1K_V1
-- name: wide_resnet101_2
+# - name: swin_v2_b
+#   source: torchvision
+#   weights: DEFAULT
+# - name: vgg19_bn
+#   source: torchvision
+#   weights: DEFAULT
+# - name: vit_h_14
+#   source: torchvision
+#   weights: IMAGENET1K_V1
+# - name: wide_resnet101_2
+#   source: torchvision
+#   weights: DEFAULT
+
+# - name: resnet152
+#   source: torchvision
+#   weights: DEFAULT
+
+- name: vit_b_16
   source: torchvision
   weights: DEFAULT

@@ -6,3 +6,11 @@ outputs/
 .env
 tests/
 .cache/
+
+# Apptainer
+Apptainer.def
+qbench_sandbox/
+*.sif
+*.img
+
+*/results/*

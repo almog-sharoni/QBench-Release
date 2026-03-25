@@ -1,0 +1,14 @@
+adapter:
+  quantized_ops: []
+  type: generic
+dataset:
+  batch_size: 32
+  name: imagenet
+  num_workers: 32
+  path: /data/imagenet/val
+evaluation:
+  mode: evaluate
+model:
+  name: efficientnet_v2_l
+  weights: DEFAULT
+output_name: ref_fp32

@@ -1,0 +1,20 @@
+adapter:
+  input_quantization: false
+  quantized_ops:
+  - '-1'
+  type: generic
+dataset:
+  batch_size: 32
+  name: imagenet
+  num_workers: 32
+  path: /data/imagenet/val
+evaluation:
+  mode: evaluate
+model:
+  name: resnext101_64x4d
+  weights: DEFAULT
+output_name: baseline_fp6_e5m0
+quantization:
+  format: fp6_e5m0
+  weight_chunk_size: 128
+  weight_mode: chunk

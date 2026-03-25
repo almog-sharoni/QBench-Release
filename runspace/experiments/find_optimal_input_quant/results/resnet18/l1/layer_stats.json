@@ -1,0 +1,178 @@
+{
+    "conv1": {
+        "format_counts": {
+            "fp8_e0m7": 35160157,
+            "fp8_e2m5": 23437010,
+            "fp8_e3m4": 202819,
+            "fp8_e4m3": 14
+        }
+    },
+    "layer1.0.conv1": {
+        "format_counts": {
+            "fp8_e0m7": 43642478,
+            "fp8_e2m5": 34257294,
+            "fp8_e3m4": 499724,
+            "fp8_e4m3": 503,
+            "fp8_e5m2": 1
+        }
+    },
+    "layer1.0.conv2": {
+        "format_counts": {
+            "fp8_e0m7": 29073080,
+            "fp8_e2m5": 48515881,
+            "fp8_e3m4": 809616,
+            "fp8_e4m3": 1422,
+            "fp8_e5m2": 1
+        }
+    },
+    "layer1.1.conv1": {
+        "format_counts": {
+            "fp8_e0m7": 24836554,
+            "fp8_e2m5": 52487341,
+            "fp8_e3m4": 1075579,
+            "fp8_e4m3": 526
+        }
+    },
+    "layer1.1.conv2": {
+        "format_counts": {
+            "fp8_e0m7": 17025907,
+            "fp8_e2m5": 59817932,
+            "fp8_e3m4": 1554192,
+            "fp8_e4m3": 1969
+        }
+    },
+    "layer2.0.conv1": {
+        "format_counts": {
+            "fp8_e0m7": 15216309,
+            "fp8_e2m5": 62340764,
+            "fp8_e3m4": 842808,
+            "fp8_e4m3": 119
+        }
+    },
+    "layer2.0.conv2": {
+        "format_counts": {
+            "fp8_e0m7": 3582344,
+            "fp8_e2m5": 34419084,
+            "fp8_e3m4": 1198408,
+            "fp8_e4m3": 164
+        }
+    },
+    "layer2.0.downsample.0": {
+        "format_counts": {
+            "fp8_e0m7": 15216309,
+            "fp8_e2m5": 62340764,
+            "fp8_e3m4": 842808,
+            "fp8_e4m3": 119
+        }
+    },
+    "layer2.1.conv1": {
+        "format_counts": {
+            "fp8_e0m7": 5700497,
+            "fp8_e2m5": 32861486,
+            "fp8_e3m4": 637819,
+            "fp8_e4m3": 198
+        }
+    },
+    "layer2.1.conv2": {
+        "format_counts": {
+            "fp8_e0m7": 7073110,
+            "fp8_e2m5": 31060622,
+            "fp8_e3m4": 1065339,
+            "fp8_e4m3": 928,
+            "fp8_e5m2": 1
+        }
+    },
+    "layer3.0.conv1": {
+        "format_counts": {
+            "fp8_e0m7": 3261318,
+            "fp8_e2m5": 34782765,
+            "fp8_e3m4": 1155816,
+            "fp8_e4m3": 101
+        }
+    },
+    "layer3.0.conv2": {
+        "format_counts": {
+            "fp8_e0m7": 1979033,
+            "fp8_e2m5": 17122180,
+            "fp8_e3m4": 498664,
+            "fp8_e4m3": 123
+        }
+    },
+    "layer3.0.downsample.0": {
+        "format_counts": {
+            "fp8_e0m7": 3261318,
+            "fp8_e2m5": 34782765,
+            "fp8_e3m4": 1155816,
+            "fp8_e4m3": 101
+        }
+    },
+    "layer3.1.conv1": {
+        "format_counts": {
+            "fp8_e0m7": 2899143,
+            "fp8_e2m5": 16356598,
+            "fp8_e3m4": 344134,
+            "fp8_e4m3": 125
+        }
+    },
+    "layer3.1.conv2": {
+        "format_counts": {
+            "fp8_e0m7": 5161407,
+            "fp8_e2m5": 13958416,
+            "fp8_e3m4": 479264,
+            "fp8_e4m3": 913
+        }
+    },
+    "layer4.0.conv1": {
+        "format_counts": {
+            "fp8_e0m7": 2289008,
+            "fp8_e2m5": 16712216,
+            "fp8_e3m4": 598621,
+            "fp8_e4m3": 155
+        }
+    },
+    "layer4.0.conv2": {
+        "format_counts": {
+            "fp8_e0m7": 1753198,
+            "fp8_e2m5": 7651206,
+            "fp8_e3m4": 395393,
+            "fp8_e4m3": 203
+        }
+    },
+    "layer4.0.downsample.0": {
+        "format_counts": {
+            "fp8_e0m7": 2289008,
+            "fp8_e2m5": 16712216,
+            "fp8_e3m4": 598621,
+            "fp8_e4m3": 155
+        }
+    },
+    "layer4.1.conv1": {
+        "format_counts": {
+            "fp8_e0m7": 1691771,
+            "fp8_e2m5": 7727146,
+            "fp8_e3m4": 380914,
+            "fp8_e4m3": 169
+        }
+    },
+    "layer4.1.conv2": {
+        "format_counts": {
+            "fp8_e0m7": 2256240,
+            "fp8_e2m5": 7309455,
+            "fp8_e3m4": 234105,
+            "fp8_e4m3": 200
+        }
+    },
+    "fc": {
+        "format_counts": {
+            "fp8_e2m5": 179483,
+            "fp8_e3m4": 20329,
+            "fp8_e0m7": 188
+        }
+    },
+    "accuracy": {
+        "top1": 69.714,
+        "top5": 89.106,
+        "norm_l1": 0.005726340049349645,
+        "norm_mse": 3.727435332477728e-05
+    }
+}

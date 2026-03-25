@@ -1,0 +1,20 @@
+adapter:
+  input_quantization: false
+  quantized_ops:
+  - '-1'
+  type: generic
+dataset:
+  batch_size: 32
+  name: imagenet
+  num_workers: 1
+  path: /data/imagenet/val
+evaluation:
+  mode: evaluate
+model:
+  name: vit_b_16
+  weights: DEFAULT
+output_name: baseline_fp6_e1m4
+quantization:
+  format: fp6_e1m4
+  weight_chunk_size: 128
+  weight_mode: chunk

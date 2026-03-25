@@ -1,0 +1,242 @@
+{
+    "conv_proj": {
+        "format_counts": {
+            "efp4_e3m0": 975641,
+            "efp4_e2m1": 27234038,
+            "efp4_e1m2": 24681059,
+            "efp4_e0m3": 3873569,
+            "fp4_e0m3": 2035693
+        }
+    },
+    "encoder.layers.encoder_layer_0.mlp.0": {
+        "format_counts": {
+            "efp4_e3m0": 39389887,
+            "efp4_e2m1": 19664998,
+            "efp4_e1m2": 14329,
+            "efp4_e0m3": 26688,
+            "fp4_e0m3": 4098
+        }
+    },
+    "encoder.layers.encoder_layer_0.mlp.3": {
+        "format_counts": {
+            "efp4_e3m0": 192895718,
+            "efp4_e2m1": 38943397,
+            "efp4_e1m2": 4252548,
+            "efp4_e0m3": 38296,
+            "fp4_e0m3": 270041
+        }
+    },
+    "encoder.layers.encoder_layer_1.mlp.0": {
+        "format_counts": {
+            "efp4_e3m0": 26758088,
+            "efp4_e2m1": 32207015,
+            "efp4_e1m2": 51210,
+            "efp4_e0m3": 60653,
+            "fp4_e0m3": 23034
+        }
+    },
+    "encoder.layers.encoder_layer_1.mlp.3": {
+        "format_counts": {
+            "efp4_e3m0": 30507508,
+            "efp4_e2m1": 134100234,
+            "efp4_e1m2": 68136932,
+            "efp4_e0m3": 58566,
+            "fp4_e0m3": 3596760
+        }
+    },
+    "encoder.layers.encoder_layer_2.mlp.0": {
+        "format_counts": {
+            "efp4_e3m0": 16092915,
+            "efp4_e2m1": 42945624,
+            "efp4_e1m2": 18950,
+            "efp4_e0m3": 37182,
+            "fp4_e0m3": 5329
+        }
+    },
+    "encoder.layers.encoder_layer_2.mlp.3": {
+        "format_counts": {
+            "efp4_e3m0": 26387320,
+            "efp4_e2m1": 200100251,
+            "efp4_e1m2": 8853433,
+            "efp4_e0m3": 58450,
+            "fp4_e0m3": 1000546
+        }
+    },
+    "encoder.layers.encoder_layer_3.mlp.0": {
+        "format_counts": {
+            "efp4_e3m0": 4183853,
+            "efp4_e2m1": 54296520,
+            "efp4_e1m2": 317355,
+            "efp4_e0m3": 255740,
+            "fp4_e0m3": 46532
+        }
+    },
+    "encoder.layers.encoder_layer_3.mlp.3": {
+        "format_counts": {
+            "efp4_e3m0": 45313884,
+            "efp4_e2m1": 165036517,
+            "efp4_e1m2": 24009896,
+            "efp4_e0m3": 20249,
+            "fp4_e0m3": 2019454
+        }
+    },
+    "encoder.layers.encoder_layer_4.mlp.0": {
+        "format_counts": {
+            "efp4_e3m0": 3144089,
+            "efp4_e2m1": 54893738,
+            "efp4_e1m2": 508027,
+            "efp4_e0m3": 449445,
+            "fp4_e0m3": 104701
+        }
+    },
+    "encoder.layers.encoder_layer_4.mlp.3": {
+        "format_counts": {
+            "efp4_e3m0": 73985655,
+            "efp4_e2m1": 148649578,
+            "efp4_e1m2": 12573651,
+            "efp4_e0m3": 30838,
+            "fp4_e0m3": 1160278
+        }
+    },
+    "encoder.layers.encoder_layer_5.mlp.0": {
+        "format_counts": {
+            "efp4_e3m0": 4135509,
+            "efp4_e2m1": 54135717,
+            "efp4_e1m2": 373301,
+            "efp4_e0m3": 374468,
+            "fp4_e0m3": 81005
+        }
+    },
+    "encoder.layers.encoder_layer_5.mlp.3": {
+        "format_counts": {
+            "efp4_e3m0": 86994840,
+            "efp4_e2m1": 127592397,
+            "efp4_e1m2": 20370852,
+            "efp4_e0m3": 11096,
+            "fp4_e0m3": 1430815
+        }
+    },
+    "encoder.layers.encoder_layer_6.mlp.0": {
+        "format_counts": {
+            "efp4_e3m0": 7947938,
+            "efp4_e2m1": 50810054,
+            "efp4_e1m2": 137444,
+            "efp4_e0m3": 171643,
+            "fp4_e0m3": 32921
+        }
+    },
+    "encoder.layers.encoder_layer_6.mlp.3": {
+        "format_counts": {
+            "efp4_e3m0": 86180412,
+            "efp4_e2m1": 120428579,
+            "efp4_e1m2": 28281163,
+            "efp4_e0m3": 55677,
+            "fp4_e0m3": 1454169
+        }
+    },
+    "encoder.layers.encoder_layer_7.mlp.0": {
+        "format_counts": {
+            "efp4_e3m0": 7187283,
+            "efp4_e2m1": 51647804,
+            "efp4_e1m2": 91851,
+            "efp4_e0m3": 140833,
+            "fp4_e0m3": 32229
+        }
+    },
+    "encoder.layers.encoder_layer_7.mlp.3": {
+        "format_counts": {
+            "efp4_e3m0": 101839323,
+            "efp4_e2m1": 103161975,
+            "efp4_e1m2": 29997016,
+            "efp4_e0m3": 118458,
+            "fp4_e0m3": 1283228
+        }
+    },
+    "encoder.layers.encoder_layer_8.mlp.0": {
+        "format_counts": {
+            "efp4_e3m0": 4464275,
+            "efp4_e2m1": 54451924,
+            "efp4_e1m2": 71208,
+            "efp4_e0m3": 92158,
+            "fp4_e0m3": 20435
+        }
+    },
+    "encoder.layers.encoder_layer_8.mlp.3": {
+        "format_counts": {
+            "efp4_e3m0": 73362537,
+            "efp4_e2m1": 89057150,
+            "efp4_e1m2": 72285189,
+            "efp4_e0m3": 16190,
+            "fp4_e0m3": 1678934
+        }
+    },
+    "encoder.layers.encoder_layer_9.mlp.0": {
+        "format_counts": {
+            "efp4_e3m0": 3526634,
+            "efp4_e2m1": 55455682,
+            "efp4_e1m2": 51263,
+            "efp4_e0m3": 55207,
+            "fp4_e0m3": 11214
+        }
+    },
+    "encoder.layers.encoder_layer_9.mlp.3": {
+        "format_counts": {
+            "efp4_e3m0": 46433826,
+            "efp4_e2m1": 83961794,
+            "efp4_e1m2": 104016577,
+            "fp4_e0m3": 1987770,
+            "efp4_e0m3": 33
+        }
+    },
+    "encoder.layers.encoder_layer_10.mlp.0": {
+        "format_counts": {
+            "efp4_e3m0": 2278767,
+            "efp4_e2m1": 56735988,
+            "efp4_e1m2": 40061,
+            "efp4_e0m3": 38836,
+            "fp4_e0m3": 6348
+        }
+    },
+    "encoder.layers.encoder_layer_10.mlp.3": {
+        "format_counts": {
+            "efp4_e3m0": 88142680,
+            "efp4_e2m1": 62378910,
+            "efp4_e1m2": 84808029,
+            "fp4_e0m3": 1070367,
+            "efp4_e0m3": 14
+        }
+    },
+    "encoder.layers.encoder_layer_11.mlp.0": {
+        "format_counts": {
+            "efp4_e3m0": 3814832,
+            "efp4_e2m1": 55272027,
+            "efp4_e1m2": 2849,
+            "efp4_e0m3": 5851,
+            "fp4_e0m3": 4441
+        }
+    },
+    "encoder.layers.encoder_layer_11.mlp.3": {
+        "format_counts": {
+            "efp4_e3m0": 10121278,
+            "efp4_e2m1": 94754751,
+            "efp4_e1m2": 130509723,
+            "efp4_e0m3": 1613,
+            "fp4_e0m3": 1012635
+        }
+    },
+    "heads.head": {
+        "format_counts": {
+            "efp4_e3m0": 1403,
+            "efp4_e2m1": 294996,
+            "efp4_e1m2": 1416,
+            "efp4_e0m3": 1489,
+            "fp4_e0m3": 696
+        }
+    },
+    "accuracy": {
+        "top1": 78.85,
+        "top5": 94.19,
+        "norm_l1": 0.13023509491708735,
+        "norm_mse": 0.016393831385645267
+    }
+}

@@ -1,0 +1,20 @@
+adapter:
+  input_quantization: false
+  quantized_ops:
+  - '-1'
+  type: generic
+dataset:
+  batch_size: 32
+  name: imagenet
+  num_workers: 32
+  path: /data/imagenet/val
+evaluation:
+  mode: evaluate
+model:
+  name: mobilenet_v3_large
+  weights: DEFAULT
+output_name: baseline_fp3_e2m0
+quantization:
+  format: fp3_e2m0
+  weight_chunk_size: 128
+  weight_mode: chunk
