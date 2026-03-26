@@ -13,7 +13,7 @@ class RunDatabase:
             # Default path relative to project root
             # src/database/handler.py -> src/database -> src -> runspace -> root
             project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
-            self.db_path = os.path.join(project_root, "runspace/results/runs.db")
+            self.db_path = os.path.join(project_root, "runspace/database/runs.db")
         else:
             self.db_path = db_path
             

@@ -20,7 +20,7 @@ To track your experiments, simply instantiate the `RunDatabase` class and call `
 ```python
 from runspace.src.database.handler import RunDatabase
 
-# Initialize (automatically creates runspace/results/runs.db if missing)
+# Initialize (automatically creates runspace/database/runs.db if missing)
 db = RunDatabase()
 
 # Log an experiment result
@@ -53,7 +53,7 @@ If you suspect issues with the logging system, run the test suite within your Ap
 
 ## Data Schema
 
-The database is stored in a single SQLite file at `runspace/results/runs.db`. It contains a `runs` table with the following structure:
+The database is stored in a single SQLite file at `runspace/database/runs.db`. It contains a `runs` table with the following structure:
 
 | Column | Type | Description |
 | :--- | :--- | :--- |

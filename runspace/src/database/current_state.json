@@ -3,29 +3,18 @@
     "filters": {
         "filter_wm_0": [],
         "filter_ab_0": [
-            0,
             3,
             4,
             8
         ],
         "filter_e_0": [
-            "input_quant_baseline",
-            "input_quant_dynamic"
+            "input_quant_baseline"
         ],
-        "filter_ae_0": [
-            1.0,
-            2.0,
-            3.0,
-            7.0
-        ],
+        "filter_ae_0": [],
         "filter_m_0": [
             "resnet152"
         ],
-        "filter_am_0": [
-            0.0,
-            1.0,
-            2.0
-        ],
+        "filter_am_0": [],
         "filter_we_0": [],
         "filter_wb_0": [
             32
