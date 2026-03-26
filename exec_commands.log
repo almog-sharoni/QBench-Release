@@ -1,0 +1,27 @@
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python generate_report.py
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/bandwidth_aware_quant/bandwidth_aware_quant.py --model_name vit_b_16
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/run_interactive.py
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/bandwidth_aware_quant/bandwidth_aware_quant.py --model_name resnet18 --limit_batches 1 --force_bandwidth
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/bandwidth_aware_quant/bandwidth_aware_quant.py --model_name resnet152
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/layer_bandwidth_analysis/layer_bandwidth_analysis.py --model_name resnet152
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/test_db.py
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python -c pip list | grep streamlit
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python -c import pandas as pd; print(pd.__version__)
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/src/database/test_handler.py
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name resnet18 --limit_batches 1 --only_baselines
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python -c from runspace.src.database.handler import RunDatabase; db = RunDatabase(); print(db.get_runs(limit=10))
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python streamlit run runspace/src/database/dashboard.py
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name resnet18 --limit_batches 1 --only_baselines
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python -c from runspace.src.database.handler import RunDatabase; db = RunDatabase(); print(db.get_runs(limit=6))
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/check_results.py
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/check_results.py
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/check_results.py
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py --model_name resnet18 --limit_batches 1 --run_eval --baseline_formats fp4_e1m2,fp8_e4m3 --metrics l1 --skip_layer_wise
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name resnet18 --limit_batches 1 --only_baselines --baseline_formats fp4_e1m2
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name resnet18 --limit_batches 1 --only_baselines --baseline_formats fp4_e1m2
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --help
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name resnet18 --limit_batches 1 --only_baselines
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py --model_name resnet18 --limit_batches 1 --run_eval --baseline_formats fp4_e1m2 --metrics l1 --skip_layer_wise
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python -c from runspace.src.database.handler import RunDatabase; db = RunDatabase(); df = db.get_runs(limit=10); print(df[['model_name', 'activation_dt', 'experiment_type', 'acc1']])
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python -c import plotly; print(plotly.__version__)
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python /home/almog/.local/bin/streamlit --version

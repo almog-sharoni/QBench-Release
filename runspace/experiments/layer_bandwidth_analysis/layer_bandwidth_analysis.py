@@ -392,6 +392,7 @@ def process_single_model(model_name, weights, dataset_config, args, device):
             
             if current_layer is None:
                 record['num_weights'] = str(record['num_weights'])
+                record['num_layers'] = 1
                 current_layer = record
                 
             elif l_type in exclude_list:
@@ -401,9 +402,11 @@ def process_single_model(model_name, weights, dataset_config, args, device):
                 current_layer['num_macs'] += record['num_macs']
                 current_layer['output_shape'] = record['output_shape']
                 current_layer['num_outputs'] = record['num_outputs']
+                current_layer['num_layers'] += 1
             else:
                 fused_stats.append(current_layer)
                 record['num_weights'] = str(record['num_weights'])
+                record['num_layers'] = 1
                 current_layer = record
         
         if current_layer:
@@ -411,7 +414,9 @@ def process_single_model(model_name, weights, dataset_config, args, device):
             
     else:
         fused_stats = raw_stats
-        for r in fused_stats: r['num_weights'] = str(r['num_weights'])
+        for r in fused_stats: 
+            r['num_weights'] = str(r['num_weights'])
+            r['num_layers'] = 1
 
     # Calculate Bandwidth Metrics (128 ALUs)
     import math
@@ -956,10 +961,11 @@ def process_single_model(model_name, weights, dataset_config, args, device):
         # Track plotted types for legend
         plotted_types = set()
         
-        # Sort stats for drawing order (maybe by intensity so high intensity is on top? or bottom?)
-        fused_stats.sort(key=lambda x: (parse_val(x['num_macs']) / ((parse_val(x['num_inputs']) + parse_val(x['num_weights']) + parse_val(x['num_outputs'])) * 1.0 + 1e-9)), reverse=True)
+        # Sort a copy for drawing order (maybe by intensity so high intensity is on top? or bottom?)
+        # We don't want to sort in-place as it breaks execution order for CSV export.
+        plot_stats = sorted(fused_stats, key=lambda x: (parse_val(x['num_macs']) / ((parse_val(x['num_inputs']) + parse_val(x['num_weights']) + parse_val(x['num_outputs'])) * 1.0 + 1e-9)), reverse=True)
 
-        for idx, layer in enumerate(fused_stats):
+        for idx, layer in enumerate(plot_stats):
             macs = layer['num_macs']
             total_data_bytes = (parse_val(layer['num_inputs']) + parse_val(layer['num_weights']) + parse_val(layer['num_outputs'])) * 1.0
             
@@ -1013,7 +1019,7 @@ def process_single_model(model_name, weights, dataset_config, args, device):
     csv_path = os.path.join(output_dir, "layer_bandwidth_stats.csv")
     print(f"Saving statistics to {csv_path}...")
     
-    fieldnames = ['layer_type', 'num_weights', 'num_inputs', 'num_outputs', 'num_macs', 'cycles', 
+    fieldnames = ['layer_type', 'num_layers', 'num_weights', 'num_inputs', 'num_outputs', 'num_macs', 'cycles', 
                   'input_data_elements', 'output_data_elements', 
                   'bw_in_elements_per_cycle', 'bw_out_elements_per_cycle', 'bw_total_elements_per_cycle',
                   'macs_status', 'input_shape', 'output_shape', 'batch_size', 'layer_name']

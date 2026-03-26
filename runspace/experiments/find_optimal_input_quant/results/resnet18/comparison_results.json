@@ -1,56 +1,65 @@
 [
     {
         "output_name": "Base_fp32",
-        "acc1": 69.76,
-        "acc5": 89.078,
+        "acc1": 90.625,
+        "acc5": 96.875,
         "errors": {
             "norm_l1": 0.0,
             "norm_mse": 0.0
         }
     },
     {
-        "output_name": "Base_fp8_e4m3",
-        "acc1": 69.442,
-        "acc5": 88.896,
+        "output_name": "Base_fp4_e3m0",
+        "acc1": 81.25,
+        "acc5": 96.875,
         "errors": {
-            "norm_l1": 0.022451581203601932,
-            "norm_mse": 0.0007162777362538341
+            "norm_l1": 0.1647183798935673,
+            "norm_mse": 0.03429437668617891
         }
     },
     {
-        "output_name": "Base_fp8_e5m2",
-        "acc1": 68.706,
-        "acc5": 88.38,
+        "output_name": "Base_fp4_e2m1",
+        "acc1": 81.25,
+        "acc5": 96.875,
         "errors": {
-            "norm_l1": 0.04369670584884285,
-            "norm_mse": 0.0026571101841596084
+            "norm_l1": 0.10016980937758398,
+            "norm_mse": 0.011303701161173747
         }
     },
     {
-        "output_name": "Base_fp8_e0m7",
-        "acc1": 69.718,
-        "acc5": 89.082,
+        "output_name": "Base_fp4_e1m2",
+        "acc1": 78.125,
+        "acc5": 93.75,
         "errors": {
-            "norm_l1": 0.007745681206814511,
-            "norm_mse": 5.728313151116173e-05
+            "norm_l1": 0.13267721226188686,
+            "norm_mse": 0.016342506101936632
         }
     },
     {
-        "output_name": "Dyn_MSE",
-        "acc1": 69.7,
-        "acc5": 89.082,
+        "output_name": "Base_fp3_e1m1",
+        "acc1": 71.875,
+        "acc5": 90.625,
         "errors": {
-            "norm_l1": 0.005780786088207264,
-            "norm_mse": 3.645525358588207e-05
+            "norm_l1": 0.2633442340926055,
+            "norm_mse": 0.06458450709483539
         }
     },
     {
-        "output_name": "Dyn_L1",
-        "acc1": 69.714,
-        "acc5": 89.106,
+        "output_name": "Base_fp3_e2m0",
+        "acc1": 78.125,
+        "acc5": 93.75,
         "errors": {
-            "norm_l1": 0.005726340049349645,
-            "norm_mse": 3.727435332477728e-05
+            "norm_l1": 0.19143072657794014,
+            "norm_mse": 0.038514635152316706
+        }
+    },
+    {
+        "output_name": "Base_fp8_e7m0",
+        "acc1": 81.25,
+        "acc5": 96.875,
+        "errors": {
+            "norm_l1": 0.16463289541613052,
+            "norm_mse": 0.03429362342955378
         }
     }
 ]

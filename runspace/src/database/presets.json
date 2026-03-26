@@ -1,0 +1,34 @@
+{
+    "res": {
+        "target_table": 0,
+        "models": [
+            "resnet152"
+        ],
+        "expr_types": [
+            "input_quant_baseline",
+            "input_quant_dynamic"
+        ],
+        "w_bits": [
+            32
+        ],
+        "w_exp": [],
+        "w_mant": [],
+        "a_bits": [
+            0,
+            3,
+            4,
+            8
+        ],
+        "a_exp": [
+            1.0,
+            2.0,
+            3.0,
+            7.0
+        ],
+        "a_mant": [
+            0.0,
+            1.0,
+            2.0
+        ]
+    }
+}

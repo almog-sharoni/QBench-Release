@@ -23,6 +23,7 @@ if PROJECT_ROOT not in sys.path:
 
 from runspace.src.adapters.adapter_factory import create_adapter
 from runspace.src.ops.quant_base import calculate_scale, quantize_tensor
+from runspace.src.database.handler import RunDatabase
 from runspace.src.quantization.quantizer import quantize 
 # from runspace.src.quantization.quantizer import quantize_fp_generic_i32 as quantize_i32
 from runspace.src.quantization.constants import get_quantization_bias
@@ -272,112 +273,113 @@ def load_cached_results(csv_path, metric, format_col_suffix="_error"):
 def create_quantized_state_dict(model, layer_results_map, args, metric, use_chunking=False):
     """
     Creates a state dict with quantized weights based on the optimal formats found.
+
+    MHA handling:
+    The analysis splits nn.MultiheadAttention.in_proj_weight into virtual entries named
+    '<mha>.q_proj', '<mha>.k_proj', '<mha>.v_proj' in layer_results_map.
+    We detect these and re-pack them into the correct state dict key '<mha>.in_proj_weight'.
+    The out_proj is handled via '<mha>.out_proj' → '<mha>.out_proj.weight' as usual.
     """
     print(f"Creating quantized state dict for metric {metric}...")
     state_dict = model.state_dict()
     quant_map = {}
-    
-    # Iterate over modules to find weights
-    # We use named_modules to find the exact keys
+
+    def _best_format(record):
+        """Return (best_type, chunk_formats) for a layer record."""
+        if use_chunking and args.per_chunk_format and args.weight_chunk_size and metric in record.get('chunk_winners', {}):
+            return None, record['chunk_winners'][metric]
+        errs = record['metrics'][metric]
+        best_err = float('inf')
+        best_type = None
+        for qt, err in errs.items():
+            if err < best_err:
+                best_err = err
+                best_type = qt
+            elif err == best_err:
+                if get_format_bits(qt) < (get_format_bits(best_type) if best_type else 999):
+                    best_type = qt
+        return best_type, None
+
+    def _quantize_weight(w, best_type, chunk_formats):
+        """Quantize a single weight tensor; returns dequantized tensor."""
+        if chunk_formats:
+            w_chunked, original_shape, pad_len = get_chunked_tensor(w, chunk_size=args.weight_chunk_size)
+            batch_size, num_chunks, chunk_size_ = w_chunked.shape
+            w_chunked_flat = w_chunked.reshape(-1, chunk_size_)
+            total_chunks = w_chunked_flat.shape[0]
+            w_dequant_flat = torch.zeros_like(w_chunked_flat)
+            current_formats = chunk_formats[:total_chunks]
+            fmt_to_indices = {}
+            for idx, fmt in enumerate(current_formats):
+                fmt_to_indices.setdefault(fmt, []).append(idx)
+            for fmt, indices in fmt_to_indices.items():
+                if not indices: continue
+                idx_tensor = torch.tensor(indices, device=w.device)
+                target_chunks = w_chunked_flat[idx_tensor]
+                dq_chunks, _ = get_quantized_tensor_sim(target_chunks, fmt)
+                w_dequant_flat[idx_tensor] = dq_chunks
+            if len(current_formats) < total_chunks:
+                w_dequant_flat[len(current_formats):] = w_chunked_flat[len(current_formats):]
+            w_dequant_chunked = w_dequant_flat.view(batch_size, num_chunks, chunk_size_)
+            flat = w_dequant_chunked.view(batch_size, -1)
+            if pad_len > 0:
+                flat = flat[:, :-pad_len]
+            return flat.view(original_shape)
+        elif best_type:
+            w_dequant, _ = get_quantized_tensor_sim(w, best_type, chunk_size=args.weight_chunk_size)
+            return w_dequant
+        return w  # no quantization
+
+    # --- Collect MHA parent names so we can reconstruct in_proj_weight ---
+    # Virtual names are '<mha_name>.q_proj', '.k_proj', '.v_proj'
+    mha_parents = {}  # mha_name -> {'q': ..., 'k': ..., 'v': ...}
+    for lname in layer_results_map:
+        for suffix in ('.q_proj', '.k_proj', '.v_proj'):
+            if lname.endswith(suffix):
+                parent = lname[: -len(suffix)]
+                mha_parents.setdefault(parent, {})[suffix[1:]] = lname  # e.g. 'q_proj' -> full name
+
+    # Quantize MHA in_proj_weight by reassembling q/k/v
+    handled_names = set()
+    for mha_name, proj_map in mha_parents.items():
+        q_name = proj_map.get('q_proj')
+        k_name = proj_map.get('k_proj')
+        v_name = proj_map.get('v_proj')
+        in_proj_key = f"{mha_name}.in_proj_weight"
+        if in_proj_key not in state_dict:
+            continue  # already decomposed model; skip
+        w_in_proj = state_dict[in_proj_key]
+        embed_dim = w_in_proj.shape[0] // 3
+        slices = {'q_proj': (0, embed_dim), 'k_proj': (embed_dim, 2*embed_dim), 'v_proj': (2*embed_dim, 3*embed_dim)}
+        new_in_proj = w_in_proj.clone()
+        for proj_key, (start, end) in slices.items():
+            vname = proj_map.get(proj_key)
+            if vname and vname in layer_results_map:
+                record = layer_results_map[vname]
+                best_type, chunk_formats = _best_format(record)
+                w_slice = w_in_proj[start:end].contiguous()
+                new_in_proj[start:end] = _quantize_weight(w_slice, best_type, chunk_formats)
+                quant_map[vname] = chunk_formats if chunk_formats else best_type
+        state_dict[in_proj_key] = new_in_proj
+        handled_names.update(proj_map.values())
+
+    # --- Handle all other layers (including MHA out_proj if present as a real module) ---
     for name, module in model.named_modules():
-        if name in layer_results_map:
+        if name in layer_results_map and name not in handled_names:
             record = layer_results_map[name]
-            
-            # Determine best format
-            # If chunking enabled and per-chunk format selected
-            best_type = None
-            chunk_formats = None
-            
-            if use_chunking and args.per_chunk_format and args.weight_chunk_size and metric in record.get('chunk_winners', {}):
-                 chunk_formats = record['chunk_winners'][metric]
-            else:
-                 # Standard layer-wise
-                 errs = record['metrics'][metric]
-                 best_err = float('inf')
-                 for qt, err in errs.items():
-                     if err < best_err:
-                         best_err = err
-                         best_type = qt
-                     elif err == best_err:
-                         # Tie break
-                         if get_format_bits(qt) < (get_format_bits(best_type) if best_type else 999):
-                             best_type = qt
-            
-            # Now quantize
+            best_type, chunk_formats = _best_format(record)
             weight_key = f"{name}.weight"
             if weight_key in state_dict:
                 w = state_dict[weight_key]
-                
-                if chunk_formats:
-                    # Optimized Vectorized Mixed Chunk Quantization
-                    # 1. Chunk
-                    w_chunked, original_shape, pad_len = get_chunked_tensor(w, chunk_size=args.weight_chunk_size)
-                    
-                    # Flatten chunks to [TotalChunks, ChunkSize]
-                    batch_size, num_chunks, chunk_size = w_chunked.shape
-                    w_chunked_flat = w_chunked.reshape(-1, chunk_size)
-                    total_chunks = w_chunked_flat.shape[0]
+                state_dict[weight_key] = _quantize_weight(w, best_type, chunk_formats)
+                quant_map[name] = chunk_formats if chunk_formats else best_type
 
-                    # 2. Quantize by grouping chunks by format
-                    w_dequant_flat = torch.zeros_like(w_chunked_flat)
-                    
-                    # Limit formats to number of chunks
-                    current_formats = chunk_formats[:total_chunks]
-                    
-                    # Group indices by format
-                    fmt_to_indices = {}
-                    for idx, fmt in enumerate(current_formats):
-                        if fmt not in fmt_to_indices:
-                            fmt_to_indices[fmt] = []
-                        fmt_to_indices[fmt].append(idx)
-                        
-                    # Process each format group (vectorized)
-                    for fmt, indices in fmt_to_indices.items():
-                        if not indices: continue
-                        
-                        # Convert to tensor for indexing
-                        idx_tensor = torch.tensor(indices, device=w.device)
-                        
-                        # Gather chunks
-                        target_chunks = w_chunked_flat[idx_tensor] # [K, ChunkSize]
-                        
-                        # Quantize batch 
-                        # We use default mode which treats dim 0 as channels/independent
-                        # matching the per-chunk behavior
-                        dq_chunks, _ = get_quantized_tensor_sim(target_chunks, fmt)
-                        
-                        # Scatter back
-                        w_dequant_flat[idx_tensor] = dq_chunks
-
-                    # Handle case where we have more chunks than formats
-                    if len(current_formats) < total_chunks:
-                         w_dequant_flat[len(current_formats):] = w_chunked_flat[len(current_formats):]
-
-                    # 3. Reshape back
-                    w_dequant_chunked = w_dequant_flat.view(batch_size, num_chunks, chunk_size)
-                    
-                    # Flatten back to [Batch, FlattenedDim]
-                    flat = w_dequant_chunked.view(batch_size, -1)
-                    if pad_len > 0:
-                        flat = flat[:, :-pad_len]
-                    w_dequant = flat.view(original_shape)
-                    
-                    state_dict[weight_key] = w_dequant
-                    
-                elif best_type:
-                    # Layer-wise
-                    w_dequant, _ = get_quantized_tensor_sim(w, best_type, chunk_size=args.weight_chunk_size)
-                    state_dict[weight_key] = w_dequant
-            
-            # Record format decision
-            if chunk_formats:
-                quant_map[name] = chunk_formats
-            elif best_type:
-                quant_map[name] = best_type
-                    
     return state_dict, quant_map
 
 def process_single_model(args, device, metrics, base_root):
+    # Initialize Database
+    db = RunDatabase()
+    
     # Valid model path: base_root / model_name
     model_dir = os.path.join(base_root, args.model_name)
 
@@ -549,6 +551,9 @@ def process_single_model(args, device, metrics, base_root):
         chunk_format_map = {}
         layer_winners_map = {} # layer -> best_fmt
         
+        # Calculate Total elements for normalization
+        total_elements = sum(r.get('numel', 0) for r in layer_results)
+        
         # Layer Configs for Optimized Model
         layer_config_m = {} 
         layer_config_per_chunk = {}
@@ -562,9 +567,13 @@ def process_single_model(args, device, metrics, base_root):
             
             # Find best
             for q_type, val in errs.items():
-                 # Tracking baseline errors for this metric
+                 # Accumulate correctly for global normalization
+                 # L1 is already a sum, MSE is a mean and needs to be scaled by numel
+                 val_raw = (val if val == val else 0.0)
+                 val_to_add = val_raw * record.get('numel', 1) if m == 'mse' else val_raw
+                 
                  out_name = f"baseline_{q_type}"
-                 total_errors_by_config[m][out_name] = total_errors_by_config[m].get(out_name, 0.0) + (val if val == val else 0.0)
+                 total_errors_by_config[m][out_name] = total_errors_by_config[m].get(out_name, 0.0) + val_to_add
 
                  if val < best_error:
                      best_error = val
@@ -599,7 +608,8 @@ def process_single_model(args, device, metrics, base_root):
                 for m_other in metrics:
                     err_other = record['metrics'][m_other].get(best_type, float('inf'))
                     if np.isfinite(err_other):
-                        total_errors_by_config[m_other][out_name_layer] = total_errors_by_config[m_other].get(out_name_layer, 0.0) + err_other
+                        val_to_add = err_other * record.get('numel', 1) if m_other == 'mse' else err_other
+                        total_errors_by_config[m_other][out_name_layer] = total_errors_by_config[m_other].get(out_name_layer, 0.0) + val_to_add
 
             # Per Chunk Config
             if args.per_chunk_format and args.weight_chunk_size:
@@ -636,8 +646,10 @@ def process_single_model(args, device, metrics, base_root):
                                         sf_other = 1.0 / record.get('num_chunks', 1)
                                    
                                    if np.isfinite(err_chunk):
-                                        # ACCUMULATE into m_other's entry for this config
-                                        total_errors_by_config[m_other][out_name_chunk] = total_errors_by_config[m_other].get(out_name_chunk, 0.0) + (err_chunk * sf_other)
+                                        # Accumulate into m_other's entry for this config
+                                        # Scale by numel if MSE to convert layer-mean back to total sum-squared
+                                        val_to_add = (err_chunk * sf_other * record.get('numel', 1)) if m_other == 'mse' else (err_chunk * sf_other)
+                                        total_errors_by_config[m_other][out_name_chunk] = total_errors_by_config[m_other].get(out_name_chunk, 0.0) + val_to_add
 
                 # For the CURRENT metric 'm', we also use the value from chunk_cross_errors[m][m]
                 # This ensures consistent scaling.
@@ -838,6 +850,57 @@ def process_single_model(args, device, metrics, base_root):
 
         results = runner.run_batch_parallel(final_configs, output_root=model_dir)
         
+        # --- Log Results to Database ---
+        # 1. Identify Reference (ref_fp32)
+        ref_acc1, ref_acc5, ref_certainty = 0.0, 0.0, 0.0
+        for res in results:
+            if res.get('output_name') == 'ref_fp32':
+                ref_acc1 = res.get('acc1', 0.0)
+                ref_acc5 = res.get('acc5', 0.0)
+                ref_certainty = res.get('certainty', 0.0)
+                break
+        
+        # 2. Log all results except ref_fp32
+        for res in results:
+            out_name = res.get('output_name', '')
+            if out_name == 'ref_fp32':
+                continue
+                
+            # For weight optimization, activation is usually fp32
+            # Weight DT is based on out_name (baseline_xxx or optimized_xxx)
+            weight_dt = out_name.replace('baseline_', '').replace('optimized_', 'opt_')
+            
+            # Fetch MSE/L1 if available and normalize
+            total_elements = sum(r.get('numel', 0) for r in layer_results)
+            
+            mse = total_errors_by_config.get('mse', {}).get(out_name)
+            if mse is not None and total_elements > 0:
+                 mse /= total_elements
+
+            l1 = total_errors_by_config.get('l1', {}).get(out_name)
+            if l1 is not None and total_elements > 0:
+                 l1 /= total_elements
+            
+            # Certainty (softmax based)
+            certainty = res.get('certainty', 0.0)
+            acc1 = res.get('acc1', 0.0)
+
+            db.log_run(
+                model_name=res.get('model_name', args.model_name),
+                weight_dt=weight_dt,
+                activation_dt="fp32", # Weight experiment assumes fp32 activations
+                acc1=acc1,
+                acc5=res.get('acc5', 0.0),
+                ref_acc1=ref_acc1,
+                ref_acc5=ref_acc5,
+                ref_certainty=ref_certainty,
+                experiment_type="weight_quant_baseline" if out_name.startswith('baseline_') else "weight_quant_optimized",
+                status=res.get('status', 'SUCCESS'),
+                mse=mse,
+                l1=l1,
+                certainty=certainty
+            )
+        
         # Plot Oracle Heatmaps
         if tracker:
             oracle_stats, candidates = tracker.get_stats()
@@ -868,111 +931,152 @@ def process_single_model(args, device, metrics, base_root):
         plot_accuracy_comparison(results, model_dir)
         print(f"Evaluation completed. Summary: {summary_path}")
 
-def run_weight_quantization_analysis(args, model, metrics_to_calc, qt_options, layer_results_map, supported_ops):
-    for name, module in tqdm(model.named_modules(), desc="Analyzing Layers (Weights)"):
-        if isinstance(module, supported_ops):
-            if not hasattr(module, 'weight') or module.weight is None: continue
-            
-            w = module.weight.data
-            
-            if name not in layer_results_map:
-                layer_results_map[name] = {
-                    'layer': name, 'shape': str(tuple(w.shape)),
-                    'max_val': 0.0, 'metrics': {},
-                    'chunk_wins': {}, 'chunk_winners': {}
-                }
-            record = layer_results_map[name]
-            
-            # Init metrics
+def _analyze_weight_tensor(w, layer_name, args, metrics_to_calc, qt_options, layer_results_map):
+    """
+    Analyze a single weight tensor (w) against all qt_options and populate layer_results_map.
+    layer_name is the key used in layer_results_map (and should match the name used during
+    deployment, e.g. 'encoder.layers.0.self_attn.q_proj').
+    """
+    if layer_name not in layer_results_map:
+        layer_results_map[layer_name] = {
+            'layer': layer_name, 'shape': str(tuple(w.shape)),
+            'max_val': 0.0, 'metrics': {},
+            'chunk_wins': {}, 'chunk_winners': {}
+        }
+    record = layer_results_map[layer_name]
+
+    for m in metrics_to_calc:
+        if m not in record['metrics']:
+            record['metrics'][m] = {}
+            record['chunk_wins'][m] = {}
+            record['chunk_winners'][m] = []
+
+    record['numel'] = w.numel()
+    if args.weight_chunk_size:
+        record['num_chunks'] = (w.numel() + args.weight_chunk_size - 1) // args.weight_chunk_size
+
+    max_val_global = record['max_val']
+    metric_chunk_errors = {m: {} for m in metrics_to_calc}
+
+    for q_type in qt_options:
+        try:
+            w_deq, mv = get_quantized_tensor_sim(w, q_type, chunk_size=args.weight_chunk_size)
+            max_val_global = max(max_val_global, mv)
+
             for m in metrics_to_calc:
-                if m not in record['metrics']: 
-                    record['metrics'][m] = {}; record['chunk_wins'][m] = {}; record['chunk_winners'][m] = []
+                err = calculate_error(w, w_deq, m)
+                record['metrics'][m][q_type] = err
 
-            # Store size info for normalization
-            record['numel'] = w.numel()
             if args.weight_chunk_size:
-                record['num_chunks'] = (w.numel() + args.weight_chunk_size - 1) // args.weight_chunk_size # Approx/Max chunks
-                # Actual chunks might be slightly different due to padding? 
-                # get_chunked_tensor handles padding. 
-                # Let's count actual chunks from the tensor shape if possible, or just use calculation.
-                # get_chunked_tensor returns [B, N_chunks, size].
-                # We can just use the calculated one as it's consistent.
-            
-            max_val_global = record['max_val']
-            metric_chunk_errors = {m: {} for m in metrics_to_calc}
+                w_chunked, _, _ = get_chunked_tensor(w, args.weight_chunk_size)
+                w_deq_chunked, _, _ = get_chunked_tensor(w_deq, args.weight_chunk_size)
+                diff = w_chunked - w_deq_chunked
 
-            for q_type in qt_options:
-                try:
-                    w_deq, mv = get_quantized_tensor_sim(w, q_type, chunk_size=args.weight_chunk_size)
-                    max_val_global = max(max_val_global, mv)
-                    
-                    for m in metrics_to_calc:
-                        err = calculate_error(w, w_deq, m)
-                        record['metrics'][m][q_type] = err
-                    
-                    if args.weight_chunk_size:
-                        w_chunked, _, _ = get_chunked_tensor(w, args.weight_chunk_size)
-                        w_deq_chunked, _, _ = get_chunked_tensor(w_deq, args.weight_chunk_size)
-                        diff = w_chunked - w_deq_chunked
-                        
-                        for m in metrics_to_calc:
-                            if m == 'l1': chunk_errs = diff.abs().sum(dim=-1).view(-1)
-                            elif m == 'mse': chunk_errs = diff.pow(2).mean(dim=-1).view(-1)
-                            elif m == 'sqnr': 
-                                sig = w_chunked.pow(2).sum(dim=-1).view(-1)
-                                noise = diff.pow(2).sum(dim=-1).view(-1).clamp(min=1e-12)
-                                chunk_errs = -10 * torch.log10(sig / noise)
-                            elif m == 'cosine': 
-                                sim = torch.nn.functional.cosine_similarity(w_chunked, w_deq_chunked, dim=-1)
-                                chunk_errs = (1.0 - sim).view(-1)
-                            metric_chunk_errors[m][q_type] = chunk_errs.cpu().numpy()
-                except:
-                    for m in metrics_to_calc: record['metrics'][m][q_type] = float('inf')
-            
-            # Process Chunk Wins
-            if args.weight_chunk_size:
-                 for m in metrics_to_calc:
-                      valid_fmts = [qt for qt in qt_options if qt in metric_chunk_errors[m]]
-                      if not valid_fmts: continue
-                      valid_fmts_sorted = sorted(valid_fmts, key=get_format_bits)
-                      err_matrix = np.stack([metric_chunk_errors[m][qt] for qt in valid_fmts_sorted])
-                      best_indices = np.argmin(err_matrix, axis=0) # [NumChunks]
-                      
-                      winners_fmts = [valid_fmts_sorted[i] for i in best_indices]
-                      record['chunk_winners'][m] = winners_fmts
-                      wins = {'total': len(best_indices)}
-                      for idx, qt in enumerate(valid_fmts_sorted):
-                          wins[qt] = int(np.sum(best_indices == idx))
-                      record['chunk_wins'][m] = wins
-                      
-                 # Calculate Chunk Cross-Errors
-                 # Now that we have winners for all metrics, calculate how they perform on OTHER metrics
-                 if 'chunk_winners' in record:
-                      record['chunk_cross_errors'] = {}
-                      for src_m in metrics_to_calc:
-                           if src_m not in record['chunk_winners']: continue
-                           winners = record['chunk_winners'][src_m]
-                           
-                           record['chunk_cross_errors'][src_m] = {}
-                           
-                           for tgt_m in metrics_to_calc:
-                                # Calculate error of 'src_m winners' using 'tgt_m' error data
-                                total_err = 0.0
-                                possible = True
-                                for i, fmt in enumerate(winners):
-                                     if fmt in metric_chunk_errors[tgt_m]:
-                                          total_err += float(metric_chunk_errors[tgt_m][fmt][i])
-                                     else:
-                                          total_err = float('inf')
-                                          possible = False
-                                          break
-                                
-                                if possible:
-                                     record['chunk_cross_errors'][src_m][tgt_m] = total_err
-                                else:
-                                     record['chunk_cross_errors'][src_m][tgt_m] = float('inf')
-                      
-            record['max_val'] = max_val_global
+                for m in metrics_to_calc:
+                    if m == 'l1':    chunk_errs = diff.abs().sum(dim=-1).view(-1)
+                    elif m == 'mse': chunk_errs = diff.pow(2).mean(dim=-1).view(-1)
+                    elif m == 'sqnr':
+                        sig   = w_chunked.pow(2).sum(dim=-1).view(-1)
+                        noise = diff.pow(2).sum(dim=-1).view(-1).clamp(min=1e-12)
+                        chunk_errs = -10 * torch.log10(sig / noise)
+                    elif m == 'cosine':
+                        sim = torch.nn.functional.cosine_similarity(w_chunked, w_deq_chunked, dim=-1)
+                        chunk_errs = (1.0 - sim).view(-1)
+                    metric_chunk_errors[m][q_type] = chunk_errs.cpu().numpy()
+        except:
+            for m in metrics_to_calc:
+                record['metrics'][m][q_type] = float('inf')
+
+    # Process Chunk Wins
+    if args.weight_chunk_size:
+        for m in metrics_to_calc:
+            valid_fmts = [qt for qt in qt_options if qt in metric_chunk_errors[m]]
+            if not valid_fmts:
+                continue
+            valid_fmts_sorted = sorted(valid_fmts, key=get_format_bits)
+            err_matrix = np.stack([metric_chunk_errors[m][qt] for qt in valid_fmts_sorted])
+            best_indices = np.argmin(err_matrix, axis=0)  # [NumChunks]
+
+            winners_fmts = [valid_fmts_sorted[i] for i in best_indices]
+            record['chunk_winners'][m] = winners_fmts
+            wins = {'total': len(best_indices)}
+            for idx, qt in enumerate(valid_fmts_sorted):
+                wins[qt] = int(np.sum(best_indices == idx))
+            record['chunk_wins'][m] = wins
+
+        # Chunk Cross-Errors
+        if 'chunk_winners' in record:
+            record['chunk_cross_errors'] = {}
+            for src_m in metrics_to_calc:
+                if src_m not in record['chunk_winners']:
+                    continue
+                winners = record['chunk_winners'][src_m]
+                record['chunk_cross_errors'][src_m] = {}
+                for tgt_m in metrics_to_calc:
+                    total_err = 0.0
+                    possible = True
+                    for i, fmt in enumerate(winners):
+                        if fmt in metric_chunk_errors[tgt_m]:
+                            total_err += float(metric_chunk_errors[tgt_m][fmt][i])
+                        else:
+                            total_err = float('inf')
+                            possible = False
+                            break
+                    record['chunk_cross_errors'][src_m][tgt_m] = total_err if possible else float('inf')
+
+    record['max_val'] = max_val_global
+
+
+def run_weight_quantization_analysis(args, model, metrics_to_calc, qt_options, layer_results_map, supported_ops):
+    """
+    Iterate over all supported layers and analyse weight tensors against every format in qt_options.
+
+    Fix #5 — nn.MultiheadAttention handling:
+    Native MHA has no .weight attribute; instead it packs Q/K/V projections into
+    `in_proj_weight` ([3*embed, embed]) and stores the output projection as
+    `out_proj.weight`.  The GenericAdapter decomposes it into four separate linear
+    layers named <mha_name>.q_proj / .k_proj / .v_proj / .out_proj so the deployment
+    model quantizes those four sub-layers independently.
+    We replicate the same decomposition here so the analysis layer names match
+    deployment layer names, and NO attention weights are silently skipped.
+    """
+    import torch.nn as nn
+
+    for name, module in tqdm(model.named_modules(), desc="Analyzing Layers (Weights)"):
+
+        # --- Special case: nn.MultiheadAttention ---
+        # MHA has no .weight; it uses in_proj_weight (packed Q+K+V) + out_proj.weight.
+        # The adapter decomposes these into q_proj / k_proj / v_proj / out_proj linear
+        # sub-layers, so we must use the same sub-layer names here to stay aligned.
+        if isinstance(module, nn.MultiheadAttention):
+            # in_proj_weight: [3*embed_dim, embed_dim] — split into [embed_dim, embed_dim] each
+            if module.in_proj_weight is not None:
+                embed_dim = module.embed_dim
+                q_w, k_w, v_w = module.in_proj_weight.data.chunk(3, dim=0)
+                for proj_name, proj_w in [('q_proj', q_w), ('k_proj', k_w), ('v_proj', v_w)]:
+                    virtual_name = f"{name}.{proj_name}" if name else proj_name
+                    _analyze_weight_tensor(
+                        proj_w, virtual_name, args, metrics_to_calc, qt_options, layer_results_map
+                    )
+            # out_proj is a real nn.Linear sub-module — it will be caught by the loop below
+            # unless it is the MHA itself that contains it.  We handle it explicitly to
+            # guarantee the name matches '<mha>.out_proj':
+            if hasattr(module, 'out_proj') and module.out_proj.weight is not None:
+                out_name = f"{name}.out_proj" if name else "out_proj"
+                _analyze_weight_tensor(
+                    module.out_proj.weight.data, out_name, args, metrics_to_calc, qt_options, layer_results_map
+                )
+            continue  # skip the generic .weight path for MHA
+
+        # --- Generic path: any other supported layer with a .weight ---
+        if not isinstance(module, supported_ops):
+            continue
+        if not hasattr(module, 'weight') or module.weight is None:
+            continue
+
+        _analyze_weight_tensor(
+            module.weight.data, name, args, metrics_to_calc, qt_options, layer_results_map
+        )
 
 
 class OnlineParams:

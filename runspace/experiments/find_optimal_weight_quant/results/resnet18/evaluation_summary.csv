@@ -1,0 +1,6 @@
+timestamp,model_name,output_name,quant_format,base_config_path,generated_config_path,status,acc1,acc5,certainty,ref_acc1,ref_acc5,ref_certainty,acc_drop,weight_comp_red,weight_comp_share,input_comp_red,input_comp_share,exec_error,report_path
+2026-03-26 11:09:07,resnet18,ref_fp32,fp8,,,NO_QUANT,90.625,96.875,0.9067587852478027,0.0,0.0,,,,,,,,
+2026-03-26 11:09:07,resnet18,baseline_fp4_e1m2,fp4_e1m2,,,SUCCESS,62.5,78.125,0.6524167060852051,0.0,0.0,,,,,,,,
+2026-03-26 11:09:07,resnet18,baseline_fp8_e4m3,fp8_e4m3,,,SUCCESS,87.5,96.875,0.8873581886291504,0.0,0.0,,,,,,,,
+2026-03-26 11:13:03,resnet18,ref_fp32,fp8,,,NO_QUANT,90.625,96.875,0.9067587852478027,0.0,0.0,,,,,,,,
+2026-03-26 11:13:03,resnet18,baseline_fp4_e1m2,fp4_e1m2,,,SUCCESS,62.5,78.125,0.6524167060852051,0.0,0.0,,,,,,,,

@@ -21,7 +21,8 @@ from runspace.core.runner import Runner
 from runspace.src.quantization.quantizer import quantize
 from runspace.src.ops.quant_base import quantize_tensor, calculate_scale
 
-from runspace.experiments.verify_quantization.verify_quantization import verify_mantissa
+from runspace.src.database.handler import RunDatabase
+from runspace.src.eval.metrics import compute_certainty
 # from runspace.src.quantization.constants import get_quantization_bias
 
 # Fix for container permission issues
@@ -29,7 +30,7 @@ os.environ['TORCH_HOME'] = '/tmp/torch'
 os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib'
 
 baseline_formats = ['fp32', 'fp4_e3m0','fp4_e2m1','fp4_e1m2', 'fp3_e1m1', 'fp3_e2m0','fp8_e7m0']
-# baseline_formats = [    'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
+# baseline_formats = [ 'fp32', 'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
 #     'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
 # ]
 
@@ -417,7 +418,7 @@ def run_baselines(args, device, formats):
     # 2. Initialize Stats
     # Track: correct_top1, correct_top5, total, sum_l1_err, sum_mse_err, sum_l1_norm, sum_l2_norm
     results = {fmt: {
-        'correct_top1': 0, 'correct_top5': 0, 'total': 0,
+        'correct_top1': 0, 'correct_top5': 0, 'total': 0, 'sum_certainty': 0.0,
         'sum_l1_err': 0.0, 'sum_mse_err': 0.0, 
         'sum_l1_norm': 0.0, 'sum_l2_norm': 0.0
     } for fmt in formats}
@@ -496,6 +497,7 @@ def run_baselines(args, device, formats):
                 results[fmt]['total'] += labels.size(0)
                 results[fmt]['correct_top1'] += res_top1
                 results[fmt]['correct_top5'] += res_top5
+                results[fmt]['sum_certainty'] += compute_certainty(outputs) * labels.size(0)
                 results[fmt]['sum_l1_err'] += l1_err
                 results[fmt]['sum_mse_err'] += mse_err
                 results[fmt]['sum_l1_norm'] += l1_norm
@@ -510,11 +512,7 @@ def run_baselines(args, device, formats):
         if total > 0:
             acc1 = 100. * results[fmt]['correct_top1'] / total
             acc5 = 100. * results[fmt]['correct_top5'] / total
-            
-            # Average Error (per element) would require total elements count
-            # But Normalized is easier: Sum(Err) / Sum(Norm)
-            # Norm L1 = Sum(|x-q|) / Sum(|x|)
-            # Norm MSE = Sum((x-q)^2) / Sum(x^2)  (Relative Squared Error)
+            certainty = results[fmt]['sum_certainty'] / total
             
             norm_l1 = results[fmt]['sum_l1_err'] / results[fmt]['sum_l1_norm'] if results[fmt]['sum_l1_norm'] > 0 else 0
             norm_mse = results[fmt]['sum_mse_err'] / results[fmt]['sum_l2_norm'] if results[fmt]['sum_l2_norm'] > 0 else 0
@@ -522,15 +520,15 @@ def run_baselines(args, device, formats):
             total_l1 = results[fmt]['sum_l1_err']
             total_mse = results[fmt]['sum_mse_err']
         else:
-            acc1, acc5, norm_l1, norm_mse, total_l1, total_mse = 0, 0, 0, 0, 0, 0
+            acc1, acc5, certainty, norm_l1, norm_mse, total_l1, total_mse = 0, 0, 0, 0, 0, 0, 0
             
         final_stats[fmt] = {
-            'acc1': acc1, 'acc5': acc5, 
+            'acc1': acc1, 'acc5': acc5, 'certainty': certainty,
             'norm_l1': norm_l1, 'norm_mse': norm_mse,
             'total_l1': total_l1, 'total_mse': total_mse
         }
         
-        print(f"Baseline {fmt}: Top1={acc1:.2f}%, Top5={acc5:.2f}%, NormL1={norm_l1:.4e}, NormMSE={norm_mse:.4e}")
+        print(f"Baseline {fmt}: Top1={acc1:.2f}%, Top5={acc5:.2f}%, Certainty={certainty:.4f}, NormL1={norm_l1:.4e}, NormMSE={norm_mse:.4e}")
         
     # Cleanup
     del model
@@ -638,6 +636,9 @@ def process_single_model(args, model_config, device, metrics):
     model_name = model_config['name']
     weights = model_config.get('weights', 'DEFAULT')
     
+    # Initialize Database for logging
+    db = RunDatabase()
+    
     print(f"\n###########################################################")
     print(f" PROCESSING MODEL: {model_name} (Weights: {weights})")
     print(f"###########################################################")
@@ -664,7 +665,22 @@ def process_single_model(args, model_config, device, metrics):
         
         baseline_stats = run_baselines(args, device, baseline_formats)
         
+        # Identify Reference (fp32)
+        ref_acc1 = baseline_stats.get('fp32', {}).get('acc1', 0.0)
+        ref_acc5 = baseline_stats.get('fp32', {}).get('acc5', 0.0)
+        ref_certainty = baseline_stats.get('fp32', {}).get('certainty', 0.0)
+        
         for fmt, stats in baseline_stats.items():
+            # Skip logging fp32 as a visible row in the DB, but keep it in all_results for plotting
+            if fmt == 'fp32':
+                all_results.append({
+                    'output_name': f"Base_{fmt}", 
+                    'acc1': stats['acc1'],
+                    'acc5': stats['acc5'],
+                    'errors': {'norm_l1': stats['norm_l1'], 'norm_mse': stats['norm_mse']}
+                })
+                continue
+                
             all_results.append({
                 'output_name': f"Base_{fmt}", 
                 'acc1': stats['acc1'],
@@ -674,8 +690,26 @@ def process_single_model(args, model_config, device, metrics):
                     'norm_mse': stats['norm_mse']
                 }
             })
+            
+            # Log Baseline to Database with Reference
+            db.log_run(
+                model_name=model_name,
+                weight_dt="fp32", 
+                activation_dt=fmt,
+                acc1=stats['acc1'],
+                acc5=stats['acc5'],
+                ref_acc1=ref_acc1,
+                ref_acc5=ref_acc5,
+                ref_certainty=ref_certainty,
+                experiment_type="input_quant_baseline",
+                status="SUCCESS",
+                mse=stats['norm_mse'],
+                l1=stats['norm_l1'],
+                certainty=stats.get('certainty', 0.0)
+            )
     else:
         print("\nSkipping Baselines (--only_dynamic set)")
+        ref_acc1, ref_acc5 = None, None
         
     
     # --- 2. Run Dynamic Optimization Loop ---
@@ -722,6 +756,7 @@ def process_single_model(args, model_config, device, metrics):
                 correct_top5 = 0
                 total = 0
                 batch_count = 0
+                total_certainty = 0.0
                 limit = args.limit_batches if args.limit_batches > 0 else float('inf')
                 
                 try:
@@ -734,10 +769,11 @@ def process_single_model(args, model_config, device, metrics):
                             else:
                                  images, labels = batch
                             
-                            images = images.to(device)
-                            labels = labels.to(device)
-                            
+                            images, labels = images.to(device), labels.to(device)
                             outputs = model(images)
+                            
+                            # Accumulate softmax certainty
+                            total_certainty += compute_certainty(outputs) * images.size(0)
                             
                             # Top-1 and Top-5
                             _, pred = outputs.topk(5, 1, True, True)
@@ -754,21 +790,29 @@ def process_single_model(args, model_config, device, metrics):
                     
                     acc1 = 100. * correct_top1 / total if total > 0 else 0
                     acc5 = 100. * correct_top5 / total if total > 0 else 0
+                    certainty = total_certainty / total if total > 0 else 0
                     
                     final_stats = quantizer_handler.get_final_stats()
                     
-                    print(f"\nDynamic Run ({metric.upper()}): Top1={acc1:.2f}%, Top5={acc5:.2f}%")
+                    print(f"\nDynamic Run ({metric.upper()}): Top1={acc1:.2f}%, Top5={acc5:.2f}%, Certainty={certainty:.4f}")
                     print(f"Norm L1: {final_stats['norm_l1']:.4e}, Norm MSE: {final_stats['norm_mse']:.4e}")
                     
-                    all_results.append({
-                        'output_name': f"Dyn_{metric.upper()}", 
-                        'acc1': acc1,
-                        'acc5': acc5,
-                        'errors': {
-                            'norm_l1': final_stats['norm_l1'],
-                            'norm_mse': final_stats['norm_mse']
-                        }
-                    })
+                    # Log Dynamic Result to Database
+                    db.log_run(
+                        model_name=model_name,
+                        weight_dt="fp32",
+                        activation_dt=f"dyn_input_{metric}",
+                        acc1=acc1,
+                        acc5=acc5,
+                        ref_acc1=ref_acc1,
+                        ref_acc5=ref_acc5,
+                        ref_certainty=ref_certainty,
+                        experiment_type="input_quant_dynamic",
+                        status="SUCCESS",
+                        mse=final_stats['norm_mse'],
+                        l1=final_stats['norm_l1'],
+                        certainty=certainty
+                    )
                     
                     plot_format_histogram(quantizer_handler.layer_stats, metric_out_dir)
                     plot_layer_format_distribution(quantizer_handler.layer_stats, metric_out_dir, metric)

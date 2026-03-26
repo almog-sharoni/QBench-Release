@@ -6,7 +6,7 @@ adapter:
 dataset:
   batch_size: 32
   name: imagenet
-  num_workers: 32
+  num_workers: 1
   path: /data/imagenet/val
 evaluation:
   mode: evaluate
