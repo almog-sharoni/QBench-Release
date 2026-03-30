@@ -29,10 +29,10 @@ from runspace.src.eval.metrics import compute_certainty
 os.environ['TORCH_HOME'] = '/tmp/torch'
 os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib'
 
-baseline_formats = ['fp32', 'fp4_e3m0','fp4_e2m1','fp4_e1m2', 'fp3_e1m1', 'fp3_e2m0','fp8_e7m0']
-# baseline_formats = [ 'fp32', 'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
-#     'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
-# ]
+# baseline_formats = ['fp32', 'fp4_e3m0','fp4_e2m1','fp4_e1m2', 'fp3_e1m1', 'fp3_e2m0','fp8_e7m0']
+baseline_formats = [ 'fp32', 'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
+    'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
+]
 
 candidate_formats = [
             # Signed FP8 (1 sign bit + 7 bits E/M)
@@ -53,7 +53,7 @@ candidate_formats = [
             # 'efp4_e3m0','efp4_e2m1','efp4_e1m2','efp4_e0m3',
             # 'fp4_e3m0','fp4_e2m1','fp4_e1m2','fp4_e0m3',
             # 'ufp4_e4m0','ufp4_e3m1','ufp4_e2m2','ufp4_e1m3','ufp4_e0m4'
-            'fp3_e0m2'
+            # 'fp3_e0m2'
         ]
 def get_args():
     parser = argparse.ArgumentParser(description="Find optimal input quantization (Dynamic)")

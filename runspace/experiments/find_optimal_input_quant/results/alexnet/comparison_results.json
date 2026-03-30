@@ -1,5 +1,14 @@
 [
     {
+        "output_name": "Base_fp32",
+        "acc1": 56.546,
+        "acc5": 79.086,
+        "errors": {
+            "norm_l1": 0.0,
+            "norm_mse": 0.0
+        }
+    },
+    {
         "output_name": "Base_fp2_e1m0",
         "acc1": 16.304,
         "acc5": 31.212,

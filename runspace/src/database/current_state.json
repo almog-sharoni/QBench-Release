@@ -1,23 +1,24 @@
 {
     "num_tables": 1,
     "filters": {
-        "filter_m_0": [
-            "resnet152"
-        ],
-        "filter_we_0": [],
-        "filter_wb_0": [
-            32
-        ],
         "filter_wm_0": [],
-        "filter_e_0": [
-            "input_quant_baseline"
-        ],
-        "filter_ae_0": [],
-        "filter_am_0": [],
         "filter_ab_0": [
             3,
             4,
             8
+        ],
+        "filter_e_0": [
+            "input_quant_baseline",
+            "input_quant_dynamic"
+        ],
+        "filter_ae_0": [],
+        "filter_m_0": [
+            "resnet152"
+        ],
+        "filter_am_0": [],
+        "filter_we_0": [],
+        "filter_wb_0": [
+            32
         ]
     }
 }

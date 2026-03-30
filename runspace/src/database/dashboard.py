@@ -21,7 +21,6 @@ class NpEncoder(json.JSONEncoder):
         return super(NpEncoder, self).default(obj)
 
 PRESETS_FILE = os.path.join(os.path.dirname(__file__), "presets.json")
-STATE_FILE = os.path.join(os.path.dirname(__file__), "current_state.json")
 
 def load_presets():
     if os.path.exists(PRESETS_FILE):
@@ -35,26 +34,6 @@ def load_presets():
 def save_presets(presets):
     with open(PRESETS_FILE, 'w') as f:
         json.dump(presets, f, indent=4, cls=NpEncoder)
-
-def load_current_state():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
-
-def save_current_state():
-    state = {
-        'num_tables': st.session_state.get('num_tables', 1),
-        'filters': {k: v for k, v in st.session_state.items() if k.startswith('filter_')}
-    }
-    try:
-        with open(STATE_FILE, 'w') as f:
-            json.dump(state, f, indent=4, cls=NpEncoder)
-    except Exception as e:
-        print(f"Error saving state: {e}")
 
 def parse_dt(dt_str):
     """Extract (bits, exp, mant) from DT strings like 'fp4_e1m2'."""
@@ -91,19 +70,6 @@ st.title("🚀 QBench Experiment Tracker")
 # Initial Session State for Presets
 if 'presets' not in st.session_state:
     st.session_state.presets = load_presets()
-
-# Load Persistent Dashboard State (tables + filters)
-if 'state_loaded' not in st.session_state:
-    saved_state = load_current_state()
-    if saved_state:
-        # We must set this BEFORE any widgets are created
-        st.session_state.num_tables = saved_state.get('num_tables', 1)
-        for k, v in saved_state.get('filters', {}).items():
-            st.session_state[k] = v
-    st.session_state.state_loaded = True
-
-if 'num_tables' not in st.session_state:
-    st.session_state.num_tables = 1
 
 st.markdown("---")
 
@@ -207,7 +173,6 @@ else:
                     del st.session_state[f"{prefix}_{last_idx}"]
                     
             st.session_state.num_tables -= 1
-            save_current_state()
             st.rerun()
 
     # --- Global Filters & Settings ---
@@ -270,7 +235,6 @@ else:
                         st.session_state[session_key] = val
             
             st.sidebar.success(f"Loaded '{selected_preset}'")
-            save_current_state()
             st.rerun()
 
         if st.sidebar.button("🗑️ Delete Preset", key="delete_preset_btn"):
@@ -289,7 +253,6 @@ else:
         for key in list(st.session_state.keys()):
             if key.startswith("filter_"):
                 del st.session_state[key]
-        save_current_state()
         st.rerun()
         
     st.sidebar.markdown("---")
@@ -514,6 +477,3 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.info("Managed via `src/database/handler.py`")
-
-# Auto-Save Current State at the end of every run
-save_current_state()
