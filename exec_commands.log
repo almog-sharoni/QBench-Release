@@ -25,3 +25,8 @@ apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_san
 apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python -c from runspace.src.database.handler import RunDatabase; db = RunDatabase(); df = db.get_runs(limit=10); print(df[['model_name', 'activation_dt', 'experiment_type', 'acc1']])
 apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python -c import plotly; print(plotly.__version__)
 apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python /home/almog/.local/bin/streamlit --version
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py --model_configs --run_eval skip_layer_wise
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py --model_configs runspace/experiments/models_best_acc1.yaml --run_eval skip_layer_wise
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py --models_config runspace/experiments/models_best_acc1.yaml --run_eval skip_layer_wise
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py --models_config runspace/experiments/models_best_acc1.yaml --run_eval --skip_layer_wise
+apptainer exec --nv --bind /data/shared_data/imagenet:/data/imagenet "qbench_sandbox" python 
