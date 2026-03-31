@@ -73,6 +73,10 @@ class RunDatabase:
             except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE runs ADD COLUMN certainty REAL")
             except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN quant_map_json TEXT")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN input_map_json TEXT")
+            except sqlite3.OperationalError: pass
             
             # Create model_graphs table for storing quantization visualizations
             cursor.execute('''
@@ -101,27 +105,30 @@ class RunDatabase:
                 
             conn.commit()
 
-    def log_run(self, model_name, weight_dt, activation_dt, acc1, acc5, status="SUCCESS", 
+    def log_run(self, model_name, weight_dt, activation_dt, acc1, acc5, status="SUCCESS",
                 ref_acc1=None, ref_acc5=None, ref_certainty=None, experiment_type=None, run_date=None,
-                mse=None, l1=None, certainty=None):
+                mse=None, l1=None, certainty=None, quant_map_json=None, input_map_json=None):
         """
         Logs a new run to the database.
+        quant_map_json : JSON string mapping layer -> weight format.
+        input_map_json : JSON string mapping layer -> dominant input format
+                         (from DynamicInputQuantizer layer_stats).
         """
         if run_date is None:
             from datetime import datetime
             run_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO runs (
                     model_name, weight_dt, activation_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
-                    experiment_type, run_date, status, mse, l1, certainty
+                    experiment_type, run_date, status, mse, l1, certainty, quant_map_json, input_map_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 model_name, weight_dt, activation_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
-                experiment_type, run_date, status, mse, l1, certainty
+                experiment_type, run_date, status, mse, l1, certainty, quant_map_json, input_map_json
             ))
             conn.commit()
             print(f"Logged run for {model_name} to {self.db_path}")

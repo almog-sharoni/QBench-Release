@@ -89,6 +89,72 @@ else:
         df[f'{prefix}_bits'] = parsed.apply(lambda x: x[0])
         df[f'{prefix}_exp'] = parsed.apply(lambda x: x[1])
         df[f'{prefix}_mant'] = parsed.apply(lambda x: x[2])
+    @st.dialog("🔬 Layer Quantization Breakdown", width="large")
+    def show_layer_breakdown(run_row):
+        model = run_row.get('model_name', '')
+        w_dt  = run_row.get('weight_dt', '')
+        a_dt  = run_row.get('activation_dt', '')
+        exp_t = run_row.get('experiment_type', '')
+
+        st.markdown(f"**Model:** `{model}`  |  **Weight DT:** `{w_dt}`  |  **Activation DT:** `{a_dt}`")
+        st.markdown(f"**Experiment:** `{exp_t}`")
+        st.markdown("---")
+
+        def _render_map_section(title, raw_json, mode_label):
+            if not raw_json or (isinstance(raw_json, float) and pd.isna(raw_json)):
+                return
+            try:
+                quant_map = json.loads(raw_json)
+            except Exception:
+                st.error(f"Could not parse {title} map JSON.")
+                return
+
+            rows = []
+            for layer, value in quant_map.items():
+                # New format: {"format": "fp4_e1m2", "type": "Conv2d"}
+                # Old format: "fp4_e1m2"  or  ["fp4_e1m2", ...]
+                if isinstance(value, dict):
+                    fmt = value.get("format", "?")
+                    layer_type = value.get("type", "?")
+                else:
+                    fmt = value
+                    layer_type = "?"
+
+                if isinstance(fmt, list):
+                    counts = {}
+                    for f in fmt:
+                        counts[f] = counts.get(f, 0) + 1
+                    fmt_str = ", ".join(
+                        f"{f}×{c}" for f, c in sorted(counts.items(), key=lambda x: -x[1])
+                    )
+                    rows.append({"Layer": layer, "Type": layer_type, "Format": fmt_str, "Mode": "per-chunk"})
+                else:
+                    rows.append({"Layer": layer, "Type": layer_type, "Format": str(fmt), "Mode": mode_label})
+
+            if not rows:
+                return
+
+            breakdown_df = pd.DataFrame(rows)
+            format_counts = breakdown_df["Format"].value_counts()
+
+            st.markdown(f"#### {title} — {len(rows)} layers")
+            cols = st.columns(min(len(format_counts), 6))
+            for idx, (fmt, cnt) in enumerate(format_counts.items()):
+                cols[idx % len(cols)].metric(fmt, f"{cnt} layers")
+            st.dataframe(
+                breakdown_df,
+                use_container_width=True,
+                column_config={
+                    "Layer":  st.column_config.TextColumn("Layer", width="large"),
+                    "Type":   st.column_config.TextColumn("Type"),
+                    "Format": st.column_config.TextColumn("Format"),
+                    "Mode":   st.column_config.TextColumn("Mode"),
+                },
+            )
+
+        _render_map_section("⚖️ Weight Formats", run_row.get('quant_map_json'), "per-layer")
+        _render_map_section("⚡ Input Formats",  run_row.get('input_map_json'),  "dynamic")
+
     @st.dialog("📈 Accuracy Comparison", width="large")
     def show_large_chart(chart_df):
         # Inject CSS to enable horizontal scroll specifically in the dialog (Modal)
@@ -480,9 +546,18 @@ else:
                 return curr_df[curr_df[col].isin(selected)]
             return curr_df
 
-        # Bits are mandatory filters (all selected by default)
-        filtered_df = filtered_df[filtered_df['w_bits'].isin(selected_w_bits)]
-        filtered_df = filtered_df[filtered_df['a_bits'].isin(selected_a_bits)]
+        # Bits are mandatory filters (all selected by default).
+        # When all options are selected (no user narrowing), also keep rows whose
+        # bits value is NaN — this happens for formats that parse_dt can't decode
+        # (e.g. the hybrid "opt_layer[...]" weight_dt strings).
+        w_bits_all = len(selected_w_bits) == len(w_bits_options)
+        a_bits_all = len(selected_a_bits) == len(a_bits_options)
+        filtered_df = filtered_df[
+            filtered_df['w_bits'].isin(selected_w_bits) | (w_bits_all & filtered_df['w_bits'].isna())
+        ]
+        filtered_df = filtered_df[
+            filtered_df['a_bits'].isin(selected_a_bits) | (a_bits_all & filtered_df['a_bits'].isna())
+        ]
 
         # Exp/Mant are optional filters
         filtered_df = apply_opt_filter(filtered_df, 'w_exp', selected_w_exp, w_exp_options)
@@ -499,7 +574,7 @@ else:
                 filtered_df['cert_drop'] = filtered_df['ref_certainty'] - filtered_df['certainty']
             
             # Clean up and reorder columns for display
-            cols_to_drop = ['run_date_dt', 'id']
+            cols_to_drop = ['run_date_dt', 'id', 'quant_map_json', 'input_map_json']
             display_df = filtered_df.drop(columns=[c for c in cols_to_drop if c in filtered_df.columns])
             
             # Reorder columns to put metrics and targets front and center
@@ -535,7 +610,25 @@ else:
 
             # --- Visualization Section ---
             selected_indices = event.selection.rows
-            
+
+            # Layer breakdown button — appears when exactly one row is selected
+            # and that run has a stored weight or input quant map.
+            if len(selected_indices) == 1:
+                orig_idx = display_df.index[selected_indices[0]]
+                has_weight_map = (
+                    'quant_map_json' in filtered_df.columns and
+                    pd.notna(filtered_df.at[orig_idx, 'quant_map_json']) and
+                    filtered_df.at[orig_idx, 'quant_map_json']
+                )
+                has_input_map = (
+                    'input_map_json' in filtered_df.columns and
+                    pd.notna(filtered_df.at[orig_idx, 'input_map_json']) and
+                    filtered_df.at[orig_idx, 'input_map_json']
+                )
+                if has_weight_map or has_input_map:
+                    if st.button("🔬 View Layer Formats", key=f"btn_layers_{i}"):
+                        show_layer_breakdown(filtered_df.loc[orig_idx].to_dict())
+
             st.markdown(f"#### 📊 Visualization Options")
             # viz_all = st.checkbox("Visualize ALL filtered runs (ignores table selection)", key=f"viz_all_{i}")
             viz_all = False
