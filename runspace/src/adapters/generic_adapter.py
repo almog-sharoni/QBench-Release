@@ -492,6 +492,7 @@ class GenericAdapter(BaseAdapter):
         # For now, we hardcode the mapping for common activations as per OpRegistry logic
         # Ideally OpRegistry should support function registration with target class.
         
+        import operator
         func_map = {
             F.relu: "QuantReLU",
             torch.relu: "QuantReLU",
@@ -499,6 +500,18 @@ class GenericAdapter(BaseAdapter):
             F.gelu: "QuantGELU",
             F.silu: "QuantSiLU",
             F.hardswish: "QuantHardswish",
+            torch.matmul: "QuantMatMul",
+            operator.matmul: "QuantMatMul",
+            torch.bmm: "QuantBMM",
+            torch.add: "QuantAdd",
+            operator.add: "QuantAdd",
+            torch.sub: "QuantSub",
+            operator.sub: "QuantSub",
+            torch.mul: "QuantMul",
+            operator.mul: "QuantMul",
+            torch.div: "QuantDiv",
+            operator.truediv: "QuantDiv",
+            torch.cat: "QuantCat",
         }
         
         # Filter by requested quantized ops

@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import sys
+import base64
 
 # Add project root to sys.path
 # runspace/src/database/dashboard.py -> runspace/src/database -> runspace/src -> runspace -> root
@@ -151,6 +152,89 @@ else:
     # --- Multi-Table Session State ---
     if 'num_tables' not in st.session_state:
         st.session_state.num_tables = 1
+
+    def toggle_button_group(label, options, session_key, default_state=True, format_func=str):
+        # Persistent CSS injection on every rerun
+        st.markdown("""
+        <style>
+        /* Smooth transitions for all buttons */
+        .stButton > button { 
+            transition: background-color 0.1s ease, border 0.1s ease !important; 
+            border-radius: 4px !important;
+        }
+        
+        /* DEFAULT: SOFT ROSE (for OFF state) */
+        div[data-testid="stHorizontalBlock"] .stButton > button {
+            background-color: #fb7185 !important;
+            color: white !important;
+            border: 1px solid #e11d48 !important;
+            padding: 0px 8px !important;
+            min-height: 24px !important;
+            height: 24px !important;
+            font-size: 10px !important;
+            line-height: normal !important;
+            font-weight: 600;
+            white-space: nowrap !important;
+            width: 100% !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        }
+        
+        /* PRIMARY: SOFT EMERALD (for ON state) */
+        div[data-testid="stHorizontalBlock"] .stButton > button[kind="primary"],
+        div[data-testid="stHorizontalBlock"] .stButton > button[data-testid*="primary"] {
+            background-color: #10b981 !important;
+            color: white !important;
+            border: 1px solid #059669 !important;
+        }
+        
+        /* Tighten gap between columns in the horizontal block */
+        div[data-testid="stHorizontalBlock"] {
+            gap: 6px !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+        st.markdown(f"**{label}**")
+        
+        # Initialize state explicitly if missing
+        if session_key not in st.session_state:
+            st.session_state[session_key] = {opt: True for opt in options}
+        state = st.session_state[session_key]
+        
+        # Ensure all current options are mapped in the state
+        for opt in options:
+            if opt not in state:
+                state[opt] = True
+        
+        # Global selection buttons
+        c1, c2, _ = st.columns([0.75, 0.75, 3])
+        if c1.button("Turn All On", key=f"{session_key}_all_on", type="primary", use_container_width=True):
+            for opt in options:
+                state[opt] = True
+            st.rerun()
+        if c2.button("Turn All Off", key=f"{session_key}_all_off", type="secondary", use_container_width=True):
+            for opt in options:
+                state[opt] = False
+            st.rerun()
+            
+        # Draw dynamic adaptive columns for toggle buttons
+        if not options: return []
+        max_label_len = max(len(format_func(o)) for o in options)
+        num_cols = 2 if max_label_len > 15 else (3 if max_label_len > 10 else (4 if max_label_len > 6 else 7))
+        
+        cols = st.columns(num_cols)
+        for idx, opt in enumerate(options):
+            is_on = state[opt]
+            btn_label = format_func(opt)
+            
+            with cols[idx % num_cols]:
+                if st.button(btn_label, key=f"{session_key}_btn_{idx}", type="primary" if is_on else "secondary", use_container_width=True):
+                    state[opt] = not is_on
+                    st.rerun()
+                    
+        # Return list of selected strings natively compatible with downstream logic
+        return [opt for opt, is_on in state.items() if is_on]
         
     def add_table():
         st.session_state.num_tables += 1
@@ -228,9 +312,11 @@ else:
                     val = preset_data[preset_key]
                     if isinstance(val, list):
                         # Validate: Only keep items that actually exist in current options
-                        # This prevents Streamlit from crashing if a model/format was removed from DB
+                        # Convert legacy list format to dictionary toggle schema mappings
                         valid_val = [v for v in val if v in options]
-                        st.session_state[session_key] = valid_val
+                        st.session_state[session_key] = {o: (o in valid_val) for o in options}
+                    elif isinstance(val, dict):
+                        st.session_state[session_key] = val
                     else:
                         st.session_state[session_key] = val
             
@@ -291,51 +377,79 @@ else:
         # Local filters for each table
         col_f1, col_f2 = st.columns(2)
         with col_f1:
-            selected_models = st.multiselect(f"Models (T{i+1})", options=models, default=models, key=f"filter_m_{i}")
+            selected_models = toggle_button_group(
+                f"Models (T{i+1})", 
+                options=models, 
+                session_key=f"filter_m_{i}",
+                default_state=True
+            )
         with col_f2:
-            selected_exprs = st.multiselect(f"Experiment Types (T{i+1})", options=expr_types, default=expr_types, key=f"filter_e_{i}")
+            selected_exprs = toggle_button_group(
+                f"Experiment Types (T{i+1})", 
+                options=expr_types, 
+                session_key=f"filter_e_{i}",
+                default_state=True
+            )
         
         # Advanced DT Filtering
         with st.expander(f"Advanced Datatype Filters (T{i+1})"):
-            col_w_bits, col_w_exp, col_w_mant = st.columns(3)
-            with col_w_bits:
+            col_bits, _ = st.columns([1,1])   # left column narrower
+            with col_bits:
                 w_bits_options = sorted(df['w_bits'].dropna().unique())
-                selected_w_bits = st.multiselect(
+                selected_w_bits = toggle_button_group(
                     "Weight Bits", 
                     options=w_bits_options, 
-                    default=w_bits_options, 
-                    key=f"filter_wb_{i}",
+                    session_key=f"filter_wb_{i}",
+                    default_state=True,
                     format_func=lambda x: "Dynamic" if x == 0 else f"{int(x)} Bits"
                 )
-            with col_w_exp:
+            
                 w_exp_options = sorted(df['w_exp'].dropna().unique())
-                selected_w_exp = st.multiselect("Weight Exponent", options=w_exp_options, default=w_exp_options, key=f"filter_we_{i}")
-            with col_w_mant:
+                selected_w_exp = toggle_button_group(
+                    "Weight Exponent", 
+                    options=w_exp_options, 
+                    session_key=f"filter_we_{i}",
+                    default_state=True
+                )
+                
                 w_mant_options = sorted(df['w_mant'].dropna().unique())
-                selected_w_mant = st.multiselect("Weight Mantissa", options=w_mant_options, default=w_mant_options, key=f"filter_wm_{i}")
+                selected_w_mant = toggle_button_group(
+                    "Weight Mantissa", 
+                    options=w_mant_options, 
+                    session_key=f"filter_wm_{i}",
+                    default_state=True
+                )
 
-            col_a_bits, col_a_exp, col_a_mant = st.columns(3)
-            with col_a_bits:
                 a_bits_options = sorted(df['a_bits'].dropna().unique())
-                selected_a_bits = st.multiselect(
+                selected_a_bits = toggle_button_group(
                     "Activation Bits", 
                     options=a_bits_options, 
-                    default=a_bits_options, 
-                    key=f"filter_ab_{i}",
+                    session_key=f"filter_ab_{i}",
+                    default_state=True,
                     format_func=lambda x: "Dynamic" if x == 0 else f"{int(x)} Bits"
                 )
-            with col_a_exp:
+                
                 a_exp_options = sorted(df['a_exp'].dropna().unique())
-                selected_a_exp = st.multiselect("Activation Exponent", options=a_exp_options, default=a_exp_options, key=f"filter_ae_{i}")
-            with col_a_mant:
+                selected_a_exp = toggle_button_group(
+                    "Activation Exponent", 
+                    options=a_exp_options, 
+                    session_key=f"filter_ae_{i}",
+                    default_state=True
+                )
+                
                 a_mant_options = sorted(df['a_mant'].dropna().unique())
-                selected_a_mant = st.multiselect("Activation Mantissa", options=a_mant_options, default=a_mant_options, key=f"filter_am_{i}")
+                selected_a_mant = toggle_button_group(
+                    "Activation Mantissa", 
+                    options=a_mant_options, 
+                    session_key=f"filter_am_{i}",
+                    default_state=True
+                )
 
             # Save Preset UI under each table's filters
             with st.expander(f"💾 Save current filters as Preset (T{i+1})"):
                 p_col1, p_col2 = st.columns([3, 1])
                 preset_name = p_col1.text_input("Preset Name", key=f"name_input_{i}", placeholder="e.g. My Optimal ResNet")
-                if p_col2.button("Save", key=f"save_btn_{i}", use_container_width=True):
+                if p_col2.button("Save", key=f"save_btn_{i}", type="primary", use_container_width=True):
                     if preset_name:
                         st.session_state.presets[preset_name] = {
                             'target_table': i,
@@ -429,7 +543,7 @@ else:
                 num_runs = len(display_df) if viz_all else len(selected_indices)
                 st.success(f"Ready to visualize {num_runs} runs.")
                 
-                if st.button(f"📈 Generate  Comparison ({num_runs})", key=f"btn_plot_{i}"):
+                if st.button(f"📈 Generate Comparison ({num_runs})", key=f"btn_plot_{i}", type="primary", use_container_width=True):
                     if viz_all:
                         selected_df = display_df.copy()
                     else:
@@ -469,6 +583,169 @@ else:
                 st.info("👆 Select rows in the table above to generate a chart.")
         else:
             st.info("No data for selected filters.")
+        
+        st.markdown("---")
+        
+        # --- Model Architecture Graph Visualization ---
+        st.markdown(f"#### 🏗️ Model Architecture & Quantization")
+        
+        if not filtered_df.empty:
+            # Get unique models in filtered data
+            available_models = sorted(filtered_df['model_name'].unique())
+            selected_model = st.selectbox(
+                f"View quantization graph for (T{i+1})",
+                options=available_models,
+                key=f"graph_model_{i}"
+            )
+            
+            if selected_model:
+                # Try to get graph from database
+                svg_content, metadata = db.get_model_graph_svg(selected_model)
+                
+                if svg_content:
+                    with st.expander(f"📊 {selected_model} - Quantization Graph", expanded=False):
+                        # Display metadata
+                        meta_col1, meta_col2, meta_col3 = st.columns(3)
+                        # graph_meta = db.get_model_graph_metadata(selected_model)
+                        graph_meta = ''
+                        if graph_meta:
+                            meta_col1.metric("Original Size", f"{graph_meta.get('svg_size_original', 0)/1024:.1f} KB")
+                            meta_col2.metric("Compressed Size", f"{graph_meta.get('svg_size_compressed', 0)/1024:.1f} KB")
+                            compression = 100 * (1 - graph_meta.get('svg_size_compressed', 1) / max(graph_meta.get('svg_size_original', 1), 1))
+                            meta_col3.metric("Compression", f"{compression:.0f}%")
+                        
+                        # Display interactive graph using streamlit-agraph
+                        st.markdown("**Green** = Quantized Layers | **Gold** = Supported (Unquantized) | **Pink** = Unsupported | **Gray** = Structural/Other")
+                        
+                        st.info("💡 **Interactive**: Zoom & pan | Drag nodes | Scroll to zoom | Click to inspect")
+                        
+                        # Display interactive graph using pyvis
+                        try:
+                            import networkx as nx
+                            from pyvis.network import Network
+                            import xml.etree.ElementTree as ET
+                            import tempfile
+                            import os
+                            import re
+                            
+                            # Parse SVG to extract exact nodes and edges
+                            svg_no_ns = re.sub(r'\sxmlns=\"[^\"]+\"', '', svg_content, count=1)
+                            root = ET.fromstring(svg_no_ns)
+                            
+                            G = nx.DiGraph()
+                            
+                            for g in root.iter('g'):
+                                cls = g.get('class')
+                                if cls == 'node':
+                                    node_id = g.get('id', '')
+                                    # Ignore legend objects to only show the model itself
+                                    if node_id.startswith('legend_') or node_id.startswith('cluster_'):
+                                        continue
+                                        
+                                    title_el = g.find('title')
+                                    if title_el is None: continue
+                                    title = title_el.text
+                                    
+                                    polygon = g.find('polygon')
+                                    color = polygon.get('fill') if polygon is not None else '#D3D3D3'
+                                    
+                                    texts = [t.text for t in g.findall('text') if t.text]
+                                    label = '\n'.join(texts) if texts else title
+                                    
+                                    G.add_node(title, label=label, color=color, shape='box')
+                                    
+                                elif cls == 'edge':
+                                    title_el = g.find('title')
+                                    if title_el is None: continue
+                                    title = title_el.text
+                                    
+                                    if '->' in title:
+                                        src, dst = title.split('->', 1)
+                                        if src in G and dst in G:
+                                            G.add_edge(src, dst)
+                                    elif '&#45;&gt;' in title:
+                                        src, dst = title.split('&#45;&gt;', 1)
+                                        if src in G and dst in G:
+                                            G.add_edge(src, dst)
+
+                            if G.number_of_nodes() > 0:
+                                net = Network(
+                                    height='700px',
+                                    width='100%',
+                                    directed=True,
+                                    notebook=True,
+                                    cdn_resources='in_line'
+                                )
+                                net.from_nx(G)
+                                
+                                # Use hierarchical layout to look like SVG, but allow drag/zoom
+                                net.set_options("""
+                                var options = {
+                                  "layout": {
+                                    "hierarchical": {
+                                      "enabled": true,
+                                      "direction": "UD",
+                                      "sortMethod": "directed",
+                                      "levelSeparation": 250,
+                                      "nodeSpacing": 250,
+                                      "treeSpacing": 250
+                                    }
+                                  },
+                                  "physics": {
+                                    "enabled": false
+                                  },
+                                  "interaction": {
+                                    "dragNodes": true,
+                                    "dragView": true,
+                                    "zoomView": true
+                                  }
+                                }
+                                """)
+                                
+                                temp_file = os.path.join(tempfile.gettempdir(), f'graph_{selected_model}.html')
+                                net.write_html(temp_file)
+                                
+                                with open(temp_file, 'r', encoding='utf-8') as f:
+                                    html_content = f.read()
+                                
+                                # Inject Reset View button overlay into the generated pyvis HTML
+                                reset_btn = '''<button onclick="network.fit({animation:{duration:500}});" style="position: absolute; bottom: 20px; right: 20px; z-index: 1000; padding: 10px 16px; background-color: #ffffff; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer; font-family: sans-serif; font-size: 14px; font-weight: 600; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); color: #374151; transition: all 0.2s;">🎯 Reset View</button>'''
+                                html_content = html_content.replace('<body>', f'<body>\n{reset_btn}')
+                                
+                                import streamlit.components.v1 as components
+                                components.html(html_content, height=750)
+                            else:
+                                st.warning("Could not extract nodes from graph SVG.")
+                                
+
+                        except Exception as e:
+                            import traceback
+                            traceback.print_exc()
+                            st.error(f"Error: {str(e)}")
+                            # Fallback: Display SVG as static image
+                            svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode()
+                            st.markdown(
+                                f'<img src="data:image/svg+xml;base64,{svg_b64}" style="max-width:100%; height:auto; border: 1px solid #ddd; border-radius: 8px; padding: 10px; background: white;">',
+                                unsafe_allow_html=True
+                            )
+                        
+                        # Download button
+                        st.download_button(
+                            label="📥 Download SVG",
+                            data=svg_content,
+                            file_name=f"{selected_model}_graph.svg",
+                            mime="image/svg+xml"
+                        )
+                        
+                        # Show metadata details
+                        if False:
+                            with st.expander("Graph Metadata"):
+                                st.json(metadata)
+                else:
+                    st.info(f"ℹ️ No quantization graph available for {selected_model}. "
+                            f"Run `python runspace/src/database/generate_model_graphs.py` to generate graphs.")
+        else:
+            st.info("No data to display. Apply filters above to see models.")
         
         st.markdown("---")
 

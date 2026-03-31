@@ -54,6 +54,8 @@ candidate_formats = [
             # 'fp4_e3m0','fp4_e2m1','fp4_e1m2','fp4_e0m3',
             # 'ufp4_e4m0','ufp4_e3m1','ufp4_e2m2','ufp4_e1m3','ufp4_e0m4'
             # 'fp3_e0m2'
+            'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
+            'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
         ]
 def get_args():
     parser = argparse.ArgumentParser(description="Find optimal input quantization (Dynamic)")

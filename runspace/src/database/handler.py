@@ -2,6 +2,9 @@ import os
 import sqlite3
 import pandas as pd
 from datetime import datetime
+import gzip
+import base64
+import json
 
 class RunDatabase:
     """
@@ -70,6 +73,31 @@ class RunDatabase:
             except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE runs ADD COLUMN certainty REAL")
             except sqlite3.OperationalError: pass
+            
+            # Create model_graphs table for storing quantization visualizations
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS model_graphs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    model_name TEXT UNIQUE NOT NULL,
+                    svg_compressed BLOB,
+                    svg_size_original INTEGER,
+                    svg_size_compressed INTEGER,
+                    metadata TEXT,
+                    generated_date TEXT,
+                    status TEXT
+                )
+            ''')
+            
+            try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN metadata TEXT")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN svg_size_original INTEGER")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN svg_size_compressed INTEGER")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN generated_date TEXT")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN status TEXT")
+            except sqlite3.OperationalError: pass
                 
             conn.commit()
 
@@ -130,3 +158,132 @@ class RunDatabase:
         if df.empty:
             return "No runs found."
         return df.groupby(['model_name', 'status']).size().unstack(fill_value=0)
+
+    # ============= MODEL GRAPH METHODS =============
+    
+    def store_model_graph(self, model_name, svg_content, metadata=None):
+        """
+        Stores a quantization graph for a model.
+        Compresses SVG with gzip for efficient storage.
+        
+        Args:
+            model_name (str): Name of the model
+            svg_content (str): SVG content as string
+            metadata (dict, optional): Additional metadata (layer_count, quant_count, etc.)
+        """
+        if metadata is None:
+            metadata = {}
+        
+        # Compress SVG using gzip
+        svg_bytes = svg_content.encode('utf-8')
+        compressed = gzip.compress(svg_bytes, compresslevel=9)  # Max compression
+        
+        # Store metadata as JSON
+        metadata_json = json.dumps(metadata)
+        
+        original_size = len(svg_bytes)
+        compressed_size = len(compressed)
+        generated_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        compression_ratio = (1 - compressed_size / original_size) * 100
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            # Use INSERT OR REPLACE for idempotency
+            cursor.execute('''
+                INSERT OR REPLACE INTO model_graphs 
+                (model_name, svg_compressed, svg_size_original, svg_size_compressed, 
+                 metadata, generated_date, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                model_name, compressed, original_size, compressed_size,
+                metadata_json, generated_date, "SUCCESS"
+            ))
+            conn.commit()
+            print(f"Stored graph for {model_name}: "
+                  f"{original_size/1024:.1f}KB → {compressed_size/1024:.1f}KB "
+                  f"({compression_ratio:.1f}% reduction)")
+    
+    def get_model_graph_svg(self, model_name):
+        """
+        Retrieves and decompresses SVG for a model.
+        
+        Args:
+            model_name (str): Name of the model
+            
+        Returns:
+            tuple: (svg_content, metadata) or (None, None) if not found
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT svg_compressed, metadata FROM model_graphs 
+                WHERE model_name = ?
+            ''', (model_name,))
+            result = cursor.fetchone()
+            
+            if result:
+                compressed, metadata_json = result
+                svg_content = gzip.decompress(compressed).decode('utf-8')
+                metadata = json.loads(metadata_json) if metadata_json else {}
+                return svg_content, metadata
+            return None, None
+    
+    def get_model_graph_metadata(self, model_name):
+        """
+        Retrieves graph metadata without decompressing SVG.
+        Useful for listing graph info without loading full SVG.
+        
+        Args:
+            model_name (str): Name of the model
+            
+        Returns:
+            dict: Metadata dict with svg_size_original, svg_size_compressed, generated_date, etc.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT svg_size_original, svg_size_compressed, metadata, 
+                       generated_date, status FROM model_graphs 
+                WHERE model_name = ?
+            ''', (model_name,))
+            result = cursor.fetchone()
+            
+            if result:
+                size_orig, size_comp, metadata_json, gen_date, status = result
+                metadata = json.loads(metadata_json) if metadata_json else {}
+                return {
+                    'model_name': model_name,
+                    'svg_size_original': size_orig,
+                    'svg_size_compressed': size_comp,
+                    'generated_date': gen_date,
+                    'status': status,
+                    **metadata
+                }
+            return None
+    
+    def get_all_model_graphs(self):
+        """
+        Retrieves metadata for all stored model graphs.
+        
+        Returns:
+            pd.DataFrame: DataFrame with graph metadata
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            df = pd.read_sql_query('''
+                SELECT model_name, svg_size_original, svg_size_compressed, 
+                       metadata, generated_date, status FROM model_graphs 
+                ORDER BY generated_date DESC
+            ''', conn)
+            
+            # Parse metadata JSON for each row
+            if not df.empty:
+                df['metadata_dict'] = df['metadata'].apply(lambda x: json.loads(x) if x else {})
+            
+            return df
+    
+    def has_model_graph(self, model_name):
+        """Check if a graph exists for a model."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM model_graphs WHERE model_name = ?', (model_name,))
+            return cursor.fetchone()[0] > 0
