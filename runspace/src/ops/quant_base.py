@@ -577,6 +577,9 @@ class QuantizedLayerMixin:
         Quantizes input tensor to FP8.
         Returns: (input_fp8, scale)
         """
+        if not isinstance(input, torch.Tensor):
+            return input
+            
         # Use input_q_type if available, otherwise fallback to q_type
         q_type = getattr(self, 'input_q_type', getattr(self, 'q_type', 'fp8_e4m3'))
         capture = getattr(self, 'capture_activations', False)

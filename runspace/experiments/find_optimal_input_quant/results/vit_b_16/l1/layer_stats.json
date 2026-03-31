@@ -1,0 +1,170 @@
+{
+    "conv_proj": {
+        "format_counts": {
+            "fp6_e1m4": 50261,
+            "fp8_e1m6": 58683977,
+            "fp2_e1m0": 476,
+            "fp7_e1m5": 36124,
+            "fp5_e1m3": 28746,
+            "fp4_e1m2": 301,
+            "fp5_e4m0": 6,
+            "fp3_e1m1": 109
+        }
+    },
+    "encoder.layers.encoder_layer_0.mlp.0": {
+        "format_counts": {
+            "fp8_e1m6": 59081760,
+            "fp6_e5m0": 18240
+        }
+    },
+    "encoder.layers.encoder_layer_0.mlp.3": {
+        "format_counts": {
+            "fp8_e1m6": 235408313,
+            "fp5_e4m0": 509883,
+            "fp6_e5m0": 481804
+        }
+    },
+    "encoder.layers.encoder_layer_1.mlp.0": {
+        "format_counts": {
+            "fp8_e1m6": 59099595,
+            "fp6_e5m0": 405
+        }
+    },
+    "encoder.layers.encoder_layer_1.mlp.3": {
+        "format_counts": {
+            "fp8_e1m6": 236399937,
+            "fp6_e5m0": 18,
+            "fp5_e4m0": 45
+        }
+    },
+    "encoder.layers.encoder_layer_2.mlp.0": {
+        "format_counts": {
+            "fp8_e1m6": 59071338,
+            "fp6_e5m0": 28662
+        }
+    },
+    "encoder.layers.encoder_layer_2.mlp.3": {
+        "format_counts": {
+            "fp8_e1m6": 236400000
+        }
+    },
+    "encoder.layers.encoder_layer_3.mlp.0": {
+        "format_counts": {
+            "fp8_e1m6": 59100000
+        }
+    },
+    "encoder.layers.encoder_layer_3.mlp.3": {
+        "format_counts": {
+            "fp8_e1m6": 236399995,
+            "fp5_e4m0": 4,
+            "fp6_e5m0": 1
+        }
+    },
+    "encoder.layers.encoder_layer_4.mlp.0": {
+        "format_counts": {
+            "fp8_e1m6": 59100000
+        }
+    },
+    "encoder.layers.encoder_layer_4.mlp.3": {
+        "format_counts": {
+            "fp8_e1m6": 236399845,
+            "fp6_e5m0": 69,
+            "fp5_e4m0": 86
+        }
+    },
+    "encoder.layers.encoder_layer_5.mlp.0": {
+        "format_counts": {
+            "fp8_e1m6": 59100000
+        }
+    },
+    "encoder.layers.encoder_layer_5.mlp.3": {
+        "format_counts": {
+            "fp8_e1m6": 236360577,
+            "fp5_e4m0": 37369,
+            "fp6_e5m0": 2054
+        }
+    },
+    "encoder.layers.encoder_layer_6.mlp.0": {
+        "format_counts": {
+            "fp8_e1m6": 59100000
+        }
+    },
+    "encoder.layers.encoder_layer_6.mlp.3": {
+        "format_counts": {
+            "fp8_e1m6": 236399323,
+            "fp5_e4m0": 538,
+            "fp6_e5m0": 139
+        }
+    },
+    "encoder.layers.encoder_layer_7.mlp.0": {
+        "format_counts": {
+            "fp8_e1m6": 59100000
+        }
+    },
+    "encoder.layers.encoder_layer_7.mlp.3": {
+        "format_counts": {
+            "fp8_e1m6": 236392410,
+            "fp6_e5m0": 4699,
+            "fp5_e4m0": 2891
+        }
+    },
+    "encoder.layers.encoder_layer_8.mlp.0": {
+        "format_counts": {
+            "fp8_e1m6": 59100000
+        }
+    },
+    "encoder.layers.encoder_layer_8.mlp.3": {
+        "format_counts": {
+            "fp8_e1m6": 236351545,
+            "fp6_e5m0": 47270,
+            "fp5_e4m0": 1185
+        }
+    },
+    "encoder.layers.encoder_layer_9.mlp.0": {
+        "format_counts": {
+            "fp8_e1m6": 59100000
+        }
+    },
+    "encoder.layers.encoder_layer_9.mlp.3": {
+        "format_counts": {
+            "fp8_e1m6": 236380313,
+            "fp5_e4m0": 11418,
+            "fp6_e5m0": 8269
+        }
+    },
+    "encoder.layers.encoder_layer_10.mlp.0": {
+        "format_counts": {
+            "fp8_e1m6": 59100000
+        }
+    },
+    "encoder.layers.encoder_layer_10.mlp.3": {
+        "format_counts": {
+            "fp8_e1m6": 236184945,
+            "fp5_e4m0": 201347,
+            "fp6_e5m0": 13708
+        }
+    },
+    "encoder.layers.encoder_layer_11.mlp.0": {
+        "format_counts": {
+            "fp8_e1m6": 59100000
+        }
+    },
+    "encoder.layers.encoder_layer_11.mlp.3": {
+        "format_counts": {
+            "fp8_e1m6": 236394442,
+            "fp5_e4m0": 2557,
+            "fp6_e5m0": 3001
+        }
+    },
+    "heads.head": {
+        "format_counts": {
+            "fp8_e1m6": 300000
+        }
+    },
+    "accuracy": {
+        "top1": 80.998,
+        "top5": 95.29,
+        "norm_l1": 0.01617374745633592,
+        "norm_mse": 0.00017228100688855658
+    }
+}

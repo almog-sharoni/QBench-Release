@@ -245,7 +245,7 @@ class QuantGELU(nn.GELU, LUTActivation):
         # if x >= +A: y = x
         # else:       y = LUT[i]
         
-        y = torch.where(x <= -A, torch.tensor(0.0, device=x.device, dtype=x.dtype),
+        y = torch.where(x <= -A, 0.0,
                         torch.where(x >= A, x, y_lut))
         
         if self.capture_activations:
