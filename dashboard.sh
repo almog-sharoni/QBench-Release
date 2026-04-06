@@ -14,4 +14,12 @@ echo "Starting QBench Dashboard..."
 echo "Access at: http://localhost:8501"
 
 # Run streamlit inside the container
-apptainer exec --nv --env PYTHONNOUSERSITE=1 --bind /data/shared_data/imagenet:/data/imagenet "$SANDBOX_DIR" python -m streamlit run "$DASHBOARD_PY" --server.port 8501
+# Create state directory for tailscale persistence if not exists
+mkdir -p tailscale_state
+
+# Run streamlit and tailscale inside the container via the wrapper script
+apptainer exec --nv --env PYTHONNOUSERSITE=1 \
+    --bind /data/shared_data/imagenet:/data/imagenet \
+    --bind "$(pwd)/tailscale_state":/var/lib/tailscale \
+    "$SANDBOX_DIR" /usr/local/bin/start_tailscale_app.sh "$DASHBOARD_PY" 8501
+

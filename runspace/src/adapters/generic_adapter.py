@@ -562,7 +562,8 @@ class GenericAdapter(BaseAdapter):
                     kwargs['inplace'] = node.kwargs['inplace']
                 
                 new_mod = QuantClass(**kwargs)
-                
+                new_mod.input_quantization = self.input_quantization
+
                 # Add module to GraphModule
                 new_mod_name = f"{node.name}_quant_{op_name.lower()}"
                 gm.add_module(new_mod_name, new_mod)

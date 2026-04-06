@@ -4,8 +4,8 @@
         "acc1": 82.342,
         "acc5": 95.922,
         "errors": {
-            "norm_l1": 0.0,
-            "norm_mse": 0.0
+            "norm_l1": NaN,
+            "norm_mse": NaN
         }
     },
     {
