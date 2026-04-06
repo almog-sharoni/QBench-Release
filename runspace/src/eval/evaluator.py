@@ -15,21 +15,21 @@ class Evaluator:
         Runs evaluation on the given model and data loader.
         """
         model.eval()
-        
+
         with torch.no_grad():
-            for batch in tqdm(data_loader, desc="Evaluating", unit="batch"):
+            for batch_idx, batch in enumerate(tqdm(data_loader, desc="Evaluating", unit="batch")):
                 # Use adapter to prepare batch (e.g. move to device, unpack)
                 inputs, targets = self.adapter.prepare_batch(batch)
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
-                
+
                 # Forward pass
                 outputs = self.adapter.forward(model, (inputs, targets))
-                
+
                 # Update metrics
                 self.metrics_engine.update(outputs, targets)
 
-                if max_batches > 0 and (self.metrics_engine.total / data_loader.batch_size) >= max_batches:
+                if max_batches > 0 and batch_idx + 1 >= max_batches:
                     break
-        
+
         return self.metrics_engine.compute()

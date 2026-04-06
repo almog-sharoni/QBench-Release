@@ -1,12 +1,14 @@
 from typing import Any, Callable, Dict
 
 from .classification import build_classification_data_loader
+from .language_model import build_language_model_data_loader
 
 
 DatasetBuilder = Callable[[Dict[str, Any], str], Any]
 
 DATASET_BUILDERS: Dict[str, DatasetBuilder] = {
     "classification": build_classification_data_loader,
+    "language_model": build_language_model_data_loader,
 }
 
 

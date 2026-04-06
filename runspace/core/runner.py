@@ -12,12 +12,21 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+import functools
+
 from src.adapters.adapter_factory import create_adapter
 from src.datasets import build_data_loader
 from src.eval.evaluator import Evaluator
-from src.eval.metrics import MetricsEngine
+from src.eval.metrics import create_task_metrics
 from src.eval.comparator import LayerComparator
-from torch.utils.data import DataLoader
+
+
+def _get_adapter_type(config: dict) -> str:
+    adapter_type = config.get('adapter', {}).get('type')
+    if not adapter_type:
+        raise ValueError("adapter.type must be specified in config")
+    return adapter_type
+
 
 class Runner:
     def __init__(self, device=None):
@@ -31,36 +40,6 @@ class Runner:
 
     def setup_data_loader(self, config: dict):
         """Setup the data loader from config."""
-        dataset_config = config.get('dataset', {})
-        
-        # Check for SLM adapter
-        if config.get('adapter', {}).get('type') == 'slm':
-            print("SLM Adapter detected. Loading wikitext-2 dataset...")
-            try:
-                import importlib
-                load_dataset = importlib.import_module("datasets").load_dataset
-                # Load wikitext-2 raw test split
-                dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
-                # Filter out empty lines
-                dataset = dataset.filter(lambda x: len(x['text'].strip()) > 0)
-                print(f"Loaded {len(dataset)} samples from wikitext-2.")
-            except Exception as e:
-                print(f"Error loading wikitext-2: {e}")
-                print("Falling back to dummy text dataset.")
-                class DummyTextDataset(torch.utils.data.Dataset):
-                    def __init__(self, length=100):
-                        self.length = length
-                        self.data = ["Hello, my name is", "The quick brown fox", "Once upon a time", "In a galaxy far far away"]
-                    def __len__(self):
-                        return self.length
-                    def __getitem__(self, idx):
-                        return {'text': self.data[idx % len(self.data)]}
-                
-                dataset = DummyTextDataset(length=100)
-
-            batch_size = dataset_config.get('batch_size', 4) # Default to smaller batch for SLM
-            return DataLoader(dataset, batch_size=batch_size, shuffle=False)
-
         return build_data_loader(config=config, project_root=PROJECT_ROOT)
 
     def run_single(self, config: Dict[str, Any], output_root: str = "runspace/outputs") -> Dict[str, Any]:
@@ -92,21 +71,13 @@ class Runner:
             'quant_format': quant_format,
             'base_config_path': meta.get('base_config_path', 'N/A'),
             'generated_config_path': meta.get('generated_config_path', 'N/A'),
-            'output_name': config.get('output_name', ''), # Custom identifier
+            'output_name': config.get('output_name', ''),
             'status': 'FAILED',
-            'acc1': 0.0,
-            'acc5': 0.0,
-            'certainty': 0.0,
-            'ref_acc1': 0.0,
-            'ref_acc5': 0.0,
-            'ref_certainty': 0.0,
-            'acc_drop': 0.0,
-            'acc_drop': 0.0,
             'weight_comp_red': 0.0,
             'weight_comp_share': 0.0,
             'input_comp_red': 0.0,
             'input_comp_share': 0.0,
-            'exec_error': None
+            'exec_error': None,
         }
 
         try:
@@ -182,64 +153,64 @@ class Runner:
             # Check evaluation mode
             eval_mode = config.get('evaluation', {}).get('mode', 'compare')
 
+            adapter_type = _get_adapter_type(config)
+
             if eval_mode == 'evaluate':
                 print(f"Running in EVALUATE mode (Quantized Model Only)...")
-                metrics_engine = MetricsEngine()
+                metrics_engine = create_task_metrics(adapter_type)
                 evaluator = Evaluator(adapter, metrics_engine, device=self.device)
-                
-                # Run full evaluation
+
                 max_batches = config.get('evaluation', {}).get('max_batches', -1)
                 eval_results = evaluator.evaluate(model, data_loader, max_batches=max_batches)
-                
-                results['acc1'] = eval_results.get('acc1', 0.0)
-                results['acc5'] = eval_results.get('acc5', 0.0)
-                results['certainty'] = eval_results.get('certainty', 0.0)
-                
+
+                results.update(eval_results)
+
                 if results['status'] != 'NO_QUANT':
                     results['status'] = 'SUCCESS'
-                
+
             else:
                 # COMPARE mode
                 print(f"Running in COMPARE mode (Reference vs Quantized)...")
-                
+
                 # Build reference model
                 ref_model = adapter.build_reference_model()
                 ref_model.to(self.device)
 
+                task_metrics_factory = functools.partial(create_task_metrics, adapter_type)
+
                 comparator = LayerComparator(
-                    ref_model, 
-                    model, 
-                    model_name=model_name, 
-                    quant_type=quant_format.replace('_', ''), 
-                    adapter=adapter, 
+                    ref_model,
+                    model,
+                    model_name=model_name,
+                    quant_type=quant_format.replace('_', ''),
+                    adapter=adapter,
                     device=self.device,
                     output_dir=output_dir,
-                    save_histograms=config.get('evaluation', {}).get('save_histograms', False)
+                    save_histograms=config.get('evaluation', {}).get('save_histograms', False),
+                    task_metrics_factory=task_metrics_factory,
                 )
-                
+
                 # Determine number of batches
                 compare_batches = config.get('evaluation', {}).get('compare_batches', -1)
                 if compare_batches == -1:
                     compare_batches = len(data_loader)
-                    
+
                 # Run Comparison (Single Pass)
                 comparator.compare(data_loader, num_batches=compare_batches, global_metrics=None)
-                
+
                 # Retrieve metrics from comparator
                 print("Retrieving metrics from comparator...")
-                quant_metrics = comparator.quant_metrics.compute()
-                ref_metrics = comparator.ref_metrics.compute()
-                
-                results['acc1'] = quant_metrics.get('acc1', 0.0)
-                results['acc5'] = quant_metrics.get('acc5', 0.0)
-                results['certainty'] = quant_metrics.get('certainty', 0.0)
-                
-                results['ref_acc1'] = ref_metrics.get('acc1', 0.0)
-                results['ref_acc5'] = ref_metrics.get('acc5', 0.0)
-                results['ref_certainty'] = ref_metrics.get('certainty', 0.0)
-                
-                results['acc_drop'] = results['ref_acc1'] - results['acc1']
-                
+                quant_results = comparator.quant_metrics.compute()
+                ref_results = comparator.ref_metrics.compute()
+
+                results.update(quant_results)
+                for key, val in ref_results.items():
+                    results[f"ref_{key}"] = val
+
+                # Primary metric drop: first key in quant_results (e.g. acc1 or ppl)
+                primary_key = next(iter(quant_results))
+                results['primary_metric_drop'] = results[f"ref_{primary_key}"] - results[primary_key]
+
                 # Retrieve Compression Stats
                 comp_stats = comparator.compression_tracker.get_stats()
                 results['weight_comp_red'] = comp_stats['weight_compression_reduction']
@@ -248,13 +219,13 @@ class Runner:
                 results['input_comp_share'] = comp_stats['input_share_of_total']
 
                 comparator.close()
-                
+
                 if results['status'] != 'NO_QUANT':
                     results['status'] = 'SUCCESS'
                     # Check for unquantized supported ops
                     if hasattr(comparator, 'unquantized_supported_count') and comparator.unquantized_supported_count > 0:
                         results['status'] = f"SUCCESS ({comparator.unquantized_supported_count} Unquantized)"
-                        
+
                 results['report_path'] = f"{output_dir}/comparison_report.txt"
 
         except Exception as e:
@@ -371,7 +342,6 @@ class Runner:
             'output_name': config.get('output_name', ''),
             'status': 'FAILED',
             'exec_error': error_msg,
-            'acc1': 0.0, 'acc5': 0.0, 'certainty': 0.0
         }
 
     def _setup_single_context(self, config, output_root):
@@ -398,8 +368,6 @@ class Runner:
             'quant_format': quant_format,
             'output_name': output_name,
             'status': 'FAILED',
-            'acc1': 0.0, 'acc5': 0.0, 'certainty': 0.0,
-            'ref_acc1': 0.0, 'ref_acc5': 0.0
         }
         
         try:
@@ -426,7 +394,7 @@ class Runner:
                 print(f"Warning: No quantized layers found for {model_name} ({output_name})")
                 
             # Metrics
-            metrics_engine = MetricsEngine()
+            metrics_engine = create_task_metrics(_get_adapter_type(config))
             
             return {
                 'status': 'READY',
@@ -508,9 +476,7 @@ class Runner:
                 # Compute metrics
                 m = ctx['metrics'].compute()
                 res = ctx['result']
-                res['acc1'] = m.get('acc1', 0.0)
-                res['acc5'] = m.get('acc5', 0.0)
-                res['certainty'] = m.get('certainty', 0.0)
+                res.update(m)
                 
                 if ctx['quant_layer_count'] == 0:
                     res['status'] = 'NO_QUANT'

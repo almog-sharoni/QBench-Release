@@ -9,7 +9,7 @@ from src.quantization.quantizer import quantize
 from src.ops.quant_base import calculate_scale
 
 class LayerComparator:
-    def __init__(self, ref_model, quant_model, model_name="model", quant_type="quant", adapter=None, device=None, output_dir=None, save_histograms=False):
+    def __init__(self, ref_model, quant_model, model_name="model", quant_type="quant", adapter=None, device=None, output_dir=None, save_histograms=False, task_metrics_factory=None):
         self.ref_model = ref_model
         self.quant_model = quant_model
         self.model_name = model_name
@@ -21,11 +21,15 @@ class LayerComparator:
         self.ref_activations = {}
         self.ref_weights = {}
         self.hooks = []
-        
-        # Metrics Engines
-        from src.eval.metrics import MetricsEngine
-        self.ref_metrics = MetricsEngine()
-        self.quant_metrics = MetricsEngine()
+
+        # Task Metrics
+        if task_metrics_factory is None:
+            raise ValueError(
+                "task_metrics_factory is required. "
+                "Pass e.g. functools.partial(create_task_metrics, adapter_type)."
+            )
+        self.ref_metrics = task_metrics_factory()
+        self.quant_metrics = task_metrics_factory()
         self.ref_certainty_sum = 0.0
         self.quant_certainty_sum = 0.0
         self.total_batches = 0
@@ -468,35 +472,29 @@ class LayerComparator:
         import torch.nn as nn
         
         report_lines = []
-        
+
         # 1. Model-Level Comparison
-        if hasattr(self, 'global_metrics') and self.global_metrics:
-            ref_acc = {'acc1': self.global_metrics.get('ref_acc1', 0.0), 'acc5': self.global_metrics.get('ref_acc5', 0.0)}
-            quant_acc = {'acc1': self.global_metrics.get('acc1', 0.0), 'acc5': self.global_metrics.get('acc5', 0.0)}
-            ref_certainty = self.global_metrics.get('ref_certainty', 0.0)
-            quant_certainty = self.global_metrics.get('certainty', 0.0)
-            acc_source = "Global (Full Dataset)"
-        else:
-            ref_acc = self.ref_metrics.compute()
-            quant_acc = self.quant_metrics.compute()
-            ref_certainty = self.ref_certainty_sum / max(1, self.total_batches)
-            quant_certainty = self.quant_certainty_sum / max(1, self.total_batches)
-            acc_source = "Local (Comparison Batches)"
-        
+        ref_metrics = self.ref_metrics.compute()
+        quant_metrics = self.quant_metrics.compute()
+        acc_source = "Local (Comparison Batches)"
+
         report_lines.append("\n=== Model Comparison Report ===")
         report_lines.append(f"Accuracy Source: {acc_source}")
         report_lines.append(f"{'Metric':<20} | {'Reference (FP32)':<20} | {f'Quantized ({self.quant_type})':<20}")
         report_lines.append("-" * 66)
-        ref_metrics = self.ref_metrics.compute()
-        quant_metrics = self.quant_metrics.compute()
-        
-        report_lines.append(f"{'Top-1 Accuracy':<20} | {ref_metrics['acc1']:.2f}%{'':<12} | {quant_metrics['acc1']:.2f}%")
-        report_lines.append(f"{'Top-5 Accuracy':<20} | {ref_metrics['acc5']:.2f}%{'':<12} | {quant_metrics['acc5']:.2f}%")
-        if 'ppl' in ref_metrics and ref_metrics['ppl'] is not None:
-            report_lines.append(f"{'Perplexity':<20} | {ref_metrics['ppl']:.2f}{'':<13} | {quant_metrics['ppl']:.2f}")
-        report_lines.append(f"{'Avg Certainty':<20} | {ref_certainty:.4f}{'':<14} | {quant_certainty:.4f}")
-        
-        # Compression Stats
+
+        _METRIC_LABELS = {
+            'acc1': ('Top-1 Accuracy', '{:.2f}%'),
+            'acc5': ('Top-5 Accuracy', '{:.2f}%'),
+            'certainty': ('Avg Certainty', '{:.4f}'),
+            'ppl': ('Perplexity', '{:.2f}'),
+        }
+        for key in ref_metrics:
+            label, fmt = _METRIC_LABELS.get(key, (key, '{:.4f}'))
+            ref_val = fmt.format(ref_metrics[key])
+            quant_val = fmt.format(quant_metrics[key])
+            report_lines.append(f"{label:<20} | {ref_val:<20} | {quant_val}")
+
         # Compression Stats
         report_lines.extend(self.compression_tracker.get_report_lines())
             
