@@ -14,6 +14,20 @@ _COMPRESSION_FIELDS = [
 _TAIL_FIELDS = ['primary_metric_drop', 'exec_error', 'report_path']
 _KNOWN_NON_METRIC = set(_FIXED_FIELDS + _COMPRESSION_FIELDS + _TAIL_FIELDS)
 
+# Human-readable labels for known metric keys (used in Markdown headers)
+_METRIC_LABELS = {
+    'acc1': 'Top-1 Acc',
+    'acc5': 'Top-5 Acc',
+    'ref_acc1': 'Ref Top-1',
+    'ref_acc5': 'Ref Top-5',
+    'certainty': 'Certainty',
+    'ref_certainty': 'Ref Certainty',
+    'ppl': 'PPL',
+    'ref_ppl': 'Ref PPL',
+}
+
+# Metric keys whose values should be displayed with a trailing '%' in Markdown
+_PERCENTAGE_METRICS = {'acc1', 'acc5', 'ref_acc1', 'ref_acc5'}
 
 def _collect_metric_keys(results: List[Dict[str, Any]]) -> List[str]:
     """Return metric keys in insertion order, deduplicated, excluding infrastructure keys."""
@@ -77,7 +91,7 @@ class ReportAggregator:
     def _write_markdown(self, results: List[Dict[str, Any]], output_file: str, timestamp: str):
         try:
             metric_keys = _collect_metric_keys(results)
-            metric_headers = [k.replace('_', ' ').title() for k in metric_keys]
+            metric_headers = [_METRIC_LABELS.get(k, k.replace('_', ' ').title()) for k in metric_keys]
 
             # Group results by base_config_path
             grouped_results: Dict[str, List[Dict[str, Any]]] = {}
@@ -124,7 +138,8 @@ class ReportAggregator:
                             if val is None:
                                 metric_cells.append('N/A')
                             elif isinstance(val, float):
-                                metric_cells.append(f"{val:.4f}")
+                                suffix = '%' if k in _PERCENTAGE_METRICS else ''
+                                metric_cells.append(f"{val:.4f}{suffix}")
                             else:
                                 metric_cells.append(str(val))
 
