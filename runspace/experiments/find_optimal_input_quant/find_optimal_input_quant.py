@@ -62,8 +62,9 @@ def get_args():
     parser.add_argument("--model_name", type=str, default="resnet18", help="Model name")
     parser.add_argument("--weights", type=str, default="DEFAULT", help="Model weights")
     parser.add_argument("--models_file", type=str, default=None, help="Path to models.yaml file to run on multiple models")
-    parser.add_argument("--dataset_name", type=str, default="imagenet", help="Dataset name")
-    parser.add_argument("--dataset_path", type=str, default="/data/imagenet/val", help="Dataset path")
+    parser.add_argument("--dataset_type", type=str, required=True, help="Dataset type (e.g., classification)")
+    parser.add_argument("--dataset_name", type=str, required=True, help="Dataset name")
+    parser.add_argument("--dataset_path", type=str, required=True, help="Dataset path")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
     parser.add_argument("--num_workers", type=int, default=16, help="Number of workers")
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of batches to process (default: -1 for all)")
@@ -404,6 +405,7 @@ def run_baselines(args, device, formats):
             'input_quantization': False # We will manually quantize inputs
         },
         'dataset': {
+             'type': args.dataset_type,
              'name': args.dataset_name, 'path': args.dataset_path, 
              'batch_size': args.batch_size, 'num_workers': args.num_workers
         }
@@ -723,6 +725,7 @@ def process_single_model(args, model_config, device, metrics):
         'model': {'name': model_name, 'weights': weights},
         'adapter': {'type': 'generic', 'quantized_ops': []}, 
         'dataset': {
+             'type': args.dataset_type,
              'name': args.dataset_name, 'path': args.dataset_path, 
              'batch_size': args.batch_size, 'num_workers': args.num_workers
         }

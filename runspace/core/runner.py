@@ -13,11 +13,10 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.adapters.adapter_factory import create_adapter
+from src.datasets import build_data_loader
 from src.eval.evaluator import Evaluator
 from src.eval.metrics import MetricsEngine
 from src.eval.comparator import LayerComparator
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
 from torch.utils.data import DataLoader
 
 class Runner:
@@ -38,7 +37,8 @@ class Runner:
         if config.get('adapter', {}).get('type') == 'slm':
             print("SLM Adapter detected. Loading wikitext-2 dataset...")
             try:
-                from datasets import load_dataset
+                import importlib
+                load_dataset = importlib.import_module("datasets").load_dataset
                 # Load wikitext-2 raw test split
                 dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
                 # Filter out empty lines
@@ -61,67 +61,7 @@ class Runner:
             batch_size = dataset_config.get('batch_size', 4) # Default to smaller batch for SLM
             return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
-        # Get dataset path
-        path = dataset_config.get('path', 'tests/data/imagenette2-320/val')
-        if not os.path.isabs(path):
-            data_dir = os.path.join(PROJECT_ROOT, path)
-        else:
-            data_dir = path
-        
-        # Custom Image Size
-        image_size = dataset_config.get('image_size', 224)
-        resize_size = dataset_config.get('resize_size', 256)
-        
-        # Standard ImageNet transforms
-        transform = transforms.Compose([
-            transforms.Resize(resize_size),
-            transforms.CenterCrop(image_size),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225]),
-        ])
-        
-        if not os.path.exists(data_dir):
-             print(f"Warning: Data directory {data_dir} does not exist. Skipping data loading.")
-             return None
-
-        dataset = datasets.ImageFolder(data_dir, transform=transform)
-        
-        # Load ImageNet Class Index for mapping (copied from run_eval.py)
-        import json
-        index_path = os.path.join(PROJECT_ROOT, 'tests/data/imagenet_class_index.json')
-        if os.path.exists(index_path):
-            with open(index_path, 'r') as f:
-                class_index = json.load(f)
-            
-            wnid_to_idx = {v[0]: int(k) for k, v in class_index.items()}
-            local_class_to_idx = dataset.class_to_idx
-            idx_map = {}
-            for wnid, local_idx in local_class_to_idx.items():
-                if wnid in wnid_to_idx:
-                    idx_map[local_idx] = wnid_to_idx[wnid]
-            
-            def target_transform(target):
-                return idx_map.get(target, target)
-            
-            dataset.target_transform = target_transform
-        
-        batch_size = dataset_config.get('batch_size', 32)
-        num_workers = dataset_config.get('num_workers', 0)
-        
-        # Optimization: pin_memory for faster host-to-device transfer
-        # persistent_workers to keep workers alive if running multiple passes (good practice)
-        pin_memory = torch.cuda.is_available()
-        persistent_workers = (num_workers > 0)
-        
-        return DataLoader(
-            dataset, 
-            batch_size=batch_size, 
-            shuffle=False, 
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-            persistent_workers=persistent_workers
-        )
+        return build_data_loader(config=config, project_root=PROJECT_ROOT)
 
     def run_single(self, config: Dict[str, Any], output_root: str = "runspace/outputs") -> Dict[str, Any]:
         """Runs a single configuration and returns the results."""
@@ -364,7 +304,12 @@ class Runner:
             # Create a signature based on dataset config
             ds_cfg = cfg.get('dataset', {})
             # We filter relevant keys for signature
-            sig_keys = {'name': ds_cfg.get('name'), 'path': ds_cfg.get('path'), 'batch_size': ds_cfg.get('batch_size')}
+            sig_keys = {
+                'type': ds_cfg.get('type'),
+                'name': ds_cfg.get('name'),
+                'path': ds_cfg.get('path'),
+                'batch_size': ds_cfg.get('batch_size'),
+            }
             ds_sig = json.dumps(sig_keys, sort_keys=True)
             
             if ds_sig not in groups: groups[ds_sig] = []

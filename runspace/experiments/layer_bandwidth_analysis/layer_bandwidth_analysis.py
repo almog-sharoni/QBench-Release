@@ -25,8 +25,9 @@ def get_args():
     parser = argparse.ArgumentParser(description="Analyze layer-wise bandwidth requirements (weights, inputs, outputs, MACs)")
     parser.add_argument("--model_name", type=str, default="resnet152", help="Model name")
     parser.add_argument("--weights", type=str, default="DEFAULT", help="Model weights")
-    parser.add_argument("--dataset_name", type=str, default="imagenet", help="Dataset name")
-    parser.add_argument("--dataset_path", type=str, default="/data/imagenet/val", help="Dataset path")
+    parser.add_argument("--dataset_type", type=str, required=True, help="Dataset type (e.g., classification)")
+    parser.add_argument("--dataset_name", type=str, required=True, help="Dataset name")
+    parser.add_argument("--dataset_path", type=str, required=True, help="Dataset path")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
     parser.add_argument("--num_workers", type=int, default=0, help="Number of workers (0 is recommended for single-batch analysis)")
     parser.add_argument("--output_dir", type=str, default=os.path.join(os.path.dirname(__file__), "results"), help="Output directory")
@@ -1041,6 +1042,7 @@ def main():
     print(f"Using device: {device}")
     
     dataset_config = {
+            'type': args.dataset_type,
          'name': args.dataset_name, 'path': args.dataset_path, 
          'batch_size': args.batch_size, 'num_workers': args.num_workers
     }

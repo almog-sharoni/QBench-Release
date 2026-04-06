@@ -60,8 +60,9 @@ def get_args():
     
     # Evaluation Args
     parser.add_argument("--run_eval", action="store_true", help="Run evaluation on FP32, FP8, and Optimized models")
-    parser.add_argument("--dataset_name", type=str, default="imagenet", help="Dataset name")
-    parser.add_argument("--dataset_path", type=str, default="/data/imagenet/val", help="Dataset path")
+    parser.add_argument("--dataset_type", type=str, required=True, help="Dataset type (e.g., classification)")
+    parser.add_argument("--dataset_name", type=str, required=True, help="Dataset name")
+    parser.add_argument("--dataset_path", type=str, required=True, help="Dataset path")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
     parser.add_argument("--num_workers", type=int, default=32, help="Number of workers")
     parser.add_argument("--weight_chunk_size", type=int, default=128, help="Weight/Input chunk size (blocks). If set, enables chunked quantization.")
@@ -395,6 +396,7 @@ def process_single_model(args, device, metrics, base_root):
         'model': {'name': args.model_name, 'weights': args.weights},
         'adapter': {'type': 'generic', 'quantized_ops': []},
         'dataset': {
+              'type': args.dataset_type,
              'name': args.dataset_name, 'path': args.dataset_path, 
              'batch_size': args.batch_size, 'num_workers': args.num_workers
         }

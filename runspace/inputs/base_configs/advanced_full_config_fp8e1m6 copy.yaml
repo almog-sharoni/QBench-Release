@@ -54,6 +54,7 @@ quantization:
   #     weight_mode: tensor
 
 dataset:
+  type: classification
   name: imagenet
   path: /data/imagenet/val
   batch_size: 64
