@@ -127,6 +127,27 @@ Use the interactive script to select a configuration and model from a menu.
 python3 runspace/run_interactive.py
 ```
 
+All inputs can also be passed as CLI flags to skip prompts:
+
+| Flag | Description |
+|------|-------------|
+| `--config <file> [file ...]` | Base config filename(s) from `runspace/inputs/base_configs/` |
+| `--model-list <file> [file ...]` | Model list filename(s) from `runspace/inputs/` |
+| `--model <name>` | Specific model name to run |
+| `--batch <n>` | Number of batches (`-1` for all) |
+| `--histograms` | Enable histogram generation (default: off) |
+| `--graph-only` | Generate quantization graphs only, skip evaluation |
+
+Any omitted flag falls back to its interactive prompt. Example fully non-interactive run:
+
+```bash
+python3 runspace/run_interactive.py \
+  --config superpoint_config_fp8e4m3.yaml \
+  --model-list feature_matching.yaml \
+  --model superpoint \
+  --batch 1
+```
+
 #### Option B: Batch Mode
 Use the `runspace/run_all.py` script to execute a batch of evaluations defined by all base configs and models.
 

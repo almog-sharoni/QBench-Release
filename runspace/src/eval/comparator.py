@@ -832,7 +832,7 @@ class LayerComparator:
         os.makedirs(report_dir, exist_ok=True)
         report_path = os.path.join(report_dir, "comparison_report.txt")
         
-        with open(report_path, "w") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             f.write(strip_ansi(report_str))
         print(f"Report saved to {report_path}")
 

@@ -71,6 +71,11 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Run QBench Interactive")
     parser.add_argument("--graph-only", action="store_true", help="Only generate quantization graphs without running full evaluation/comparison.")
+    parser.add_argument("--config", nargs='+', help="Base config filename(s) from runspace/inputs/base_configs/")
+    parser.add_argument("--model-list", nargs='+', dest="model_list", help="Model list filename(s) from runspace/inputs/")
+    parser.add_argument("--model", type=str, help="Specific model name to run")
+    parser.add_argument("--batch", type=int, help="Number of batches to run (-1 for all)")
+    parser.add_argument("--histograms", action="store_true", help="Enable histogram generation (default: no)")
     args = parser.parse_args()
 
     print("=== QBench Interactive Run ===\n")
@@ -96,7 +101,10 @@ def main():
             "slm_config_fp8e4m3.yaml",
             "tf32_accum_config.yaml"
         ]
-    selected_base_config_names = get_user_selection(base_config_names, "Base Config")
+    if args.config:
+        selected_base_config_names = args.config
+    else:
+        selected_base_config_names = get_user_selection(base_config_names, "Base Config")
     
     # 2. List Model Files
     inputs_dir = os.path.join(PROJECT_ROOT, 'runspace/inputs')
@@ -109,7 +117,10 @@ def main():
         print(f"Error: No model list files found in {inputs_dir}")
         sys.exit(1)
         
-    selected_model_file = get_user_selection(model_files, "Models List File")
+    if args.model_list:
+        selected_model_file = args.model_list
+    else:
+        selected_model_file = get_user_selection(model_files, "Models List File")
     # If user selected multiple (which get_user_selection supports), we just take the first one or merge?
     # get_user_selection returns a list.
     # For model list file, we probably just want one file to load models from, or we can load from all selected.
@@ -130,7 +141,10 @@ def main():
     # Remove duplicates if any
     model_names = sorted(list(set(model_names)))
     
-    selected_model_names = get_user_selection(model_names, "Model")
+    if args.model:
+        selected_model_names = [args.model]
+    else:
+        selected_model_names = get_user_selection(model_names, "Model")
     
     # Filter selected models
     # We need to handle potential duplicates in all_models list if multiple files have same model
@@ -180,42 +194,62 @@ def main():
         print(f"\nNumber of batches to run for all configs (default: {default_str}):")
         print("Press Enter to use default, enter a positive number, or -1 for all.")
         
-        while True:
-            batch_input = input("Batches: ").strip()
-            if not batch_input:
-                break
-            try:
-                new_batches = int(batch_input)
-                if new_batches > 0 or new_batches == -1:
-                    for config in all_configs:
-                        if 'evaluation' not in config:
-                            config['evaluation'] = {}
-                        config['evaluation']['compare_batches'] = new_batches
-                    
-                    batch_msg = "ALL" if new_batches == -1 else str(new_batches)
-                    print(f"Set number of batches to {batch_msg}")
+        if args.batch is not None:
+            new_batches = args.batch
+            if new_batches > 0 or new_batches == -1:
+                for config in all_configs:
+                    if 'evaluation' not in config:
+                        config['evaluation'] = {}
+                    config['evaluation']['compare_batches'] = new_batches
+                batch_msg = "ALL" if new_batches == -1 else str(new_batches)
+                print(f"Set number of batches to {batch_msg}")
+            else:
+                print(f"Warning: Invalid --batch value {new_batches}, using config defaults.")
+        else:
+            while True:
+                batch_input = input("Batches: ").strip()
+                if not batch_input:
                     break
-                else:
-                    print("Please enter a positive number or -1.")
-            except ValueError:
-                print("Invalid input. Please enter a number.")
+                try:
+                    new_batches = int(batch_input)
+                    if new_batches > 0 or new_batches == -1:
+                        for config in all_configs:
+                            if 'evaluation' not in config:
+                                config['evaluation'] = {}
+                            config['evaluation']['compare_batches'] = new_batches
+
+                        batch_msg = "ALL" if new_batches == -1 else str(new_batches)
+                        print(f"Set number of batches to {batch_msg}")
+                        break
+                    else:
+                        print("Please enter a positive number or -1.")
+                except ValueError:
+                    print("Invalid input. Please enter a number.")
         
     # 3.6. Ask for Histogram Generation - SKIP if graph_only
+    cli_mode = any([args.config, args.model_list, args.model, args.batch is not None])
     if not args.graph_only:
-        print("\nGenerate Quantization Histograms?")
-        print("Note: This will force execution mode to 'compare' and may be slower due to reference model execution.")
-        
-        hist_input = input("Generate Histograms? (y/N): ").strip().lower()
-        if hist_input in ('y', 'yes'):
+        if args.histograms:
             print("Enabling histogram generation for all configurations...")
             for config in all_configs:
                 if 'evaluation' not in config:
                     config['evaluation'] = {}
                 config['evaluation']['save_histograms'] = True
-                # Force compare mode as histograms require reference vs quantized comparison
                 config['evaluation']['mode'] = 'compare'
-        else:
-            print("Using configuration defaults for histograms.")
+        elif not cli_mode:
+            print("\nGenerate Quantization Histograms?")
+            print("Note: This will force execution mode to 'compare' and may be slower due to reference model execution.")
+            hist_input = input("Generate Histograms? (y/N): ").strip().lower()
+            if hist_input in ('y', 'yes'):
+                print("Enabling histogram generation for all configurations...")
+                for config in all_configs:
+                    if 'evaluation' not in config:
+                        config['evaluation'] = {}
+                    config['evaluation']['save_histograms'] = True
+                    # Force compare mode as histograms require reference vs quantized comparison
+                    config['evaluation']['mode'] = 'compare'
+            else:
+                print("Using configuration defaults for histograms.")
         
     # 4. Run Batch
     print(f"\nStarting execution of {len(all_configs)} configurations...")
