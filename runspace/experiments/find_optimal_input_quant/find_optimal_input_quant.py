@@ -72,8 +72,23 @@ def get_args():
     parser.add_argument("--chunk_size", type=int, default=128, help="Chunk size for input quantization (blocks)")
     parser.add_argument("--only_dynamic", action="store_true", help="Skip baseline runs and only run dynamic optimization")
     parser.add_argument("--only_baselines", action="store_true", help="Skip dynamic runs and only run baseline runs")
+    parser.add_argument("--force_rerun", action="store_true", help="Re-run all experiments even if already in DB")
     # Add other args as needed
     return parser.parse_args()
+
+
+def _input_quant_run_exists(db, model_name, experiment_type, activation_dt):
+    """Return True if a successful run exists in DB for this model/experiment/activation combo."""
+    runs = db.get_runs()
+    if runs.empty:
+        return False
+    return not runs[
+        (runs['model_name']      == model_name) &
+        (runs['experiment_type'] == experiment_type) &
+        (runs['weight_dt']       == 'fp32') &
+        (runs['activation_dt']   == activation_dt) &
+        (runs['status']          == 'SUCCESS')
+    ].empty
 
 
 class DynamicInputQuantizer:
@@ -653,19 +668,37 @@ def process_single_model(args, model_config, device, metrics):
     
     # --- 1. Run Baselines (Global) ---
     if not args.only_dynamic:
-        
-        # We need to constructing specific args/config for this model
-        # Create a temp args-like object or just pass config dict? 
-        # run_baselines uses 'args.model_name' etc. 
-        # Let's modify run_baselines to accept model_config dict instead of just args, 
-        # or temporarily patch args.
-        
-        # Patch args for this model (simplest refactor without changing everything signature)
-        # Note: This modifies the passed args object, which is fine since we do it per loop
         args.model_name = model_name
         args.weights = weights
-        
-        baseline_stats = run_baselines(args, device, baseline_formats)
+
+        # Check which baseline formats are already in DB
+        cached_baseline_stats = {}
+        formats_to_run = []
+        if not args.force_rerun:
+            for fmt in baseline_formats:
+                if _input_quant_run_exists(db, model_name, 'input_quant_baseline', fmt) or fmt == 'fp32' and _input_quant_run_exists(db, model_name, 'fp32_ref', 'fp32'):
+                    all_runs = db.get_runs()
+                    row = all_runs[
+                        (all_runs['model_name'] == model_name) &
+                        (all_runs['weight_dt']  == 'fp32') &
+                        (all_runs['activation_dt'] == fmt) &
+                        (all_runs['status'] == 'SUCCESS')
+                    ]
+                    if not row.empty:
+                        r = row.iloc[0]
+                        cached_baseline_stats[fmt] = {
+                            'acc1': float(r['acc1']), 'acc5': float(r['acc5']),
+                            'norm_l1': float(r['l1'] or 0), 'norm_mse': float(r['mse'] or 0),
+                            'certainty': float(r['certainty'] or 0),
+                        }
+                        print(f"[Baseline] Skipping {fmt} — already in DB (acc1={r['acc1']:.2f}%)")
+                        continue
+                formats_to_run.append(fmt)
+        else:
+            formats_to_run = list(baseline_formats)
+
+        new_baseline_stats = run_baselines(args, device, formats_to_run) if formats_to_run else {}
+        baseline_stats = {**cached_baseline_stats, **new_baseline_stats}
         
         # Identify Reference (fp32)
         ref_acc1 = baseline_stats.get('fp32', {}).get('acc1', 0.0)
@@ -742,9 +775,14 @@ def process_single_model(args, model_config, device, metrics):
             loader = runner.setup_data_loader(config)
             
             for metric in metrics:
+                activation_dt = f"dyn_input_{metric}"
+                if not args.force_rerun and _input_quant_run_exists(db, model_name, 'input_quant_dynamic', activation_dt):
+                    print(f"[Dynamic] Skipping {metric} — already in DB for {model_name}")
+                    continue
+
                 print(f"\n===========================================")
                 print(f"Processing Metric: {metric.upper()} for {model_name}")
-                print(f"===========================================")
+                print(f"=============================================")
                 
                 metric_out_dir = os.path.join(model_out_dir, metric)
                 os.makedirs(metric_out_dir, exist_ok=True)

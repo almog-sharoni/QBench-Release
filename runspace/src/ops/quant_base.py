@@ -267,7 +267,7 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
 
         # Max per chunk (standard single format mode)
         max_val_chunk = chunked.abs().amax(dim=-1, keepdim=True) # [N, num_chunks, 1]
-        max_val_chunk = torch.clamp(max_val_chunk, min=1e-5)
+        max_val_chunk = torch.clamp(max_val_chunk, min=1e-9)
         
         # Calculate scale per chunk
         # Calculate scale per chunk

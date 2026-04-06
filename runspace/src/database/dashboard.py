@@ -110,15 +110,20 @@ else:
                 return
 
             rows = []
+            chunk_dist_rows = []  # For per-layer chunk distribution (dynamic runs)
             for layer, value in quant_map.items():
-                # New format: {"format": "fp4_e1m2", "type": "Conv2d"}
+                # New format: {"format": "fp4_e1m2", "type": "Conv2d", ...}
                 # Old format: "fp4_e1m2"  or  ["fp4_e1m2", ...]
                 if isinstance(value, dict):
                     fmt = value.get("format", "?")
                     layer_type = value.get("type", "?")
+                    per_chunk_counts = value.get("format_counts")
+                    total_chunks = value.get("total_chunks")
                 else:
                     fmt = value
                     layer_type = "?"
+                    per_chunk_counts = None
+                    total_chunks = None
 
                 if isinstance(fmt, list):
                     counts = {}
@@ -130,6 +135,11 @@ else:
                     rows.append({"Layer": layer, "Type": layer_type, "Format": fmt_str, "Mode": "per-chunk"})
                 else:
                     rows.append({"Layer": layer, "Type": layer_type, "Format": str(fmt), "Mode": mode_label})
+
+                if per_chunk_counts and total_chunks:
+                    row = {"Layer": layer, "Type": layer_type, "Total Chunks": total_chunks}
+                    row.update({f: per_chunk_counts.get(f, 0) for f in per_chunk_counts})
+                    chunk_dist_rows.append(row)
 
             if not rows:
                 return
@@ -151,6 +161,21 @@ else:
                     "Mode":   st.column_config.TextColumn("Mode"),
                 },
             )
+
+            if chunk_dist_rows:
+                with st.expander("📊 Chunk Format Distribution (per layer)", expanded=False):
+                    chunk_df = pd.DataFrame(chunk_dist_rows).fillna(0)
+                    # Move Layer/Type/Total Chunks to front; format columns sorted by total usage
+                    fixed_cols = ["Layer", "Type", "Total Chunks"]
+                    fmt_cols = sorted(
+                        [c for c in chunk_df.columns if c not in fixed_cols],
+                        key=lambda c: -chunk_df[c].sum()
+                    )
+                    chunk_df = chunk_df[fixed_cols + fmt_cols]
+                    for fc in fmt_cols:
+                        chunk_df[fc] = chunk_df[fc].astype(int)
+                    chunk_df["Total Chunks"] = chunk_df["Total Chunks"].astype(int)
+                    st.dataframe(chunk_df, use_container_width=True)
 
         _render_map_section("⚖️ Weight Formats", run_row.get('quant_map_json'), "per-layer")
         _render_map_section("⚡ Input Formats",  run_row.get('input_map_json'),  "dynamic")
