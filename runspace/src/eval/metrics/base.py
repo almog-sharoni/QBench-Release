@@ -22,3 +22,8 @@ class TaskMetricsBase(ABC):
     def percentage_keys(self) -> set[str]:
         """Return the subset of metric keys whose values should be displayed as a percentage."""
         ...
+
+    @abstractmethod
+    def compute_certainty(self, predictions: torch.Tensor) -> float:
+        """Return mean certainty score for a single batch of predictions."""
+        ...

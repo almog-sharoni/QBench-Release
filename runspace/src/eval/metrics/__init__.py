@@ -3,7 +3,6 @@ from .classification import ClassificationMetrics
 from .language_model import LanguageModelMetrics
 from .factory import create_task_metrics
 from .utils import (
-    compute_certainty,
     compute_mse,
     compute_mean_pow16_error,
     compute_cosine_similarity,
@@ -17,7 +16,6 @@ __all__ = [
     "ClassificationMetrics",
     "LanguageModelMetrics",
     "create_task_metrics",
-    "compute_certainty",
     "compute_mse",
     "compute_mean_pow16_error",
     "compute_cosine_similarity",

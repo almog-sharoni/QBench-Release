@@ -33,50 +33,18 @@ class RunDatabase:
                     model_name TEXT NOT NULL,
                     weight_dt TEXT,
                     activation_dt TEXT,
-                    acc1 REAL,
-                    acc5 REAL,
-                    ref_acc1 REAL,
-                    ref_acc5 REAL,
-                    ref_certainty REAL,
+                    task_type TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    ref_metrics_json TEXT,
                     experiment_type TEXT,
                     run_date TEXT,
                     status TEXT,
                     mse REAL,
                     l1 REAL,
-                    certainty REAL
+                    quant_map_json TEXT,
+                    input_map_json TEXT
                 )
             ''')
-            
-            # Migration: Check if columns exist and add if not (for existing databases)
-            try:
-                cursor.execute("ALTER TABLE runs ADD COLUMN ref_acc1 REAL")
-                cursor.execute("ALTER TABLE runs ADD COLUMN ref_acc5 REAL")
-            except sqlite3.OperationalError: pass # Already exists
-            
-            try:
-                cursor.execute("ALTER TABLE runs ADD COLUMN experiment_type TEXT")
-            except sqlite3.OperationalError: pass # Already exists
-
-            try: cursor.execute("ALTER TABLE runs ADD COLUMN ref_acc1 REAL")
-            except sqlite3.OperationalError: pass
-            try: cursor.execute("ALTER TABLE runs ADD COLUMN ref_acc5 REAL")
-            except sqlite3.OperationalError: pass
-            try: cursor.execute("ALTER TABLE runs ADD COLUMN ref_certainty REAL")
-            except sqlite3.OperationalError: pass
-            try: cursor.execute("ALTER TABLE runs ADD COLUMN run_date TEXT")
-            except sqlite3.OperationalError: pass
-            try: cursor.execute("ALTER TABLE runs ADD COLUMN status TEXT")
-            except sqlite3.OperationalError: pass
-            try: cursor.execute("ALTER TABLE runs ADD COLUMN mse REAL")
-            except sqlite3.OperationalError: pass
-            try: cursor.execute("ALTER TABLE runs ADD COLUMN l1 REAL")
-            except sqlite3.OperationalError: pass
-            try: cursor.execute("ALTER TABLE runs ADD COLUMN certainty REAL")
-            except sqlite3.OperationalError: pass
-            try: cursor.execute("ALTER TABLE runs ADD COLUMN quant_map_json TEXT")
-            except sqlite3.OperationalError: pass
-            try: cursor.execute("ALTER TABLE runs ADD COLUMN input_map_json TEXT")
-            except sqlite3.OperationalError: pass
             
             # Create model_graphs table for storing quantization visualizations
             cursor.execute('''
@@ -105,30 +73,42 @@ class RunDatabase:
                 
             conn.commit()
 
-    def log_run(self, model_name, weight_dt, activation_dt, acc1, acc5, status="SUCCESS",
-                ref_acc1=None, ref_acc5=None, ref_certainty=None, experiment_type=None, run_date=None,
-                mse=None, l1=None, certainty=None, quant_map_json=None, input_map_json=None):
+    def log_run(self, model_name, weight_dt, activation_dt, task_type, metrics, status="SUCCESS",
+                ref_metrics=None, experiment_type=None, run_date=None,
+                mse=None, l1=None, quant_map_json=None, input_map_json=None):
         """
         Logs a new run to the database.
-        quant_map_json : JSON string mapping layer -> weight format.
-        input_map_json : JSON string mapping layer -> dominant input format
-                         (from DynamicInputQuantizer layer_stats).
+
+        task_type     : Required. Task identifier, e.g. "classification" or "language_model".
+        metrics       : Required. Dict of metric name -> float for the quantized run,
+                        e.g. {"acc1": 76.3, "acc5": 93.0} or {"ppl": 12.4}.
+        ref_metrics   : Optional. Same structure for the reference (fp32) run.
+        quant_map_json: JSON string mapping layer -> weight format.
+        input_map_json: JSON string mapping layer -> dominant input format
+                        (from DynamicInputQuantizer layer_stats).
         """
+        if not isinstance(task_type, str) or not task_type:
+            raise ValueError("task_type must be a non-empty string")
+        if not isinstance(metrics, dict) or not metrics:
+            raise ValueError("metrics must be a non-empty dict")
+
         if run_date is None:
-            from datetime import datetime
             run_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        metrics_json = json.dumps(metrics)
+        ref_metrics_json = json.dumps(ref_metrics) if ref_metrics is not None else None
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO runs (
-                    model_name, weight_dt, activation_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
-                    experiment_type, run_date, status, mse, l1, certainty, quant_map_json, input_map_json
+                    model_name, weight_dt, activation_dt, task_type, metrics_json, ref_metrics_json,
+                    experiment_type, run_date, status, mse, l1, quant_map_json, input_map_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                model_name, weight_dt, activation_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
-                experiment_type, run_date, status, mse, l1, certainty, quant_map_json, input_map_json
+                model_name, weight_dt, activation_dt, task_type, metrics_json, ref_metrics_json,
+                experiment_type, run_date, status, mse, l1, quant_map_json, input_map_json
             ))
             conn.commit()
             print(f"Logged run for {model_name} to {self.db_path}")
@@ -160,11 +140,11 @@ class RunDatabase:
             print("Database cleared.")
 
     def get_summary(self):
-        """Returns a summary of runs grouped by model and status."""
+        """Returns a summary of runs grouped by model, task type, and status."""
         df = self.get_runs()
         if df.empty:
             return "No runs found."
-        return df.groupby(['model_name', 'status']).size().unstack(fill_value=0)
+        return df.groupby(['model_name', 'task_type', 'status']).size().unstack(fill_value=0)
 
     # ============= MODEL GRAPH METHODS =============
     

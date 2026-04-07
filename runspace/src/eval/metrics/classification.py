@@ -1,5 +1,5 @@
+import torch
 from .base import TaskMetricsBase
-from .utils import compute_certainty
 
 
 class ClassificationMetrics(TaskMetricsBase):
@@ -9,10 +9,16 @@ class ClassificationMetrics(TaskMetricsBase):
         self._total = 0
         self.total_certainty = 0.0
 
+    def compute_certainty(self, predictions: torch.Tensor) -> float:
+        import torch.nn.functional as F
+        probs = F.softmax(predictions, dim=1)  # predictions: [batch, num_classes]
+        max_probs, _ = probs.max(dim=1)
+        return max_probs.mean().item()
+
     def update(self, predictions, targets):
         # predictions: [batch, num_classes] — 2D
         batch = predictions.size(0)
-        self.total_certainty += compute_certainty(predictions) * batch
+        self.total_certainty += self.compute_certainty(predictions) * batch
         self._total += batch
         _, pred_1 = predictions.topk(1, 1, True, True)
         self.correct_1 += pred_1.eq(targets.view(-1, 1)).sum().item()

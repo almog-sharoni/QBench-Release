@@ -30,8 +30,6 @@ class LayerComparator:
             )
         self.ref_metrics = task_metrics_factory()
         self.quant_metrics = task_metrics_factory()
-        self.ref_certainty_sum = 0.0
-        self.quant_certainty_sum = 0.0
         self.total_batches = 0
         self.layer_metrics = {}
         
@@ -106,8 +104,6 @@ class LayerComparator:
                     module.capture_activations = True
 
     def compare(self, data_loader, num_batches=1, global_metrics=None):
-        from src.eval.metrics import compute_certainty
-        
         self.global_metrics = global_metrics
         self.ref_model.eval()
         self.quant_model.eval()
@@ -170,8 +166,6 @@ class LayerComparator:
                 self.ref_metrics.update(ref_outputs, targets)
                 self.quant_metrics.update(quant_outputs, targets)
                 
-                self.ref_certainty_sum += compute_certainty(ref_outputs)
-                self.quant_certainty_sum += compute_certainty(quant_outputs)
                 self.total_batches += 1
                 
                 # Compare Layers
@@ -483,14 +477,11 @@ class LayerComparator:
         report_lines.append(f"{'Metric':<20} | {'Reference (FP32)':<20} | {f'Quantized ({self.quant_type})':<20}")
         report_lines.append("-" * 66)
 
-        _METRIC_LABELS = {
-            'acc1': ('Top-1 Accuracy', '{:.2f}%'),
-            'acc5': ('Top-5 Accuracy', '{:.2f}%'),
-            'certainty': ('Avg Certainty', '{:.4f}'),
-            'ppl': ('Perplexity', '{:.2f}'),
-        }
+        labels = self.ref_metrics.metric_labels()
+        pct_keys = self.ref_metrics.percentage_keys()
         for key in ref_metrics:
-            label, fmt = _METRIC_LABELS.get(key, (key, '{:.4f}'))
+            label = labels.get(key, key)
+            fmt = '{:.2f}%' if key in pct_keys else '{:.4f}'
             ref_val = fmt.format(ref_metrics[key])
             quant_val = fmt.format(quant_metrics[key])
             report_lines.append(f"{label:<20} | {ref_val:<20} | {quant_val}")

@@ -1,3 +1,4 @@
+import torch
 from .base import TaskMetricsBase
 
 
@@ -28,3 +29,10 @@ class LanguageModelMetrics(TaskMetricsBase):
 
     def percentage_keys(self) -> set[str]:
         return set()
+
+    def compute_certainty(self, predictions: torch.Tensor) -> float:
+        import torch.nn.functional as F
+        # predictions: [batch, seq_len, vocab_size]
+        probs = F.softmax(predictions, dim=2)
+        max_probs, _ = probs.max(dim=2)  # [batch, seq_len]
+        return max_probs.mean().item()

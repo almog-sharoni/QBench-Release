@@ -1,14 +1,6 @@
 import torch
 
 
-def compute_certainty(predictions):
-    """Computes mean certainty (max softmax probability) of predictions."""
-    import torch.nn.functional as F
-    probs = F.softmax(predictions, dim=1)
-    max_probs, _ = probs.max(dim=1)
-    return max_probs.mean().item()
-
-
 def compute_mse(tensor_a, tensor_b):
     """Computes Mean Squared Error between two tensors."""
     return compute_mean_pow16_error(tensor_a, tensor_b)
