@@ -22,3 +22,9 @@ class LanguageModelMetrics(TaskMetricsBase):
             raise RuntimeError("No tokens processed; cannot compute metrics.")
         import math
         return {"ppl": math.exp(self.total_loss / self.total_tokens)}
+
+    def metric_labels(self) -> dict[str, str]:
+        return {"ppl": "PPL"}
+
+    def percentage_keys(self) -> set[str]:
+        return set()

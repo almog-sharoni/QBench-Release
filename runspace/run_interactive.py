@@ -20,6 +20,7 @@ if 'PYTORCH_KERNEL_CACHE_PATH' not in os.environ:
 from runspace.core.config_factory import ConfigFactory
 from runspace.core.runner import Runner
 from runspace.core.report_aggregator import ReportAggregator
+from runspace.src.eval.metrics import create_task_metrics
 
 def load_models_list(path: str) -> list:
     with open(path, 'r') as f:
@@ -265,12 +266,14 @@ def main():
     if len(results) > 0 and not args.graph_only:
         print("Aggregating results...")
         aggregator = ReportAggregator()
+        adapter_type = all_configs[0].get('adapter', {}).get('type')
+        task_metrics = create_task_metrics(adapter_type)
         summary_path = os.path.join(output_root, 'interactive_summary_report.csv')
-        aggregator.aggregate(results, summary_path)
-        
+        aggregator.aggregate(results, summary_path, task_metrics)
+
         # Generate Markdown version
         summary_md_path = os.path.splitext(summary_path)[0] + '.md'
-        aggregator.aggregate(results, summary_md_path)
+        aggregator.aggregate(results, summary_md_path, task_metrics)
         
         print(f"Summary Report: {summary_path}")
         print(f"Markdown Report: {summary_md_path}")

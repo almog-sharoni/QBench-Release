@@ -15,6 +15,7 @@ if 'TORCH_HOME' not in os.environ:
 from runspace.core.config_factory import ConfigFactory
 from runspace.core.runner import Runner
 from runspace.core.report_aggregator import ReportAggregator
+from runspace.src.eval.metrics import create_task_metrics
 
 def load_models_list(path: str) -> list:
     with open(path, 'r') as f:
@@ -90,12 +91,14 @@ def main():
     # 3. Aggregate Reports
     print("Aggregating results...")
     aggregator = ReportAggregator()
+    adapter_type = all_configs[0].get('adapter', {}).get('type')
+    task_metrics = create_task_metrics(adapter_type)
     summary_path = os.path.join(args.output_dir, args.summary_file)
-    aggregator.aggregate(results, summary_path)
-    
+    aggregator.aggregate(results, summary_path, task_metrics)
+
     # Generate Markdown version as well
     summary_md_path = os.path.splitext(summary_path)[0] + '.md'
-    aggregator.aggregate(results, summary_md_path)
+    aggregator.aggregate(results, summary_md_path, task_metrics)
     
     print("Batch run completed.")
 

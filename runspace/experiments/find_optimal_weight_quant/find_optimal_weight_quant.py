@@ -30,6 +30,7 @@ from runspace.src.quantization.constants import get_quantization_bias
 # Late import
 from runspace.core.runner import Runner
 from runspace.core.report_aggregator import ReportAggregator
+from runspace.src.eval.metrics import create_task_metrics
 from runspace.src.registry.op_registry import OpRegistry
 
 baseline_formats = [
@@ -920,8 +921,9 @@ def process_single_model(args, device, metrics, base_root):
 
         # Aggregate
         aggregator = ReportAggregator()
+        task_metrics = create_task_metrics('generic')
         summary_path = os.path.join(model_dir, "evaluation_summary.csv")
-        aggregator.aggregate(results, summary_path)
+        aggregator.aggregate(results, summary_path, task_metrics)
         # Attach errors to results for plotting
         for res in results:
             out_name = res.get('output_name', '')

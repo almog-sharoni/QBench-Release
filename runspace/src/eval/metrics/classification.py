@@ -27,3 +27,13 @@ class ClassificationMetrics(TaskMetricsBase):
             "acc5": 100.0 * self.correct_5 / self._total,
             "certainty": self.total_certainty / self._total,
         }
+
+    def metric_labels(self) -> dict[str, str]:
+        return {
+            "acc1": "Top-1 Acc",
+            "acc5": "Top-5 Acc",
+            "certainty": "Certainty",
+        }
+
+    def percentage_keys(self) -> set[str]:
+        return {"acc1", "acc5"}

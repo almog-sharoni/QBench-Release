@@ -3,6 +3,13 @@ import os
 from typing import List, Dict, Any
 from datetime import datetime
 
+import sys
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from src.eval.metrics.base import TaskMetricsBase
+
 _FIXED_FIELDS = [
     'timestamp', 'model_name', 'output_name', 'quant_format',
     'base_config_path', 'generated_config_path', 'status',
@@ -14,20 +21,20 @@ _COMPRESSION_FIELDS = [
 _TAIL_FIELDS = ['primary_metric_drop', 'exec_error', 'report_path']
 _KNOWN_NON_METRIC = set(_FIXED_FIELDS + _COMPRESSION_FIELDS + _TAIL_FIELDS)
 
-# Human-readable labels for known metric keys (used in Markdown headers)
-_METRIC_LABELS = {
-    'acc1': 'Top-1 Acc',
-    'acc5': 'Top-5 Acc',
-    'ref_acc1': 'Ref Top-1',
-    'ref_acc5': 'Ref Top-5',
-    'certainty': 'Certainty',
-    'ref_certainty': 'Ref Certainty',
-    'ppl': 'PPL',
-    'ref_ppl': 'Ref PPL',
-}
 
-# Metric keys whose values should be displayed with a trailing '%' in Markdown
-_PERCENTAGE_METRICS = {'acc1', 'acc5', 'ref_acc1', 'ref_acc5'}
+def _build_display_meta(task_metrics: TaskMetricsBase) -> tuple[dict[str, str], set[str]]:
+    """Derive label map and percentage key set (including ref_ variants) from a task metrics instance."""
+    base_labels = task_metrics.metric_labels()
+    base_pct = task_metrics.percentage_keys()
+
+    all_labels: dict[str, str] = {}
+    for k, label in base_labels.items():
+        all_labels[k] = label
+        all_labels[f"ref_{k}"] = f"Ref {label}"
+
+    all_pct: set[str] = base_pct | {f"ref_{k}" for k in base_pct}
+    return all_labels, all_pct
+
 
 def _collect_metric_keys(results: List[Dict[str, Any]]) -> List[str]:
     """Return metric keys in insertion order, deduplicated, excluding infrastructure keys."""
@@ -45,17 +52,22 @@ class ReportAggregator:
     def __init__(self):
         pass
 
-    def aggregate(self, results: List[Dict[str, Any]], output_file: str):
+    def aggregate(self, results: List[Dict[str, Any]], output_file: str, task_metrics: TaskMetricsBase):
         """
         Aggregates run results into a single file.
 
         Args:
             results: List of result dictionaries from Runner.
             output_file: Path to the output file (e.g., summary.csv or summary.md).
+            task_metrics: A task metrics instance used to derive human-readable labels
+                          and percentage-display flags. Must implement metric_labels()
+                          and percentage_keys().
         """
         if not results:
             print("No results to aggregate.")
             return
+
+        all_labels, all_pct = _build_display_meta(task_metrics)
 
         # Add timestamp to results
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -68,7 +80,7 @@ class ReportAggregator:
         if ext == '.csv':
             self._write_csv(results, output_file)
         elif ext == '.md':
-            self._write_markdown(results, output_file, timestamp)
+            self._write_markdown(results, output_file, timestamp, all_labels, all_pct)
         else:
             raise ValueError(f"Unsupported report format '{ext}'. Use .csv or .md.")
 
@@ -88,10 +100,17 @@ class ReportAggregator:
         except Exception as e:
             print(f"Failed to write CSV report: {e}")
 
-    def _write_markdown(self, results: List[Dict[str, Any]], output_file: str, timestamp: str):
+    def _write_markdown(
+        self,
+        results: List[Dict[str, Any]],
+        output_file: str,
+        timestamp: str,
+        all_labels: dict[str, str],
+        all_pct: set[str],
+    ):
         try:
             metric_keys = _collect_metric_keys(results)
-            metric_headers = [_METRIC_LABELS.get(k, k.replace('_', ' ').title()) for k in metric_keys]
+            metric_headers = [all_labels.get(k, k.replace('_', ' ').title()) for k in metric_keys]
 
             # Group results by base_config_path
             grouped_results: Dict[str, List[Dict[str, Any]]] = {}
@@ -138,7 +157,7 @@ class ReportAggregator:
                             if val is None:
                                 metric_cells.append('N/A')
                             elif isinstance(val, float):
-                                suffix = '%' if k in _PERCENTAGE_METRICS else ''
+                                suffix = '%' if k in all_pct else ''
                                 metric_cells.append(f"{val:.4f}{suffix}")
                             else:
                                 metric_cells.append(str(val))
