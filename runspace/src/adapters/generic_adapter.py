@@ -13,7 +13,7 @@ except ImportError:
 
 class GenericAdapter(BaseAdapter):
     """
-    A generic adapter that works with any PyTorch model from torchvision.
+    A generic adapter that works with any PyTorch model from torchvision or timm.
     Recursively replaces Conv2d, Linear, BatchNorm2d with quantized ops.
     """
     
@@ -21,7 +21,7 @@ class GenericAdapter(BaseAdapter):
         self,
         model_name: str = "resnet18",
         model: nn.Module = None,
-        model_source: str = "torchvision",
+        model_source: str = "auto",
         weights: str = None,
         input_quantization: bool = True,
         quantize_first_layer: bool = False,
@@ -42,9 +42,11 @@ class GenericAdapter(BaseAdapter):
         simulate_tf32_accum: bool = False,
         rounding: str = "nearest",
         input_chunk_size: int = None,
-        run_id: str = "default"
+        run_id: str = "default",
+        skip_calibration: bool = False,
     ):
         super().__init__()
+        self.skip_calibration = skip_calibration
         self.model_name = model_name
         self.base_model_instance = model
         self.model_source = model_source
@@ -76,17 +78,38 @@ class GenericAdapter(BaseAdapter):
         self.input_chunk_size = input_chunk_size
         self.model = self.build_model(quantized=True)
 
+    def _auto_detect_model_source(self) -> str:
+        """Detect whether the model lives in torchvision or timm."""
+        if hasattr(models, self.model_name):
+            return "torchvision"
+        try:
+            import timm
+            if timm.is_model(self.model_name):
+                return "timm"
+        except ImportError:
+            pass
+        raise ValueError(
+            f"Model '{self.model_name}' not found in torchvision or timm. "
+            f"Specify model_source explicitly if using a custom source."
+        )
+
     def _load_base_model(self) -> nn.Module:
         """Loads the base model from torchvision or other sources."""
         if self.base_model_instance is not None:
-            # Return a copy to ensure we don't modify the original instance
             import copy
             return copy.deepcopy(self.base_model_instance)
-            
+
+        if self.model_source == "auto":
+            self.model_source = self._auto_detect_model_source()
+            print(f"Auto-detected model source: {self.model_source}")
+
         if self.model_source == "torchvision":
             return self._load_torchvision_model()
+        elif self.model_source == "timm":
+            return self._load_timm_model()
         else:
-            raise ValueError(f"Unsupported model source: {self.model_source}")
+            raise ValueError(f"Unknown model_source: '{self.model_source}'. Use 'torchvision', 'timm', or 'auto'.")
+
 
     def _load_torchvision_model(self) -> nn.Module:
         """Load a model from torchvision.models."""
@@ -177,6 +200,27 @@ class GenericAdapter(BaseAdapter):
                 return weights_class.DEFAULT
         
         return None
+
+    def _load_timm_model(self) -> nn.Module:
+        """Load a model from the timm library."""
+        try:
+            import timm
+        except ImportError:
+            raise ImportError(
+                "The 'timm' package is required to load this model. "
+                "Install it with: pip install timm"
+            )
+
+        pretrained = bool(self.weights) and str(self.weights).lower() not in ('none', 'false', '0')
+        # print(f"Loading model {self.model_name} with pretrained={pretrained}")
+        if not timm.is_model(self.model_name):
+            raise ValueError(
+                f"Model '{self.model_name}' not found in timm. "
+                f"Check available models with: timm.list_models('{self.model_name}*')"
+            )
+
+        model = timm.create_model(self.model_name, pretrained=pretrained)
+        return model
 
     def _calibrate_model(self, model: nn.Module):
         """Calibrate quantized layers (pre-compute scales)."""
@@ -455,8 +499,10 @@ class GenericAdapter(BaseAdapter):
                 device = torch.device('cuda')
                 model.to(device)
             
-            # Calibrate weights (pre-compute scales)
-            self._calibrate_model(model)
+            # Calibrate weights (pre-compute scales) — skip when weights will be
+            # loaded from a pre-quantized cache immediately after construction.
+            if not self.skip_calibration:
+                self._calibrate_model(model)
             
             # FX-based Functional Quantization
             # This handles functional calls like F.relu that are not modules
@@ -468,9 +514,9 @@ class GenericAdapter(BaseAdapter):
                 if fx_model is not None:
                     model = fx_model
             except Exception as e:
-                print(f"Warning: FX quantization failed: {e}")
-                import traceback
-                traceback.print_exc()
+                # Control-flow models (e.g. timm MobileViT) can't be FX-traced — that's fine,
+                # recursive replacement already handled all registered ops.
+                print(f"Note: FX quantization skipped ({type(e).__name__}: {e})")
         
         return model
 

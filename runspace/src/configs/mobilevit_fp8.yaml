@@ -1,0 +1,20 @@
+# MobileViT FP8 Quantization Config
+# Hybrid CNN+Transformer architecture (Apple, 2021)
+# Quantizes Conv2d (MobileNetV2 blocks) and Linear (Transformer FFN + attention projections)
+
+model:
+  name: mobilevit_s
+  source: timm
+  weights: DEFAULT
+
+adapter:
+  type: generic
+  quantize_first_layer: false
+  quantized_ops: ["Conv2d", "Linear", "LayerNorm"]
+  input_quantization: true
+
+quantization:
+  format: fp8_e4m3
+  weight_mode: channel
+  act_mode: tensor
+  calib_method: max
