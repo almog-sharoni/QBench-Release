@@ -9,6 +9,7 @@ import yaml
 import gc
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import json
 
 # Add project root to sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
@@ -36,24 +37,24 @@ baseline_formats = [ 'fp32', 'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp
 
 candidate_formats = [
             # Signed FP8 (1 sign bit + 7 bits E/M)
-            # 'fp8_e0m7','fp8_e1m6'   ,'fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
-            # 'fp6_e0m5','fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
-            # 'fp4_e3m0' , 'fp4_e2m1' , 'fp4_e1m2' , 'fp4_e0m3',
+            #'fp8_e1m6'   ,'fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
+            #'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
+            # 'fp4_e3m0' , 'fp4_e2m1' , 'fp4_e1m2' ,
             
             # Unsigned FP8 (0 sign bit + 8 bits E/M) - Fully utilizes 8 bits
-            # 'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3', 'ufp4_e0m4'
-            # 'ufp8_e8m0','ufp8_e7m1','ufp8_e6m2','ufp8_e5m3','ufp8_e4m4','ufp8_e3m5','ufp8_e2m6','ufp8_e1m7'
+            # 'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3',             # 'ufp8_e8m0','ufp8_e7m1','ufp8_e6m2','ufp8_e5m3','ufp8_e4m4','ufp8_e3m5','ufp8_e2m6','ufp8_e1m7'
 
             # Expended FP8 (Moved to top to test tie-breaking)
-            # 'efp8_e0m7','efp8_e1m6','efp8_e2m5','efp8_e3m4','efp8_e4m3','efp8_e5m2','efp8_e6m1','efp8_e7m0'
+            # 'efp8_e1m6','efp8_e2m5','efp8_e3m4','efp8_e4m3','efp8_e5m2','efp8_e6m1','efp8_e7m0'
 
             # 'fp5_e4m0', 'fp5_e3m1', 'fp5_e2m2', 'fp5_e1m3',
             # 'ufp5_e5m0', 'ufp5_e4m1', 'ufp5_e3m2', 'ufp5_e2m3', 'ufp5_e1m4'
 
-            # 'efp4_e3m0','efp4_e2m1','efp4_e1m2','efp4_e0m3',
-            # 'fp4_e3m0','fp4_e2m1','fp4_e1m2','fp4_e0m3',
-            # 'ufp4_e4m0','ufp4_e3m1','ufp4_e2m2','ufp4_e1m3','ufp4_e0m4'
-            # 'fp3_e0m2'
+            # 'efp4_e3m0','efp4_e2m1','efp4_e1m2',
+            # 'fp4_e3m0','fp4_e2m1','fp4_e1m2'
+            # 'ufp4_e4m0','ufp4_e3m1','ufp4_e2m2','ufp4_e1m3',
+            'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
+            'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
         ]
 def get_args():
     parser = argparse.ArgumentParser(description="Find optimal input quantization (Dynamic)")
@@ -70,8 +71,23 @@ def get_args():
     parser.add_argument("--chunk_size", type=int, default=128, help="Chunk size for input quantization (blocks)")
     parser.add_argument("--only_dynamic", action="store_true", help="Skip baseline runs and only run dynamic optimization")
     parser.add_argument("--only_baselines", action="store_true", help="Skip dynamic runs and only run baseline runs")
+    parser.add_argument("--force_rerun", action="store_true", help="Re-run all experiments even if already in DB")
     # Add other args as needed
     return parser.parse_args()
+
+
+def _input_quant_run_exists(db, model_name, experiment_type, activation_dt):
+    """Return True if a successful run exists in DB for this model/experiment/activation combo."""
+    runs = db.get_runs()
+    if runs.empty:
+        return False
+    return not runs[
+        (runs['model_name']      == model_name) &
+        (runs['experiment_type'] == experiment_type) &
+        (runs['weight_dt']       == 'fp32') &
+        (runs['activation_dt']   == activation_dt) &
+        (runs['status']          == 'SUCCESS')
+    ].empty
 
 
 class DynamicInputQuantizer:
@@ -449,28 +465,23 @@ def run_baselines(args, device, formats):
                 mse_err = 0.0
                 
                 if fmt != 'fp32':
-                    # Calculate Quantization Error
-                    # Note: We need to validate=False for speed
-                    # But for correct error calculation, we should try to match the 'dynamic' behavior
-                    # The baselines use per-tensor (default) or whatever `quantize` does.
-                    # Dynamic uses per-chunk. This is a fairness difference, but acceptable for "Baseline".
-                    
                     try:
-                        # For proper error tracking, we need to manually quantize and keep track
-                        # Let's assume standard per-tensor quantization for baselines? 
-                        # Or per-channel? Standard `quantize` is per-tensor if axis not set.
-                        
-                        max_val = x.abs().max()
-                        # bias = get_quantization_bias(fmt)
-                        scale = calculate_scale(max_val, fmt)
-                        #raise error if not verified
-                        x_quant_pre_scale = quantize(x / scale, q_type=fmt, validate=False) 
-                        # _, passrate = verify_mantissa(x_quant_pre_scale, 1,1)
-                        # if passrate < 1.0:
-                        #     raise ValueError(f"Format {fmt} verification failed for layer {layer_name}, passrate: {passrate}")
-                        # print (x_quant_pre_scale)
-                      
-                        x_quant = x_quant_pre_scale * scale
+                        # Chunk-wise quantization — matches find_optimal_w6a4 Phase B.
+                        chunk_size = args.chunk_size
+                        flat = x.reshape(-1)
+                        pad_len = 0
+                        if flat.numel() % chunk_size != 0:
+                            pad_len = chunk_size - (flat.numel() % chunk_size)
+                            flat = torch.nn.functional.pad(flat, (0, pad_len))
+                        chunks = flat.view(-1, chunk_size)
+                        scale = calculate_scale(
+                            chunks.abs().amax(dim=1, keepdim=True).clamp(min=1e-5), fmt
+                        )
+                        q_chunks = quantize(chunks / scale, q_type=fmt, validate=False) * scale
+                        flat_q = q_chunks.reshape(-1)
+                        if pad_len > 0:
+                            flat_q = flat_q[:-pad_len]
+                        x_quant = flat_q.reshape(x.shape)
 
                     
                         
@@ -651,19 +662,37 @@ def process_single_model(args, model_config, device, metrics):
     
     # --- 1. Run Baselines (Global) ---
     if not args.only_dynamic:
-        
-        # We need to constructing specific args/config for this model
-        # Create a temp args-like object or just pass config dict? 
-        # run_baselines uses 'args.model_name' etc. 
-        # Let's modify run_baselines to accept model_config dict instead of just args, 
-        # or temporarily patch args.
-        
-        # Patch args for this model (simplest refactor without changing everything signature)
-        # Note: This modifies the passed args object, which is fine since we do it per loop
         args.model_name = model_name
         args.weights = weights
-        
-        baseline_stats = run_baselines(args, device, baseline_formats)
+
+        # Check which baseline formats are already in DB
+        cached_baseline_stats = {}
+        formats_to_run = []
+        if not args.force_rerun:
+            for fmt in baseline_formats:
+                if _input_quant_run_exists(db, model_name, 'input_quant_baseline', fmt) or fmt == 'fp32' and _input_quant_run_exists(db, model_name, 'fp32_ref', 'fp32'):
+                    all_runs = db.get_runs()
+                    row = all_runs[
+                        (all_runs['model_name'] == model_name) &
+                        (all_runs['weight_dt']  == 'fp32') &
+                        (all_runs['activation_dt'] == fmt) &
+                        (all_runs['status'] == 'SUCCESS')
+                    ]
+                    if not row.empty:
+                        r = row.iloc[0]
+                        cached_baseline_stats[fmt] = {
+                            'acc1': float(r['acc1']), 'acc5': float(r['acc5']),
+                            'norm_l1': float(r['l1'] or 0), 'norm_mse': float(r['mse'] or 0),
+                            'certainty': float(r['certainty'] or 0),
+                        }
+                        print(f"[Baseline] Skipping {fmt} — already in DB (acc1={r['acc1']:.2f}%)")
+                        continue
+                formats_to_run.append(fmt)
+        else:
+            formats_to_run = list(baseline_formats)
+
+        new_baseline_stats = run_baselines(args, device, formats_to_run) if formats_to_run else {}
+        baseline_stats = {**cached_baseline_stats, **new_baseline_stats}
         
         # Identify Reference (fp32)
         ref_acc1 = baseline_stats.get('fp32', {}).get('acc1', 0.0)
@@ -692,9 +721,17 @@ def process_single_model(args, model_config, device, metrics):
             })
             
             # Log Baseline to Database with Reference
+            _cfg = json.dumps({
+                'model': {'name': model_name, 'weights': weights},
+                'dataset': {'name': args.dataset_name, 'path': args.dataset_path,
+                            'batch_size': args.batch_size, 'num_workers': args.num_workers,
+                            'limit_batches': args.limit_batches},
+                'quantization': {'activation_format': fmt, 'activation_mode': 'chunk',
+                                 'chunk_size': args.chunk_size},
+            })
             db.log_run(
                 model_name=model_name,
-                weight_dt="fp32", 
+                weight_dt="fp32",
                 activation_dt=fmt,
                 acc1=stats['acc1'],
                 acc5=stats['acc5'],
@@ -705,7 +742,8 @@ def process_single_model(args, model_config, device, metrics):
                 status="SUCCESS",
                 mse=stats['norm_mse'],
                 l1=stats['norm_l1'],
-                certainty=stats.get('certainty', 0.0)
+                certainty=stats.get('certainty', 0.0),
+                config_json=_cfg,
             )
     else:
         print("\nSkipping Baselines (--only_dynamic set)")
@@ -740,9 +778,14 @@ def process_single_model(args, model_config, device, metrics):
             loader = runner.setup_data_loader(config)
             
             for metric in metrics:
+                activation_dt = f"dyn_input_{metric}"
+                if not args.force_rerun and _input_quant_run_exists(db, model_name, 'input_quant_dynamic', activation_dt):
+                    print(f"[Dynamic] Skipping {metric} — already in DB for {model_name}")
+                    continue
+
                 print(f"\n===========================================")
                 print(f"Processing Metric: {metric.upper()} for {model_name}")
-                print(f"===========================================")
+                print(f"=============================================")
                 
                 metric_out_dir = os.path.join(model_out_dir, metric)
                 os.makedirs(metric_out_dir, exist_ok=True)
@@ -798,6 +841,14 @@ def process_single_model(args, model_config, device, metrics):
                     print(f"Norm L1: {final_stats['norm_l1']:.4e}, Norm MSE: {final_stats['norm_mse']:.4e}")
                     
                     # Log Dynamic Result to Database
+                    _cfg_dyn = json.dumps({
+                        'model': {'name': model_name, 'weights': weights},
+                        'dataset': {'name': args.dataset_name, 'path': args.dataset_path,
+                                    'batch_size': args.batch_size, 'num_workers': args.num_workers,
+                                    'limit_batches': args.limit_batches},
+                        'quantization': {'activation_mode': 'dynamic', 'metric': metric,
+                                         'chunk_size': args.chunk_size},
+                    })
                     db.log_run(
                         model_name=model_name,
                         weight_dt="fp32",
@@ -811,13 +862,13 @@ def process_single_model(args, model_config, device, metrics):
                         status="SUCCESS",
                         mse=final_stats['norm_mse'],
                         l1=final_stats['norm_l1'],
-                        certainty=certainty
+                        certainty=certainty,
+                        config_json=_cfg_dyn,
                     )
                     
                     plot_format_histogram(quantizer_handler.layer_stats, metric_out_dir)
                     plot_layer_format_distribution(quantizer_handler.layer_stats, metric_out_dir, metric)
                     
-                    import json
                     stats_path = os.path.join(metric_out_dir, "layer_stats.json")
                     with open(stats_path, 'w') as f:
                         # Save stats + accuracy
@@ -857,7 +908,6 @@ def process_single_model(args, model_config, device, metrics):
         plot_accuracy_comparison(all_results, model_out_dir)
         
         # Also save raw results to CSV/JSON for easy review
-        import json
         with open(os.path.join(model_out_dir, "comparison_results.json"), 'w') as f:
              json.dump(all_results, f, indent=4)
 

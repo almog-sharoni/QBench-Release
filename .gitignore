@@ -14,3 +14,10 @@ qbench_sandbox/
 *.img
 
 */results/*
+
+cloudflared
+tailscale
+tailscale.tgz
+tailscale_state/
+tailscaled
+systemd/

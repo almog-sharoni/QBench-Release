@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import sys
+import base64
 
 # Add project root to sys.path
 # runspace/src/database/dashboard.py -> runspace/src/database -> runspace/src -> runspace -> root
@@ -88,6 +89,130 @@ else:
         df[f'{prefix}_bits'] = parsed.apply(lambda x: x[0])
         df[f'{prefix}_exp'] = parsed.apply(lambda x: x[1])
         df[f'{prefix}_mant'] = parsed.apply(lambda x: x[2])
+    @st.dialog("🔬 Layer Quantization Breakdown", width="large")
+    def show_layer_breakdown(run_row):
+        model = run_row.get('model_name', '')
+        w_dt  = run_row.get('weight_dt', '')
+        a_dt  = run_row.get('activation_dt', '')
+        exp_t = run_row.get('experiment_type', '')
+
+        st.markdown(f"**Model:** `{model}`  |  **Weight DT:** `{w_dt}`  |  **Activation DT:** `{a_dt}`")
+        st.markdown(f"**Experiment:** `{exp_t}`")
+        st.markdown("---")
+
+        def _render_map_section(title, raw_json, mode_label):
+            if not raw_json or (isinstance(raw_json, float) and pd.isna(raw_json)):
+                return
+            try:
+                quant_map = json.loads(raw_json)
+            except Exception:
+                st.error(f"Could not parse {title} map JSON.")
+                return
+
+            rows = []
+            chunk_dist_rows = []  # For per-layer chunk distribution (dynamic runs)
+            for layer, value in quant_map.items():
+                # New format: {"format": "fp4_e1m2", "type": "Conv2d", ...}
+                # Old format: "fp4_e1m2"  or  ["fp4_e1m2", ...]
+                if isinstance(value, dict):
+                    fmt = value.get("format", "?")
+                    layer_type = value.get("type", "?")
+                    per_chunk_counts = value.get("format_counts")
+                    total_chunks = value.get("total_chunks")
+                else:
+                    fmt = value
+                    layer_type = "?"
+                    per_chunk_counts = None
+                    total_chunks = None
+
+                if isinstance(fmt, list):
+                    counts = {}
+                    for f in fmt:
+                        counts[f] = counts.get(f, 0) + 1
+                    fmt_str = ", ".join(
+                        f"{f}×{c}" for f, c in sorted(counts.items(), key=lambda x: -x[1])
+                    )
+                    rows.append({"Layer": layer, "Type": layer_type, "Format": fmt_str, "Mode": "per-chunk"})
+                else:
+                    rows.append({"Layer": layer, "Type": layer_type, "Format": str(fmt), "Mode": mode_label})
+
+                if per_chunk_counts and total_chunks:
+                    row = {"Layer": layer, "Type": layer_type, "Total Chunks": total_chunks}
+                    row.update({f: per_chunk_counts.get(f, 0) for f in per_chunk_counts})
+                    chunk_dist_rows.append(row)
+
+            if not rows:
+                return
+
+            breakdown_df = pd.DataFrame(rows)
+            format_counts = breakdown_df["Format"].value_counts()
+
+            st.markdown(f"#### {title} — {len(rows)} layers")
+            cols = st.columns(min(len(format_counts), 6))
+            for idx, (fmt, cnt) in enumerate(format_counts.items()):
+                cols[idx % len(cols)].metric(fmt, f"{cnt} layers")
+            st.dataframe(
+                breakdown_df,
+                use_container_width=True,
+                column_config={
+                    "Layer":  st.column_config.TextColumn("Layer", width="large"),
+                    "Type":   st.column_config.TextColumn("Type"),
+                    "Format": st.column_config.TextColumn("Format"),
+                    "Mode":   st.column_config.TextColumn("Mode"),
+                },
+            )
+
+            if chunk_dist_rows:
+                with st.expander("📊 Chunk Format Distribution (per layer)", expanded=False):
+                    chunk_df = pd.DataFrame(chunk_dist_rows).fillna(0)
+                    # Move Layer/Type/Total Chunks to front; format columns sorted by total usage
+                    fixed_cols = ["Layer", "Type", "Total Chunks"]
+                    fmt_cols = sorted(
+                        [c for c in chunk_df.columns if c not in fixed_cols],
+                        key=lambda c: -chunk_df[c].sum()
+                    )
+                    chunk_df = chunk_df[fixed_cols + fmt_cols]
+                    for fc in fmt_cols:
+                        chunk_df[fc] = chunk_df[fc].astype(int)
+                    chunk_df["Total Chunks"] = chunk_df["Total Chunks"].astype(int)
+                    st.dataframe(chunk_df, use_container_width=True)
+
+        _render_map_section("⚖️ Weight Formats", run_row.get('quant_map_json'), "per-layer")
+        _render_map_section("⚡ Input Formats",  run_row.get('input_map_json'),  "dynamic")
+
+    @st.dialog("⚙️ Run Configurations", width="large")
+    def show_run_config(run_rows):
+        """run_rows: list of row dicts."""
+        if len(run_rows) == 1:
+            row = run_rows[0]
+            st.markdown(f"**Model:** `{row.get('model_name','')}` | **Exp:** `{row.get('experiment_type','')}` | `{row.get('weight_dt','')}` / `{row.get('activation_dt','')}`")
+            st.markdown("---")
+            raw = row.get('config_json')
+            if not raw or (isinstance(raw, float) and pd.isna(raw)):
+                st.info("No config stored for this run.")
+                return
+            try:
+                st.json(json.loads(raw), expanded=True)
+            except Exception:
+                st.code(str(raw), language="json")
+        else:
+            tab_labels = [
+                f"{r.get('model_name','')} · {r.get('weight_dt','')} / {r.get('activation_dt','')}"
+                for r in run_rows
+            ]
+            tabs = st.tabs(tab_labels)
+            for tab, row in zip(tabs, run_rows):
+                with tab:
+                    st.markdown(f"**Experiment:** `{row.get('experiment_type','')}`")
+                    raw = row.get('config_json')
+                    if not raw or (isinstance(raw, float) and pd.isna(raw)):
+                        st.info("No config stored for this run.")
+                        continue
+                    try:
+                        st.json(json.loads(raw), expanded=True)
+                    except Exception:
+                        st.code(str(raw), language="json")
+
     @st.dialog("📈 Accuracy Comparison", width="large")
     def show_large_chart(chart_df):
         # Inject CSS to enable horizontal scroll specifically in the dialog (Modal)
@@ -151,6 +276,89 @@ else:
     # --- Multi-Table Session State ---
     if 'num_tables' not in st.session_state:
         st.session_state.num_tables = 1
+
+    def toggle_button_group(label, options, session_key, default_state=True, format_func=str):
+        # Persistent CSS injection on every rerun
+        st.markdown("""
+        <style>
+        /* Smooth transitions for all buttons */
+        .stButton > button { 
+            transition: background-color 0.1s ease, border 0.1s ease !important; 
+            border-radius: 4px !important;
+        }
+        
+        /* DEFAULT: SOFT ROSE (for OFF state) */
+        div[data-testid="stHorizontalBlock"] .stButton > button {
+            background-color: #fb7185 !important;
+            color: white !important;
+            border: 1px solid #e11d48 !important;
+            padding: 0px 8px !important;
+            min-height: 24px !important;
+            height: 24px !important;
+            font-size: 10px !important;
+            line-height: normal !important;
+            font-weight: 600;
+            white-space: nowrap !important;
+            width: 100% !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        }
+        
+        /* PRIMARY: SOFT EMERALD (for ON state) */
+        div[data-testid="stHorizontalBlock"] .stButton > button[kind="primary"],
+        div[data-testid="stHorizontalBlock"] .stButton > button[data-testid*="primary"] {
+            background-color: #10b981 !important;
+            color: white !important;
+            border: 1px solid #059669 !important;
+        }
+        
+        /* Tighten gap between columns in the horizontal block */
+        div[data-testid="stHorizontalBlock"] {
+            gap: 6px !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+        st.markdown(f"**{label}**")
+        
+        # Initialize state explicitly if missing
+        if session_key not in st.session_state:
+            st.session_state[session_key] = {opt: True for opt in options}
+        state = st.session_state[session_key]
+        
+        # Ensure all current options are mapped in the state
+        for opt in options:
+            if opt not in state:
+                state[opt] = True
+        
+        # Global selection buttons
+        c1, c2, _ = st.columns([0.75, 0.75, 3])
+        if c1.button("Turn All On", key=f"{session_key}_all_on", type="primary", use_container_width=True):
+            for opt in options:
+                state[opt] = True
+            st.rerun()
+        if c2.button("Turn All Off", key=f"{session_key}_all_off", type="secondary", use_container_width=True):
+            for opt in options:
+                state[opt] = False
+            st.rerun()
+            
+        # Draw dynamic adaptive columns for toggle buttons
+        if not options: return []
+        max_label_len = max(len(format_func(o)) for o in options)
+        num_cols = 2 if max_label_len > 15 else (3 if max_label_len > 10 else (4 if max_label_len > 6 else 7))
+        
+        cols = st.columns(num_cols)
+        for idx, opt in enumerate(options):
+            is_on = state[opt]
+            btn_label = format_func(opt)
+            
+            with cols[idx % num_cols]:
+                if st.button(btn_label, key=f"{session_key}_btn_{idx}", type="primary" if is_on else "secondary", use_container_width=True):
+                    state[opt] = not is_on
+                    st.rerun()
+                    
+        # Return list of selected strings natively compatible with downstream logic
+        return [opt for opt, is_on in state.items() if is_on]
         
     def add_table():
         st.session_state.num_tables += 1
@@ -228,9 +436,11 @@ else:
                     val = preset_data[preset_key]
                     if isinstance(val, list):
                         # Validate: Only keep items that actually exist in current options
-                        # This prevents Streamlit from crashing if a model/format was removed from DB
+                        # Convert legacy list format to dictionary toggle schema mappings
                         valid_val = [v for v in val if v in options]
-                        st.session_state[session_key] = valid_val
+                        st.session_state[session_key] = {o: (o in valid_val) for o in options}
+                    elif isinstance(val, dict):
+                        st.session_state[session_key] = val
                     else:
                         st.session_state[session_key] = val
             
@@ -291,51 +501,79 @@ else:
         # Local filters for each table
         col_f1, col_f2 = st.columns(2)
         with col_f1:
-            selected_models = st.multiselect(f"Models (T{i+1})", options=models, default=models, key=f"filter_m_{i}")
+            selected_models = toggle_button_group(
+                f"Models (T{i+1})", 
+                options=models, 
+                session_key=f"filter_m_{i}",
+                default_state=True
+            )
         with col_f2:
-            selected_exprs = st.multiselect(f"Experiment Types (T{i+1})", options=expr_types, default=expr_types, key=f"filter_e_{i}")
+            selected_exprs = toggle_button_group(
+                f"Experiment Types (T{i+1})", 
+                options=expr_types, 
+                session_key=f"filter_e_{i}",
+                default_state=True
+            )
         
         # Advanced DT Filtering
         with st.expander(f"Advanced Datatype Filters (T{i+1})"):
-            col_w_bits, col_w_exp, col_w_mant = st.columns(3)
-            with col_w_bits:
+            col_bits, _ = st.columns([1,1])   # left column narrower
+            with col_bits:
                 w_bits_options = sorted(df['w_bits'].dropna().unique())
-                selected_w_bits = st.multiselect(
+                selected_w_bits = toggle_button_group(
                     "Weight Bits", 
                     options=w_bits_options, 
-                    default=w_bits_options, 
-                    key=f"filter_wb_{i}",
+                    session_key=f"filter_wb_{i}",
+                    default_state=True,
                     format_func=lambda x: "Dynamic" if x == 0 else f"{int(x)} Bits"
                 )
-            with col_w_exp:
+            
                 w_exp_options = sorted(df['w_exp'].dropna().unique())
-                selected_w_exp = st.multiselect("Weight Exponent", options=w_exp_options, default=w_exp_options, key=f"filter_we_{i}")
-            with col_w_mant:
+                selected_w_exp = toggle_button_group(
+                    "Weight Exponent", 
+                    options=w_exp_options, 
+                    session_key=f"filter_we_{i}",
+                    default_state=True
+                )
+                
                 w_mant_options = sorted(df['w_mant'].dropna().unique())
-                selected_w_mant = st.multiselect("Weight Mantissa", options=w_mant_options, default=w_mant_options, key=f"filter_wm_{i}")
+                selected_w_mant = toggle_button_group(
+                    "Weight Mantissa", 
+                    options=w_mant_options, 
+                    session_key=f"filter_wm_{i}",
+                    default_state=True
+                )
 
-            col_a_bits, col_a_exp, col_a_mant = st.columns(3)
-            with col_a_bits:
                 a_bits_options = sorted(df['a_bits'].dropna().unique())
-                selected_a_bits = st.multiselect(
+                selected_a_bits = toggle_button_group(
                     "Activation Bits", 
                     options=a_bits_options, 
-                    default=a_bits_options, 
-                    key=f"filter_ab_{i}",
+                    session_key=f"filter_ab_{i}",
+                    default_state=True,
                     format_func=lambda x: "Dynamic" if x == 0 else f"{int(x)} Bits"
                 )
-            with col_a_exp:
+                
                 a_exp_options = sorted(df['a_exp'].dropna().unique())
-                selected_a_exp = st.multiselect("Activation Exponent", options=a_exp_options, default=a_exp_options, key=f"filter_ae_{i}")
-            with col_a_mant:
+                selected_a_exp = toggle_button_group(
+                    "Activation Exponent", 
+                    options=a_exp_options, 
+                    session_key=f"filter_ae_{i}",
+                    default_state=True
+                )
+                
                 a_mant_options = sorted(df['a_mant'].dropna().unique())
-                selected_a_mant = st.multiselect("Activation Mantissa", options=a_mant_options, default=a_mant_options, key=f"filter_am_{i}")
+                selected_a_mant = toggle_button_group(
+                    "Activation Mantissa", 
+                    options=a_mant_options, 
+                    session_key=f"filter_am_{i}",
+                    default_state=True
+                )
 
             # Save Preset UI under each table's filters
             with st.expander(f"💾 Save current filters as Preset (T{i+1})"):
                 p_col1, p_col2 = st.columns([3, 1])
                 preset_name = p_col1.text_input("Preset Name", key=f"name_input_{i}", placeholder="e.g. My Optimal ResNet")
-                if p_col2.button("Save", key=f"save_btn_{i}", use_container_width=True):
+                if p_col2.button("Save", key=f"save_btn_{i}", type="primary", use_container_width=True):
                     if preset_name:
                         st.session_state.presets[preset_name] = {
                             'target_table': i,
@@ -366,9 +604,18 @@ else:
                 return curr_df[curr_df[col].isin(selected)]
             return curr_df
 
-        # Bits are mandatory filters (all selected by default)
-        filtered_df = filtered_df[filtered_df['w_bits'].isin(selected_w_bits)]
-        filtered_df = filtered_df[filtered_df['a_bits'].isin(selected_a_bits)]
+        # Bits are mandatory filters (all selected by default).
+        # When all options are selected (no user narrowing), also keep rows whose
+        # bits value is NaN — this happens for formats that parse_dt can't decode
+        # (e.g. the hybrid "opt_layer[...]" weight_dt strings).
+        w_bits_all = len(selected_w_bits) == len(w_bits_options)
+        a_bits_all = len(selected_a_bits) == len(a_bits_options)
+        filtered_df = filtered_df[
+            filtered_df['w_bits'].isin(selected_w_bits) | (w_bits_all & filtered_df['w_bits'].isna())
+        ]
+        filtered_df = filtered_df[
+            filtered_df['a_bits'].isin(selected_a_bits) | (a_bits_all & filtered_df['a_bits'].isna())
+        ]
 
         # Exp/Mant are optional filters
         filtered_df = apply_opt_filter(filtered_df, 'w_exp', selected_w_exp, w_exp_options)
@@ -385,7 +632,7 @@ else:
                 filtered_df['cert_drop'] = filtered_df['ref_certainty'] - filtered_df['certainty']
             
             # Clean up and reorder columns for display
-            cols_to_drop = ['run_date_dt', 'id']
+            cols_to_drop = ['run_date_dt', 'id', 'quant_map_json', 'input_map_json', 'config_json']
             display_df = filtered_df.drop(columns=[c for c in cols_to_drop if c in filtered_df.columns])
             
             # Reorder columns to put metrics and targets front and center
@@ -421,7 +668,37 @@ else:
 
             # --- Visualization Section ---
             selected_indices = event.selection.rows
-            
+
+            # Action buttons — appear based on what's available in selected rows.
+            if len(selected_indices) == 1:
+                orig_idx = display_df.index[selected_indices[0]]
+                has_weight_map = (
+                    'quant_map_json' in filtered_df.columns and
+                    pd.notna(filtered_df.at[orig_idx, 'quant_map_json']) and
+                    filtered_df.at[orig_idx, 'quant_map_json']
+                )
+                has_input_map = (
+                    'input_map_json' in filtered_df.columns and
+                    pd.notna(filtered_df.at[orig_idx, 'input_map_json']) and
+                    filtered_df.at[orig_idx, 'input_map_json']
+                )
+                if has_weight_map or has_input_map:
+                    if st.button("🔬 View Layer Formats", key=f"btn_layers_{i}"):
+                        show_layer_breakdown(filtered_df.loc[orig_idx].to_dict())
+
+            if len(selected_indices) >= 1:
+                orig_indices = [display_df.index[j] for j in selected_indices]
+                rows_with_config = [
+                    filtered_df.loc[idx].to_dict() for idx in orig_indices
+                    if 'config_json' in filtered_df.columns and
+                       pd.notna(filtered_df.at[idx, 'config_json']) and
+                       filtered_df.at[idx, 'config_json']
+                ]
+                if rows_with_config:
+                    label = f"⚙️ View Config ({len(rows_with_config)})" if len(rows_with_config) > 1 else "⚙️ View Config"
+                    if st.button(label, key=f"btn_config_{i}"):
+                        show_run_config(rows_with_config)
+
             st.markdown(f"#### 📊 Visualization Options")
             # viz_all = st.checkbox("Visualize ALL filtered runs (ignores table selection)", key=f"viz_all_{i}")
             viz_all = False
@@ -429,7 +706,7 @@ else:
                 num_runs = len(display_df) if viz_all else len(selected_indices)
                 st.success(f"Ready to visualize {num_runs} runs.")
                 
-                if st.button(f"📈 Generate  Comparison ({num_runs})", key=f"btn_plot_{i}"):
+                if st.button(f"📈 Generate Comparison ({num_runs})", key=f"btn_plot_{i}", type="primary", use_container_width=True):
                     if viz_all:
                         selected_df = display_df.copy()
                     else:
@@ -469,6 +746,169 @@ else:
                 st.info("👆 Select rows in the table above to generate a chart.")
         else:
             st.info("No data for selected filters.")
+        
+        st.markdown("---")
+        
+        # --- Model Architecture Graph Visualization ---
+        st.markdown(f"#### 🏗️ Model Architecture & Quantization")
+        
+        if not filtered_df.empty:
+            # Get unique models in filtered data
+            available_models = sorted(filtered_df['model_name'].unique())
+            selected_model = st.selectbox(
+                f"View quantization graph for (T{i+1})",
+                options=available_models,
+                key=f"graph_model_{i}"
+            )
+            
+            if selected_model:
+                # Try to get graph from database
+                svg_content, metadata = db.get_model_graph_svg(selected_model)
+                
+                if svg_content:
+                    with st.expander(f"📊 {selected_model} - Quantization Graph", expanded=False):
+                        # Display metadata
+                        meta_col1, meta_col2, meta_col3 = st.columns(3)
+                        # graph_meta = db.get_model_graph_metadata(selected_model)
+                        graph_meta = ''
+                        if graph_meta:
+                            meta_col1.metric("Original Size", f"{graph_meta.get('svg_size_original', 0)/1024:.1f} KB")
+                            meta_col2.metric("Compressed Size", f"{graph_meta.get('svg_size_compressed', 0)/1024:.1f} KB")
+                            compression = 100 * (1 - graph_meta.get('svg_size_compressed', 1) / max(graph_meta.get('svg_size_original', 1), 1))
+                            meta_col3.metric("Compression", f"{compression:.0f}%")
+                        
+                        # Display interactive graph using streamlit-agraph
+                        st.markdown("**Green** = Quantized Layers | **Gold** = Supported (Unquantized) | **Pink** = Unsupported | **Gray** = Structural/Other")
+                        
+                        st.info("💡 **Interactive**: Zoom & pan | Drag nodes | Scroll to zoom | Click to inspect")
+                        
+                        # Display interactive graph using pyvis
+                        try:
+                            import networkx as nx
+                            from pyvis.network import Network
+                            import xml.etree.ElementTree as ET
+                            import tempfile
+                            import os
+                            import re
+                            
+                            # Parse SVG to extract exact nodes and edges
+                            svg_no_ns = re.sub(r'\sxmlns=\"[^\"]+\"', '', svg_content, count=1)
+                            root = ET.fromstring(svg_no_ns)
+                            
+                            G = nx.DiGraph()
+                            
+                            for g in root.iter('g'):
+                                cls = g.get('class')
+                                if cls == 'node':
+                                    node_id = g.get('id', '')
+                                    # Ignore legend objects to only show the model itself
+                                    if node_id.startswith('legend_') or node_id.startswith('cluster_'):
+                                        continue
+                                        
+                                    title_el = g.find('title')
+                                    if title_el is None: continue
+                                    title = title_el.text
+                                    
+                                    polygon = g.find('polygon')
+                                    color = polygon.get('fill') if polygon is not None else '#D3D3D3'
+                                    
+                                    texts = [t.text for t in g.findall('text') if t.text]
+                                    label = '\n'.join(texts) if texts else title
+                                    
+                                    G.add_node(title, label=label, color=color, shape='box')
+                                    
+                                elif cls == 'edge':
+                                    title_el = g.find('title')
+                                    if title_el is None: continue
+                                    title = title_el.text
+                                    
+                                    if '->' in title:
+                                        src, dst = title.split('->', 1)
+                                        if src in G and dst in G:
+                                            G.add_edge(src, dst)
+                                    elif '&#45;&gt;' in title:
+                                        src, dst = title.split('&#45;&gt;', 1)
+                                        if src in G and dst in G:
+                                            G.add_edge(src, dst)
+
+                            if G.number_of_nodes() > 0:
+                                net = Network(
+                                    height='700px',
+                                    width='100%',
+                                    directed=True,
+                                    notebook=True,
+                                    cdn_resources='in_line'
+                                )
+                                net.from_nx(G)
+                                
+                                # Use hierarchical layout to look like SVG, but allow drag/zoom
+                                net.set_options("""
+                                var options = {
+                                  "layout": {
+                                    "hierarchical": {
+                                      "enabled": true,
+                                      "direction": "UD",
+                                      "sortMethod": "directed",
+                                      "levelSeparation": 250,
+                                      "nodeSpacing": 250,
+                                      "treeSpacing": 250
+                                    }
+                                  },
+                                  "physics": {
+                                    "enabled": false
+                                  },
+                                  "interaction": {
+                                    "dragNodes": true,
+                                    "dragView": true,
+                                    "zoomView": true
+                                  }
+                                }
+                                """)
+                                
+                                temp_file = os.path.join(tempfile.gettempdir(), f'graph_{selected_model}.html')
+                                net.write_html(temp_file)
+                                
+                                with open(temp_file, 'r', encoding='utf-8') as f:
+                                    html_content = f.read()
+                                
+                                # Inject Reset View button overlay into the generated pyvis HTML
+                                reset_btn = '''<button onclick="network.fit({animation:{duration:500}});" style="position: absolute; bottom: 20px; right: 20px; z-index: 1000; padding: 10px 16px; background-color: #ffffff; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer; font-family: sans-serif; font-size: 14px; font-weight: 600; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); color: #374151; transition: all 0.2s;">🎯 Reset View</button>'''
+                                html_content = html_content.replace('<body>', f'<body>\n{reset_btn}')
+                                
+                                import streamlit.components.v1 as components
+                                components.html(html_content, height=750)
+                            else:
+                                st.warning("Could not extract nodes from graph SVG.")
+                                
+
+                        except Exception as e:
+                            import traceback
+                            traceback.print_exc()
+                            st.error(f"Error: {str(e)}")
+                            # Fallback: Display SVG as static image
+                            svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode()
+                            st.markdown(
+                                f'<img src="data:image/svg+xml;base64,{svg_b64}" style="max-width:100%; height:auto; border: 1px solid #ddd; border-radius: 8px; padding: 10px; background: white;">',
+                                unsafe_allow_html=True
+                            )
+                        
+                        # Download button
+                        st.download_button(
+                            label="📥 Download SVG",
+                            data=svg_content,
+                            file_name=f"{selected_model}_graph.svg",
+                            mime="image/svg+xml"
+                        )
+                        
+                        # Show metadata details
+                        if False:
+                            with st.expander("Graph Metadata"):
+                                st.json(metadata)
+                else:
+                    st.info(f"ℹ️ No quantization graph available for {selected_model}. "
+                            f"Run `python runspace/src/database/generate_model_graphs.py` to generate graphs.")
+        else:
+            st.info("No data to display. Apply filters above to see models.")
         
         st.markdown("---")
 
