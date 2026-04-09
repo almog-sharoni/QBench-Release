@@ -180,6 +180,39 @@ else:
         _render_map_section("⚖️ Weight Formats", run_row.get('quant_map_json'), "per-layer")
         _render_map_section("⚡ Input Formats",  run_row.get('input_map_json'),  "dynamic")
 
+    @st.dialog("⚙️ Run Configurations", width="large")
+    def show_run_config(run_rows):
+        """run_rows: list of row dicts."""
+        if len(run_rows) == 1:
+            row = run_rows[0]
+            st.markdown(f"**Model:** `{row.get('model_name','')}` | **Exp:** `{row.get('experiment_type','')}` | `{row.get('weight_dt','')}` / `{row.get('activation_dt','')}`")
+            st.markdown("---")
+            raw = row.get('config_json')
+            if not raw or (isinstance(raw, float) and pd.isna(raw)):
+                st.info("No config stored for this run.")
+                return
+            try:
+                st.json(json.loads(raw), expanded=True)
+            except Exception:
+                st.code(str(raw), language="json")
+        else:
+            tab_labels = [
+                f"{r.get('model_name','')} · {r.get('weight_dt','')} / {r.get('activation_dt','')}"
+                for r in run_rows
+            ]
+            tabs = st.tabs(tab_labels)
+            for tab, row in zip(tabs, run_rows):
+                with tab:
+                    st.markdown(f"**Experiment:** `{row.get('experiment_type','')}`")
+                    raw = row.get('config_json')
+                    if not raw or (isinstance(raw, float) and pd.isna(raw)):
+                        st.info("No config stored for this run.")
+                        continue
+                    try:
+                        st.json(json.loads(raw), expanded=True)
+                    except Exception:
+                        st.code(str(raw), language="json")
+
     @st.dialog("📈 Accuracy Comparison", width="large")
     def show_large_chart(chart_df):
         # Inject CSS to enable horizontal scroll specifically in the dialog (Modal)
@@ -599,7 +632,7 @@ else:
                 filtered_df['cert_drop'] = filtered_df['ref_certainty'] - filtered_df['certainty']
             
             # Clean up and reorder columns for display
-            cols_to_drop = ['run_date_dt', 'id', 'quant_map_json', 'input_map_json']
+            cols_to_drop = ['run_date_dt', 'id', 'quant_map_json', 'input_map_json', 'config_json']
             display_df = filtered_df.drop(columns=[c for c in cols_to_drop if c in filtered_df.columns])
             
             # Reorder columns to put metrics and targets front and center
@@ -636,8 +669,7 @@ else:
             # --- Visualization Section ---
             selected_indices = event.selection.rows
 
-            # Layer breakdown button — appears when exactly one row is selected
-            # and that run has a stored weight or input quant map.
+            # Action buttons — appear based on what's available in selected rows.
             if len(selected_indices) == 1:
                 orig_idx = display_df.index[selected_indices[0]]
                 has_weight_map = (
@@ -653,6 +685,19 @@ else:
                 if has_weight_map or has_input_map:
                     if st.button("🔬 View Layer Formats", key=f"btn_layers_{i}"):
                         show_layer_breakdown(filtered_df.loc[orig_idx].to_dict())
+
+            if len(selected_indices) >= 1:
+                orig_indices = [display_df.index[j] for j in selected_indices]
+                rows_with_config = [
+                    filtered_df.loc[idx].to_dict() for idx in orig_indices
+                    if 'config_json' in filtered_df.columns and
+                       pd.notna(filtered_df.at[idx, 'config_json']) and
+                       filtered_df.at[idx, 'config_json']
+                ]
+                if rows_with_config:
+                    label = f"⚙️ View Config ({len(rows_with_config)})" if len(rows_with_config) > 1 else "⚙️ View Config"
+                    if st.button(label, key=f"btn_config_{i}"):
+                        show_run_config(rows_with_config)
 
             st.markdown(f"#### 📊 Visualization Options")
             # viz_all = st.checkbox("Visualize ALL filtered runs (ignores table selection)", key=f"viz_all_{i}")

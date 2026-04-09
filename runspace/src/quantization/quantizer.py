@@ -186,6 +186,44 @@ def get_int8_table(device: torch.device = None) -> torch.Tensor:
     return _generate_int8_table(device).clone()
 
 
+def get_format_table(q_type: str, device: torch.device = None) -> torch.Tensor:
+    """
+    Return a valid-values lookup table for any supported format string.
+    Parses formats like 'fp8_e1m6', 'fp8_e3m4', 'fp4_e2m1', 'int8', etc.
+    Returns None for unrecognised formats.
+    """
+    if q_type == 'fp8_e4m3':
+        return get_fp8_e4m3_table(device)
+    if q_type == 'fp8_e5m2':
+        return get_fp8_e5m2_table(device)
+    if q_type == 'fp4_e2m1':
+        return get_fp4_e2m1_table(device)
+    if q_type == 'fp4_e3m0':
+        return get_fp4_e3m0_table(device)
+    if q_type == 'int8':
+        return get_int8_table(device)
+
+    # Generic fpX_eEmM formats
+    try:
+        if '_e' in q_type and 'm' in q_type:
+            prefix = q_type.split('_')[0]  # e.g. 'fp8'
+            e_part = q_type.split('_e')[1]  # e.g. '1m6'
+            exp_bits = int(e_part.split('m')[0])
+            mant_bits = int(e_part.split('m')[1])
+            total_bits = int(''.join(filter(str.isdigit, prefix)))
+            signed = not prefix.startswith('u')
+            # Standard IEEE-style bias: 2^(E-1) - 1
+            bias = max(0, (1 << (exp_bits - 1)) - 1) if exp_bits > 0 else 0
+            return _generate_fp_generic_table(
+                device, total_bits=total_bits, exp_bits=exp_bits,
+                mant_bits=mant_bits, bias=bias, signed=signed
+            ).clone()
+    except Exception:
+        pass
+
+    return None
+
+
 # ============================================================================
 # INT4 Lookup Table
 # ============================================================================

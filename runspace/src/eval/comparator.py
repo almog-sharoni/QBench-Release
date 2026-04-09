@@ -528,18 +528,36 @@ class LayerComparator:
         
         # Import FP8/FP4/INT8 table getters and compliance checker
         from ..quantization.quantizer import (
-            get_fp8_e4m3_table, get_fp8_e5m2_table, 
-            get_fp4_e2m1_table, get_fp4_e3m0_table, get_int8_table,
+            get_format_table,
             check_fp8_compliance
         )
-        
-        # Pre-fetch tables
+
+        # Native formats use exact value-set compliance; simulated custom formats use
+        # mantissa-precision compliance (the quantizer preserves only mant_bits in FP32 space).
+        _NATIVE_FORMATS = {'fp8_e4m3', 'fp8_e5m2', 'fp4_e2m1', 'fp4_e3m0', 'fp4_e1m2', 'fp4_e0m3', 'int8', 'int4', 'fp32'}
+
+        def _parse_mant_bits(q_type: str):
+            """Return mantissa bit count for a simulated FP format, or None if not parseable."""
+            try:
+                if '_e' in q_type and 'm' in q_type:
+                    return int(q_type.split('_e')[1].split('m')[1])
+            except Exception:
+                pass
+            return None
+
+        def _check_mantissa_precision(tensor, mant_bits):
+            """Verify that each value has at most mant_bits significant mantissa bits."""
+            import torch as _torch
+            mask = (1 << (23 - mant_bits)) - 1
+            f32_int = tensor.float().contiguous().view(_torch.int32)
+            bad = (f32_int & mask) != 0
+            inv_count = int(bad.sum().item())
+            examples = tensor.float()[bad].flatten()[:5].tolist() if inv_count > 0 else []
+            return inv_count == 0, inv_count, examples
+
+        # Pre-fetch tables (cached per-format, keyed by q_type string)
         device = next(self.quant_model.parameters()).device
-        valid_values_fp8_e4m3 = get_fp8_e4m3_table(device)
-        valid_values_fp8_e5m2 = get_fp8_e5m2_table(device)
-        valid_values_fp4_e2m1 = get_fp4_e2m1_table(device)
-        valid_values_fp4_e3m0 = get_fp4_e3m0_table(device)
-        valid_values_int8 = get_int8_table(device)
+        _table_cache = {}
         
         # Determine global q_type from the model (check first quantized layer)
         global_q_type = 'fp8_e4m3'
@@ -574,34 +592,41 @@ class LayerComparator:
                 # Use module's q_type if available, otherwise use global default
                 q_type = getattr(module, 'q_type', global_q_type)
                 
-                if q_type == 'fp8_e5m2':
-                    valid_values = valid_values_fp8_e5m2
-                elif q_type == 'fp4_e2m1':
-                    valid_values = valid_values_fp4_e2m1
-                elif q_type == 'fp4_e3m0':
-                    valid_values = valid_values_fp4_e3m0
-                elif q_type == 'int8':
-                    valid_values = valid_values_int8
-                else:
-                    valid_values = valid_values_fp8_e4m3
+                if q_type not in _table_cache:
+                    _table_cache[q_type] = get_format_table(q_type, device)
+                valid_values = _table_cache[q_type]
                 
                 # Check for Under Construction Status
                 is_under_construction = OpRegistry.is_under_construction(layer_type)
                 under_construction_str = f"{RED}{'🚧 UNDER CONSTRUCTION':<20}{RESET}"
 
+                # Determine whether to use table-based or mantissa-precision compliance
+                use_mant_check = q_type not in _NATIVE_FORMATS
+                mant_bits = _parse_mant_bits(q_type) if use_mant_check else None
+
                 # Check Parameters (Weights + Stats)
+                unknown_fmt = valid_values is None and mant_bits is None
+                unknown_fmt_str = f"{'N/A (Unknown fmt)':<20}"
                 weight_str = f"{'N/A':<20}"
-                
-                if is_under_construction:
+
+                def _compliance_check(tensor):
+                    """Run the appropriate compliance check and return (passed, inv_count, examples)."""
+                    if use_mant_check and mant_bits is not None:
+                        return _check_mantissa_precision(tensor, mant_bits)
+                    return check_fp8_compliance(tensor, valid_values)
+
+                if unknown_fmt:
+                    weight_str = unknown_fmt_str
+                elif is_under_construction:
                      weight_str = under_construction_str
                 # 1. Weights (Main Table)
                 elif hasattr(module, 'weight_fp8') and module.weight_fp8 is not None:
-                    passed, inv_count, examples = check_fp8_compliance(module.weight_fp8.float(), valid_values)
+                    passed, inv_count, examples = _compliance_check(module.weight_fp8.float())
                     weight_str = format_status(passed, inv_count, 20, examples)
                     if not passed:
                         detailed_failures.append((name, layer_type, 'weight_fp8', inv_count, examples))
                 elif hasattr(module, 'weight') and module.weight is not None:
-                    passed, inv_count, examples = check_fp8_compliance(module.weight, valid_values)
+                    passed, inv_count, examples = _compliance_check(module.weight)
                     weight_str = format_status(passed, inv_count, 20, examples)
                     if not passed:
                         detailed_failures.append((name, layer_type, 'weight', inv_count, examples))
@@ -615,22 +640,25 @@ class LayerComparator:
                 # So we keep weight/weight_fp8 separate for the main table logic, 
                 # and use potential_stats for the detailed table (excluding weight/weight_fp8 if they are in there).
                 
-                for stat_name in potential_stats:
-                    if stat_name in ['weight', 'weight_fp8']:
-                        continue
-                        
-                    if hasattr(module, stat_name) and getattr(module, stat_name) is not None:
-                        passed, inv_count, examples = check_fp8_compliance(getattr(module, stat_name).float(), valid_values)
-                        if not passed:
-                             detailed_failures.append((name, layer_type, stat_name, inv_count, examples))
-                
+                if not unknown_fmt:
+                    for stat_name in potential_stats:
+                        if stat_name in ['weight', 'weight_fp8']:
+                            continue
+
+                        if hasattr(module, stat_name) and getattr(module, stat_name) is not None:
+                            passed, inv_count, examples = _compliance_check(getattr(module, stat_name).float())
+                            if not passed:
+                                detailed_failures.append((name, layer_type, stat_name, inv_count, examples))
+
                 # Check Inputs
                 input_str = f"{'N/A (No Capture)':<20}"
-                
+
                 # Check for custom compliance status in registry
                 custom_status = OpRegistry.get_compliance_status(module.__class__.__name__)
-                
-                if is_under_construction:
+
+                if unknown_fmt:
+                    input_str = unknown_fmt_str
+                elif is_under_construction:
                     if custom_status:
                         # Append under construction to custom status
                         input_str = f"{ORANGE}{custom_status}{RESET} {RED}🚧 UNDER CONSTRUCTION{RESET}"
@@ -641,11 +669,11 @@ class LayerComparator:
                      input_str = f"{ORANGE}{custom_status:<20}{RESET}"
                 # Prefer internal unscaled capture for Quant layers
                 elif hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
-                    input_passed, i_inv_count, i_examples = check_fp8_compliance(module.last_quant_input_unscaled, valid_values)
+                    input_passed, i_inv_count, i_examples = _compliance_check(module.last_quant_input_unscaled)
                     input_str = format_status(input_passed, i_inv_count, 20, i_examples)
                 # Check output for activation layers (they quantize output, not input)
                 elif hasattr(module, 'last_quant_output_unscaled') and module.last_quant_output_unscaled is not None:
-                    input_passed, i_inv_count, i_examples = check_fp8_compliance(module.last_quant_output_unscaled, valid_values)
+                    input_passed, i_inv_count, i_examples = _compliance_check(module.last_quant_output_unscaled)
                     input_str = format_status(input_passed, i_inv_count, 20, i_examples)
                 # Fallback to hook capture
                 elif name in self.quant_activations:

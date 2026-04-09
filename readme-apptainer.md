@@ -30,3 +30,18 @@ This wrapper script automatically handles mapping the ImageNet path and forwardi
 By default, your host's `$PWD` and home directory are automatically mounted into the Apptainer container, allowing the script to read configurations and write outputs directly to your host's filesystem (e.g., inside `runspace/outputs/`). 
 
 Because unprivileged users typically cannot mount `extfs` overlay images (like `.img` files) inside `setuid` Apptainer environments without specific system configurations, we run the container without an overlay flag. This works seamlessly since all required write operations target the naturally mapped host directories.
+
+## 3. Installing New Packages
+
+To install new Python packages into the sandbox, use the `--writable` and `--fakeroot` flags:
+
+```bash
+apptainer exec --nv --writable --fakeroot qbench_sandbox pip install <package_name>
+```
+
+For example, to install `timm`:
+```bash
+apptainer exec --nv --writable --fakeroot qbench_sandbox pip install timm
+```
+
+*Note: Remember to also update `Apptainer.def` if you want the package to be included in future builds.*

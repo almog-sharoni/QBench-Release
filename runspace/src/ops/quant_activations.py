@@ -162,25 +162,26 @@ class QuantReLU6(nn.ReLU6):
         return output_quant
 
 
-# @OpRegistry.register("QuantSiLU", original_cls=nn.SiLU, is_activation=True)
-# class QuantSiLU(nn.SiLU, LUTActivation):
-#     """
-#     Quantized SiLU (Swish) using LUT.
-#     """
-#     def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
-#         super().__init__(inplace=inplace)
-#         self.capture_activations = False
-#         self.last_quant_output_unscaled = None
-#         self.build_lut(nn.functional.silu, q_type=q_type, bias=quantization_bias, quant_mode=quant_mode, chunk_size=chunk_size)
-    
-#     def forward(self, input: torch.Tensor) -> torch.Tensor:
-#         output_quant, output_unscaled = self.apply_lut(input)
-        
-#         if self.capture_activations:
-#             self.last_quant_input = input.detach()
-#             self.last_quant_output_unscaled = output_unscaled.detach()
-        
-#         return output_quant
+@OpRegistry.register("QuantSiLU", original_cls=nn.SiLU, is_activation=True, compliance_status="FP32 activation")
+class QuantSiLU(nn.SiLU):
+    """
+    Quantized SiLU (Swish). Applies standard SiLU; quantization of the output
+    is handled by the next layer's input quantizer (same pattern as QuantReLU).
+    """
+    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
+        super().__init__(inplace=inplace)
+        self.capture_activations = False
+        self.quantization_bias = quantization_bias
+        self.last_quant_output_unscaled = None
+
+    def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
+        output_quant = nn.functional.silu(input, inplace=self.inplace)
+
+        if self.capture_activations:
+            self.last_quant_input = input.detach()
+            self.last_quant_output_unscaled = output_quant.detach()
+
+        return output_quant
 
 
 @OpRegistry.register("QuantGELU", original_cls=nn.GELU, is_activation=True, compliance_status="FP32 activation")

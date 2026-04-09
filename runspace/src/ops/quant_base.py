@@ -76,9 +76,9 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
         # Candidate formats (Standard set)
         candidates = [
             'fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6', 
-            'fp8_e6m1', 'fp8_e7m0', 'fp8_e0m7',
+            'fp8_e6m1', 'fp8_e7m0',
             'fp7_e3m3', 'fp7_e4m2', 'fp7_e2m4', 'fp7_e5m1', 'fp7_e1m5', 
-            'fp7_e6m0', 'fp7_e0m6'
+            'fp7_e6m0'
         ]
         
         # Flatten and chunk
@@ -156,7 +156,7 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
         scale_flat_packed = best_scale.view(batch_size, -1) # This is [B, Nchunks] -> we need [B, Nchunks*1]? No, packed scale.
         
         # Expand scale for return if needed
-        scale_expanded = best_scale.expand(-1, -1, chunk_size).reshape(batch_size, -1)
+        scale_expanded = best_scale.expand(-1, -1, chunk_size).contiguous().reshape(batch_size, -1)
         
         # Remove pad
         if pad_len > 0:
@@ -276,7 +276,7 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
         # Expand scale back to original shape
         # s_chunk is [N, num_chunks, 1]
         # We need to broadcast it to [N, num_chunks, chunk_size]
-        s_expanded = s_chunk.expand(-1, -1, chunk_size).reshape(flat_input.shape)
+        s_expanded = s_chunk.expand(-1, -1, chunk_size).contiguous().reshape(flat_input.shape)
         
         # Remove padding
         if num_elements % chunk_size != 0:
@@ -443,7 +443,7 @@ class QuantizedLayerMixin:
                 quantized_flat[indices_tensor] = quant
                 
                 # Expand scale to chunk size and store
-                scale_expanded = scale.expand(-1, chunk_size)
+                scale_expanded = scale.expand(-1, chunk_size).contiguous()
                 scale_flat[indices_tensor] = scale_expanded
 
             # Reshape back to [batch, num_chunks, chunk_size]
@@ -459,9 +459,9 @@ class QuantizedLayerMixin:
                 weight_fp8_flat = weight_fp8_flat[:, :num_elements]
                 weight_scale_flat = weight_scale_flat[:, :num_elements]
             
-            # View as original shape
-            self.weight_fp8 = weight_fp8_flat.view_as(self.weight)
-            self.weight_scale = weight_scale_flat.view_as(self.weight)
+            # View as original shape (clone to ensure contiguous, non-overlapping memory)
+            self.weight_fp8 = weight_fp8_flat.view_as(self.weight).clone()
+            self.weight_scale = weight_scale_flat.view_as(self.weight).clone()
             
             # Store chunk formats for reference
             self.weight_chunk_formats = final_formats

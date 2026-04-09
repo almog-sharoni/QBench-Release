@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./apptainer.sh python:*)",
+      "Bash(python3 -c \":*)"
+    ]
+  }
+}
