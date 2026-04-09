@@ -11,7 +11,7 @@ class QuantAdd(nn.Module, QuantizedLayerMixin):
         self.quantization_bias = quantization_bias
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
-        self.input_quantization = True
+        self.input_quantization = False
 
     def forward(self, input: torch.Tensor, other: torch.Tensor) -> torch.Tensor:
         q1 = self.quantize_input(input)
@@ -26,7 +26,7 @@ class QuantSub(nn.Module, QuantizedLayerMixin):
         self.quantization_bias = quantization_bias
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
-        self.input_quantization = True
+        self.input_quantization = False
 
     def forward(self, input: torch.Tensor, other: torch.Tensor) -> torch.Tensor:
         q1 = self.quantize_input(input)
@@ -41,7 +41,7 @@ class QuantMul(nn.Module, QuantizedLayerMixin):
         self.quantization_bias = quantization_bias
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
-        self.input_quantization = True
+        self.input_quantization = False
 
     def forward(self, input: torch.Tensor, other: torch.Tensor) -> torch.Tensor:
         q1 = self.quantize_input(input)
@@ -56,7 +56,7 @@ class QuantDiv(nn.Module, QuantizedLayerMixin):
         self.quantization_bias = quantization_bias
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
-        self.input_quantization = True
+        self.input_quantization = False
 
     def forward(self, input: torch.Tensor, other: torch.Tensor) -> torch.Tensor:
         q1 = self.quantize_input(input)
@@ -71,7 +71,7 @@ class QuantCat(nn.Module, QuantizedLayerMixin):
         self.quantization_bias = quantization_bias
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
-        self.input_quantization = True
+        self.input_quantization = False
 
     def forward(self, tensors: list[torch.Tensor], dim: int = 0) -> torch.Tensor:
         # Quantize all inputs

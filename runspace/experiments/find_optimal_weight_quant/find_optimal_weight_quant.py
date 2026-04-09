@@ -73,8 +73,24 @@ def get_args():
     parser.add_argument("--baseline_formats", type=str, default=','.join(baseline_formats), help="Comma-separated list of formats to run as baselines (full eval)")
     parser.add_argument("--skip_layer_wise", action="store_true", help="Skip the layer-wise optimization experiment (only run chunk/baselines)")
     parser.add_argument("--force_recalc", action="store_true", help="Force recalculation of layer errors even if results exist")
-    
+    parser.add_argument("--force_rerun", action="store_true", help="Re-run all evaluations even if already in DB")
+
     return parser.parse_args()
+
+
+def _weight_quant_run_exists(db, model_name, experiment_type, weight_dt):
+    """Return True if a successful weight-quant run already exists in DB."""
+    runs = db.get_runs()
+    if runs.empty:
+        return False
+    return not runs[
+        (runs['model_name']      == model_name) &
+        (runs['experiment_type'] == experiment_type) &
+        (runs['weight_dt']       == weight_dt) &
+        (runs['activation_dt']   == 'fp32') &
+        (runs['status']          == 'SUCCESS')
+    ].empty
+
 
 def get_quantized_tensor_sim(tensor, q_type, chunk_size=None, chunk_formats=None, mode=None):
     """
@@ -82,52 +98,21 @@ def get_quantized_tensor_sim(tensor, q_type, chunk_size=None, chunk_formats=None
     Returns (tensor_dequant, max_val).
     """
     if chunk_size is not None:
-        # Use simple manual chunking to avoid op registry mismatches
-        w_chunked, original_shape, pad_len = get_chunked_tensor(tensor, chunk_size=chunk_size)
-        
-        # Max per chunk (Abs)
-        max_vals = w_chunked.abs().amax(dim=-1, keepdim=True).clamp(min=1e-9)
-        
-        scale = calculate_scale(max_vals, q_type)
-        
-        scaled = w_chunked / scale
-        quant = quantize(scaled, q_type=q_type, rounding="nearest", validate=False)
-        dequant = quant * scale
+        return quantize_tensor(tensor, q_type=q_type, mode='chunk', chunk_size=chunk_size,
+                               chunk_formats=chunk_formats, rounding='nearest', validate=False)
 
-
-        
-        # Flatten back
-        flat = dequant.view(w_chunked.shape[0], -1)
-        if pad_len > 0:
-            flat = flat[:, :-pad_len]
-            
-        w_dequant = flat.view(original_shape)
-        
-        return w_dequant, max_vals.max().item()
-
-    # Standard "Per Channel" or "Per Tensor" logic
-    
-    # If the user passes 'tensor', we treat as global.
     if mode == 'tensor':
-         max_val = tensor.abs().amax(dim=None).clamp(min=1e-9) # Scalar
-         scale = calculate_scale(max_val, q_type)
-         t_scaled = tensor / scale
-         t_quant = quantize(t_scaled, q_type=q_type, rounding="nearest", validate=False)
-         t_deq = t_quant * scale
-         return t_deq, max_val.item()
+        return quantize_tensor(tensor, q_type=q_type, mode='tensor', rounding='nearest', validate=False)
 
-    # Default: Assumes WEIGHT (Channel dim 0)
+    # Default: per output-channel (dim 0) — note: quantize_tensor 'channel' mode uses dim 1,
+    # which is wrong for weights, so we keep the explicit per-output-channel logic here.
     out_channels = tensor.shape[0]
     flat = tensor.view(out_channels, -1)
-    
     max_val_per_channel = flat.abs().amax(dim=1, keepdim=True).clamp(min=1e-9)
     scale = calculate_scale(max_val_per_channel, q_type)
-    
     scaled = flat / scale
     quant = quantize(scaled, q_type=q_type, rounding="nearest", validate=False)
-    dequant = quant * scale
-    
-    dequant = dequant.view_as(tensor)
+    dequant = (quant * scale).view_as(tensor)
     return dequant, max_val_per_channel.max().item()
 
 
@@ -839,6 +824,22 @@ def process_single_model(args, device, metrics, base_root):
              if s not in sigs:
                  sigs.add(s)
                  final_configs.append(c)
+
+        # DB skip: filter out configs already successfully evaluated
+        if not args.force_rerun:
+            filtered_configs = []
+            for c in final_configs:
+                out_name = c.get('output_name', '')
+                if out_name == 'ref_fp32':
+                    filtered_configs.append(c)
+                    continue
+                weight_dt = out_name.replace('baseline_', '').replace('optimized_', 'opt_')
+                expr_type = "weight_quant_baseline" if out_name.startswith('baseline_') else "weight_quant_optimized"
+                if _weight_quant_run_exists(db, args.model_name, expr_type, weight_dt):
+                    print(f"[DB] Skipping {out_name} — already in DB")
+                else:
+                    filtered_configs.append(c)
+            final_configs = filtered_configs
 
         # Enable Oracle Tracker
         tracker = None

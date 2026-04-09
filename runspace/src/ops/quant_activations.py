@@ -226,6 +226,9 @@ class QuantGELU(nn.GELU, LUTActivation):
         self.register_buffer('piecewise_lut', lut_values)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if not getattr(self, 'input_quantization', True):
+            return nn.functional.gelu(input, approximate=self.approximate)
+
         # Input x (FP32)
         x = input
         A = self.A

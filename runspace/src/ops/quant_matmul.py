@@ -15,7 +15,7 @@ class QuantMatMul(nn.Module, QuantizedLayerMixin):
         self.quantization_bias = quantization_bias
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
-        self.input_quantization = True
+        self.input_quantization = False
 
     def forward(self, input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
         # Quantize both inputs. 
@@ -35,7 +35,7 @@ class QuantBMM(nn.Module, QuantizedLayerMixin):
         self.quantization_bias = quantization_bias
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
-        self.input_quantization = True
+        self.input_quantization = False
 
     def forward(self, input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
         q1 = self.quantize_input(input1)
