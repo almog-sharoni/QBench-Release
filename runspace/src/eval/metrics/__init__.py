@@ -11,6 +11,8 @@ from .utils import (
     check_fp8_compliance,
 )
 
+compute_certainty = ClassificationMetrics.compute_certainty
+
 __all__ = [
     "TaskMetricsBase",
     "ClassificationMetrics",
@@ -22,4 +24,5 @@ __all__ = [
     "compute_min_max",
     "get_fp8_e4m3_values",
     "check_fp8_compliance",
+    "compute_certainty",
 ]

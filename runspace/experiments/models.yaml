@@ -294,9 +294,9 @@
 #   source: torchvision
 #   weights: DEFAULT
 
-# - name: resnet152
-#   source: torchvision
-#   weights: DEFAULT
+- name: resnet152
+  source: torchvision
+  weights: DEFAULT
 
 # - name: resnet152
 #   source: torchvision
@@ -398,9 +398,9 @@
 #   source: torchvision
 #   weights: DEFAULT
 
-# - name: vit_b_16
-#   source: torchvision
-#   weights: DEFAULT
+- name: vit_b_16
+  source: torchvision
+  weights: DEFAULT
 
 # - name: vit_b_16
 #   source: torchvision

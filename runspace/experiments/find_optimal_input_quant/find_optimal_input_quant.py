@@ -731,18 +731,19 @@ def process_single_model(args, model_config, device, metrics):
             # Log Baseline to Database with Reference
             db.log_run(
                 model_name=model_name,
-                weight_dt="fp32", 
+                weight_dt="fp32",
                 activation_dt=fmt,
+                task_type=args.dataset_type,
+                experiment_type="input_quant_baseline",
+                status="SUCCESS",
                 acc1=stats['acc1'],
                 acc5=stats['acc5'],
+                certainty=stats.get('certainty', 0.0),
                 ref_acc1=ref_acc1,
                 ref_acc5=ref_acc5,
                 ref_certainty=ref_certainty,
-                experiment_type="input_quant_baseline",
-                status="SUCCESS",
                 mse=stats['norm_mse'],
                 l1=stats['norm_l1'],
-                certainty=stats.get('certainty', 0.0)
             )
     else:
         print("\nSkipping Baselines (--only_dynamic set)")
@@ -845,16 +846,17 @@ def process_single_model(args, model_config, device, metrics):
                         model_name=model_name,
                         weight_dt="fp32",
                         activation_dt=f"dyn_input_{metric}",
+                        task_type=args.dataset_type,
+                        experiment_type="input_quant_dynamic",
+                        status="SUCCESS",
                         acc1=acc1,
                         acc5=acc5,
+                        certainty=certainty,
                         ref_acc1=ref_acc1,
                         ref_acc5=ref_acc5,
                         ref_certainty=ref_certainty,
-                        experiment_type="input_quant_dynamic",
-                        status="SUCCESS",
                         mse=final_stats['norm_mse'],
                         l1=final_stats['norm_l1'],
-                        certainty=certainty
                     )
                     
                     plot_format_histogram(quantizer_handler.layer_stats, metric_out_dir)

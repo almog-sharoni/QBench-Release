@@ -892,17 +892,18 @@ def process_single_model(args, device, metrics, base_root):
             db.log_run(
                 model_name=res.get('model_name', args.model_name),
                 weight_dt=weight_dt,
-                activation_dt="fp32", # Weight experiment assumes fp32 activations
+                activation_dt="fp32",  # Weight experiment assumes fp32 activations
+                task_type=args.dataset_type,
+                experiment_type="weight_quant_baseline" if out_name.startswith('baseline_') else "weight_quant_optimized",
+                status=res.get('status', 'SUCCESS'),
                 acc1=acc1,
                 acc5=res.get('acc5', 0.0),
+                certainty=certainty,
                 ref_acc1=ref_acc1,
                 ref_acc5=ref_acc5,
                 ref_certainty=ref_certainty,
-                experiment_type="weight_quant_baseline" if out_name.startswith('baseline_') else "weight_quant_optimized",
-                status=res.get('status', 'SUCCESS'),
                 mse=mse,
                 l1=l1,
-                certainty=certainty
             )
         
         # Plot Oracle Heatmaps
