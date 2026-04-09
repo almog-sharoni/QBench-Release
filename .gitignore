@@ -12,6 +12,7 @@ Apptainer.def
 qbench_sandbox/
 *.sif
 *.img
+.claude/
 
 */results/*
 
