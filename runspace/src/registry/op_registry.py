@@ -78,7 +78,8 @@ import torch
 import torch.nn.functional as F
 standard_functions = [
     F.conv2d, F.linear, F.batch_norm, F.layer_norm, F.dropout, F.softmax, F.scaled_dot_product_attention,
-    torch.softmax, torch.relu, F.relu, F.relu6, F.silu, F.gelu, F.hardswish
+    torch.softmax, torch.relu, F.relu, F.relu6, F.silu, F.gelu, F.hardswish,
+    # torch.matmul, torch.bmm, torch.add, torch.sub, torch.mul, torch.div, torch.cat
 ]
 for func in standard_functions:
     OpRegistry.register_function(func)

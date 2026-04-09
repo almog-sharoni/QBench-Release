@@ -61,7 +61,7 @@ dataset:
 
 evaluation:
   # Mode: evaluate (quantized only), compare (reference vs quantized)
-  mode: evaluate
+  mode: compare
   # Number of batches to compare (false or -1 for all)
   compare_batches: -1
   generate_graph_svg: false

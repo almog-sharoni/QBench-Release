@@ -71,15 +71,53 @@ class Runner:
         # Custom Image Size
         image_size = dataset_config.get('image_size', 224)
         resize_size = dataset_config.get('resize_size', 256)
-        
-        # Standard ImageNet transforms
-        transform = transforms.Compose([
-            transforms.Resize(resize_size),
-            transforms.CenterCrop(image_size),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225]),
-        ])
+
+        # For timm models, use the model's own data config for correct transforms
+        model_source = config.get('model', {}).get('source', 'auto')
+        model_name = config.get('model', {}).get('name', '')
+        if model_source == 'auto':
+            import torchvision.models as _tv_models
+            if hasattr(_tv_models, model_name):
+                model_source = 'torchvision'
+            else:
+                try:
+                    import timm as _timm
+                    model_source = 'timm' if _timm.is_model(model_name) else 'torchvision'
+                except ImportError:
+                    model_source = 'torchvision'
+        print(f"Model source: {model_source}")
+        if model_source == 'timm':
+            try:
+                import timm
+                # Create a lightweight (pretrained=False) instance to get the model's actual
+                # data config — resolve_model_data_config(name_string) returns wrong defaults
+                # for models like mobilevit_xxs.cvnets_in1k that use non-standard normalization.
+                _tmp = timm.create_model(model_name, pretrained=False)
+                data_cfg = timm.data.resolve_model_data_config(_tmp)
+                del _tmp
+                transform = timm.data.create_transform(**data_cfg, is_training=False)
+                print(f"Using timm transforms for {model_name}: "
+                      f"input_size={data_cfg.get('input_size')}, "
+                      f"mean={data_cfg.get('mean')}, std={data_cfg.get('std')}")
+            except Exception as e:
+                print(f"Warning: Could not resolve timm transforms for {model_name}: {e}. "
+                      f"Falling back to standard ImageNet transforms.")
+                transform = transforms.Compose([
+                    transforms.Resize(resize_size),
+                    transforms.CenterCrop(image_size),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                         std=[0.229, 0.224, 0.225]),
+                ])
+        else:
+            # Standard ImageNet transforms
+            transform = transforms.Compose([
+                transforms.Resize(resize_size),
+                transforms.CenterCrop(image_size),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225]),
+            ])
         
         if not os.path.exists(data_dir):
              print(f"Warning: Data directory {data_dir} does not exist. Skipping data loading.")
@@ -93,18 +131,31 @@ class Runner:
         if os.path.exists(index_path):
             with open(index_path, 'r') as f:
                 class_index = json.load(f)
-            
+
             wnid_to_idx = {v[0]: int(k) for k, v in class_index.items()}
             local_class_to_idx = dataset.class_to_idx
             idx_map = {}
             for wnid, local_idx in local_class_to_idx.items():
                 if wnid in wnid_to_idx:
                     idx_map[local_idx] = wnid_to_idx[wnid]
-            
+
+            mapped = len(idx_map)
+            total_classes = len(local_class_to_idx)
+            print(f"Label mapping: {mapped}/{total_classes} classes matched to ImageNet canonical indices.")
+            if mapped == 0:
+                print("Warning: No classes matched. Labels may be incorrect. "
+                      "Check that val folder names are WordNet IDs (e.g. n01440764).")
+            elif mapped < total_classes:
+                print(f"Warning: {total_classes - mapped} classes could not be mapped — "
+                      "their local indices will be used as-is.")
+
             def target_transform(target):
                 return idx_map.get(target, target)
-            
+
             dataset.target_transform = target_transform
+        else:
+            print(f"Warning: imagenet_class_index.json not found at {index_path}. "
+                  "Using ImageFolder's default alphabetical label ordering.")
         
         batch_size = dataset_config.get('batch_size', 32)
         num_workers = dataset_config.get('num_workers', 0)

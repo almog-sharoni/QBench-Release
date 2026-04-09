@@ -71,8 +71,45 @@ def get_args():
     parser.add_argument("--baseline_formats", type=str, default=','.join(baseline_formats), help="Comma-separated list of formats to run as baselines (full eval)")
     parser.add_argument("--skip_layer_wise", action="store_true", help="Skip the layer-wise optimization experiment (only run chunk/baselines)")
     parser.add_argument("--force_recalc", action="store_true", help="Force recalculation of layer errors even if results exist")
-    
+    parser.add_argument("--force_rerun", action="store_true", help="Re-run all evaluations even if already in DB")
+
     return parser.parse_args()
+
+
+def _load_existing_runs(db):
+    """Fetch all runs from DB once and return a DataFrame (empty if none)."""
+    runs = db.get_runs()
+    return runs if not runs.empty else None
+
+
+def _weight_quant_run_exists(existing_runs, model_name, experiment_type, weight_dt):
+    """Return True if a successful weight-quant run already exists in the pre-fetched DataFrame."""
+    if existing_runs is None:
+        return False
+    return not existing_runs[
+        (existing_runs['model_name']      == model_name) &
+        (existing_runs['experiment_type'] == experiment_type) &
+        (existing_runs['weight_dt']       == weight_dt) &
+        (existing_runs['activation_dt']   == 'fp32') &
+        (existing_runs['status']          == 'SUCCESS')
+    ].empty
+
+
+def _get_ref_from_db(existing_runs, model_name):
+    """Return (acc1, acc5, certainty) for the fp32 reference if it's in DB, else None."""
+    if existing_runs is None:
+        return None
+    mask = (
+        (existing_runs['model_name']      == model_name) &
+        (existing_runs['experiment_type'] == 'fp32_ref') &
+        (existing_runs['status']          == 'SUCCESS')
+    )
+    rows = existing_runs[mask]
+    if rows.empty:
+        return None
+    r = rows.iloc[0]
+    return float(r.get('acc1', 0.0) or 0.0), float(r.get('acc5', 0.0) or 0.0), float(r.get('certainty', 0.0) or 0.0)
+
 
 def get_quantized_tensor_sim(tensor, q_type, chunk_size=None, chunk_formats=None, mode=None):
     """
@@ -80,52 +117,21 @@ def get_quantized_tensor_sim(tensor, q_type, chunk_size=None, chunk_formats=None
     Returns (tensor_dequant, max_val).
     """
     if chunk_size is not None:
-        # Use simple manual chunking to avoid op registry mismatches
-        w_chunked, original_shape, pad_len = get_chunked_tensor(tensor, chunk_size=chunk_size)
-        
-        # Max per chunk (Abs)
-        max_vals = w_chunked.abs().amax(dim=-1, keepdim=True).clamp(min=1e-9)
-        
-        scale = calculate_scale(max_vals, q_type)
-        
-        scaled = w_chunked / scale
-        quant = quantize(scaled, q_type=q_type, rounding="nearest", validate=False)
-        dequant = quant * scale
+        return quantize_tensor(tensor, q_type=q_type, mode='chunk', chunk_size=chunk_size,
+                               chunk_formats=chunk_formats, rounding='nearest', validate=False)
 
-
-        
-        # Flatten back
-        flat = dequant.view(w_chunked.shape[0], -1)
-        if pad_len > 0:
-            flat = flat[:, :-pad_len]
-            
-        w_dequant = flat.view(original_shape)
-        
-        return w_dequant, max_vals.max().item()
-
-    # Standard "Per Channel" or "Per Tensor" logic
-    
-    # If the user passes 'tensor', we treat as global.
     if mode == 'tensor':
-         max_val = tensor.abs().amax(dim=None).clamp(min=1e-9) # Scalar
-         scale = calculate_scale(max_val, q_type)
-         t_scaled = tensor / scale
-         t_quant = quantize(t_scaled, q_type=q_type, rounding="nearest", validate=False)
-         t_deq = t_quant * scale
-         return t_deq, max_val.item()
+        return quantize_tensor(tensor, q_type=q_type, mode='tensor', rounding='nearest', validate=False)
 
-    # Default: Assumes WEIGHT (Channel dim 0)
+    # Default: per output-channel (dim 0) — note: quantize_tensor 'channel' mode uses dim 1,
+    # which is wrong for weights, so we keep the explicit per-output-channel logic here.
     out_channels = tensor.shape[0]
     flat = tensor.view(out_channels, -1)
-    
     max_val_per_channel = flat.abs().amax(dim=1, keepdim=True).clamp(min=1e-9)
     scale = calculate_scale(max_val_per_channel, q_type)
-    
     scaled = flat / scale
     quant = quantize(scaled, q_type=q_type, rounding="nearest", validate=False)
-    dequant = quant * scale
-    
-    dequant = dequant.view_as(tensor)
+    dequant = (quant * scale).view_as(tensor)
     return dequant, max_val_per_channel.max().item()
 
 
@@ -488,36 +494,39 @@ def process_single_model(args, device, metrics, base_root):
          
     dataset_base = config['dataset']
 
+    # Fetch DB state once — used for all skip checks below
+    existing_runs = None if args.force_rerun else _load_existing_runs(db)
+
     # Always add Ref and Baselines if we are evaling (and not cached)
     if args.run_eval:
-        # Ref
-        ref_config = {
-            'model': {'name': args.model_name, 'weights': args.weights},
-            'adapter': {'type': 'generic', 'quantized_ops': []},
-            'evaluation': eval_config,
-            'dataset': dataset_base,
-            'output_name': "ref_fp32"
-        }
-        configs_to_run.append(ref_config)
-        
-        # 2. Baselines for user-specified formats
-        if args.include_fp32:
-            pass
-        
+        # Ref — skip if already in DB (cached_ref_acc carries the stored values)
+        cached_ref = None if args.force_rerun else _get_ref_from_db(existing_runs, args.model_name)
+        if cached_ref is not None:
+            print(f"[DB] Skipping ref_fp32 — already in DB (acc1={cached_ref[0]:.2f}%)")
+        else:
+            ref_config = {
+                'model': {'name': args.model_name, 'weights': args.weights},
+                'adapter': {'type': 'generic', 'quantized_ops': []},
+                'evaluation': eval_config,
+                'dataset': dataset_base,
+                'output_name': "ref_fp32"
+            }
+            configs_to_run.append(ref_config)
+
         # Parse baseline formats and strip whitespace
         requested_baselines = [fmt.strip() for fmt in args.baseline_formats.split(',') if fmt.strip()]
-        
+
         for fmt in requested_baselines:
-            # Verify format is valid if needed, or just run it (runner will fail if invalid)
-            # if fmt not in baseline_formats: print warning?
-            
+            if _weight_quant_run_exists(existing_runs, args.model_name, 'weight_quant_baseline', fmt):
+                print(f"[DB] Skipping baseline_{fmt} — already in DB")
+                continue
+
             b_cfg = {
                 'model': {'name': args.model_name, 'weights': args.weights},
                 'adapter': {
-                    'type': 'generic', 
-                    'quantized_ops': ['-1'], # Quantize all supported
-                    'input_quantization': False, 
-                    # 'input_quantization_type': args.input_method if args.input_method else (fmt if args.target == 'inputs' else 'fp32') 
+                    'type': 'generic',
+                    'quantized_ops': ['-1'],
+                    'input_quantization': False,
                 },
                 'quantization': {
                     'format': fmt,
@@ -528,9 +537,6 @@ def process_single_model(args, device, metrics, base_root):
                 'dataset': dataset_base,
                 'output_name': f"baseline_{fmt}"
             }
-            
-
-                
             configs_to_run.append(b_cfg)
 
     # Initialize total_errors_by_config for all metrics upfront
@@ -828,14 +834,29 @@ def process_single_model(args, device, metrics, base_root):
         runner = Runner()
         print("Using Parallel Execution...")
         
-        # Dedupe logic
+        # Dedupe logic (baselines already filtered by DB at build time above)
         final_configs = []
         sigs = set()
         for c in configs_to_run:
-             s = json.dumps(c, sort_keys=True)
-             if s not in sigs:
-                 sigs.add(s)
-                 final_configs.append(c)
+            s = json.dumps(c, sort_keys=True)
+            if s not in sigs:
+                sigs.add(s)
+                final_configs.append(c)
+
+        # Secondary DB skip for optimized configs (added later in the metrics loop)
+        if not args.force_rerun:
+            filtered_configs = []
+            for c in final_configs:
+                out_name = c.get('output_name', '')
+                if out_name == 'ref_fp32' or out_name.startswith('baseline_'):
+                    filtered_configs.append(c)  # baselines already pre-filtered
+                    continue
+                weight_dt = out_name.replace('optimized_', 'opt_')
+                if _weight_quant_run_exists(existing_runs, args.model_name, 'weight_quant_optimized', weight_dt):
+                    print(f"[DB] Skipping {out_name} — already in DB")
+                else:
+                    filtered_configs.append(c)
+            final_configs = filtered_configs
 
         # Enable Oracle Tracker
         tracker = None
@@ -851,19 +872,39 @@ def process_single_model(args, device, metrics, base_root):
         results = runner.run_batch_parallel(final_configs, output_root=model_dir)
         
         # --- Log Results to Database ---
-        # 1. Identify Reference (ref_fp32)
-        ref_acc1, ref_acc5, ref_certainty = 0.0, 0.0, 0.0
-        for res in results:
-            if res.get('output_name') == 'ref_fp32':
-                ref_acc1 = res.get('acc1', 0.0)
-                ref_acc5 = res.get('acc5', 0.0)
-                ref_certainty = res.get('certainty', 0.0)
-                break
+        # 1. Identify Reference (ref_fp32) — use cached DB value if ref was skipped
+        if cached_ref is not None:
+            ref_acc1, ref_acc5, ref_certainty = cached_ref
+        else:
+            ref_acc1, ref_acc5, ref_certainty = 0.0, 0.0, 0.0
+            for res in results:
+                if res.get('output_name') == 'ref_fp32':
+                    ref_acc1 = res.get('acc1', 0.0)
+                    ref_acc5 = res.get('acc5', 0.0)
+                    ref_certainty = res.get('certainty', 0.0)
+                    break
         
-        # 2. Log all results except ref_fp32
+        # 2. Log all results
         for res in results:
             out_name = res.get('output_name', '')
             if out_name == 'ref_fp32':
+                if res.get('status') == 'SUCCESS':
+                    db.log_run(
+                        model_name=res.get('model_name', args.model_name),
+                        weight_dt='fp32',
+                        activation_dt='fp32',
+                        acc1=ref_acc1,
+                        acc5=ref_acc5,
+                        ref_acc1=ref_acc1,
+                        ref_acc5=ref_acc5,
+                        ref_certainty=ref_certainty,
+                        experiment_type='fp32_ref',
+                        status='SUCCESS',
+                        certainty=ref_certainty,
+                        config_json=json.dumps({'model': {'name': args.model_name, 'weights': args.weights},
+                                                'dataset': {'name': args.dataset_name, 'path': args.dataset_path,
+                                                            'batch_size': args.batch_size}}),
+                    )
                 continue
                 
             # For weight optimization, activation is usually fp32
@@ -888,7 +929,7 @@ def process_single_model(args, device, metrics, base_root):
             db.log_run(
                 model_name=res.get('model_name', args.model_name),
                 weight_dt=weight_dt,
-                activation_dt="fp32", # Weight experiment assumes fp32 activations
+                activation_dt="fp32",
                 acc1=acc1,
                 acc5=res.get('acc5', 0.0),
                 ref_acc1=ref_acc1,
@@ -898,7 +939,14 @@ def process_single_model(args, device, metrics, base_root):
                 status=res.get('status', 'SUCCESS'),
                 mse=mse,
                 l1=l1,
-                certainty=certainty
+                certainty=certainty,
+                config_json=json.dumps({
+                    'model': {'name': args.model_name, 'weights': args.weights},
+                    'dataset': {'name': args.dataset_name, 'path': args.dataset_path,
+                                'batch_size': args.batch_size},
+                    'quantization': {'weight_format': weight_dt, 'weight_mode': 'chunk',
+                                     'weight_chunk_size': args.weight_chunk_size},
+                }),
             )
         
         # Plot Oracle Heatmaps
