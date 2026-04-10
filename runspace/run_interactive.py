@@ -202,6 +202,7 @@ def main():
                     if 'evaluation' not in config:
                         config['evaluation'] = {}
                     config['evaluation']['compare_batches'] = new_batches
+                    config['evaluation']['max_batches'] = new_batches
                 batch_msg = "ALL" if new_batches == -1 else str(new_batches)
                 print(f"Set number of batches to {batch_msg}")
             else:
@@ -218,7 +219,7 @@ def main():
                             if 'evaluation' not in config:
                                 config['evaluation'] = {}
                             config['evaluation']['compare_batches'] = new_batches
-
+                            config['evaluation']['max_batches'] = new_batches
                         batch_msg = "ALL" if new_batches == -1 else str(new_batches)
                         print(f"Set number of batches to {batch_msg}")
                         break

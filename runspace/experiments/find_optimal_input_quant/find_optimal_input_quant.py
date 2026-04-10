@@ -9,6 +9,7 @@ import yaml
 import gc
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import json
 
 # Add project root to sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
@@ -36,24 +37,22 @@ baseline_formats = [ 'fp32', 'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp
 
 candidate_formats = [
             # Signed FP8 (1 sign bit + 7 bits E/M)
-            # 'fp8_e0m7','fp8_e1m6'   ,'fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
-            # 'fp6_e0m5','fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
-            # 'fp4_e3m0' , 'fp4_e2m1' , 'fp4_e1m2' , 'fp4_e0m3',
+            #'fp8_e1m6'   ,'fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
+            #'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
+            # 'fp4_e3m0' , 'fp4_e2m1' , 'fp4_e1m2' ,
             
             # Unsigned FP8 (0 sign bit + 8 bits E/M) - Fully utilizes 8 bits
-            # 'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3', 'ufp4_e0m4'
-            # 'ufp8_e8m0','ufp8_e7m1','ufp8_e6m2','ufp8_e5m3','ufp8_e4m4','ufp8_e3m5','ufp8_e2m6','ufp8_e1m7'
+            # 'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3',             # 'ufp8_e8m0','ufp8_e7m1','ufp8_e6m2','ufp8_e5m3','ufp8_e4m4','ufp8_e3m5','ufp8_e2m6','ufp8_e1m7'
 
             # Expended FP8 (Moved to top to test tie-breaking)
-            # 'efp8_e0m7','efp8_e1m6','efp8_e2m5','efp8_e3m4','efp8_e4m3','efp8_e5m2','efp8_e6m1','efp8_e7m0'
+            # 'efp8_e1m6','efp8_e2m5','efp8_e3m4','efp8_e4m3','efp8_e5m2','efp8_e6m1','efp8_e7m0'
 
             # 'fp5_e4m0', 'fp5_e3m1', 'fp5_e2m2', 'fp5_e1m3',
             # 'ufp5_e5m0', 'ufp5_e4m1', 'ufp5_e3m2', 'ufp5_e2m3', 'ufp5_e1m4'
 
-            # 'efp4_e3m0','efp4_e2m1','efp4_e1m2','efp4_e0m3',
-            # 'fp4_e3m0','fp4_e2m1','fp4_e1m2','fp4_e0m3',
-            # 'ufp4_e4m0','ufp4_e3m1','ufp4_e2m2','ufp4_e1m3','ufp4_e0m4'
-            # 'fp3_e0m2'
+            # 'efp4_e3m0','efp4_e2m1','efp4_e1m2',
+            # 'fp4_e3m0','fp4_e2m1','fp4_e1m2'
+            # 'ufp4_e4m0','ufp4_e3m1','ufp4_e2m2','ufp4_e1m3',
             'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
             'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
         ]
@@ -468,28 +467,23 @@ def run_baselines(args, device, formats):
                 mse_err = 0.0
                 
                 if fmt != 'fp32':
-                    # Calculate Quantization Error
-                    # Note: We need to validate=False for speed
-                    # But for correct error calculation, we should try to match the 'dynamic' behavior
-                    # The baselines use per-tensor (default) or whatever `quantize` does.
-                    # Dynamic uses per-chunk. This is a fairness difference, but acceptable for "Baseline".
-                    
                     try:
-                        # For proper error tracking, we need to manually quantize and keep track
-                        # Let's assume standard per-tensor quantization for baselines? 
-                        # Or per-channel? Standard `quantize` is per-tensor if axis not set.
-                        
-                        max_val = x.abs().max()
-                        # bias = get_quantization_bias(fmt)
-                        scale = calculate_scale(max_val, fmt)
-                        #raise error if not verified
-                        x_quant_pre_scale = quantize(x / scale, q_type=fmt, validate=False) 
-                        # _, passrate = verify_mantissa(x_quant_pre_scale, 1,1)
-                        # if passrate < 1.0:
-                        #     raise ValueError(f"Format {fmt} verification failed for layer {layer_name}, passrate: {passrate}")
-                        # print (x_quant_pre_scale)
-                      
-                        x_quant = x_quant_pre_scale * scale
+                        # Chunk-wise quantization — matches find_optimal_w6a4 Phase B.
+                        chunk_size = args.chunk_size
+                        flat = x.reshape(-1)
+                        pad_len = 0
+                        if flat.numel() % chunk_size != 0:
+                            pad_len = chunk_size - (flat.numel() % chunk_size)
+                            flat = torch.nn.functional.pad(flat, (0, pad_len))
+                        chunks = flat.view(-1, chunk_size)
+                        scale = calculate_scale(
+                            chunks.abs().amax(dim=1, keepdim=True).clamp(min=1e-5), fmt
+                        )
+                        q_chunks = quantize(chunks / scale, q_type=fmt, validate=False) * scale
+                        flat_q = q_chunks.reshape(-1)
+                        if pad_len > 0:
+                            flat_q = flat_q[:-pad_len]
+                        x_quant = flat_q.reshape(x.shape)
 
                     
                         
@@ -729,6 +723,14 @@ def process_single_model(args, model_config, device, metrics):
             })
             
             # Log Baseline to Database with Reference
+            _cfg = json.dumps({
+                'model': {'name': model_name, 'weights': weights},
+                'dataset': {'name': args.dataset_name, 'path': args.dataset_path,
+                            'batch_size': args.batch_size, 'num_workers': args.num_workers,
+                            'limit_batches': args.limit_batches},
+                'quantization': {'activation_format': fmt, 'activation_mode': 'chunk',
+                                 'chunk_size': args.chunk_size},
+            })
             db.log_run(
                 model_name=model_name,
                 weight_dt="fp32",
@@ -744,6 +746,7 @@ def process_single_model(args, model_config, device, metrics):
                 ref_certainty=ref_certainty,
                 mse=stats['norm_mse'],
                 l1=stats['norm_l1'],
+                config_json=_cfg,
             )
     else:
         print("\nSkipping Baselines (--only_dynamic set)")
@@ -842,6 +845,14 @@ def process_single_model(args, model_config, device, metrics):
                     print(f"Norm L1: {final_stats['norm_l1']:.4e}, Norm MSE: {final_stats['norm_mse']:.4e}")
                     
                     # Log Dynamic Result to Database
+                    _cfg_dyn = json.dumps({
+                        'model': {'name': model_name, 'weights': weights},
+                        'dataset': {'name': args.dataset_name, 'path': args.dataset_path,
+                                    'batch_size': args.batch_size, 'num_workers': args.num_workers,
+                                    'limit_batches': args.limit_batches},
+                        'quantization': {'activation_mode': 'dynamic', 'metric': metric,
+                                         'chunk_size': args.chunk_size},
+                    })
                     db.log_run(
                         model_name=model_name,
                         weight_dt="fp32",
@@ -857,12 +868,12 @@ def process_single_model(args, model_config, device, metrics):
                         ref_certainty=ref_certainty,
                         mse=final_stats['norm_mse'],
                         l1=final_stats['norm_l1'],
+                        config_json=_cfg_dyn,
                     )
                     
                     plot_format_histogram(quantizer_handler.layer_stats, metric_out_dir)
                     plot_layer_format_distribution(quantizer_handler.layer_stats, metric_out_dir, metric)
                     
-                    import json
                     stats_path = os.path.join(metric_out_dir, "layer_stats.json")
                     with open(stats_path, 'w') as f:
                         # Save stats + accuracy
@@ -902,7 +913,6 @@ def process_single_model(args, model_config, device, metrics):
         plot_accuracy_comparison(all_results, model_out_dir)
         
         # Also save raw results to CSV/JSON for easy review
-        import json
         with open(os.path.join(model_out_dir, "comparison_results.json"), 'w') as f:
              json.dump(all_results, f, indent=4)
 

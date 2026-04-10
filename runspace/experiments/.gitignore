@@ -1,8 +1,2 @@
-optimal_layer_quant/
-optimal_weight_quant/
-optimal_input_quant/
-bandwidth_analysis/
-backup/
-bandwidth_aware_quant/
-find_optimal_hybrid_quant/
-find_optimal_w6a4/
+backup/*
+**/results/

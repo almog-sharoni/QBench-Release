@@ -90,9 +90,45 @@ class RunDatabase:
                     status          TEXT,
                     run_date        TEXT,
                     quant_map_json  TEXT,
-                    input_map_json  TEXT
+                    input_map_json  TEXT,
+                    config_json     TEXT
                 )
             ''')
+
+            # Migration: Check if columns exist and add if not (for existing databases)
+            try:
+                cursor.execute("ALTER TABLE runs ADD COLUMN ref_acc1 REAL")
+                cursor.execute("ALTER TABLE runs ADD COLUMN ref_acc5 REAL")
+            except sqlite3.OperationalError: pass # Already exists
+
+            try:
+                cursor.execute("ALTER TABLE runs ADD COLUMN experiment_type TEXT")
+            except sqlite3.OperationalError: pass # Already exists
+
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN ref_acc1 REAL")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN ref_acc5 REAL")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN ref_certainty REAL")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN run_date TEXT")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN status TEXT")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN mse REAL")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN l1 REAL")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN certainty REAL")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN quant_map_json TEXT")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN input_map_json TEXT")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN task_type_id INTEGER")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN config_json TEXT")
+            except sqlite3.OperationalError: pass
 
             # Create model_graphs table for storing quantization visualizations
             cursor.execute('''
@@ -135,12 +171,14 @@ class RunDatabase:
                 # error metrics
                 mse=None, l1=None,
                 # layer maps for dashboard
-                quant_map_json=None, input_map_json=None):
+                quant_map_json=None, input_map_json=None,
+                config_json=None):
         """
         Logs a new run to the database.
         quant_map_json : JSON string mapping layer -> weight format.
         input_map_json : JSON string mapping layer -> dominant input format
                          (from DynamicInputQuantizer layer_stats).
+        config_json    : JSON string of the full run configuration dict.
         """
         if not isinstance(task_type, str) or not task_type:
             raise ValueError("task_type must be a non-empty string")
@@ -162,7 +200,7 @@ class RunDatabase:
                     w_bits, w_exp, w_mant,
                     a_bits, a_exp, a_mant,
                     status, run_date,
-                    quant_map_json, input_map_json
+                    quant_map_json, input_map_json, config_json
                 ) VALUES (
                     ?,?,?,?,?,
                     ?,?,?,
@@ -171,7 +209,7 @@ class RunDatabase:
                     ?,?,?,
                     ?,?,?,
                     ?,?,
-                    ?,?
+                    ?,?,?
                 )
             ''', (
                 model_name, experiment_type, weight_dt, activation_dt, task_type_id,
@@ -181,7 +219,7 @@ class RunDatabase:
                 w_bits, w_exp, w_mant,
                 a_bits, a_exp, a_mant,
                 status, run_date,
-                quant_map_json, input_map_json,
+                quant_map_json, input_map_json, config_json,
             ))
             conn.commit()
             print(f"Logged run for {model_name} to {self.db_path}")

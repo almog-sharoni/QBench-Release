@@ -43,7 +43,7 @@ def create_adapter(config: dict) -> BaseAdapter:
     
     # Extract common parameters
     model_name = model_config.get('name', 'resnet18')
-    model_source = model_config.get('source', 'torchvision')
+    model_source = model_config.get('source', 'auto')
     weights = model_config.get('weights', None)
     
     quantize_first_layer = adapter_config.get('quantize_first_layer', False)
@@ -53,6 +53,7 @@ def create_adapter(config: dict) -> BaseAdapter:
     # input_quantization is now True by default, unless explicitly disabled in adapter config (which we removed from base config but keep support for overrides if needed, or just force True as per request)
     # User said "we asking id to quant inputs - this shouldnt be a question". So we default to True.
     input_quantization = adapter_config.get('input_quantization', True)
+    skip_calibration = adapter_config.get('skip_calibration', False)
     
     # Check for quantization type in adapter config first, then in quantization section
     quantization_config = config.get('quantization', {})
@@ -117,7 +118,8 @@ def create_adapter(config: dict) -> BaseAdapter:
             rounding=rounding,
             per_chunk_format=per_chunk_format,
             input_chunk_size=input_chunk_size,
-            run_id=run_id
+            run_id=run_id,
+            skip_calibration=skip_calibration,
         )
     
     elif adapter_type == 'slm':
@@ -167,20 +169,39 @@ def load_reference_model(config: dict):
     
     model_config = config.get('model', {})
     model_name = model_config.get('name', 'resnet18')
-    model_source = model_config.get('source', 'torchvision')
+    model_source = model_config.get('source', 'auto')
     weights = model_config.get('weights', None)
     
+    if model_source == 'auto':
+        if hasattr(models, model_name):
+            model_source = 'torchvision'
+        else:
+            try:
+                import timm as _timm
+                model_source = 'timm' if _timm.is_model(model_name) else 'torchvision'
+            except ImportError:
+                model_source = 'torchvision'
+
     if model_source == 'torchvision':
         if not hasattr(models, model_name):
             raise ValueError(f"Model '{model_name}' not found in torchvision.models.")
-        
+
         model_fn = getattr(models, model_name)
-        
+
         if weights:
-            # Try to load with weights
             return model_fn(weights=weights if weights != 'DEFAULT' else 'DEFAULT')
         else:
             return model_fn(weights=None)
+    elif model_source == 'timm':
+        try:
+            import timm
+        except ImportError:
+            raise ImportError(
+                "The 'timm' package is required to load this model. "
+                "Install it with: pip install timm"
+            )
+        pretrained = bool(weights) and str(weights).lower() not in ('none', 'false', '0')
+        return timm.create_model(model_name, pretrained=pretrained)
     else:
         raise ValueError(f"Unsupported model source: {model_source}")
 
@@ -195,7 +216,7 @@ def validate_config(config: dict):
     # Define allowed keys
     schema = {
         'model': ['name', 'source', 'weights'],
-        'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size'],
+        'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size', 'skip_calibration'],
         'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format'], # 'type' and 'enabled' for backward compat/fp4 example
         'dataset': ['type', 'name', 'path', 'batch_size', 'num_workers', 'image_size', 'resize_size', 'class_index_path'],
         'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms', 'max_batches', 'graph_only'] # dataset/batch_size allowed here too?
