@@ -81,13 +81,22 @@ class RunDatabase:
             except sqlite3.OperationalError: pass
             
             # Create model_graphs table for storing quantization visualizations
+            # Drop old table to clean up SVG space as user requested
+            try:
+                cursor.execute('PRAGMA user_version')
+                version = cursor.fetchone()[0]
+                if version < 1:
+                    cursor.execute('DROP TABLE IF EXISTS model_graphs')
+                    cursor.execute('PRAGMA user_version = 1')
+            except sqlite3.OperationalError: pass
+
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS model_graphs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     model_name TEXT UNIQUE NOT NULL,
-                    svg_compressed BLOB,
-                    svg_size_original INTEGER,
-                    svg_size_compressed INTEGER,
+                    graph_json_compressed BLOB,
+                    graph_size_original INTEGER,
+                    graph_size_compressed INTEGER,
                     metadata TEXT,
                     generated_date TEXT,
                     status TEXT
@@ -96,9 +105,9 @@ class RunDatabase:
             
             try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN metadata TEXT")
             except sqlite3.OperationalError: pass
-            try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN svg_size_original INTEGER")
+            try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN graph_size_original INTEGER")
             except sqlite3.OperationalError: pass
-            try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN svg_size_compressed INTEGER")
+            try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN graph_size_compressed INTEGER")
             except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN generated_date TEXT")
             except sqlite3.OperationalError: pass
@@ -174,37 +183,37 @@ class RunDatabase:
 
     # ============= MODEL GRAPH METHODS =============
     
-    def store_model_graph(self, model_name, svg_content, metadata=None):
+    def store_model_graph(self, model_name, graph_json_content, metadata=None):
         """
         Stores a quantization graph for a model.
-        Compresses SVG with gzip for efficient storage.
+        Compresses JSON with gzip for efficient storage.
         
         Args:
             model_name (str): Name of the model
-            svg_content (str): SVG content as string
+            graph_json_content (str): JSON content as string
             metadata (dict, optional): Additional metadata (layer_count, quant_count, etc.)
         """
         if metadata is None:
             metadata = {}
         
-        # Compress SVG using gzip
-        svg_bytes = svg_content.encode('utf-8')
-        compressed = gzip.compress(svg_bytes, compresslevel=9)  # Max compression
+        # Compress JSON using gzip
+        json_bytes = graph_json_content.encode('utf-8')
+        compressed = gzip.compress(json_bytes, compresslevel=9)  # Max compression
         
         # Store metadata as JSON
         metadata_json = json.dumps(metadata)
         
-        original_size = len(svg_bytes)
+        original_size = len(json_bytes)
         compressed_size = len(compressed)
         generated_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        compression_ratio = (1 - compressed_size / original_size) * 100
+        compression_ratio = (1 - compressed_size / original_size) * 100 if original_size > 0 else 0
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             # Use INSERT OR REPLACE for idempotency
             cursor.execute('''
                 INSERT OR REPLACE INTO model_graphs 
-                (model_name, svg_compressed, svg_size_original, svg_size_compressed, 
+                (model_name, graph_json_compressed, graph_size_original, graph_size_compressed, 
                  metadata, generated_date, status)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
@@ -216,46 +225,46 @@ class RunDatabase:
                   f"{original_size/1024:.1f}KB → {compressed_size/1024:.1f}KB "
                   f"({compression_ratio:.1f}% reduction)")
     
-    def get_model_graph_svg(self, model_name):
+    def get_model_graph_json(self, model_name):
         """
-        Retrieves and decompresses SVG for a model.
+        Retrieves and decompresses graph JSON for a model.
         
         Args:
             model_name (str): Name of the model
             
         Returns:
-            tuple: (svg_content, metadata) or (None, None) if not found
+            tuple: (graph_json_content, metadata) or (None, None) if not found
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT svg_compressed, metadata FROM model_graphs 
+                SELECT graph_json_compressed, metadata FROM model_graphs 
                 WHERE model_name = ?
             ''', (model_name,))
             result = cursor.fetchone()
             
             if result:
                 compressed, metadata_json = result
-                svg_content = gzip.decompress(compressed).decode('utf-8')
+                graph_json_content = gzip.decompress(compressed).decode('utf-8')
                 metadata = json.loads(metadata_json) if metadata_json else {}
-                return svg_content, metadata
+                return graph_json_content, metadata
             return None, None
     
     def get_model_graph_metadata(self, model_name):
         """
-        Retrieves graph metadata without decompressing SVG.
-        Useful for listing graph info without loading full SVG.
+        Retrieves graph metadata without decompressing JSON.
+        Useful for listing graph info without loading full JSON.
         
         Args:
             model_name (str): Name of the model
             
         Returns:
-            dict: Metadata dict with svg_size_original, svg_size_compressed, generated_date, etc.
+            dict: Metadata dict with graph_size_original, graph_size_compressed, generated_date, etc.
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT svg_size_original, svg_size_compressed, metadata, 
+                SELECT graph_size_original, graph_size_compressed, metadata, 
                        generated_date, status FROM model_graphs 
                 WHERE model_name = ?
             ''', (model_name,))
@@ -266,8 +275,8 @@ class RunDatabase:
                 metadata = json.loads(metadata_json) if metadata_json else {}
                 return {
                     'model_name': model_name,
-                    'svg_size_original': size_orig,
-                    'svg_size_compressed': size_comp,
+                    'graph_size_original': size_orig,
+                    'graph_size_compressed': size_comp,
                     'generated_date': gen_date,
                     'status': status,
                     **metadata
@@ -283,7 +292,7 @@ class RunDatabase:
         """
         with sqlite3.connect(self.db_path) as conn:
             df = pd.read_sql_query('''
-                SELECT model_name, svg_size_original, svg_size_compressed, 
+                SELECT model_name, graph_size_original, graph_size_compressed, 
                        metadata, generated_date, status FROM model_graphs 
                 ORDER BY generated_date DESC
             ''', conn)
