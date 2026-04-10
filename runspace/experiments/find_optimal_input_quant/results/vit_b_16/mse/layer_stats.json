@@ -72,8 +72,8 @@
     },
     "encoder.layers.encoder_layer_5.mlp.3": {
         "format_counts": {
-            "fp8_e1m6": 236393339,
-            "fp5_e4m0": 6456,
+            "fp8_e1m6": 236393338,
+            "fp5_e4m0": 6457,
             "fp6_e5m0": 205
         }
     },
@@ -108,9 +108,9 @@
     },
     "encoder.layers.encoder_layer_8.mlp.3": {
         "format_counts": {
-            "fp8_e1m6": 236393562,
-            "fp6_e5m0": 6251,
-            "fp5_e4m0": 187
+            "fp8_e1m6": 236393561,
+            "fp5_e4m0": 187,
+            "fp6_e5m0": 6252
         }
     },
     "encoder.layers.encoder_layer_9.mlp.0": {
@@ -132,8 +132,8 @@
     },
     "encoder.layers.encoder_layer_10.mlp.3": {
         "format_counts": {
-            "fp8_e1m6": 236368840,
-            "fp5_e4m0": 29169,
+            "fp8_e1m6": 236368841,
+            "fp5_e4m0": 29168,
             "fp6_e5m0": 1991
         }
     },
@@ -157,7 +157,7 @@
     "accuracy": {
         "top1": 81.008,
         "top5": 95.332,
-        "norm_l1": 0.01617804487921683,
-        "norm_mse": 0.00017017989026222685
+        "norm_l1": 0.016178045859239668,
+        "norm_mse": 0.00017017991285025978
     }
 }

@@ -80,8 +80,8 @@
     "encoder.layers.encoder_layer_5.mlp.3": {
         "format_counts": {
             "fp8_e1m6": 236360577,
-            "fp5_e4m0": 37369,
-            "fp6_e5m0": 2054
+            "fp5_e4m0": 37370,
+            "fp6_e5m0": 2053
         }
     },
     "encoder.layers.encoder_layer_6.mlp.0": {
@@ -103,9 +103,9 @@
     },
     "encoder.layers.encoder_layer_7.mlp.3": {
         "format_counts": {
-            "fp8_e1m6": 236392410,
-            "fp6_e5m0": 4699,
-            "fp5_e4m0": 2891
+            "fp8_e1m6": 236392409,
+            "fp5_e4m0": 2892,
+            "fp6_e5m0": 4699
         }
     },
     "encoder.layers.encoder_layer_8.mlp.0": {
@@ -115,9 +115,9 @@
     },
     "encoder.layers.encoder_layer_8.mlp.3": {
         "format_counts": {
-            "fp8_e1m6": 236351545,
-            "fp6_e5m0": 47270,
-            "fp5_e4m0": 1185
+            "fp8_e1m6": 236351546,
+            "fp5_e4m0": 1185,
+            "fp6_e5m0": 47269
         }
     },
     "encoder.layers.encoder_layer_9.mlp.0": {
@@ -127,9 +127,9 @@
     },
     "encoder.layers.encoder_layer_9.mlp.3": {
         "format_counts": {
-            "fp8_e1m6": 236380313,
+            "fp8_e1m6": 236380312,
             "fp5_e4m0": 11418,
-            "fp6_e5m0": 8269
+            "fp6_e5m0": 8270
         }
     },
     "encoder.layers.encoder_layer_10.mlp.0": {
@@ -139,9 +139,9 @@
     },
     "encoder.layers.encoder_layer_10.mlp.3": {
         "format_counts": {
-            "fp8_e1m6": 236184945,
-            "fp5_e4m0": 201347,
-            "fp6_e5m0": 13708
+            "fp8_e1m6": 236184944,
+            "fp5_e4m0": 201349,
+            "fp6_e5m0": 13707
         }
     },
     "encoder.layers.encoder_layer_11.mlp.0": {
@@ -162,9 +162,9 @@
         }
     },
     "accuracy": {
-        "top1": 80.998,
+        "top1": 80.996,
         "top5": 95.29,
-        "norm_l1": 0.01617374745633592,
-        "norm_mse": 0.00017228100688855658
+        "norm_l1": 0.016173746491944897,
+        "norm_mse": 0.00017228097662599034
     }
 }
