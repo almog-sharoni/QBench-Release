@@ -38,11 +38,11 @@ except ImportError:
     print("⚠️  Warning: torch not installed. Graph generation may fail.")
 
 try:
-    from runspace.src.utils.graph_viz import generate_quantization_graph
+    from runspace.src.utils.architecture_viz import generate_hierarchical_json
     GRAPH_VIZ_AVAILABLE = True
 except Exception as e:
     GRAPH_VIZ_AVAILABLE = False
-    print(f"⚠️  Warning: graph_viz not available: {e}")
+    print(f"⚠️  Warning: architecture_viz not available: {e}")
 
 
 def load_model_names(config_file=None):
@@ -55,14 +55,15 @@ def load_model_names(config_file=None):
     
     # Fallback: Common model names
     default_models = [
-        'resnet18', 'resnet50', 'resnet152',
-        'vit_b_16', 'vit_l_16',
-        'efficientnet_b0', 'efficientnet_v2_l',
-        'mobilenet_v3_large',
-        # 'densenet121', 'densenet161',
-        'inception_v3',
-        'alexnet', 'vgg19_bn',
-        'googlenet',
+        # 'resnet18', 'resnet50', 'resnet152',
+        # 'vit_b_16', 'vit_l_16',
+        # 'efficientnet_b0', 'efficientnet_v2_l',
+        # 'mobilenet_v3_large',
+        # # 'densenet121', 'densenet161',
+        # 'inception_v3',
+        # 'alexnet', 'vgg19_bn',
+        # 'googlenet',
+        'mobilevit_xxs',
     ]
     return default_models
 
@@ -143,38 +144,31 @@ def generate_graph_for_model(model_name, db, force=False, quantized=True):
         
         model.eval()
         
-        # Generate SVG in temporary file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.svg', delete=False) as f:
-            temp_svg = f.name
+        # Generate JSON graph representation
+        print("  Tracing and generating hierarchical JSON...")
+        graph_json = generate_hierarchical_json(model, input_size=(1, 3, 224, 224), model_name=model_name, depth=4)
         
-        try:
-            # Generate graph visualization
-            generate_quantization_graph(model, temp_svg, model_name=model_name)
+        if not graph_json:
+            print(f"✗ Graph generation produced empty JSON for {model_name}")
+            return False
+
+        # Extract metadata from the JSON (count nodes, etc.)
+        import json
+        parsed_json = json.loads(graph_json)
+        num_nodes = sum(1 for e in parsed_json if e.get('data', {}).get('type') in ('node', 'compound'))
+        num_quantized = sum(1 for e in parsed_json if '#a7f3d0' in str(e.get('data', {}).get('color', '')))
+
+        metadata = {
+            'num_nodes': num_nodes,
+            'num_quantized_layers': num_quantized,
+            'generated_at': datetime.now().isoformat()
+        }
+
+        # Store in database
+        db.store_model_graph(model_name, graph_json, metadata)
+        print(f"✓ Success")
+        return True
             
-            # Read generated SVG
-            with open(temp_svg, 'r') as f:
-                svg_content = f.read()
-            
-            # Extract metadata from the SVG (count nodes, quantized layers, etc.)
-            num_nodes = svg_content.count('<title>')  # Rough estimate
-            num_quantized = svg_content.count('#90EE90')  # Green color = quantized
-            
-            metadata = {
-                'num_nodes': num_nodes,
-                'num_quantized_layers': num_quantized,
-                'generated_at': datetime.now().isoformat()
-            }
-            
-            # Store in database
-            db.store_model_graph(model_name, svg_content, metadata)
-            print(f"✓ Success")
-            return True
-            
-        finally:
-            # Clean up temp file
-            if os.path.exists(temp_svg):
-                os.remove(temp_svg)
-                
     except Exception as e:
         print(f"✗ Error: {e}")
         # import traceback
@@ -268,8 +262,8 @@ def main():
     print("\n📦 Storage Summary:")
     graphs_df = db.get_all_model_graphs()
     if not graphs_df.empty:
-        total_compressed = graphs_df['svg_size_compressed'].sum()
-        total_original = graphs_df['svg_size_original'].sum()
+        total_compressed = graphs_df['graph_size_compressed'].sum()
+        total_original = graphs_df['graph_size_original'].sum()
         avg_reduction = 100 * (1 - total_compressed / total_original) if total_original > 0 else 0
         
         print(f"  Total graphs: {len(graphs_df)}")
@@ -280,8 +274,8 @@ def main():
         # Show per-model sizes
         print("\n  Per-model breakdown:")
         for _, row in graphs_df.iterrows():
-            reduction = 100 * (1 - row['svg_size_compressed'] / row['svg_size_original']) if row['svg_size_original'] > 0 else 0
-            print(f"    {row['model_name']:20s}: {row['svg_size_original']/1024:7.1f}KB → {row['svg_size_compressed']/1024:7.1f}KB ({reduction:5.1f}%)")
+            reduction = 100 * (1 - row['graph_size_compressed'] / row['graph_size_original']) if row['graph_size_original'] > 0 else 0
+            print(f"    {row['model_name']:20s}: {row['graph_size_original']/1024:7.1f}KB → {row['graph_size_compressed']/1024:7.1f}KB ({reduction:5.1f}%)")
 
 if __name__ == "__main__":
     main()

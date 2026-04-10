@@ -14,10 +14,77 @@ from src.registry.op_registry import OpRegistry
 from src.ops.quant_base import QuantizedLayerMixin
 from src.ops.quant_mha import DecomposedMultiheadAttention
 
+import operator as _operator
+
+# Arithmetic operators that produce integers when their inputs are integers.
+_INT_ARITH_OPS = {
+    _operator.add, _operator.sub, _operator.mul,
+    _operator.truediv, _operator.floordiv, _operator.mod, _operator.pow,
+    _operator.rshift, _operator.lshift,
+    _operator.neg, _operator.abs,
+    _operator.getitem,          # e.g. shape[0]
+    _operator.and_, _operator.or_, _operator.xor,
+}
+
+
+def _find_non_tensor_nodes(graph: torch.fx.Graph) -> set:
+    """
+    Forward-propagate an 'integer / non-tensor' label through an FX graph.
+
+    Seeds (nodes known to produce integers):
+      • getattr(x, 'shape')  → torch.Size
+      • call_method 'size'   → int
+      • call_method 'dim' / 'numel' / 'stride' / 'item'  → int
+
+    Propagation rule: an arithmetic call_function node is non-tensor if
+    *all* of its Node-valued args are already non-tensor.
+    """
+    non_tensor: set = set()
+
+    for node in graph.nodes:          # graph is topologically sorted
+        if node.op == 'call_function':
+            target = node.target
+
+            # getattr(x, 'shape') → torch.Size object
+            if target is getattr and len(node.args) >= 2 and node.args[1] == 'shape':
+                non_tensor.add(node.name)
+                continue
+
+            if target in _INT_ARITH_OPS:
+                # Non-tensor only when every Node input is already non-tensor.
+                # Constant (non-Node) args are always fine (they're Python ints/floats).
+                node_inputs = [a for a in node.args if isinstance(a, torch.fx.Node)]
+                if node_inputs and all(a.name in non_tensor for a in node_inputs):
+                    non_tensor.add(node.name)
+
+        elif node.op == 'call_method':
+            if node.target in {'size', 'dim', 'numel', 'stride', 'item', 'tolist'}:
+                non_tensor.add(node.name)
+
+    return non_tensor
+
+
+def _get_model_dummy_input(model: torch.nn.Module) -> torch.Tensor:
+    """Return a dummy input tensor on the same device as the model."""
+    try:
+        device = next(model.parameters()).device
+    except StopIteration:
+        device = torch.device('cpu')
+
+    # timm models expose their expected input size via default_cfg
+    if hasattr(model, 'default_cfg'):
+        cfg = model.default_cfg
+        input_size = getattr(cfg, 'input_size', None)
+        if input_size and len(input_size) == 3:
+            c, h, w = input_size
+            return torch.zeros(1, c, h, w, device=device)
+    return torch.zeros(1, 3, 224, 224, device=device)
+
+
 def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_name: str = "model"):
     """
     Generates an SVG graph of the model using torch.fx, highlighting quantized layers.
-    
+
     Args:
         model: The PyTorch model to visualize.
         output_path: Path to save the SVG file.
@@ -26,29 +93,43 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
     try:
         # 1. Trace the model
         # We need a custom tracer to treat quantized layers as leaves
+        class _FalseProxy(torch.fx.Proxy):
+            """Proxy that evaluates to False on any boolean check.
+
+            Models like timm MobileViT guard reshape ops with checks such as
+            'if H % patch_h != 0' to handle arbitrary input sizes. For standard
+            ImageNet-sized inputs these checks are always False (dimensions are
+            divisible by the patch size), so returning False keeps the trace on
+            the correct path without needing a real input tensor.
+            """
+            def __bool__(self):
+                return False
+
         class CoverageTracer(torch.fx.Tracer):
+            def proxy(self, node):
+                return _FalseProxy(node, self)
+
             def is_leaf_module(self, m: torch.nn.Module, module_qualified_name: str) -> bool:
-                # Treat DecomposedMHA as non-leaf to see internal Softmax/Linear
+                # Always trace into DecomposedMHA to expose its Softmax/Linear
                 if isinstance(m, DecomposedMultiheadAttention):
                     return False
-                
-                # Treat other Quantized Layers and Activations as leaves
+
+                # Quantized ops are leaves
                 quantized_ops = tuple(OpRegistry.get_supported_ops().values())
                 if isinstance(m, quantized_ops):
                     return True
-                    
+
                 return super().is_leaf_module(m, module_qualified_name)
 
         tracer = CoverageTracer()
-        # We don't want to actually run the model, just trace it.
-        # But some models might need dummy inputs or specific args to trace.
-        # torch.fx.symbolic_trace might be safer if the model is simple.
-        # However, CoverageTracer inherits from Tracer, so we use tracer.trace()
-        
-        # Note: Tracing might fail for complex dynamic control flow.
-        # We'll wrap in try-except.
         graph = tracer.trace(model)
         traced = torch.fx.GraphModule(model, graph)
+
+        # Static analysis: identify nodes that produce integers rather than
+        # tensors (shape arithmetic like B*C*num_patch_h, rshift, lshift …).
+        # We forward-propagate a "non-tensor" label through the graph starting
+        # from known seeds, so we never need to run the model.
+        _non_tensor_nodes = _find_non_tensor_nodes(traced.graph)
         
         # 2. Draw the graph
         drawer = FxGraphDrawer(traced, model_name)
@@ -75,11 +156,16 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
                     break
             
             if fx_node:
+                # Hide shape-arithmetic nodes (produce ints, not tensors).
+                if fx_node.name in _non_tensor_nodes:
+                    node.set_style('invis')
+                    continue
+
                 # Basic Styling based on Operation
                 color = "#D3D3D3" # Default Gray (Structural)
                 style = "filled"
                 label_text = str(fx_node.op)
-                
+
                 if fx_node.op == 'call_module':
                     module = traced.get_submodule(fx_node.target)
                     label_text = type(module).__name__
@@ -91,30 +177,30 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
                          color = "#D3D3D3" # Gray
                     else:
                         color = "#FFB6C1" # LightPink (Unsupported)
-                        
+
                 elif fx_node.op == 'call_function':
                     label_text = getattr(fx_node.target, '__name__', str(fx_node.target))
                     if fx_node.target in supported_functions:
                          color = "#FFD700" # Gold
                     else:
                          color = "#D3D3D3" # Gray
-                
+
                 elif fx_node.op == 'call_method':
                     label_text = str(fx_node.target)
                     color = "#D3D3D3" # Gray
-                
+
                 elif fx_node.op == 'get_attr':
                     label_text = "get_attr"
                     color = "#D3D3D3" # Gray
-                
+
                 elif fx_node.op == 'placeholder':
                     label_text = "Input"
                     color = "#D3D3D3" # Gray
-                
+
                 elif fx_node.op == 'output':
                     label_text = "Output"
                     color = "#D3D3D3" # Gray
-                
+
                 # Construct a rich label for the node
                 rich_label = _get_node_label(fx_node, traced)
                 node.set_label(rich_label)
@@ -122,6 +208,13 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
                 node.set_style(style)
                 # Use label_text for the legend key
                 legend_items[label_text] = color
+
+        # Hide edges that touch invisible (non-tensor) nodes
+        for edge in dot.get_edges():
+            src = edge.get_source().strip('"')
+            dst = edge.get_destination().strip('"')
+            if src in _non_tensor_nodes or dst in _non_tensor_nodes:
+                edge.set_style('invis')
 
         # Add Legend
         import pydot
@@ -180,12 +273,8 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
         dot.write_svg(output_path)
         print(f"Quantization graph saved to {output_path}")
         
-    except ImportError:
-        print("Warning: graphviz or pydot not installed. Skipping graph generation.")
-    except Exception as e:
-        print(f"Warning: Failed to generate quantization graph: {e}")
-        # import traceback
-        # traceback.print_exc()
+    except ImportError as e:
+        raise ImportError("graphviz or pydot not installed; cannot generate graph") from e
 
 def _get_node_label(fx_node: torch.fx.Node, traced: torch.fx.GraphModule) -> str:
     """

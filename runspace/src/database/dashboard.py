@@ -763,149 +763,146 @@ else:
             
             if selected_model:
                 # Try to get graph from database
-                svg_content, metadata = db.get_model_graph_svg(selected_model)
+                graph_json, metadata = db.get_model_graph_json(selected_model)
                 
-                if svg_content:
-                    with st.expander(f"📊 {selected_model} - Quantization Graph", expanded=False):
+                if graph_json:
+                    with st.expander(f"📊 {selected_model} - Architecture Graph", expanded=False):
                         # Display metadata
                         meta_col1, meta_col2, meta_col3 = st.columns(3)
-                        # graph_meta = db.get_model_graph_metadata(selected_model)
-                        graph_meta = ''
+                        graph_meta = db.get_model_graph_metadata(selected_model)
                         if graph_meta:
-                            meta_col1.metric("Original Size", f"{graph_meta.get('svg_size_original', 0)/1024:.1f} KB")
-                            meta_col2.metric("Compressed Size", f"{graph_meta.get('svg_size_compressed', 0)/1024:.1f} KB")
-                            compression = 100 * (1 - graph_meta.get('svg_size_compressed', 1) / max(graph_meta.get('svg_size_original', 1), 1))
+                            meta_col1.metric("Original Size", f"{graph_meta.get('graph_size_original', 0)/1024:.1f} KB")
+                            meta_col2.metric("Compressed Size", f"{graph_meta.get('graph_size_compressed', 0)/1024:.1f} KB")
+                            compression = 100 * (1 - graph_meta.get('graph_size_compressed', 1) / max(graph_meta.get('graph_size_original', 1), 1))
                             meta_col3.metric("Compression", f"{compression:.0f}%")
                         
-                        # Display interactive graph using streamlit-agraph
-                        st.markdown("**Green** = Quantized Layers | **Gold** = Supported (Unquantized) | **Pink** = Unsupported | **Gray** = Structural/Other")
+                        st.markdown("**Green** = Quantized Layers | **Gold** = Supported (Unquantized) | **Gray** = Structural/Other")
+                        st.info("💡 **Interactive**: Click on dashed boxes (compound nodes) to collapse/expand them! Use mouse wheel to zoom.")
                         
-                        st.info("💡 **Interactive**: Zoom & pan | Drag nodes | Scroll to zoom | Click to inspect")
+                        import streamlit.components.v1 as components
                         
-                        # Display interactive graph using pyvis
-                        try:
-                            import networkx as nx
-                            from pyvis.network import Network
-                            import xml.etree.ElementTree as ET
-                            import tempfile
-                            import os
-                            import re
-                            
-                            # Parse SVG to extract exact nodes and edges
-                            svg_no_ns = re.sub(r'\sxmlns=\"[^\"]+\"', '', svg_content, count=1)
-                            root = ET.fromstring(svg_no_ns)
-                            
-                            G = nx.DiGraph()
-                            
-                            for g in root.iter('g'):
-                                cls = g.get('class')
-                                if cls == 'node':
-                                    node_id = g.get('id', '')
-                                    # Ignore legend objects to only show the model itself
-                                    if node_id.startswith('legend_') or node_id.startswith('cluster_'):
-                                        continue
-                                        
-                                    title_el = g.find('title')
-                                    if title_el is None: continue
-                                    title = title_el.text
+                        html_template = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                        <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+                        <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+                        <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+                        <script src="https://cdn.jsdelivr.net/npm/cytoscape-expand-collapse@4.1.0/cytoscape-expand-collapse.min.js"></script>
+                        <style>
+                            #cy {{
+                                width: 100%;
+                                height: 800px;
+                                display: block;
+                                background-color: #f8fafc;
+                                border: 1px solid #e2e8f0;
+                                border-radius: 8px;
+                            }}
+                            /* hide scrollbars */
+                            body {{ margin:0; padding:0; overflow:hidden; }}
+                        </style>
+                        </head>
+                        <body>
+                            <div id="cy"></div>
+                            <script>
+                                document.addEventListener('DOMContentLoaded', function() {{
+                                    var elements = {graph_json};
+                                    var cy = cytoscape({{
+                                        container: document.getElementById('cy'),
+                                        elements: elements,
+                                        style: [
+                                            {{
+                                                selector: 'node',
+                                                style: {{
+                                                    'content': 'data(label)',
+                                                    'text-valign': 'center',
+                                                    'text-halign': 'center',
+                                                    'background-color': 'data(color)',
+                                                    'border-width': 1,
+                                                    'border-color': '#94a3b8',
+                                                    'shape': 'round-rectangle',
+                                                    'width': 'label',
+                                                    'height': 'label',
+                                                    'padding': '10px',
+                                                    'font-size': '12px'
+                                                }}
+                                            }},
+                                            {{
+                                                selector: '$node > node',
+                                                style: {{
+                                                    'background-color': '#e2e8f0',
+                                                    'padding-top': '25px',
+                                                    'padding-left': '10px',
+                                                    'padding-bottom': '10px',
+                                                    'padding-right': '10px',
+                                                    'text-valign': 'top',
+                                                    'text-halign': 'center',
+                                                    'border-color': '#94a3b8',
+                                                    'border-width': 2,
+                                                    'border-style': 'dashed',
+                                                    'font-size': '14px',
+                                                    'font-weight': 'bold'
+                                                }}
+                                            }},
+                                            {{
+                                                selector: 'edge',
+                                                style: {{
+                                                    'curve-style': 'bezier',
+                                                    'target-arrow-shape': 'triangle',
+                                                    'line-color': '#cbd5e1',
+                                                    'target-arrow-color': '#cbd5e1',
+                                                    'width': 2
+                                                }}
+                                            }},
+                                            {{
+                                                selector: 'node.cy-expand-collapse-collapsed-node',
+                                                style: {{
+                                                    'background-color': '#cbd5e1',
+                                                    'border-color': '#64748b',
+                                                    'border-width': 3,
+                                                    'shape': 'round-rectangle',
+                                                    'padding': '10px'
+                                                }}
+                                            }}
+                                        ],
+                                        layout: {{
+                                            name: 'dagre',
+                                            rankDir: 'TB',
+                                            nodeSep: 50,
+                                            edgeSep: 10,
+                                            rankSep: 50
+                                        }}
+                                    }});
                                     
-                                    polygon = g.find('polygon')
-                                    color = polygon.get('fill') if polygon is not None else '#D3D3D3'
-                                    
-                                    texts = [t.text for t in g.findall('text') if t.text]
-                                    label = '\n'.join(texts) if texts else title
-                                    
-                                    G.add_node(title, label=label, color=color, shape='box')
-                                    
-                                elif cls == 'edge':
-                                    title_el = g.find('title')
-                                    if title_el is None: continue
-                                    title = title_el.text
-                                    
-                                    if '->' in title:
-                                        src, dst = title.split('->', 1)
-                                        if src in G and dst in G:
-                                            G.add_edge(src, dst)
-                                    elif '&#45;&gt;' in title:
-                                        src, dst = title.split('&#45;&gt;', 1)
-                                        if src in G and dst in G:
-                                            G.add_edge(src, dst)
-
-                            if G.number_of_nodes() > 0:
-                                net = Network(
-                                    height='700px',
-                                    width='100%',
-                                    directed=True,
-                                    notebook=True,
-                                    cdn_resources='in_line'
-                                )
-                                net.from_nx(G)
-                                
-                                # Use hierarchical layout to look like SVG, but allow drag/zoom
-                                net.set_options("""
-                                var options = {
-                                  "layout": {
-                                    "hierarchical": {
-                                      "enabled": true,
-                                      "direction": "UD",
-                                      "sortMethod": "directed",
-                                      "levelSeparation": 250,
-                                      "nodeSpacing": 250,
-                                      "treeSpacing": 250
-                                    }
-                                  },
-                                  "physics": {
-                                    "enabled": false
-                                  },
-                                  "interaction": {
-                                    "dragNodes": true,
-                                    "dragView": true,
-                                    "zoomView": true
-                                  }
-                                }
-                                """)
-                                
-                                temp_file = os.path.join(tempfile.gettempdir(), f'graph_{selected_model}.html')
-                                net.write_html(temp_file)
-                                
-                                with open(temp_file, 'r', encoding='utf-8') as f:
-                                    html_content = f.read()
-                                
-                                # Inject Reset View button overlay into the generated pyvis HTML
-                                reset_btn = '''<button onclick="network.fit({animation:{duration:500}});" style="position: absolute; bottom: 20px; right: 20px; z-index: 1000; padding: 10px 16px; background-color: #ffffff; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer; font-family: sans-serif; font-size: 14px; font-weight: 600; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); color: #374151; transition: all 0.2s;">🎯 Reset View</button>'''
-                                html_content = html_content.replace('<body>', f'<body>\n{reset_btn}')
-                                
-                                import streamlit.components.v1 as components
-                                components.html(html_content, height=750)
-                            else:
-                                st.warning("Could not extract nodes from graph SVG.")
-                                
-
-                        except Exception as e:
-                            import traceback
-                            traceback.print_exc()
-                            st.error(f"Error: {str(e)}")
-                            # Fallback: Display SVG as static image
-                            svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode()
-                            st.markdown(
-                                f'<img src="data:image/svg+xml;base64,{svg_b64}" style="max-width:100%; height:auto; border: 1px solid #ddd; border-radius: 8px; padding: 10px; background: white;">',
-                                unsafe_allow_html=True
-                            )
+                                    // Expand/collapse config
+                                    var api = cy.expandCollapse({{
+                                        layoutBy: {{
+                                            name: "dagre",
+                                            animate: true,
+                                            randomize: false,
+                                            fit: false
+                                        }},
+                                        fisheye: false,
+                                        animate: true,
+                                        undoable: false
+                                    }});
+                                }});
+                            </script>
+                        </body>
+                        </html>
+                        """
+                        components.html(html_template, height=820)
                         
                         # Download button
                         st.download_button(
-                            label="📥 Download SVG",
-                            data=svg_content,
-                            file_name=f"{selected_model}_graph.svg",
-                            mime="image/svg+xml"
+                            label="⬇️ Download Graph JSON",
+                            data=graph_json,
+                            file_name=f"{selected_model}_architecture.json",
+                            mime="application/json",
+                            key=f"dl_json_{i}"
                         )
-                        
-                        # Show metadata details
-                        if False:
-                            with st.expander("Graph Metadata"):
-                                st.json(metadata)
                 else:
-                    st.info(f"ℹ️ No quantization graph available for {selected_model}. "
+                    st.info(f"ℹ️ No architecture graph available for {selected_model}. "
                             f"Run `python runspace/src/database/generate_model_graphs.py` to generate graphs.")
         else:
             st.info("No data to display. Apply filters above to see models.")
