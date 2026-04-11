@@ -6,7 +6,7 @@ outputs/
 .env
 tests/
 .cache/
-
+/venv/
 # Apptainer
 Apptainer.def
 qbench_sandbox/

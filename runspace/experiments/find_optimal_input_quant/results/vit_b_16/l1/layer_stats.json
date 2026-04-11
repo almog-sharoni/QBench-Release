@@ -104,8 +104,8 @@
     "encoder.layers.encoder_layer_7.mlp.3": {
         "format_counts": {
             "fp8_e1m6": 236392409,
-            "fp5_e4m0": 2892,
-            "fp6_e5m0": 4699
+            "fp6_e5m0": 4699,
+            "fp5_e4m0": 2892
         }
     },
     "encoder.layers.encoder_layer_8.mlp.0": {
@@ -116,8 +116,8 @@
     "encoder.layers.encoder_layer_8.mlp.3": {
         "format_counts": {
             "fp8_e1m6": 236351546,
-            "fp5_e4m0": 1185,
-            "fp6_e5m0": 47269
+            "fp6_e5m0": 47269,
+            "fp5_e4m0": 1185
         }
     },
     "encoder.layers.encoder_layer_9.mlp.0": {
@@ -164,7 +164,7 @@
     "accuracy": {
         "top1": 80.996,
         "top5": 95.29,
-        "norm_l1": 0.016173746491944897,
-        "norm_mse": 0.00017228097662599034
+        "norm_l1": 0.01617374649759752,
+        "norm_mse": 0.00017228097654270775
     }
 }

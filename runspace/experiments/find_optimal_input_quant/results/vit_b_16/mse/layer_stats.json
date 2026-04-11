@@ -109,8 +109,8 @@
     "encoder.layers.encoder_layer_8.mlp.3": {
         "format_counts": {
             "fp8_e1m6": 236393561,
-            "fp5_e4m0": 187,
-            "fp6_e5m0": 6252
+            "fp6_e5m0": 6252,
+            "fp5_e4m0": 187
         }
     },
     "encoder.layers.encoder_layer_9.mlp.0": {
@@ -157,7 +157,7 @@
     "accuracy": {
         "top1": 81.008,
         "top5": 95.332,
-        "norm_l1": 0.016178045859239668,
-        "norm_mse": 0.00017017991285025978
+        "norm_l1": 0.016178045881023007,
+        "norm_mse": 0.00017017991261127112
     }
 }
