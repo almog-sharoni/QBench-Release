@@ -53,6 +53,12 @@ def main():
             'mode': 'evaluate',       # Just standard evaluation
             # 'max_batches': 10       # Let's run full inference
         },
+        'experiment': {
+            'name': 'bandwidth_aware_quant',
+            'type': 'bandwidth_manual_inference',
+            'weight_dt': 'opt_layer_csv',
+            'activation_dt': 'fp32',
+        },
         'output_name': 'bw_aware_custom_inference'
     }
 
@@ -63,24 +69,21 @@ def main():
     print(f"Config: {config}")
     
     try:
-        results = runner.run_batch([config], output_root=output_dir)
+        res = runner.run_single_logged(config, output_root=output_dir)
         print("\n\nInference completed successfully!")
-        
-        # Manually extract output
-        if results and isinstance(results, list):
-            res = results[0]
-            if isinstance(res, dict):
-                print(f"Final Metrics:")
-                print(f"  Accuracy (top-1): {res.get('acc1', 'N/A')}%")
-                print(f"  Accuracy (top-5): {res.get('acc5', 'N/A')}%")
-                print(f"  Certainty:        {res.get('certainty', 'N/A')}")
-                
-                # Also save to JSON
-                import json
-                out_path = os.path.join(output_dir, "metrics.json")
-                with open(out_path, "w") as f:
-                    json.dump(res, f, indent=4)
-                print(f"Saved metrics dict to {out_path}")
+
+        if isinstance(res, dict):
+            print(f"Final Metrics:")
+            print(f"  Accuracy (top-1): {res.get('acc1', 'N/A')}%")
+            print(f"  Accuracy (top-5): {res.get('acc5', 'N/A')}%")
+            print(f"  Certainty:        {res.get('certainty', 'N/A')}")
+
+            # Also save to JSON
+            import json
+            out_path = os.path.join(output_dir, "metrics.json")
+            with open(out_path, "w") as f:
+                json.dump(res, f, indent=4)
+            print(f"Saved metrics dict to {out_path}")
     except Exception as e:
         print(f"Error during inference: {e}")
         import traceback

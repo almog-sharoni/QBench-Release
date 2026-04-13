@@ -3,12 +3,10 @@ import os
 import sys
 import gc
 import json
+import copy
 import yaml
 import argparse
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from tqdm import tqdm
 
 # Fix for container permission issues
 os.environ['TORCH_HOME'] = '/tmp/torch'
@@ -19,13 +17,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from runspace.src.adapters.adapter_factory import create_adapter
-from runspace.src.registry.op_registry import OpRegistry
 from runspace.core.runner import Runner
-from runspace.src.quantization.quantizer import quantize
-from runspace.src.ops.quant_base import calculate_scale
-from runspace.src.database.handler import RunDatabase
-from runspace.src.eval.metrics import compute_certainty
 
 
 
@@ -127,7 +119,7 @@ def _make_weight_quant_config(args, fmt, chunk_size):
     }
 
 
-def _get_or_build_quantized_state_dict(args, fmt, chunk_size, weights_dir, force_rebuild=False):
+def _get_or_build_quantized_state_dict(runner, args, fmt, chunk_size, weights_dir, force_rebuild=False):
     """
     Build (and cache on disk) the calibrated model state dict using the exact
     same adapter config as weight_quant_baseline. The saved file can be loaded
@@ -142,141 +134,41 @@ def _get_or_build_quantized_state_dict(args, fmt, chunk_size, weights_dir, force
 
     print(f"  [weights] Building quantized model (weight_quant_baseline config) → {cache_path}")
     config = _make_weight_quant_config(args, fmt, chunk_size)
-    adapter = create_adapter(config)
-    clean_sd = {k: v.clone().contiguous() for k, v in adapter.model.state_dict().items()}
-    torch.save(clean_sd, cache_path)
-    print(f"  [weights] Saved: {cache_path}")
-
-    del adapter
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    return cache_path
+    materialized = runner.materialize_weight_file(
+        config=config,
+        weight_file_path=cache_path,
+        force_rebuild=force_rebuild,
+    )
+    print(f"  [weights] Saved: {materialized}")
+    return materialized
 
 
-def _load_model_with_uniform_weights(args, device, fmt, chunk_size, weights_dir, force_rebuild=False):
+def _load_model_with_uniform_weights(runner, args, device, fmt, chunk_size, weights_dir, force_rebuild=False):
     """
     Load a weight-quantized model using the same adapter structure as
     weight_quant_baseline, restoring weights from the cached state dict.
     """
     cache_path = _get_or_build_quantized_state_dict(
-        args, fmt, chunk_size, weights_dir, force_rebuild=force_rebuild
+        runner, args, fmt, chunk_size, weights_dir, force_rebuild=force_rebuild
     )
     config = _make_weight_quant_config(args, fmt, chunk_size)
-    config['adapter']['skip_calibration'] = True  # weights restored from cache below
-    adapter = create_adapter(config)
-    state_dict = torch.load(cache_path, map_location='cpu')
-    # Buffers registered as None (weight_scale, weight_fp8) are absent from
-    # model.state_dict(), causing strict=True to fail with "unexpected keys".
-    # Pre-initialise them as empty tensors matching the cached shapes so the
-    # strict load can proceed and assign=True will overwrite them correctly.
-    for fqn, tensor in state_dict.items():
-        parts = fqn.split('.')
-        mod = adapter.model
-        try:
-            for part in parts[:-1]:
-                mod = getattr(mod, part)
-            buf_name = parts[-1]
-            if buf_name in mod._buffers and mod._buffers[buf_name] is None:
-                mod.register_buffer(buf_name, torch.empty_like(tensor))
-        except AttributeError:
-            pass
-    # assign=True replaces buffers/parameters instead of copy_()-ing into them,
-    # avoiding the overlapping-memory error from stride-0 scale tensors.
-    try:
-        adapter.model.load_state_dict(state_dict, strict=True, assign=True)
-    except TypeError:
-        # PyTorch < 2.1 fallback: contiguify model buffers before loading
-        for module in adapter.model.modules():
-            for name, buf in list(module._buffers.items()):
-                if buf is not None and not buf.is_contiguous():
-                    module._buffers[name] = buf.contiguous()
-        adapter.model.load_state_dict(state_dict, strict=True)
-    adapter.model.to(device).eval()
-    return adapter.model, adapter
-
-
-def _load_fp32_model(args, device):
-    """Load model with original fp32 weights."""
-    config = _make_config(args)
-    adapter = create_adapter(config)
-    model = adapter.model.to(device).eval()
+    model, adapter = runner.load_model_from_weight_file(
+        config=config,
+        weight_file_path=cache_path,
+        skip_calibration=True
+    )
     return model, adapter
 
 
-# ---------------------------------------------------------------------------
-# Uniform activation quantization (hook-based)
-# ---------------------------------------------------------------------------
-
-def _quantize_tensor(x, fmt, chunk_size):
-    """Chunk-wise quantization of a tensor (shared by Phase B and Phase C hooks)."""
-    original_shape = x.shape
-    flat = x.reshape(-1)
-    pad_len = 0
-    if flat.numel() % chunk_size != 0:
-        pad_len = chunk_size - (flat.numel() % chunk_size)
-        flat = F.pad(flat, (0, pad_len))
-    chunks = flat.view(-1, chunk_size)
-    scale = calculate_scale(chunks.abs().amax(dim=1, keepdim=True).clamp(min=1e-5), fmt)
-    q_chunks = quantize(chunks / scale, q_type=fmt, validate=False) * scale
-    flat_q = q_chunks.reshape(-1)
-    if pad_len > 0:
-        flat_q = flat_q[:-pad_len]
-    return flat_q.reshape(original_shape)
-
-
-class UniformInputQuantizer:
-    """
-    Registers forward pre-hooks on all Conv2d / Linear layers (and any
-    registered quantized ops) to quantize activations uniformly to `fmt`.
-    """
-    def __init__(self, model, fmt, chunk_size=128):
-        self.model = model
-        self.fmt = fmt
-        self.chunk_size = chunk_size
-        self.hooks = []
-        self.supported_ops = tuple(OpRegistry.get_supported_ops().values())
-        self.stats = {
-            'sum_l1_err': 0.0, 'sum_mse_err': 0.0,
-            'sum_l1_norm': 0.0, 'sum_l2_norm': 0.0,
-        }
-
-    def _quantize(self, x):
-        return _quantize_tensor(x, self.fmt, self.chunk_size)
-
-    def _make_hook(self):
-        def hook(module, inputs):
-            if not inputs or not isinstance(inputs[0], torch.Tensor):
-                return inputs
-            x = inputs[0]
-            x_q = self._quantize(x)
-            with torch.no_grad():
-                diff = x - x_q
-                self.stats['sum_l1_err']  += diff.abs().sum().item()
-                self.stats['sum_mse_err'] += diff.pow(2).sum().item()
-                self.stats['sum_l1_norm'] += x.abs().sum().item()
-                self.stats['sum_l2_norm'] += x.pow(2).sum().item()
-            return (x_q,) + inputs[1:]
-        return hook
-
-    def register_hooks(self):
-        hook_fn = self._make_hook()
-        for name, module in self.model.named_modules():
-            if isinstance(module, self.supported_ops) or isinstance(module, (nn.Conv2d, nn.Linear)):
-                self.hooks.append(module.register_forward_pre_hook(hook_fn))
-
-    def cleanup(self):
-        for h in self.hooks:
-            h.remove()
-        self.hooks.clear()
-
-    def get_stats(self):
-        l1_norm  = self.stats['sum_l1_norm']
-        l2_norm  = self.stats['sum_l2_norm']
-        return {
-            'norm_l1':  self.stats['sum_l1_err']  / l1_norm  if l1_norm  > 0 else 0.0,
-            'norm_mse': self.stats['sum_mse_err'] / l2_norm if l2_norm > 0 else 0.0,
-        }
+def _load_fp32_model(runner, args, device):
+    """Load model with original fp32 weights."""
+    config = _make_config(args)
+    fp32_dir = os.path.join(args.output_dir, args.model_name, "fp32_ref")
+    model, adapter, _ = runner.prepare_model_with_materialized_weights(
+        config=config,
+        output_dir=fp32_dir
+    )
+    return model, adapter
 
 
 # ---------------------------------------------------------------------------
@@ -294,66 +186,32 @@ def _make_config(args):
     }
 
 
-def _build_loader(args, device):
-    runner = Runner(device)
+def _build_loader(args, device, runner):
     loader = runner.setup_data_loader(_make_config(args))
     return loader
 
 
-def _run_inference(model, adapter, loader, device, args,
-                   act_quantizer=None, input_fmt=None, chunk_size=128, desc=""):
+def _run_inference(runner, model, adapter, loader, args, input_quant_cfg=None, desc=""):
     """
     Run inference. Two quantization modes (mutually exclusive):
       - input_fmt: quantize only the input image batch chunk-wise before the forward
         pass (matches input_quant_baseline behaviour).
       - act_quantizer: hook-based quantization at every layer input (Phase C).
     """
-    correct1 = correct5 = total = 0
-    total_certainty = 0.0
-    batch_count = 0
-    limit = args.limit_batches if args.limit_batches > 0 else float('inf')
-    input_stats = {'sum_l1_err': 0.0, 'sum_mse_err': 0.0,
-                   'sum_l1_norm': 0.0, 'sum_l2_norm': 0.0}
-
-    with torch.no_grad():
-        for batch in tqdm(loader, desc=desc):
-            if batch_count >= limit:
-                break
-            images, labels = adapter.prepare_batch(batch)
-            images, labels = images.to(device), labels.to(device)
-            if input_fmt is not None:
-                images_q = _quantize_tensor(images, input_fmt, chunk_size)
-                diff = images - images_q
-                input_stats['sum_l1_err']  += diff.abs().sum().item()
-                input_stats['sum_mse_err'] += diff.pow(2).sum().item()
-                input_stats['sum_l1_norm'] += images.abs().sum().item()
-                input_stats['sum_l2_norm'] += images.pow(2).sum().item()
-                images = images_q
-            outputs = model(images)
-            total_certainty += compute_certainty(outputs) * images.size(0)
-            _, pred = outputs.topk(5, 1, True, True)
-            pred = pred.t()
-            correct = pred.eq(labels.view(1, -1).expand_as(pred))
-            correct1 += correct[:1].reshape(-1).float().sum().item()
-            correct5 += correct[:5].reshape(-1).float().sum().item()
-            total += labels.size(0)
-            batch_count += 1
-
-    acc1 = 100.0 * correct1 / total if total > 0 else 0.0
-    acc5 = 100.0 * correct5 / total if total > 0 else 0.0
-    certainty = total_certainty / total if total > 0 else 0.0
-    if act_quantizer is not None:
-        act_stats = act_quantizer.get_stats()
-    elif input_fmt is not None:
-        l1_norm = input_stats['sum_l1_norm']
-        l2_norm = input_stats['sum_l2_norm']
-        act_stats = {
-            'norm_l1':  input_stats['sum_l1_err']  / l1_norm if l1_norm > 0 else 0.0,
-            'norm_mse': input_stats['sum_mse_err'] / l2_norm if l2_norm > 0 else 0.0,
-        }
-    else:
-        act_stats = None
-    return acc1, acc5, certainty, act_stats
+    eval_results = runner.evaluate_model(
+        model=model,
+        data_loader=loader,
+        adapter=adapter,
+        max_batches=args.limit_batches,
+        desc=desc,
+        input_quant_cfg=input_quant_cfg,
+    )
+    return (
+        eval_results.get('acc1', 0.0),
+        eval_results.get('acc5', 0.0),
+        eval_results.get('certainty', 0.0),
+        eval_results.get('input_quant')
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +232,7 @@ def _run_exists(db, model_name, experiment_type, weight_dt, activation_dt):
     return not match.empty
 
 
-def _get_or_run_fp32_ref(args, device, db, model_name):
+def _get_or_run_fp32_ref(runner, args, device, db, model_name):
     runs = db.get_runs()
     if not args.force_rerun and not runs.empty:
         fp32_rows = runs[
@@ -393,17 +251,35 @@ def _get_or_run_fp32_ref(args, device, db, model_name):
             return ref_acc1, ref_acc5, ref_cert
 
     print("[FP32 ref] Not in DB — running inference ...")
-    model, adapter = _load_fp32_model(args, device)
-    loader = _build_loader(args, device)
-    acc1, acc5, cert, _ = _run_inference(model, adapter, loader, device, args, desc="FP32 ref")
+    model, adapter = _load_fp32_model(runner, args, device)
+    loader = _build_loader(args, device, runner)
+    acc1, acc5, cert, _ = _run_inference(
+        runner, model, adapter, loader, args, desc="FP32 ref"
+    )
     del model, adapter
     gc.collect(); torch.cuda.empty_cache()
     print(f"[FP32 ref] Top1={acc1:.2f}%, Top5={acc5:.2f}%")
-    db.log_run(
-        model_name=model_name, weight_dt="fp32", activation_dt="fp32",
-        acc1=acc1, acc5=acc5, ref_acc1=acc1, ref_acc5=acc5, ref_certainty=cert,
-        experiment_type="fp32_ref", status="SUCCESS", certainty=cert,
-        config_json=_serialize_config(_make_config(args)),
+    log_cfg = _make_config(args)
+    log_cfg['experiment'] = {
+        'name': 'find_optimal_w6a4',
+        'type': 'fp32_ref',
+        'weight_dt': 'fp32',
+        'activation_dt': 'fp32',
+        'ref_acc1': acc1,
+        'ref_acc5': acc5,
+        'ref_certainty': cert,
+        'metrics': {'certainty': cert},
+        'config_json': _serialize_config(_make_config(args)),
+    }
+    runner.log_experiment_result(
+        config=log_cfg,
+        result={
+            'model_name': model_name,
+            'status': 'SUCCESS',
+            'acc1': acc1,
+            'acc5': acc5,
+            'certainty': cert,
+        },
     )
     return acc1, acc5, cert
 
@@ -447,6 +323,53 @@ def _best_from_phase(db, model_name, experiment_type):
     return best['weight_dt'], best['activation_dt'], float(best['acc1'])
 
 
+def _log_w6a4_run(
+    runner,
+    config,
+    model_name,
+    experiment_type,
+    weight_dt,
+    activation_dt,
+    acc1,
+    acc5,
+    status,
+    ref_acc1=None,
+    ref_acc5=None,
+    ref_certainty=None,
+    certainty=None,
+    mse=None,
+    l1=None,
+    config_json=None,
+    input_quant_stats=None,
+):
+    log_cfg = copy.deepcopy(config)
+    log_cfg['experiment'] = {
+        'name': 'find_optimal_w6a4',
+        'type': experiment_type,
+        'weight_dt': weight_dt,
+        'activation_dt': activation_dt,
+        'ref_acc1': ref_acc1,
+        'ref_acc5': ref_acc5,
+        'ref_certainty': ref_certainty,
+        'metrics': {
+            'mse': mse,
+            'l1': l1,
+            'certainty': certainty,
+        },
+        'config_json': config_json,
+    }
+    result = {
+        'model_name': model_name,
+        'status': status,
+        'acc1': acc1,
+        'acc5': acc5,
+        'certainty': certainty if certainty is not None else 0.0,
+    }
+    if input_quant_stats is not None:
+        result['input_quant'] = input_quant_stats
+    runner.log_experiment_result(log_cfg, result)
+
+
 # ---------------------------------------------------------------------------
 # Core experiment
 # ---------------------------------------------------------------------------
@@ -456,7 +379,8 @@ def process_single_model(args, device):
     weight_formats    = [f.strip() for f in args.weight_formats.split(',')]
     activation_formats = [f.strip() for f in args.activation_formats.split(',')]
 
-    db = RunDatabase()
+    runner = Runner(device)
+    db = runner._get_db()
     weights_dir = os.path.join(args.output_dir, model_name, "weights")
 
     print(f"\n{'='*60}")
@@ -466,7 +390,7 @@ def process_single_model(args, device):
     print(f"{'='*60}")
 
     # FP32 reference
-    ref_acc1, ref_acc5, ref_cert = _get_or_run_fp32_ref(args, device, db, model_name)
+    ref_acc1, ref_acc5, ref_cert = _get_or_run_fp32_ref(runner, args, device, db, model_name)
 
     # -----------------------------------------------------------------------
     # Phase A — weight-only sweep (quantized weights × fp32 activations)
@@ -476,7 +400,7 @@ def process_single_model(args, device):
         print(f" Phase A: 6-bit weight sweep × fp32 activations")
         print(f"{'─'*60}")
 
-        loader = _build_loader(args, device)
+        loader = _build_loader(args, device, runner)
 
         for w_fmt in weight_formats:
             if not args.force_rerun and _run_exists(
@@ -487,23 +411,32 @@ def process_single_model(args, device):
 
             print(f"  [A] {w_fmt} × fp32 ...")
             model, adapter = _load_model_with_uniform_weights(
-                args, device, w_fmt, args.chunk_size, weights_dir,
+                runner, args, device, w_fmt, args.chunk_size, weights_dir,
                 force_rebuild=args.force_rerun,
             )
             try:
                 acc1, acc5, cert, _ = _run_inference(
-                    model, adapter, loader, device, args,
+                    runner, model, adapter, loader, args,
                     desc=f"A: {w_fmt}"
                 )
             except Exception as e:
                 print(f"  [A] ERROR ({w_fmt}): {e}")
-                db.log_run(
-                    model_name=model_name, weight_dt=w_fmt, activation_dt="fp32",
-                    acc1=0.0, acc5=0.0, ref_acc1=ref_acc1, ref_acc5=ref_acc5,
-                    ref_certainty=ref_cert, experiment_type="w6a4_weight_only",
+                phase_cfg = _make_weight_quant_config(args, w_fmt, args.chunk_size)
+                _log_w6a4_run(
+                    runner=runner,
+                    config=phase_cfg,
+                    model_name=model_name,
+                    experiment_type="w6a4_weight_only",
+                    weight_dt=w_fmt,
+                    activation_dt="fp32",
+                    acc1=0.0,
+                    acc5=0.0,
                     status="ERROR",
+                    ref_acc1=ref_acc1,
+                    ref_acc5=ref_acc5,
+                    ref_certainty=ref_cert,
                     config_json=_serialize_config(
-                        _make_weight_quant_config(args, w_fmt, args.chunk_size),
+                        phase_cfg,
                         weights_source="cached_pre_quantized",
                     ),
                 )
@@ -511,13 +444,23 @@ def process_single_model(args, device):
                 continue
 
             print(f"      Top1={acc1:.2f}%, Top5={acc5:.2f}%")
-            db.log_run(
-                model_name=model_name, weight_dt=w_fmt, activation_dt="fp32",
-                acc1=acc1, acc5=acc5, ref_acc1=ref_acc1, ref_acc5=ref_acc5,
-                ref_certainty=ref_cert, experiment_type="w6a4_weight_only",
-                status="SUCCESS", certainty=cert,
+            phase_cfg = _make_weight_quant_config(args, w_fmt, args.chunk_size)
+            _log_w6a4_run(
+                runner=runner,
+                config=phase_cfg,
+                model_name=model_name,
+                experiment_type="w6a4_weight_only",
+                weight_dt=w_fmt,
+                activation_dt="fp32",
+                acc1=acc1,
+                acc5=acc5,
+                status="SUCCESS",
+                ref_acc1=ref_acc1,
+                ref_acc5=ref_acc5,
+                ref_certainty=ref_cert,
+                certainty=cert,
                 config_json=_serialize_config(
-                    _make_weight_quant_config(args, w_fmt, args.chunk_size),
+                    phase_cfg,
                     weights_source="cached_pre_quantized",
                 ),
             )
@@ -531,7 +474,7 @@ def process_single_model(args, device):
         print(f" Phase B: fp32 weights × 4-bit activation sweep")
         print(f"{'─'*60}")
 
-        loader = _build_loader(args, device)
+        loader = _build_loader(args, device, runner)
 
         for a_fmt in activation_formats:
             if not args.force_rerun and _run_exists(
@@ -541,20 +484,39 @@ def process_single_model(args, device):
                 continue
 
             print(f"  [B] fp32 × {a_fmt} ...")
-            model, adapter = _load_fp32_model(args, device)
+            model, adapter = _load_fp32_model(runner, args, device)
             try:
                 acc1, acc5, cert, act_stats = _run_inference(
-                    model, adapter, loader, device, args,
-                    input_fmt=a_fmt, chunk_size=args.chunk_size, desc=f"B: {a_fmt}"
+                    runner, model, adapter, loader, args,
+                    input_quant_cfg={
+                        'enabled': True,
+                        'mode': 'input_only',
+                        'format': a_fmt,
+                        'chunk_size': args.chunk_size,
+                    },
+                    desc=f"B: {a_fmt}"
                 )
             except Exception as e:
                 print(f"  [B] ERROR ({a_fmt}): {e}")
-                db.log_run(
-                    model_name=model_name, weight_dt="fp32", activation_dt=a_fmt,
-                    acc1=0.0, acc5=0.0, ref_acc1=ref_acc1, ref_acc5=ref_acc5,
-                    ref_certainty=ref_cert, experiment_type="w6a4_input_only",
+                phase_cfg = _make_config(args)
+                _log_w6a4_run(
+                    runner=runner,
+                    config=phase_cfg,
+                    model_name=model_name,
+                    experiment_type="w6a4_input_only",
+                    weight_dt="fp32",
+                    activation_dt=a_fmt,
+                    acc1=0.0,
+                    acc5=0.0,
                     status="ERROR",
-                    config_json=_serialize_config(_make_config(args), activation_fmt=a_fmt, chunk_size=args.chunk_size),
+                    ref_acc1=ref_acc1,
+                    ref_acc5=ref_acc5,
+                    ref_certainty=ref_cert,
+                    config_json=_serialize_config(
+                        phase_cfg,
+                        activation_fmt=a_fmt,
+                        chunk_size=args.chunk_size
+                    ),
                 )
                 del model, adapter; gc.collect(); torch.cuda.empty_cache()
                 continue
@@ -565,13 +527,29 @@ def process_single_model(args, device):
                 f"      Top1={acc1:.2f}%, Top5={acc5:.2f}%"
                 + (f", NormL1={norm_l1:.4e}, NormMSE={norm_mse:.4e}" if norm_l1 is not None else "")
             )
-            db.log_run(
-                model_name=model_name, weight_dt="fp32", activation_dt=a_fmt,
-                acc1=acc1, acc5=acc5, ref_acc1=ref_acc1, ref_acc5=ref_acc5,
-                ref_certainty=ref_cert, experiment_type="w6a4_input_only",
-                status="SUCCESS", certainty=cert,
-                mse=norm_mse, l1=norm_l1,
-                config_json=_serialize_config(_make_config(args), activation_fmt=a_fmt, chunk_size=args.chunk_size),
+            phase_cfg = _make_config(args)
+            _log_w6a4_run(
+                runner=runner,
+                config=phase_cfg,
+                model_name=model_name,
+                experiment_type="w6a4_input_only",
+                weight_dt="fp32",
+                activation_dt=a_fmt,
+                acc1=acc1,
+                acc5=acc5,
+                status="SUCCESS",
+                ref_acc1=ref_acc1,
+                ref_acc5=ref_acc5,
+                ref_certainty=ref_cert,
+                certainty=cert,
+                mse=norm_mse,
+                l1=norm_l1,
+                config_json=_serialize_config(
+                    phase_cfg,
+                    activation_fmt=a_fmt,
+                    chunk_size=args.chunk_size
+                ),
+                input_quant_stats=act_stats,
             )
             del model, adapter; gc.collect(); torch.cuda.empty_cache()
 
@@ -585,7 +563,7 @@ def process_single_model(args, device):
               f"{len(weight_formats) * len(activation_formats)} combos)")
         print(f"{'─'*60}")
 
-        loader = _build_loader(args, device)
+        loader = _build_loader(args, device, runner)
 
         for w_fmt in weight_formats:
             for a_fmt in activation_formats:
@@ -597,34 +575,45 @@ def process_single_model(args, device):
 
                 print(f"  [C] {w_fmt} × {a_fmt} ...")
                 model, adapter = _load_model_with_uniform_weights(
-                    args, device, w_fmt, args.chunk_size, weights_dir,
+                    runner, args, device, w_fmt, args.chunk_size, weights_dir,
                     force_rebuild=False,  # weights_dir already built in Phase A
                 )
-                act_q = UniformInputQuantizer(model, fmt=a_fmt, chunk_size=args.chunk_size)
-                act_q.register_hooks()
                 try:
                     acc1, acc5, cert, act_stats = _run_inference(
-                        model, adapter, loader, device, args,
-                        act_quantizer=act_q, desc=f"C: {w_fmt}×{a_fmt}"
+                        runner, model, adapter, loader, args,
+                        input_quant_cfg={
+                            'enabled': True,
+                            'mode': 'uniform',
+                            'format': a_fmt,
+                            'chunk_size': args.chunk_size,
+                        },
+                        desc=f"C: {w_fmt}×{a_fmt}"
                     )
                 except Exception as e:
                     print(f"  [C] ERROR ({w_fmt}×{a_fmt}): {e}")
-                    act_q.cleanup()
-                    db.log_run(
-                        model_name=model_name, weight_dt=w_fmt, activation_dt=a_fmt,
-                        acc1=0.0, acc5=0.0, ref_acc1=ref_acc1, ref_acc5=ref_acc5,
-                        ref_certainty=ref_cert, experiment_type="w6a4_cross",
+                    phase_cfg = _make_weight_quant_config(args, w_fmt, args.chunk_size)
+                    _log_w6a4_run(
+                        runner=runner,
+                        config=phase_cfg,
+                        model_name=model_name,
+                        experiment_type="w6a4_cross",
+                        weight_dt=w_fmt,
+                        activation_dt=a_fmt,
+                        acc1=0.0,
+                        acc5=0.0,
                         status="ERROR",
+                        ref_acc1=ref_acc1,
+                        ref_acc5=ref_acc5,
+                        ref_certainty=ref_cert,
                         config_json=_serialize_config(
-                            _make_weight_quant_config(args, w_fmt, args.chunk_size),
-                            activation_fmt=a_fmt, chunk_size=args.chunk_size,
+                            phase_cfg,
+                            activation_fmt=a_fmt,
+                            chunk_size=args.chunk_size,
                             weights_source="cached_pre_quantized",
                         ),
                     )
                     del model, adapter; gc.collect(); torch.cuda.empty_cache()
                     continue
-                finally:
-                    act_q.cleanup()
 
                 norm_l1  = act_stats['norm_l1']  if act_stats else None
                 norm_mse = act_stats['norm_mse'] if act_stats else None
@@ -632,17 +621,30 @@ def process_single_model(args, device):
                     f"      Top1={acc1:.2f}%, Top5={acc5:.2f}%"
                     + (f", NormL1={norm_l1:.4e}, NormMSE={norm_mse:.4e}" if norm_l1 is not None else "")
                 )
-                db.log_run(
-                    model_name=model_name, weight_dt=w_fmt, activation_dt=a_fmt,
-                    acc1=acc1, acc5=acc5, ref_acc1=ref_acc1, ref_acc5=ref_acc5,
-                    ref_certainty=ref_cert, experiment_type="w6a4_cross",
-                    status="SUCCESS", certainty=cert,
-                    mse=norm_mse, l1=norm_l1,
+                phase_cfg = _make_weight_quant_config(args, w_fmt, args.chunk_size)
+                _log_w6a4_run(
+                    runner=runner,
+                    config=phase_cfg,
+                    model_name=model_name,
+                    experiment_type="w6a4_cross",
+                    weight_dt=w_fmt,
+                    activation_dt=a_fmt,
+                    acc1=acc1,
+                    acc5=acc5,
+                    status="SUCCESS",
+                    ref_acc1=ref_acc1,
+                    ref_acc5=ref_acc5,
+                    ref_certainty=ref_cert,
+                    certainty=cert,
+                    mse=norm_mse,
+                    l1=norm_l1,
                     config_json=_serialize_config(
-                        _make_weight_quant_config(args, w_fmt, args.chunk_size),
-                        activation_fmt=a_fmt, chunk_size=args.chunk_size,
+                        phase_cfg,
+                        activation_fmt=a_fmt,
+                        chunk_size=args.chunk_size,
                         weights_source="cached_pre_quantized",
                     ),
+                    input_quant_stats=act_stats,
                 )
                 del model, adapter; gc.collect(); torch.cuda.empty_cache()
 

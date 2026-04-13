@@ -24,26 +24,22 @@ class QuantConv2d(nn.Conv2d, QuantizedLayerMixin):
         if not hasattr(torch, 'float8_e4m3fn'):
              raise RuntimeError("FP8 support (torch.float8_e4m3fn) is required but not available.")
 
+        if self.weight_fp8 is not None and self.weight_scale is not None:
+            w_decomp = self.weight_fp8.float() * self.weight_scale
+        else:
+            w_decomp = self.weight
+
         if self.is_first_layer:
             if not getattr(self, 'quantize_first_layer', False):
                 # Do NOT quantize to FP8. Just cast to float for the operation.
                 input_fp8 = input.float() 
-                
-                # For first layer, we still need w_decomp (weights are quantized)
-                w_decomp = self.weight_fp8.float() * self.weight_scale
             else:
                 # Use shared quantization logic
                 input_fp8 = self.quantize_input(input.float())
-            
-                # Dequantize weights for operation: w = w_fp8 * s_w
-                w_decomp = self.weight_fp8.float() * self.weight_scale
 
         else:
             # Use shared quantization logic
             input_fp8 = self.quantize_input(input)
-        
-            # Dequantize weights for operation: w = w_fp8 * s_w
-            w_decomp = self.weight_fp8.float() * self.weight_scale
         
         # Capture activations if enabled
         if getattr(self, 'capture_activations', False):
@@ -91,4 +87,3 @@ class QuantConv2d(nn.Conv2d, QuantizedLayerMixin):
                 self.dilation, 
                 self.groups
             )
-

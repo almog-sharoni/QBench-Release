@@ -17,7 +17,6 @@ if PROJECT_ROOT not in sys.path:
 
 from runspace.core.runner import Runner
 from runspace.core.config_factory import ConfigFactory
-from src.adapters.adapter_factory import create_adapter
 from src.registry.op_registry import OpRegistry
 from src.ops.quant_base import QuantizedLayerMixin
 
@@ -463,12 +462,12 @@ def main():
     # 2. Setup Models
     # Ref Model (FP32)
     print("Building Reference Model...")
-    adapter = create_adapter(config)
+    init_dir = os.path.join(os.path.dirname(__file__), 'results', model_name, 'model_init')
+    quant_model, adapter, _ = runner.prepare_model_with_materialized_weights(
+        config=config,
+        output_dir=init_dir
+    )
     ref_model = adapter.build_reference_model()
-    
-    # Quant Model (Initial - will be mutated)
-    print("Building Quant Model...")
-    quant_model = adapter.model
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -514,9 +513,18 @@ def main():
     # Load the new mixed config
     mixed_configs = factory.create_configs(mixed_config_path, model_info)
     mixed_config = mixed_configs[0]
+    mixed_config['experiment'] = {
+        'name': 'mixed_precision_experiment',
+        'type': 'mixed_precision_validation',
+        'weight_dt': 'mixed',
+        'activation_dt': mixed_config.get('quantization', {}).get('input_format', 'fp32'),
+    }
     
     # Run evaluation
-    res = runner.run_single(mixed_config, output_root=os.path.join(os.path.dirname(__file__), 'results'))
+    res = runner.run_single_logged(
+        mixed_config,
+        output_root=os.path.join(os.path.dirname(__file__), 'results')
+    )
     
     print("\n=== Validation Results ===")
     print(f"Top-1 Accuracy: {res['acc1']:.2f}%")

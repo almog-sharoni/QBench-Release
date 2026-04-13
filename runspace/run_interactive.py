@@ -218,13 +218,17 @@ def main():
         else:
             print("Using configuration defaults for histograms.")
         
-    # 4. Run Batch
+    # 4. Run Configs Sequentially (explicit loop; runner handles single-run only)
     print(f"\nStarting execution of {len(all_configs)} configurations...")
     runner = Runner()
-    # We use run_batch which returns a list of results
-    # We need to define an output root. We'll use the default 'runspace/outputs'
     output_root = os.path.join(PROJECT_ROOT, 'runspace/outputs')
-    results = runner.run_batch(all_configs, output_root=output_root)
+    results = []
+    total = len(all_configs)
+    for idx, cfg in enumerate(all_configs, start=1):
+        out_name = cfg.get('output_name', f'run_{idx}')
+        print(f"Running config {idx}/{total}: {out_name}")
+        res = runner.run_single_logged(cfg, output_root=output_root)
+        results.append(res)
     
     print("\n=== Execution Completed ===")
     

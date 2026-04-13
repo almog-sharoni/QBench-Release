@@ -55,15 +55,16 @@ def load_model_names(config_file=None):
     
     # Fallback: Common model names
     default_models = [
-        # 'resnet18', 'resnet50', 'resnet152',
-        # 'vit_b_16', 'vit_l_16',
+        # 'resnet18', 'resnet50', 
+        # 'resnet152',
+        # 'vit_b_16', 
         # 'efficientnet_b0', 'efficientnet_v2_l',
         # 'mobilenet_v3_large',
         # # 'densenet121', 'densenet161',
         # 'inception_v3',
         # 'alexnet', 'vgg19_bn',
         # 'googlenet',
-        'mobilevit_xxs',
+        'mobilevit_s',
     ]
     return default_models
 
@@ -87,7 +88,8 @@ def get_model_from_name(model_name, quantized=True):
             # We quantize all supported layers to show them as Green in the graph
             adapter = GenericAdapter(
                 model_name=model_name,
-                quantized_ops=["all"]
+                quantized_ops=["all"],
+                input_quantization=False,
             )
             model = adapter.build_model(quantized=True)
             return model
@@ -106,7 +108,7 @@ def get_model_from_name(model_name, quantized=True):
     
     return None
 
-def generate_graph_for_model(model_name, db, force=False, quantized=True):
+def generate_graph_for_model(model_name, db, force=False, quantized=True, graph_depth=12):
     """
     Generate quantization graph for a single model.
     
@@ -146,7 +148,12 @@ def generate_graph_for_model(model_name, db, force=False, quantized=True):
         
         # Generate JSON graph representation
         print("  Tracing and generating hierarchical JSON...")
-        graph_json = generate_hierarchical_json(model, input_size=(1, 3, 224, 224), model_name=model_name, depth=4)
+        graph_json = generate_hierarchical_json(
+            model,
+            input_size=(1, 3, 224, 224),
+            model_name=model_name,
+            depth=graph_depth
+        )
         
         if not graph_json:
             print(f"✗ Graph generation produced empty JSON for {model_name}")
@@ -171,8 +178,8 @@ def generate_graph_for_model(model_name, db, force=False, quantized=True):
             
     except Exception as e:
         print(f"✗ Error: {e}")
-        # import traceback
-        # traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return False
 
 def main():
@@ -204,6 +211,12 @@ def main():
         '--vanilla',
         action='store_true',
         help='Generate graph for unquantized (vanilla) model instead'
+    )
+    parser.add_argument(
+        '--depth',
+        type=int,
+        default=12,
+        help='Tracing depth for hierarchical graph generation (higher exposes more internals)'
     )
     
     args = parser.parse_args()
@@ -245,7 +258,13 @@ def main():
             skip_count += 1
             continue
         
-        if generate_graph_for_model(model_name, db, force=args.force, quantized=not args.vanilla):
+        if generate_graph_for_model(
+            model_name,
+            db,
+            force=args.force,
+            quantized=not args.vanilla,
+            graph_depth=args.depth
+        ):
             success_count += 1
         else:
             fail_count += 1
