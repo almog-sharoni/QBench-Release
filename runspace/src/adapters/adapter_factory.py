@@ -5,7 +5,38 @@ Creates adapters from configuration dictionaries.
 Provides a single entry point for adapter instantiation.
 """
 
+import json
+import os
+
 from .base_adapter import BaseAdapter
+
+
+def _should_print_adapter_config(config: dict) -> bool:
+    """Return True if adapter config snapshots should be printed."""
+    env_flag = os.environ.get("QBENCH_PRINT_ADAPTER_CONFIG", "").strip().lower()
+    if env_flag in {"1", "true", "yes", "on"}:
+        return True
+    debug_cfg = config.get("debug", {})
+    if isinstance(debug_cfg, dict) and bool(debug_cfg.get("print_adapter_config", False)):
+        return True
+    return False
+
+
+def _print_adapter_config_snapshot(config: dict, adapter_type: str, resolved_kwargs: dict):
+    """Print a compact, machine-readable snapshot of adapter inputs."""
+    snapshot = {
+        "model": config.get("model", {}),
+        "adapter": config.get("adapter", {}),
+        "quantization": config.get("quantization", {}),
+        "dataset": config.get("dataset", {}),
+        "evaluation": config.get("evaluation", {}),
+        "output_name": config.get("output_name", ""),
+        "adapter_type": adapter_type,
+        "resolved_adapter_kwargs": resolved_kwargs,
+    }
+    print("[AdapterConfig] BEGIN")
+    print(json.dumps(snapshot, indent=2, sort_keys=True, default=str))
+    print("[AdapterConfig] END")
 
 
 def create_adapter(config: dict) -> BaseAdapter:
@@ -50,6 +81,7 @@ def create_adapter(config: dict) -> BaseAdapter:
     quantized_ops = adapter_config.get('quantized_ops', ['Conv2d'])
     excluded_ops = adapter_config.get('excluded_ops', [])
     fold_layers = adapter_config.get('fold_layers', False)
+    weight_quantization = adapter_config.get('weight_quantization', True)
     # input_quantization is now True by default, unless explicitly disabled in adapter config (which we removed from base config but keep support for overrides if needed, or just force True as per request)
     # User said "we asking id to quant inputs - this shouldnt be a question". So we default to True.
     input_quantization = adapter_config.get('input_quantization', True)
@@ -88,6 +120,14 @@ def create_adapter(config: dict) -> BaseAdapter:
     
     # Check if per-chunk format mode is enabled
     per_chunk_format = quantization_config.get('per_chunk_format', False)
+
+    # If nothing is requested to be quantized, avoid the quantized build path.
+    # This keeps pure FP32 / file-backed state-dict runs on a simpler, safer path.
+    qops_list = quantized_ops if isinstance(quantized_ops, list) else [quantized_ops]
+    has_qops = any(bool(x) for x in qops_list)
+    has_layer_overrides = isinstance(layer_config, dict) and len(layer_config) > 0
+    default_build_quantized = bool(quantize_first_layer or has_qops or has_layer_overrides)
+    build_quantized = adapter_config.get('build_quantized', default_build_quantized)
     
     # Extract output_name as run_id for tracking
     run_id = config.get('output_name', 'default')
@@ -95,12 +135,12 @@ def create_adapter(config: dict) -> BaseAdapter:
     if adapter_type == 'generic' or adapter_type == 'resnet':
         from .generic_adapter import GenericAdapter
         # For 'resnet' type, we just use GenericAdapter with defaults or config overrides
-        
-        return GenericAdapter(
+        resolved_kwargs = dict(
             model_name=model_name,
             model_source=model_source,
             weights=weights,
             input_quantization=input_quantization,
+            weight_quantization=weight_quantization,
             quantize_first_layer=quantize_first_layer,
             quantized_ops=quantized_ops,
             excluded_ops=excluded_ops,
@@ -121,15 +161,20 @@ def create_adapter(config: dict) -> BaseAdapter:
             input_chunk_size=input_chunk_size,
             run_id=run_id,
             skip_calibration=skip_calibration,
+            build_quantized=build_quantized,
         )
+        if _should_print_adapter_config(config):
+            _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)
+        return GenericAdapter(**resolved_kwargs)
     
     elif adapter_type == 'slm':
         from .slm_adapter import SLMAdapter
-        return SLMAdapter(
+        resolved_kwargs = dict(
             model_name=model_name,
             model_source=model_source,
             weights=weights,
             input_quantization=input_quantization,
+            weight_quantization=weight_quantization,
             quantize_first_layer=quantize_first_layer,
             quantized_ops=quantized_ops,
             excluded_ops=excluded_ops,
@@ -148,6 +193,9 @@ def create_adapter(config: dict) -> BaseAdapter:
             rounding=rounding,
             input_chunk_size=input_chunk_size
         )
+        if _should_print_adapter_config(config):
+            _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)
+        return SLMAdapter(**resolved_kwargs)
 
         
 
@@ -190,11 +238,34 @@ def load_reference_model(config: dict):
             raise ValueError(f"Model '{model_name}' not found in torchvision.models.")
 
         model_fn = getattr(models, model_name)
-
-        if weights:
-            return model_fn(weights=weights if weights != 'DEFAULT' else 'DEFAULT')
-        else:
+        if not weights or str(weights).strip().lower() in ('none', 'false', '0', 'null', ''):
             return model_fn(weights=None)
+
+        # Resolve weight enums safely (no deprecated weights=True / string fallbacks).
+        try:
+            from torchvision.models import get_model_weights
+            weights_cls = get_model_weights(model_fn)
+            token = str(weights).strip()
+            token_l = token.lower()
+            if token_l in ('default', 'true', '1'):
+                return model_fn(weights=weights_cls.DEFAULT if hasattr(weights_cls, 'DEFAULT') else None)
+            if hasattr(weights_cls, token):
+                return model_fn(weights=getattr(weights_cls, token))
+            token_up = token.upper()
+            for attr in dir(weights_cls):
+                if attr.upper() == token_up:
+                    return model_fn(weights=getattr(weights_cls, attr))
+            if hasattr(weights_cls, 'DEFAULT'):
+                return model_fn(weights=weights_cls.DEFAULT)
+        except Exception:
+            pass
+
+        # Last resort: run uninitialized rather than using deprecated bool path.
+        print(
+            f"Warning: Could not resolve torchvision weights '{weights}' for "
+            f"{model_name}; using weights=None."
+        )
+        return model_fn(weights=None)
     elif model_source == 'timm':
         try:
             import timm
@@ -219,14 +290,14 @@ def validate_config(config: dict):
     # Define allowed keys
     schema = {
         'model': ['name', 'source', 'weights'],
-        'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size', 'skip_calibration'],
+        'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'weight_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size', 'skip_calibration', 'build_quantized'],
         'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format'], # 'type' and 'enabled' for backward compat/fp4 example
         'dataset': ['name', 'path', 'batch_size', 'num_workers'],
-        'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms', 'max_batches', 'graph_only'] # dataset/batch_size allowed here too?
+        'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms', 'max_batches', 'graph_only', 'dynamic_input_quant', 'input_quant'] # dataset/batch_size allowed here too?
     }
     
     # Check top-level keys
-    allowed_top_level = list(schema.keys()) + ['output_name']  # output_name used by runner
+    allowed_top_level = list(schema.keys()) + ['output_name', 'meta', 'debug', 'experiment']  # metadata/debug keys used by runners
     for key in config:
         if key not in allowed_top_level:
             warnings.warn(f"Unknown top-level config key: '{key}'")

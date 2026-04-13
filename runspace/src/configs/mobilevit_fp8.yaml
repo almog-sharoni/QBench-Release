@@ -10,7 +10,7 @@ model:
 adapter:
   type: generic
   quantize_first_layer: false
-  quantized_ops: ["Conv2d", "Linear", "LayerNorm"]
+  quantized_ops: ["Conv2d", "Linear", "LayerNorm", "Attention", "Mlp"]
   input_quantization: true
 
 quantization:

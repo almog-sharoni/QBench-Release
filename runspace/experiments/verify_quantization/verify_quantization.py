@@ -262,9 +262,9 @@ if __name__ == "__main__":
     #vector with 0.1 jumps between 2.0 and -2.0
     vector = torch.arange(-1.9, 2.0 , 0.1)
     # pass_rate, _ = verify_mantissa(vector, 3, 0)
-    from runspace.src.quantization.quantizer import quantize
+    from runspace.src.ops.quant_base import quantize_tensor
     print(vector)
-    quantized_vector = quantize(vector, 'efp4_e1m2')
+    quantized_vector, _ = quantize_tensor(vector, q_type='efp4_e1m2', mode='tensor', rounding='nearest')
     print(quantized_vector)
 
     # print vecotrs side by side
