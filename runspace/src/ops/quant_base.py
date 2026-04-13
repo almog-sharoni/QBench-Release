@@ -232,7 +232,12 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
                 idx_tensor = torch.tensor(indices, device=input.device)
                 sub_chunks = chunked_flat[idx_tensor]
                 
-                max_v = sub_chunks.abs().amax(dim=1, keepdim=True).clamp(min=1e-5)
+                # Keep the per-format chunk path numerically identical to the
+                # standard single-format chunk path so that:
+                # - uniform baseline `q_type=fmt`
+                # - dynamic replay with `chunk_formats=[fmt, fmt, ...]`
+                # behave the same.
+                max_v = sub_chunks.abs().amax(dim=1, keepdim=True).clamp(min=1e-9)
                 bias_v = None
                 scale = calculate_scale(max_v, fmt)
                 

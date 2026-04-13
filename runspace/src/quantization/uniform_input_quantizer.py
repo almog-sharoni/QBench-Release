@@ -15,7 +15,7 @@ class UniformInputQuantizer:
         self.fmt = fmt
         self.chunk_size = chunk_size
         self.hooks = []
-        self.layer_names = []
+        self.layer_stats = {}
         self.supported_ops = tuple(OpRegistry.get_supported_ops().values())
         self.stats = {
             'sum_l1_err': 0.0,
@@ -37,10 +37,32 @@ class UniformInputQuantizer:
     def _make_hook(self, layer_name):
         def hook(module, inputs):
             if not inputs or not isinstance(inputs[0], torch.Tensor):
-                return inputs
+                return None
 
             x = inputs[0]
             x_q = self._quantize(x)
+
+            if x.dim() > 1:
+                flat = x.flatten(1)
+                batch_size = x.shape[0]
+            else:
+                flat = x.flatten(0).unsqueeze(0)
+                batch_size = 1
+
+            num_elements = flat.shape[-1]
+            pad_len = 0
+            if num_elements % self.chunk_size != 0:
+                pad_len = self.chunk_size - (num_elements % self.chunk_size)
+                num_elements += pad_len
+            num_chunks = num_elements // self.chunk_size
+            total_chunks = batch_size * num_chunks
+
+            module.input_quantization = True
+            module.input_mode = 'chunk'
+            module.input_chunk_size = self.chunk_size
+            module.input_q_type = self.fmt
+            module.input_chunk_formats = None
+            module.rounding = 'nearest'
 
             with torch.no_grad():
                 diff = x - x_q
@@ -49,7 +71,14 @@ class UniformInputQuantizer:
                 self.stats['sum_l1_norm'] += x.abs().sum().item()
                 self.stats['sum_l2_norm'] += x.pow(2).sum().item()
 
-            return (x_q,) + inputs[1:]
+            stats = self.layer_stats.setdefault(
+                layer_name,
+                {'format_counts': {}, 'total_chunks': 0, 'type': module.__class__.__name__}
+            )
+            stats['format_counts'][self.fmt] = stats['format_counts'].get(self.fmt, 0) + total_chunks
+            stats['total_chunks'] += total_chunks
+
+            return None
 
         return hook
 
@@ -57,19 +86,11 @@ class UniformInputQuantizer:
         for name, module in self.model.named_modules():
             if isinstance(module, self.supported_ops) or isinstance(module, (nn.Conv2d, nn.Linear)):
                 self.hooks.append(module.register_forward_pre_hook(self._make_hook(name)))
-                self.layer_names.append(name)
 
     def cleanup(self):
         for hook in self.hooks:
             hook.remove()
         self.hooks = []
-
-    @property
-    def layer_stats(self):
-        return {
-            layer_name: {'format_counts': {self.fmt: 1}, 'total_chunks': 1}
-            for layer_name in self.layer_names
-        }
 
     def get_final_stats(self):
         norm_l1 = self.stats['sum_l1_err'] / self.stats['sum_l1_norm'] if self.stats['sum_l1_norm'] > 0 else 0.0

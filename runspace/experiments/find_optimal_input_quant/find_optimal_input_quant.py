@@ -51,6 +51,13 @@ candidate_formats = [
             'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
         ]
 
+
+def _parse_csv_arg(value, fallback):
+    if value is None:
+        return list(fallback)
+    parsed = [item.strip() for item in str(value).split(',') if item.strip()]
+    return parsed if parsed else list(fallback)
+
 # Keep experiments on the library replacement path (no manual tensor injection).
 # `weight_quantization` will be disabled in config for input-only studies.
 INPUT_ONLY_QUANTIZED_OPS = ["all"]
@@ -90,7 +97,12 @@ def _build_input_quant_config(args, model_name, weights, default_format, quantiz
             'weight_chunk_size': args.chunk_size,
             'rounding': 'nearest',
             'calib_method': 'max'
-        }
+        },
+        'experiment': {
+            'materialize_weights': {
+                'force_rebuild': bool(getattr(args, 'force_rebuild_weights', False) or getattr(args, 'force_rerun', False)),
+            },
+        },
     }
 
 
@@ -136,6 +148,18 @@ def get_args():
     parser.add_argument("--metric", type=str, default="mse,l1", help="Comma-separated error metrics for dynamic selection (e.g. 'mse,l1')")
     parser.add_argument("--chunk_size", type=int, default=128, help="Chunk size for input quantization (blocks)")
     parser.add_argument(
+        "--baseline_formats",
+        type=str,
+        default=None,
+        help="Comma-separated baseline formats to evaluate. Defaults to the script's baseline_formats list.",
+    )
+    parser.add_argument(
+        "--candidate_formats",
+        type=str,
+        default=None,
+        help="Comma-separated dynamic candidate formats. Defaults to the script's candidate_formats list.",
+    )
+    parser.add_argument(
         "--excluded_ops",
         type=str,
         default="LayerNorm",
@@ -144,9 +168,16 @@ def get_args():
     parser.add_argument("--only_dynamic", action="store_true", help="Skip baseline runs and only run dynamic optimization")
     parser.add_argument("--only_baselines", action="store_true", help="Skip dynamic runs and only run baseline runs")
     parser.add_argument("--force_rerun", action="store_true", help="Re-run all experiments even if already in DB")
+    parser.add_argument(
+        "--force_rebuild_weights",
+        action="store_true",
+        help="Force rebuilding cached materialized weights/checkpoints used by the experiment",
+    )
     # Add other args as needed
     args = parser.parse_args()
     args.excluded_ops = [op.strip() for op in args.excluded_ops.split(',') if op.strip()]
+    args.baseline_formats = _parse_csv_arg(args.baseline_formats, baseline_formats)
+    args.candidate_formats = _parse_csv_arg(args.candidate_formats, candidate_formats)
     return args
 
 
@@ -384,7 +415,7 @@ def process_single_model(args, model_config, device, metrics):
         cached_baseline_stats = {}
         formats_to_run = []
         if not args.force_rerun:
-            for fmt in baseline_formats:
+            for fmt in args.baseline_formats:
                 if _input_quant_run_exists(db, model_name, 'input_quant_baseline', fmt) or fmt == 'fp32' and _input_quant_run_exists(db, model_name, 'fp32_ref', 'fp32'):
                     all_runs = db.get_runs()
                     row = all_runs[
@@ -404,7 +435,7 @@ def process_single_model(args, model_config, device, metrics):
                         continue
                 formats_to_run.append(fmt)
         else:
-            formats_to_run = list(baseline_formats)
+            formats_to_run = list(args.baseline_formats)
 
         ref_acc1_live = cached_baseline_stats.get('fp32', {}).get('acc1', 0.0)
         ref_acc5_live = cached_baseline_stats.get('fp32', {}).get('acc5', 0.0)
@@ -510,7 +541,7 @@ def process_single_model(args, model_config, device, metrics):
         args,
         model_name,
         weights,
-        baseline_formats[0] if baseline_formats else 'fp8_e4m3',
+        args.baseline_formats[0] if args.baseline_formats else 'fp8_e4m3',
         quantize_first_layer=False
     )
     
@@ -545,7 +576,7 @@ def process_single_model(args, model_config, device, metrics):
                         'enabled': True,
                         'metric': metric,
                         'chunk_size': args.chunk_size,
-                        'candidate_formats': candidate_formats,
+                        'candidate_formats': args.candidate_formats,
                     }
                     eval_results = runner.evaluate_model(
                         model=model,
@@ -664,6 +695,8 @@ def main():
     # Parse metrics
     metrics = [m.strip().lower() for m in args.metric.split(',')]
     print(f"Metrics to process: {metrics}")
+    print(f"Baseline formats: {args.baseline_formats}")
+    print(f"Dynamic candidate formats: {args.candidate_formats}")
     
     # Determine models to run
     models_to_run = []

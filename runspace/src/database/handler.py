@@ -273,6 +273,35 @@ class RunDatabase:
             conn.commit()
             print("Database cleared.")
 
+    def delete_runs_by_ids(self, run_ids):
+        """Delete one or more runs by primary-key id and return deleted count."""
+        if not run_ids:
+            return 0
+
+        normalized_ids = []
+        for run_id in run_ids:
+            if run_id is None:
+                continue
+            try:
+                normalized_ids.append(int(run_id))
+            except (TypeError, ValueError):
+                continue
+
+        normalized_ids = sorted(set(normalized_ids))
+        if not normalized_ids:
+            return 0
+
+        placeholders = ",".join("?" for _ in normalized_ids)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"DELETE FROM runs WHERE id IN ({placeholders})",
+                normalized_ids,
+            )
+            deleted_count = max(cursor.rowcount, 0)
+            conn.commit()
+            return deleted_count
+
     def get_summary(self):
         """Returns a summary of runs grouped by model and status."""
         df = self.get_runs()

@@ -118,13 +118,16 @@ def parse_dt(dt_str):
     return bits, exp, mant
 
 
-@st.cache_data(show_spinner=False)
-def get_runs_cached(limit, refresh_nonce):
+def get_runs(limit):
     db = RunDatabase(db_path=DB_PATH)
     return db.get_runs(limit=limit)
 
 
-@st.cache_data(show_spinner=False)
+def delete_runs_by_ids(run_ids):
+    db = RunDatabase(db_path=DB_PATH)
+    return db.delete_runs_by_ids(run_ids)
+
+
 def preprocess_runs_df(df):
     if df is None or df.empty:
         return df
@@ -266,7 +269,6 @@ def _safe_json_load(raw_json):
         return None
 
 
-@st.cache_data(show_spinner=False)
 def _compute_weight_win_rate_views(raw_json):
     """
     Build summary tables for layer/chunk winners from quant_map_json.
@@ -387,14 +389,12 @@ def _compute_weight_win_rate_views(raw_json):
     return summary_df, layer_df, layer_chunk_df, meta
 
 
-@st.cache_data(show_spinner=False)
-def get_model_graph_json_cached(model_name, refresh_nonce):
+def get_model_graph_json(model_name):
     db = RunDatabase(db_path=DB_PATH)
     return db.get_model_graph_json(model_name)
 
 
-@st.cache_data(show_spinner=False)
-def get_model_graph_metadata_cached(model_name, refresh_nonce):
+def get_model_graph_metadata(model_name):
     db = RunDatabase(db_path=DB_PATH)
     return db.get_model_graph_metadata(model_name)
 
@@ -521,12 +521,13 @@ st.set_page_config(page_title="QBench Experiment Dashboard", layout="wide")
 
 st.title("🚀 QBench Experiment Tracker")
 inject_global_styles()
+flash_message = st.session_state.pop("dashboard_flash_message", None)
+if flash_message:
+    st.success(flash_message)
 
 # Initial Session State for Presets
 if 'presets' not in st.session_state:
     st.session_state.presets = load_presets()
-if 'refresh_nonce' not in st.session_state:
-    st.session_state.refresh_nonce = 0
 
 st.sidebar.header("⚡ Performance")
 run_window_label = st.sidebar.selectbox(
@@ -546,7 +547,7 @@ st.sidebar.caption("Use `Refresh Data` after new experiments complete.")
 st.markdown("---")
 
 with st.spinner("Loading experiment runs..."):
-    df = get_runs_cached(selected_run_limit, st.session_state.refresh_nonce)
+    df = get_runs(selected_run_limit)
 
 if df.empty:
     st.warning("No runs found in the database yet. Run an experiment first!")
@@ -701,6 +702,64 @@ else:
                             if _safe_json_load(weight_map_json) is not None and _safe_json_load(input_map_json) is not None:
                                 st.markdown("---")
                         _render_input_win_rates(input_map_json)
+
+    @st.dialog("🗑️ Delete Runs From Database", width="large")
+    def show_delete_runs_dialog(run_rows, table_index):
+        if not run_rows:
+            st.info("No runs selected.")
+            return
+
+        selected_df = pd.DataFrame(run_rows)
+        run_ids = []
+        for row in run_rows:
+            run_id = row.get('id')
+            if pd.notna(run_id):
+                run_ids.append(int(run_id))
+        run_ids = sorted(set(run_ids))
+
+        st.warning("This permanently deletes the selected rows from `runs.db`. This action cannot be undone.")
+
+        preview_cols = [
+            'id', 'model_name', 'experiment_type', 'weight_dt', 'activation_dt',
+            'acc1', 'acc5', 'status', 'run_date'
+        ]
+        existing_preview_cols = [c for c in preview_cols if c in selected_df.columns]
+        st.dataframe(
+            selected_df[existing_preview_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "id": "DB ID",
+                "model_name": "Model",
+                "experiment_type": "Exp. Type",
+                "weight_dt": "Weight DT",
+                "activation_dt": "Activation DT",
+                "acc1": st.column_config.NumberColumn("Acc1 (%)", format="%.2f"),
+                "acc5": st.column_config.NumberColumn("Acc5 (%)", format="%.2f"),
+                "status": "Status",
+                "run_date": "Date",
+            },
+        )
+
+        st.caption(f"Selected rows: {len(run_ids)}")
+        if st.button(
+            f"🗑️ Permanently Delete {len(run_ids)} Selected Row{'s' if len(run_ids) != 1 else ''}",
+            key=f"confirm_delete_runs_{table_index}",
+            type="primary",
+            use_container_width=True,
+        ):
+            deleted_count = delete_runs_by_ids(run_ids)
+            st.session_state["dashboard_flash_message"] = (
+                f"Deleted {deleted_count} run{'s' if deleted_count != 1 else ''} from the database."
+            )
+            for key in (
+                f"table_{table_index}",
+                f"graph_payload_{table_index}",
+                f"graph_meta_{table_index}",
+                f"graph_payload_model_{table_index}",
+            ):
+                st.session_state.pop(key, None)
+            st.rerun()
 
     @st.dialog("📈 Accuracy Comparison", width="large")
     def show_large_chart(chart_df):
@@ -890,7 +949,9 @@ else:
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ⚙️ Controls")
     if st.sidebar.button("🔄 Refresh Data", type="primary", use_container_width=True):
-        st.session_state.refresh_nonce += 1
+        for key in list(st.session_state.keys()):
+            if key.startswith("graph_payload_") or key.startswith("graph_meta_"):
+                del st.session_state[key]
         st.rerun()
     
     if st.sidebar.button("🧹 Reset All Filters", use_container_width=True):
@@ -1109,6 +1170,11 @@ else:
             selected_indices = event.selection.rows
 
             # Action buttons — appear based on what's available in selected rows.
+            selected_run_rows = []
+            if len(selected_indices) >= 1:
+                orig_indices = [display_df.index[j] for j in selected_indices]
+                selected_run_rows = [filtered_df.loc[idx].to_dict() for idx in orig_indices]
+
             if len(selected_indices) == 1:
                 orig_idx = display_df.index[selected_indices[0]]
                 run_row = filtered_df.loc[orig_idx].to_dict()
@@ -1124,22 +1190,21 @@ else:
                         show_layer_breakdown(run_row)
 
             if len(selected_indices) >= 1:
-                orig_indices = [display_df.index[j] for j in selected_indices]
                 rows_with_details = [
-                    filtered_df.loc[idx].to_dict() for idx in orig_indices
+                    row for row in selected_run_rows
                     if (
                         (
-                            'config_json' in filtered_df.columns and
-                            pd.notna(filtered_df.at[idx, 'config_json']) and
-                            filtered_df.at[idx, 'config_json']
+                            'config_json' in row and
+                            pd.notna(row.get('config_json')) and
+                            row.get('config_json')
                         ) or (
-                            'quant_map_json' in filtered_df.columns and
-                            pd.notna(filtered_df.at[idx, 'quant_map_json']) and
-                            filtered_df.at[idx, 'quant_map_json']
+                            'quant_map_json' in row and
+                            pd.notna(row.get('quant_map_json')) and
+                            row.get('quant_map_json')
                         ) or (
-                            'input_map_json' in filtered_df.columns and
-                            pd.notna(filtered_df.at[idx, 'input_map_json']) and
-                            filtered_df.at[idx, 'input_map_json']
+                            'input_map_json' in row and
+                            pd.notna(row.get('input_map_json')) and
+                            row.get('input_map_json')
                         )
                     )
                 ]
@@ -1150,6 +1215,20 @@ else:
                     )
                     if st.button(label, key=f"btn_config_{i}"):
                         show_run_config(rows_with_details)
+
+                selected_run_ids = []
+                for row in selected_run_rows:
+                    run_id = row.get('id')
+                    if pd.notna(run_id):
+                        selected_run_ids.append(int(run_id))
+                selected_run_ids = sorted(set(selected_run_ids))
+                if selected_run_ids:
+                    delete_label = (
+                        f"🗑️ Delete Selected Rows ({len(selected_run_ids)})"
+                        if len(selected_run_ids) > 1 else "🗑️ Delete Selected Row"
+                    )
+                    if st.button(delete_label, key=f"btn_delete_rows_{i}", use_container_width=True):
+                        show_delete_runs_dialog(selected_run_rows, i)
 
             st.markdown(f"#### 📊 Visualization Options")
             # viz_all = st.checkbox("Visualize ALL filtered runs (ignores table selection)", key=f"viz_all_{i}")
@@ -1246,8 +1325,8 @@ else:
 
                 if should_load_now:
                     with st.spinner(f"Loading architecture graph for {selected_model}..."):
-                        graph_json, _ = get_model_graph_json_cached(selected_model, st.session_state.refresh_nonce)
-                        graph_meta = get_model_graph_metadata_cached(selected_model, st.session_state.refresh_nonce)
+                        graph_json, _ = get_model_graph_json(selected_model)
+                        graph_meta = get_model_graph_metadata(selected_model)
                     st.session_state[graph_payload_key] = graph_json
                     st.session_state[graph_meta_key] = graph_meta
                     st.session_state[graph_model_loaded_key] = selected_model
