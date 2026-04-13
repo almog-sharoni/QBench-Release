@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import os
 import sys
-import base64
 
 # Add project root to sys.path
 # runspace/src/database/dashboard.py -> runspace/src/database -> runspace/src -> runspace -> root
@@ -22,6 +21,13 @@ class NpEncoder(json.JSONEncoder):
         return super(NpEncoder, self).default(obj)
 
 PRESETS_FILE = os.path.join(os.path.dirname(__file__), "presets.json")
+DB_PATH = os.path.join(PROJECT_ROOT, "runspace/database/runs.db")
+RUN_WINDOW_TO_LIMIT = {
+    "200 (fastest)": 200,
+    "500": 500,
+    "1000": 1000,
+    "All": None,
+}
 
 def load_presets():
     if os.path.exists(PRESETS_FILE):
@@ -35,6 +41,53 @@ def load_presets():
 def save_presets(presets):
     with open(PRESETS_FILE, 'w') as f:
         json.dump(presets, f, indent=4, cls=NpEncoder)
+
+
+def inject_global_styles():
+    st.markdown("""
+    <style>
+    .stButton > button {
+        transition: background-color 0.1s ease, border 0.1s ease !important;
+        border-radius: 4px !important;
+    }
+
+    div[data-testid="stHorizontalBlock"] .stButton > button {
+        background-color: #fb7185 !important;
+        color: white !important;
+        border: 1px solid #e11d48 !important;
+        padding: 0px 8px !important;
+        min-height: 24px !important;
+        height: 24px !important;
+        font-size: 10px !important;
+        line-height: normal !important;
+        font-weight: 600;
+        white-space: nowrap !important;
+        width: 100% !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+    }
+
+    div[data-testid="stHorizontalBlock"] .stButton > button[kind="primary"],
+    div[data-testid="stHorizontalBlock"] .stButton > button[data-testid*="primary"] {
+        background-color: #10b981 !important;
+        color: white !important;
+        border: 1px solid #059669 !important;
+    }
+
+    div[data-testid="stHorizontalBlock"] {
+        gap: 6px !important;
+    }
+
+    [data-testid="stDialog"] [data-testid="stVerticalBlock"] {
+        overflow-x: auto !important;
+        padding-bottom: 20px;
+    }
+
+    .element-container:has(iframe) {
+        min-width: fit-content;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 def parse_dt(dt_str):
     """Extract (bits, exp, mant) from DT strings like 'fp4_e1m2'."""
@@ -64,37 +117,450 @@ def parse_dt(dt_str):
             except: pass
     return bits, exp, mant
 
+
+@st.cache_data(show_spinner=False)
+def get_runs_cached(limit, refresh_nonce):
+    db = RunDatabase(db_path=DB_PATH)
+    return db.get_runs(limit=limit)
+
+
+@st.cache_data(show_spinner=False)
+def preprocess_runs_df(df):
+    if df is None or df.empty:
+        return df
+
+    parsed_df = df.copy()
+    for col in ['weight_dt', 'activation_dt']:
+        prefix = 'w' if col.startswith('weight') else 'a'
+        parsed = parsed_df[col].apply(parse_dt)
+        parsed_df[f'{prefix}_bits'] = parsed.apply(lambda x: x[0])
+        parsed_df[f'{prefix}_exp'] = parsed.apply(lambda x: x[1])
+        parsed_df[f'{prefix}_mant'] = parsed.apply(lambda x: x[2])
+    return parsed_df
+
+
+def _attach_effective_references(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure each row has usable reference metrics even when legacy rows logged
+    ref_* as zeros. Prefers latest fp32_ref per model, falls back to latest
+    fp32/fp32 row with positive accuracy.
+    """
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+    for col in ('acc1', 'acc5', 'ref_acc1', 'ref_acc5', 'certainty', 'ref_certainty'):
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors='coerce')
+
+    refs = out.copy()
+    if 'weight_dt' in refs.columns and 'activation_dt' in refs.columns:
+        refs = refs[
+            refs['weight_dt'].astype(str).str.lower().eq('fp32') &
+            refs['activation_dt'].astype(str).str.lower().eq('fp32')
+        ]
+    if 'acc1' in refs.columns:
+        refs = refs[refs['acc1'].fillna(0) > 0]
+
+    if refs.empty:
+        out['ref_acc1_effective'] = out.get('ref_acc1', 0.0).fillna(0.0)
+        out['ref_acc5_effective'] = out.get('ref_acc5', 0.0).fillna(0.0)
+        out['ref_certainty_effective'] = out.get('ref_certainty', 0.0).fillna(0.0)
+        return out
+
+    refs = refs.copy()
+    refs['is_fp32_ref'] = refs.get('experiment_type', '').astype(str).eq('fp32_ref').astype(int)
+    refs['is_success'] = refs.get('status', '').astype(str).eq('SUCCESS').astype(int)
+    sort_cols = [c for c in ['model_name', 'is_fp32_ref', 'is_success', 'run_date', 'id'] if c in refs.columns]
+    sort_asc = [True, False, False, False, False][:len(sort_cols)]
+    refs = refs.sort_values(by=sort_cols, ascending=sort_asc)
+    refs = refs.drop_duplicates(subset=['model_name'], keep='first')
+
+    ref_acc1_map = refs.set_index('model_name')['acc1'].to_dict() if 'acc1' in refs.columns else {}
+    ref_acc5_map = refs.set_index('model_name')['acc5'].to_dict() if 'acc5' in refs.columns else {}
+    ref_cert_map = refs.set_index('model_name')['certainty'].to_dict() if 'certainty' in refs.columns else {}
+
+    out['ref_acc1_effective'] = out.get('ref_acc1', 0.0)
+    out['ref_acc5_effective'] = out.get('ref_acc5', 0.0)
+    out['ref_certainty_effective'] = out.get('ref_certainty', 0.0)
+
+    if 'model_name' in out.columns:
+        model_ref_acc1 = out['model_name'].map(ref_acc1_map)
+        model_ref_acc5 = out['model_name'].map(ref_acc5_map)
+        model_ref_cert = out['model_name'].map(ref_cert_map)
+    else:
+        model_ref_acc1 = pd.Series([np.nan] * len(out), index=out.index)
+        model_ref_acc5 = pd.Series([np.nan] * len(out), index=out.index)
+        model_ref_cert = pd.Series([np.nan] * len(out), index=out.index)
+
+    miss_ref1 = out['ref_acc1_effective'].isna() | (out['ref_acc1_effective'] <= 0)
+    miss_ref5 = out['ref_acc5_effective'].isna() | (out['ref_acc5_effective'] <= 0)
+    miss_refc = out['ref_certainty_effective'].isna() | (out['ref_certainty_effective'] <= 0)
+    out.loc[miss_ref1, 'ref_acc1_effective'] = model_ref_acc1[miss_ref1]
+    out.loc[miss_ref5, 'ref_acc5_effective'] = model_ref_acc5[miss_ref5]
+    out.loc[miss_refc, 'ref_certainty_effective'] = model_ref_cert[miss_refc]
+
+    # fp32_ref rows should use themselves as reference.
+    if 'experiment_type' in out.columns and 'acc1' in out.columns and 'acc5' in out.columns:
+        is_ref = out['experiment_type'].astype(str).eq('fp32_ref')
+        out.loc[is_ref & out['acc1'].notna(), 'ref_acc1_effective'] = out.loc[is_ref & out['acc1'].notna(), 'acc1']
+        out.loc[is_ref & out['acc5'].notna(), 'ref_acc5_effective'] = out.loc[is_ref & out['acc5'].notna(), 'acc5']
+        if 'certainty' in out.columns:
+            out.loc[is_ref & out['certainty'].notna(), 'ref_certainty_effective'] = out.loc[is_ref & out['certainty'].notna(), 'certainty']
+
+    out['ref_acc1_effective'] = out['ref_acc1_effective'].fillna(0.0)
+    out['ref_acc5_effective'] = out['ref_acc5_effective'].fillna(0.0)
+    out['ref_certainty_effective'] = out['ref_certainty_effective'].fillna(0.0)
+    return out
+
+
+def _get_format_bits(fmt):
+    """Best-effort bit width extraction for strings like fp6_e2m3."""
+    if not fmt:
+        return 32
+    text = str(fmt).strip().lower()
+    if text == "fp32":
+        return 32
+    if text == "fp16" or text == "bf16":
+        return 16
+    if text == "int8":
+        return 8
+    if text == "int4":
+        return 4
+    if text.startswith("fp"):
+        base = text.split("_", 1)[0]
+        try:
+            return int(base.replace("fp", ""))
+        except Exception:
+            return 32
+    return 32
+
+
+def _sort_quant_formats(formats):
+    """Sort by bit width desc then exponent bits desc, similar to plotting utils."""
+    def parse_fmt(fmt):
+        text = str(fmt).strip().lower()
+        bits = _get_format_bits(text)
+        exp = 0
+        if "_e" in text:
+            try:
+                exp_part = text.split("_e", 1)[1]
+                exp = int(exp_part.split("m", 1)[0])
+            except Exception:
+                exp = 0
+        return bits, exp, text
+
+    return sorted(set(formats), key=parse_fmt, reverse=True)
+
+
+def _safe_json_load(raw_json):
+    if raw_json is None:
+        return None
+    if isinstance(raw_json, float) and pd.isna(raw_json):
+        return None
+    if isinstance(raw_json, (dict, list)):
+        return raw_json
+    try:
+        return json.loads(raw_json)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner=False)
+def _compute_weight_win_rate_views(raw_json):
+    """
+    Build summary tables for layer/chunk winners from quant_map_json.
+    Returns (summary_df, layer_df, layer_chunk_df, meta) or (None, None, None, None) if unavailable.
+    """
+    quant_map = _safe_json_load(raw_json)
+    if not isinstance(quant_map, dict) or not quant_map:
+        return None, None, None, None
+
+    layer_rows = []
+    layer_chunk_rows = []
+    layer_win_counts = {}
+    chunk_win_counts = {}
+
+    for layer_idx, (layer, value) in enumerate(quant_map.items()):
+        layer_type = "?"
+        fmt_spec = value
+        explicit_counts = None
+        explicit_total_chunks = None
+        dominant_format = None
+
+        if isinstance(value, dict):
+            layer_type = str(value.get("type", "?"))
+            fmt_spec = value.get("format")
+            if isinstance(value.get("format_counts"), dict):
+                explicit_counts = {}
+                for fmt, cnt in value["format_counts"].items():
+                    try:
+                        explicit_counts[str(fmt)] = int(cnt)
+                    except Exception:
+                        continue
+            try:
+                if value.get("total_chunks") is not None:
+                    explicit_total_chunks = int(value.get("total_chunks"))
+            except Exception:
+                explicit_total_chunks = None
+            if value.get("dominant_format") is not None:
+                dominant_format = str(value.get("dominant_format"))
+
+        counts = {}
+        if explicit_counts:
+            counts = explicit_counts
+        elif isinstance(fmt_spec, list):
+            for fmt in fmt_spec:
+                key = str(fmt)
+                counts[key] = counts.get(key, 0) + 1
+        elif fmt_spec is not None:
+            key = str(fmt_spec)
+            counts[key] = counts.get(key, 0) + 1
+
+        if not counts:
+            continue
+
+        if dominant_format is None:
+            dominant_format = sorted(counts.items(), key=lambda x: (-x[1], x[0]))[0][0]
+        total_chunks = explicit_total_chunks if explicit_total_chunks is not None else int(sum(counts.values()))
+        if total_chunks <= 0:
+            total_chunks = int(sum(counts.values()))
+
+        layer_win_counts[dominant_format] = layer_win_counts.get(dominant_format, 0) + 1
+        for fmt, cnt in counts.items():
+            chunk_win_counts[fmt] = chunk_win_counts.get(fmt, 0) + int(cnt)
+            layer_chunk_rows.append({
+                "Layer": layer,
+                "Layer Index": int(layer_idx),
+                "Type": layer_type,
+                "Format": fmt,
+                "Chunk Wins": int(cnt),
+            })
+
+        layer_rows.append({
+            "Layer": layer,
+            "Layer Index": int(layer_idx),
+            "Type": layer_type,
+            "Dominant Format": dominant_format,
+            "Chunks": int(total_chunks),
+        })
+
+    if not layer_rows:
+        return None, None, None, None
+
+    layer_total = len(layer_rows)
+    chunk_total = int(sum(chunk_win_counts.values()))
+    all_formats = _sort_quant_formats(set(layer_win_counts.keys()) | set(chunk_win_counts.keys()))
+
+    summary_rows = []
+    for fmt in all_formats:
+        layer_wins = int(layer_win_counts.get(fmt, 0))
+        chunk_wins = int(chunk_win_counts.get(fmt, 0))
+        summary_rows.append({
+            "Format": fmt,
+            "Layer Wins": layer_wins,
+            "Layer Win Rate (%)": (100.0 * layer_wins / layer_total) if layer_total > 0 else 0.0,
+            "Chunk Wins": chunk_wins,
+            "Chunk Win Rate (%)": (100.0 * chunk_wins / chunk_total) if chunk_total > 0 else 0.0,
+        })
+
+    summary_df = pd.DataFrame(summary_rows)
+    layer_df = pd.DataFrame(layer_rows).sort_values(by=["Layer Index", "Layer"], ascending=[True, True])
+    layer_chunk_df = pd.DataFrame(layer_chunk_rows)
+    layer_chunk_df = layer_chunk_df.merge(
+        layer_df[["Layer", "Layer Index", "Chunks"]],
+        on=["Layer", "Layer Index"],
+        how="left"
+    ).sort_values(
+        by=["Layer Index", "Layer", "Format"],
+        ascending=[True, True, True]
+    )
+
+    top_layer_format = max(layer_win_counts.items(), key=lambda x: (x[1], x[0]))[0] if layer_win_counts else "-"
+    top_chunk_format = max(chunk_win_counts.items(), key=lambda x: (x[1], x[0]))[0] if chunk_win_counts else "-"
+    meta = {
+        "layers": layer_total,
+        "chunks": chunk_total,
+        "top_layer_format": top_layer_format,
+        "top_chunk_format": top_chunk_format,
+    }
+    return summary_df, layer_df, layer_chunk_df, meta
+
+
+@st.cache_data(show_spinner=False)
+def get_model_graph_json_cached(model_name, refresh_nonce):
+    db = RunDatabase(db_path=DB_PATH)
+    return db.get_model_graph_json(model_name)
+
+
+@st.cache_data(show_spinner=False)
+def get_model_graph_metadata_cached(model_name, refresh_nonce):
+    db = RunDatabase(db_path=DB_PATH)
+    return db.get_model_graph_metadata(model_name)
+
+
+def _render_win_rates(raw_map_json, title_prefix, empty_info):
+    summary_df, layer_df, layer_chunk_df, meta = _compute_weight_win_rate_views(raw_map_json)
+    if summary_df is None:
+        st.info(empty_info)
+        return
+
+    st.markdown(f"#### 🏆 {title_prefix} Chunk / Layer Win Rates")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Layers", f"{meta['layers']}")
+    m2.metric("Chunks", f"{meta['chunks']}")
+    m3.metric("Top Layer Winner", meta["top_layer_format"])
+    m4.metric("Top Chunk Winner", meta["top_chunk_format"])
+
+    # Stacked bar chart similar to plot_chunk_win_rate in experiments utils.
+    if layer_chunk_df is not None and not layer_chunk_df.empty:
+        st.markdown("**Chunk format selection per layer**")
+        chart_df = layer_chunk_df.copy()
+        format_totals = chart_df.groupby("Format")["Chunk Wins"].sum().to_dict()
+        active_formats = [
+            f for f in _sort_quant_formats(format_totals.keys())
+            if int(format_totals.get(f, 0)) > 0
+        ]
+        chart_df = chart_df[chart_df["Format"].isin(active_formats)]
+        layer_order = layer_df.sort_values(by=["Layer Index", "Layer"])["Layer"].tolist()
+        st.vega_lite_chart(
+            chart_df,
+            {
+                "mark": {"type": "bar", "tooltip": True},
+                "encoding": {
+                    "x": {
+                        "field": "Layer",
+                        "type": "nominal",
+                        "axis": {"labelAngle": -90, "title": ""},
+                        "sort": layer_order,
+                    },
+                    "y": {
+                        "field": "Chunk Wins",
+                        "type": "quantitative",
+                        "stack": "zero",
+                        "title": "Number of Chunks",
+                    },
+                    "color": {
+                        "field": "Format",
+                        "type": "nominal",
+                        "sort": active_formats,
+                        "legend": {"orient": "right"},
+                    },
+                },
+                "height": 360,
+            },
+            use_container_width=True,
+        )
+
+    st.dataframe(
+        summary_df,
+        use_container_width=True,
+        column_config={
+            "Format": st.column_config.TextColumn("Format"),
+            "Layer Wins": st.column_config.NumberColumn("Layer Wins", format="%d"),
+            "Layer Win Rate (%)": st.column_config.NumberColumn("Layer Win Rate (%)", format="%.2f"),
+            "Chunk Wins": st.column_config.NumberColumn("Chunk Wins", format="%d"),
+            "Chunk Win Rate (%)": st.column_config.NumberColumn("Chunk Win Rate (%)", format="%.2f"),
+        }
+    )
+
+    with st.expander("Per-layer dominant winners", expanded=False):
+        st.dataframe(
+            layer_df[["Layer", "Type", "Dominant Format", "Chunks"]],
+            use_container_width=True,
+            column_config={
+                "Layer": st.column_config.TextColumn("Layer", width="large"),
+                "Type": st.column_config.TextColumn("Type"),
+                "Dominant Format": st.column_config.TextColumn("Dominant Format"),
+                "Chunks": st.column_config.NumberColumn("Chunks", format="%d"),
+            }
+        )
+
+
+def _render_weight_win_rates(raw_quant_map_json):
+    _render_win_rates(
+        raw_map_json=raw_quant_map_json,
+        title_prefix="Weight",
+        empty_info="No weight quantization map stored for this run.",
+    )
+
+
+def _render_input_win_rates(raw_input_map_json):
+    _render_win_rates(
+        raw_map_json=raw_input_map_json,
+        title_prefix="Activation/Input",
+        empty_info="No activation/input quantization map stored for this run.",
+    )
+
+
+def _is_input_experiment(experiment_type):
+    text = str(experiment_type or "").strip().lower()
+    return text.startswith("input_quant")
+
+
+def _resolve_maps_for_display(run_row):
+    """
+    Return (weight_map_json, input_map_json, is_input_experiment).
+
+    For input-only experiments we intentionally suppress weight map rendering.
+    Legacy rows may have input maps mirrored into quant_map_json, so we fall back
+    to quant_map_json only when input_map_json is absent.
+    """
+    raw_weight_map = run_row.get('quant_map_json')
+    raw_input_map = run_row.get('input_map_json')
+    is_input_exp = _is_input_experiment(run_row.get('experiment_type'))
+
+    if is_input_exp:
+        if _safe_json_load(raw_input_map) is None and _safe_json_load(raw_weight_map) is not None:
+            raw_input_map = raw_weight_map
+        raw_weight_map = None
+
+    return raw_weight_map, raw_input_map, is_input_exp
+
 st.set_page_config(page_title="QBench Experiment Dashboard", layout="wide")
 
 st.title("🚀 QBench Experiment Tracker")
+inject_global_styles()
 
 # Initial Session State for Presets
 if 'presets' not in st.session_state:
     st.session_state.presets = load_presets()
+if 'refresh_nonce' not in st.session_state:
+    st.session_state.refresh_nonce = 0
+
+st.sidebar.header("⚡ Performance")
+run_window_label = st.sidebar.selectbox(
+    "Rows to Load",
+    options=list(RUN_WINDOW_TO_LIMIT.keys()),
+    index=1,
+    help="Loads only the newest N runs to keep reruns fast. Use 'All' when you need full history.",
+)
+selected_run_limit = RUN_WINDOW_TO_LIMIT[run_window_label]
+load_graphs_on_demand = st.sidebar.checkbox(
+    "Load Graphs On Demand",
+    value=True,
+    help="Delays model graph JSON fetch/decompression until you explicitly request a graph.",
+)
+st.sidebar.caption("Use `Refresh Data` after new experiments complete.")
 
 st.markdown("---")
 
-# Initialize Database
-db = RunDatabase()
-df = db.get_runs()
+with st.spinner("Loading experiment runs..."):
+    df = get_runs_cached(selected_run_limit, st.session_state.refresh_nonce)
 
 if df.empty:
     st.warning("No runs found in the database yet. Run an experiment first!")
 else:
-    # Pre-process DF with parsed DT components
-    for col in ['weight_dt', 'activation_dt']:
-        prefix = 'w' if col.startswith('weight') else 'a'
-        # Apply parsing and expand to separate columns
-        parsed = df[col].apply(parse_dt)
-        df[f'{prefix}_bits'] = parsed.apply(lambda x: x[0])
-        df[f'{prefix}_exp'] = parsed.apply(lambda x: x[1])
-        df[f'{prefix}_mant'] = parsed.apply(lambda x: x[2])
+    with st.spinner("Preparing dashboard data..."):
+        df = preprocess_runs_df(df)
+    st.caption(f"Showing {len(df)} runs from the selected load window ({run_window_label}).")
     @st.dialog("🔬 Layer Quantization Breakdown", width="large")
     def show_layer_breakdown(run_row):
         model = run_row.get('model_name', '')
         w_dt  = run_row.get('weight_dt', '')
         a_dt  = run_row.get('activation_dt', '')
         exp_t = run_row.get('experiment_type', '')
+        weight_map_json, input_map_json, is_input_exp = _resolve_maps_for_display(run_row)
 
         st.markdown(f"**Model:** `{model}`  |  **Weight DT:** `{w_dt}`  |  **Activation DT:** `{a_dt}`")
         st.markdown(f"**Experiment:** `{exp_t}`")
@@ -177,24 +643,36 @@ else:
                     chunk_df["Total Chunks"] = chunk_df["Total Chunks"].astype(int)
                     st.dataframe(chunk_df, use_container_width=True)
 
-        _render_map_section("⚖️ Weight Formats", run_row.get('quant_map_json'), "per-layer")
-        _render_map_section("⚡ Input Formats",  run_row.get('input_map_json'),  "dynamic")
+        if not is_input_exp:
+            _render_map_section("⚖️ Weight Formats", weight_map_json, "per-layer")
+        _render_map_section("⚡ Input Formats",  input_map_json,  "dynamic")
 
     @st.dialog("⚙️ Run Configurations", width="large")
     def show_run_config(run_rows):
         """run_rows: list of row dicts."""
         if len(run_rows) == 1:
             row = run_rows[0]
+            weight_map_json, input_map_json, is_input_exp = _resolve_maps_for_display(row)
             st.markdown(f"**Model:** `{row.get('model_name','')}` | **Exp:** `{row.get('experiment_type','')}` | `{row.get('weight_dt','')}` / `{row.get('activation_dt','')}`")
             st.markdown("---")
-            raw = row.get('config_json')
-            if not raw or (isinstance(raw, float) and pd.isna(raw)):
-                st.info("No config stored for this run.")
-                return
-            try:
-                st.json(json.loads(raw), expanded=True)
-            except Exception:
-                st.code(str(raw), language="json")
+            cfg_tab, win_tab = st.tabs(["Config", "Win Rates"])
+
+            with cfg_tab:
+                raw = row.get('config_json')
+                if not raw or (isinstance(raw, float) and pd.isna(raw)):
+                    st.info("No config stored for this run.")
+                else:
+                    try:
+                        st.json(json.loads(raw), expanded=True)
+                    except Exception:
+                        st.code(str(raw), language="json")
+
+            with win_tab:
+                if not is_input_exp:
+                    _render_weight_win_rates(weight_map_json)
+                    if _safe_json_load(weight_map_json) is not None and _safe_json_load(input_map_json) is not None:
+                        st.markdown("---")
+                _render_input_win_rates(input_map_json)
         else:
             tab_labels = [
                 f"{r.get('model_name','')} · {r.get('weight_dt','')} / {r.get('activation_dt','')}"
@@ -203,32 +681,29 @@ else:
             tabs = st.tabs(tab_labels)
             for tab, row in zip(tabs, run_rows):
                 with tab:
+                    weight_map_json, input_map_json, is_input_exp = _resolve_maps_for_display(row)
                     st.markdown(f"**Experiment:** `{row.get('experiment_type','')}`")
-                    raw = row.get('config_json')
-                    if not raw or (isinstance(raw, float) and pd.isna(raw)):
-                        st.info("No config stored for this run.")
-                        continue
-                    try:
-                        st.json(json.loads(raw), expanded=True)
-                    except Exception:
-                        st.code(str(raw), language="json")
+                    cfg_tab, win_tab = st.tabs(["Config", "Win Rates"])
+
+                    with cfg_tab:
+                        raw = row.get('config_json')
+                        if not raw or (isinstance(raw, float) and pd.isna(raw)):
+                            st.info("No config stored for this run.")
+                        else:
+                            try:
+                                st.json(json.loads(raw), expanded=True)
+                            except Exception:
+                                st.code(str(raw), language="json")
+
+                    with win_tab:
+                        if not is_input_exp:
+                            _render_weight_win_rates(weight_map_json)
+                            if _safe_json_load(weight_map_json) is not None and _safe_json_load(input_map_json) is not None:
+                                st.markdown("---")
+                        _render_input_win_rates(input_map_json)
 
     @st.dialog("📈 Accuracy Comparison", width="large")
     def show_large_chart(chart_df):
-        # Inject CSS to enable horizontal scroll specifically in the dialog (Modal)
-        st.markdown("""
-            <style>
-            [data-testid="stDialog"] [data-testid="stVerticalBlock"] {
-                overflow-x: auto !important;
-                padding-bottom: 20px;
-            }
-            /* Target the chart container to ensure it doesn't squash */
-            .element-container:has(iframe) {
-                min-width: fit-content;
-            }
-            </style>
-        """, unsafe_allow_html=True)
-        
         num_groups = chart_df['Label'].nunique()
         chart_width = max(1100, num_groups * 160)
         
@@ -278,47 +753,6 @@ else:
         st.session_state.num_tables = 1
 
     def toggle_button_group(label, options, session_key, default_state=True, format_func=str):
-        # Persistent CSS injection on every rerun
-        st.markdown("""
-        <style>
-        /* Smooth transitions for all buttons */
-        .stButton > button { 
-            transition: background-color 0.1s ease, border 0.1s ease !important; 
-            border-radius: 4px !important;
-        }
-        
-        /* DEFAULT: SOFT ROSE (for OFF state) */
-        div[data-testid="stHorizontalBlock"] .stButton > button {
-            background-color: #fb7185 !important;
-            color: white !important;
-            border: 1px solid #e11d48 !important;
-            padding: 0px 8px !important;
-            min-height: 24px !important;
-            height: 24px !important;
-            font-size: 10px !important;
-            line-height: normal !important;
-            font-weight: 600;
-            white-space: nowrap !important;
-            width: 100% !important;
-            overflow: hidden !important;
-            text-overflow: ellipsis !important;
-        }
-        
-        /* PRIMARY: SOFT EMERALD (for ON state) */
-        div[data-testid="stHorizontalBlock"] .stButton > button[kind="primary"],
-        div[data-testid="stHorizontalBlock"] .stButton > button[data-testid*="primary"] {
-            background-color: #10b981 !important;
-            color: white !important;
-            border: 1px solid #059669 !important;
-        }
-        
-        /* Tighten gap between columns in the horizontal block */
-        div[data-testid="stHorizontalBlock"] {
-            gap: 6px !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-
         st.markdown(f"**{label}**")
         
         # Initialize state explicitly if missing
@@ -456,6 +890,7 @@ else:
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ⚙️ Controls")
     if st.sidebar.button("🔄 Refresh Data", type="primary", use_container_width=True):
+        st.session_state.refresh_nonce += 1
         st.rerun()
     
     if st.sidebar.button("🧹 Reset All Filters", use_container_width=True):
@@ -624,15 +1059,19 @@ else:
         filtered_df = apply_opt_filter(filtered_df, 'a_mant', selected_a_mant, a_mant_options)
         
         if not filtered_df.empty:
+            filtered_df = _attach_effective_references(filtered_df)
             # Calculate Accuracy Drop relative to reference
-            if 'ref_acc1' in filtered_df.columns:
-                filtered_df['acc1_drop'] = filtered_df['ref_acc1'] - filtered_df['acc1']
-                filtered_df['acc5_drop'] = filtered_df['ref_acc5'] - filtered_df['acc5']
-            if 'ref_certainty' in filtered_df.columns and 'certainty' in filtered_df.columns:
-                filtered_df['cert_drop'] = filtered_df['ref_certainty'] - filtered_df['certainty']
+            if 'ref_acc1_effective' in filtered_df.columns:
+                filtered_df['acc1_drop'] = filtered_df['ref_acc1_effective'] - filtered_df['acc1']
+                filtered_df['acc5_drop'] = filtered_df['ref_acc5_effective'] - filtered_df['acc5']
+            if 'ref_certainty_effective' in filtered_df.columns and 'certainty' in filtered_df.columns:
+                filtered_df['cert_drop'] = filtered_df['ref_certainty_effective'] - filtered_df['certainty']
             
             # Clean up and reorder columns for display
-            cols_to_drop = ['run_date_dt', 'id', 'quant_map_json', 'input_map_json', 'config_json']
+            cols_to_drop = [
+                'run_date_dt', 'id', 'quant_map_json', 'input_map_json', 'config_json',
+                'ref_acc1_effective', 'ref_acc5_effective', 'ref_certainty_effective'
+            ]
             display_df = filtered_df.drop(columns=[c for c in cols_to_drop if c in filtered_df.columns])
             
             # Reorder columns to put metrics and targets front and center
@@ -672,32 +1111,45 @@ else:
             # Action buttons — appear based on what's available in selected rows.
             if len(selected_indices) == 1:
                 orig_idx = display_df.index[selected_indices[0]]
+                run_row = filtered_df.loc[orig_idx].to_dict()
+                weight_map_json, input_map_json, _ = _resolve_maps_for_display(run_row)
                 has_weight_map = (
-                    'quant_map_json' in filtered_df.columns and
-                    pd.notna(filtered_df.at[orig_idx, 'quant_map_json']) and
-                    filtered_df.at[orig_idx, 'quant_map_json']
+                    _safe_json_load(weight_map_json) is not None
                 )
                 has_input_map = (
-                    'input_map_json' in filtered_df.columns and
-                    pd.notna(filtered_df.at[orig_idx, 'input_map_json']) and
-                    filtered_df.at[orig_idx, 'input_map_json']
+                    _safe_json_load(input_map_json) is not None
                 )
                 if has_weight_map or has_input_map:
                     if st.button("🔬 View Layer Formats", key=f"btn_layers_{i}"):
-                        show_layer_breakdown(filtered_df.loc[orig_idx].to_dict())
+                        show_layer_breakdown(run_row)
 
             if len(selected_indices) >= 1:
                 orig_indices = [display_df.index[j] for j in selected_indices]
-                rows_with_config = [
+                rows_with_details = [
                     filtered_df.loc[idx].to_dict() for idx in orig_indices
-                    if 'config_json' in filtered_df.columns and
-                       pd.notna(filtered_df.at[idx, 'config_json']) and
-                       filtered_df.at[idx, 'config_json']
+                    if (
+                        (
+                            'config_json' in filtered_df.columns and
+                            pd.notna(filtered_df.at[idx, 'config_json']) and
+                            filtered_df.at[idx, 'config_json']
+                        ) or (
+                            'quant_map_json' in filtered_df.columns and
+                            pd.notna(filtered_df.at[idx, 'quant_map_json']) and
+                            filtered_df.at[idx, 'quant_map_json']
+                        ) or (
+                            'input_map_json' in filtered_df.columns and
+                            pd.notna(filtered_df.at[idx, 'input_map_json']) and
+                            filtered_df.at[idx, 'input_map_json']
+                        )
+                    )
                 ]
-                if rows_with_config:
-                    label = f"⚙️ View Config ({len(rows_with_config)})" if len(rows_with_config) > 1 else "⚙️ View Config"
+                if rows_with_details:
+                    label = (
+                        f"⚙️ View Config + Win Rates ({len(rows_with_details)})"
+                        if len(rows_with_details) > 1 else "⚙️ View Config + Win Rates"
+                    )
                     if st.button(label, key=f"btn_config_{i}"):
-                        show_run_config(rows_with_config)
+                        show_run_config(rows_with_details)
 
             st.markdown(f"#### 📊 Visualization Options")
             # viz_all = st.checkbox("Visualize ALL filtered runs (ignores table selection)", key=f"viz_all_{i}")
@@ -707,40 +1159,39 @@ else:
                 st.success(f"Ready to visualize {num_runs} runs.")
                 
                 if st.button(f"📈 Generate Comparison ({num_runs})", key=f"btn_plot_{i}", type="primary", use_container_width=True):
-                    if viz_all:
-                        selected_df = display_df.copy()
-                    else:
-                        selected_df = display_df.iloc[selected_indices].copy()
-                    
-                    # Create labels
-                    selected_df['run_label'] = selected_df['model_name'] + " (" + \
-                                              selected_df['weight_dt'].astype(str) + "/" + \
-                                              selected_df['activation_dt'].astype(str) + ")"
-                    
-                    # Prepare flattened data
-                    chart_data = []
-                    
-                    # Group by model to show ref once per model
-                    models_in_selection = selected_df['model_name'].unique()
-                    
-                    for model in models_in_selection:
-                        model_rows = selected_df[selected_df['model_name'] == model]
-                        
-                        # 1. Add Reference Entry (ONCE)
-                        first_row = model_rows.iloc[0]
-                        ref_label = f"REF: {model}"
-                        chart_data.append({'Label': ref_label, 'MetricName': 'Acc1', 'MetricType': 'Reference (Acc1)', 'Accuracy (%)': first_row['ref_acc1'] if 'ref_acc1' in first_row else 0})
-                        chart_data.append({'Label': ref_label, 'MetricName': 'Acc5', 'MetricType': 'Reference (Acc5)', 'Accuracy (%)': first_row['ref_acc5'] if 'ref_acc5' in first_row else 0})
-                        
-                        # 2. Add Quantized Entries
-                        for _, row in model_rows.iterrows():
-                            # Include date to make label unique if same format is run multiple times
-                            # dt_str = pd.to_datetime(row['run_date']).strftime('%m/%d %H:%M')
-                            quant_label = f"{row['weight_dt']}/{row['activation_dt']} ({model})"
-                            chart_data.append({'Label': quant_label, 'MetricName': 'Acc1', 'MetricType': 'Quantized (Acc1)', 'Accuracy (%)': row['acc1']})
-                            chart_data.append({'Label': quant_label, 'MetricName': 'Acc5', 'MetricType': 'Quantized (Acc5)', 'Accuracy (%)': row['acc5']})
-                    
-                    chart_df = pd.DataFrame(chart_data)
+                    with st.spinner(f"Building comparison chart for {num_runs} runs..."):
+                        if viz_all:
+                            selected_df = display_df.copy()
+                        else:
+                            selected_df = display_df.iloc[selected_indices].copy()
+
+                        # Create labels
+                        selected_df['run_label'] = selected_df['model_name'] + " (" + \
+                                                  selected_df['weight_dt'].astype(str) + "/" + \
+                                                  selected_df['activation_dt'].astype(str) + ")"
+
+                        # Prepare flattened data
+                        chart_data = []
+
+                        # Group by model to show ref once per model
+                        models_in_selection = selected_df['model_name'].unique()
+
+                        for model in models_in_selection:
+                            model_rows = selected_df[selected_df['model_name'] == model]
+
+                            # 1. Add Reference Entry (ONCE)
+                            first_row = model_rows.iloc[0]
+                            ref_label = f"REF: {model}"
+                            chart_data.append({'Label': ref_label, 'MetricName': 'Acc1', 'MetricType': 'Reference (Acc1)', 'Accuracy (%)': first_row['ref_acc1_effective'] if 'ref_acc1_effective' in first_row else 0})
+                            chart_data.append({'Label': ref_label, 'MetricName': 'Acc5', 'MetricType': 'Reference (Acc5)', 'Accuracy (%)': first_row['ref_acc5_effective'] if 'ref_acc5_effective' in first_row else 0})
+
+                            # 2. Add Quantized Entries
+                            for _, row in model_rows.iterrows():
+                                quant_label = f"{row['weight_dt']}/{row['activation_dt']} ({model})"
+                                chart_data.append({'Label': quant_label, 'MetricName': 'Acc1', 'MetricType': 'Quantized (Acc1)', 'Accuracy (%)': row['acc1']})
+                                chart_data.append({'Label': quant_label, 'MetricName': 'Acc5', 'MetricType': 'Quantized (Acc5)', 'Accuracy (%)': row['acc5']})
+
+                        chart_df = pd.DataFrame(chart_data)
                     show_large_chart(chart_df)
             else:
                 st.info("👆 Select rows in the table above to generate a chart.")
@@ -751,8 +1202,23 @@ else:
         
         # --- Model Architecture Graph Visualization ---
         st.markdown(f"#### 🏗️ Model Architecture & Quantization")
-        
+
+        graph_enabled_key = f"graph_section_enabled_{i}"
+        graph_payload_key = f"graph_payload_{i}"
+        graph_meta_key = f"graph_meta_{i}"
+        graph_model_loaded_key = f"graph_payload_model_{i}"
+        if graph_enabled_key not in st.session_state:
+            st.session_state[graph_enabled_key] = not load_graphs_on_demand
+
         if not filtered_df.empty:
+            if load_graphs_on_demand and not st.session_state.get(graph_enabled_key, False):
+                if st.button("⚡ Enable Architecture Graph Tools", key=f"enable_graph_section_{i}", use_container_width=True):
+                    st.session_state[graph_enabled_key] = True
+                    st.rerun()
+                st.info("Graph data is fetched only when needed. Enable the tools to start loading graph assets.")
+                st.markdown("---")
+                continue
+
             # Get unique models in filtered data
             available_models = sorted(filtered_df['model_name'].unique())
             selected_model = st.selectbox(
@@ -762,14 +1228,39 @@ else:
             )
             
             if selected_model:
-                # Try to get graph from database
-                graph_json, metadata = db.get_model_graph_json(selected_model)
-                
-                if graph_json:
+                loaded_model = st.session_state.get(graph_model_loaded_key)
+                should_load_now = False
+                if load_graphs_on_demand:
+                    lcol, rcol = st.columns([2, 1])
+                    if lcol.button("📊 Load Selected Graph", key=f"load_graph_{i}", type="primary", use_container_width=True):
+                        should_load_now = True
+                    if rcol.button("🧹 Unload Graph", key=f"unload_graph_{i}", use_container_width=True):
+                        for key in (graph_payload_key, graph_meta_key, graph_model_loaded_key):
+                            st.session_state.pop(key, None)
+                        st.rerun()
+                else:
+                    should_load_now = (
+                        loaded_model != selected_model or
+                        graph_payload_key not in st.session_state
+                    )
+
+                if should_load_now:
+                    with st.spinner(f"Loading architecture graph for {selected_model}..."):
+                        graph_json, _ = get_model_graph_json_cached(selected_model, st.session_state.refresh_nonce)
+                        graph_meta = get_model_graph_metadata_cached(selected_model, st.session_state.refresh_nonce)
+                    st.session_state[graph_payload_key] = graph_json
+                    st.session_state[graph_meta_key] = graph_meta
+                    st.session_state[graph_model_loaded_key] = selected_model
+
+                graph_json = st.session_state.get(graph_payload_key)
+                graph_meta = st.session_state.get(graph_meta_key)
+
+                if load_graphs_on_demand and st.session_state.get(graph_model_loaded_key) != selected_model:
+                    st.info("Select a model and click `Load Selected Graph` to fetch and render that graph.")
+                elif graph_json:
                     with st.expander(f"📊 {selected_model} - Architecture Graph", expanded=False):
                         # Display metadata
                         meta_col1, meta_col2, meta_col3 = st.columns(3)
-                        graph_meta = db.get_model_graph_metadata(selected_model)
                         if graph_meta:
                             meta_col1.metric("Original Size", f"{graph_meta.get('graph_size_original', 0)/1024:.1f} KB")
                             meta_col2.metric("Compressed Size", f"{graph_meta.get('graph_size_compressed', 0)/1024:.1f} KB")
@@ -790,26 +1281,165 @@ else:
                         <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
                         <script src="https://cdn.jsdelivr.net/npm/cytoscape-expand-collapse@4.1.0/cytoscape-expand-collapse.min.js"></script>
                         <style>
-                            #cy {{
-                                width: 100%;
-                                height: 800px;
-                                display: block;
-                                background-color: #f8fafc;
-                                border: 1px solid #e2e8f0;
-                                border-radius: 8px;
+                            html, body {{
+                                margin: 0;
+                                padding: 0;
+                                background: #f8fafc;
+                                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                             }}
-                            /* hide scrollbars */
-                            body {{ margin:0; padding:0; overflow:hidden; }}
+                            #graph-shell {{
+                                position: relative;
+                                width: 100%;
+                                height: 810px;
+                                border: 1px solid #e2e8f0;
+                                border-radius: 10px;
+                                background: #f8fafc;
+                                overflow: hidden;
+                            }}
+                            #cy {{
+                                position: absolute;
+                                inset: 0;
+                                z-index: 1;
+                                background-color: #f8fafc;
+                            }}
+                            #toolbar {{
+                                position: absolute;
+                                top: 12px;
+                                right: 12px;
+                                z-index: 70;
+                                display: flex;
+                                gap: 8px;
+                                flex-wrap: wrap;
+                                justify-content: flex-end;
+                                max-width: 90%;
+                            }}
+                            .graph-btn {{
+                                cursor: pointer;
+                                background: #ffffff;
+                                border: 1px solid #bfdbfe;
+                                border-radius: 8px;
+                                color: #1d4ed8;
+                                padding: 7px 10px;
+                                font-size: 12px;
+                                font-weight: 600;
+                                box-shadow: 0 3px 10px rgba(0,0,0,0.12);
+                                user-select: none;
+                                transition: transform 0.08s ease, background-color 0.12s ease;
+                            }}
+                            .graph-btn:hover {{
+                                background: #eff6ff;
+                                transform: translateY(-1px);
+                            }}
+                            .graph-btn.active {{
+                                background: #1d4ed8;
+                                color: #ffffff;
+                                border-color: #1e40af;
+                            }}
+                            #meta-layer {{
+                                position: absolute;
+                                inset: 0;
+                                z-index: 45;
+                                pointer-events: none;
+                            }}
+                            .meta-card {{
+                                background: #ffffff;
+                                border: 1px solid #cbd5e1;
+                                border-radius: 8px;
+                                padding: 7px 9px;
+                                font-size: 11px;
+                                color: #111827;
+                                box-shadow: 0 6px 16px rgba(15, 23, 42, 0.18);
+                                max-width: 260px;
+                                line-height: 1.25;
+                            }}
+                            #hover-tooltip {{
+                                position: absolute;
+                                display: none;
+                                pointer-events: none;
+                            }}
+                            .pinned-meta {{
+                                position: absolute;
+                                border-left: 3px solid #2563eb;
+                                pointer-events: auto;
+                                min-width: 180px;
+                            }}
+                            .meta-close {{
+                                float: right;
+                                border: none;
+                                background: #e2e8f0;
+                                color: #0f172a;
+                                border-radius: 5px;
+                                width: 20px;
+                                height: 20px;
+                                cursor: pointer;
+                                font-weight: 700;
+                                line-height: 18px;
+                                padding: 0;
+                                margin-left: 6px;
+                            }}
+                            .meta-close:hover {{
+                                background: #cbd5e1;
+                            }}
+                            #all-meta-panel {{
+                                position: absolute;
+                                right: 12px;
+                                top: 54px;
+                                width: 340px;
+                                max-height: 72%;
+                                overflow: auto;
+                                background: #ffffff;
+                                border: 1px solid #93c5fd;
+                                border-radius: 10px;
+                                box-shadow: 0 8px 18px rgba(15, 23, 42, 0.2);
+                                z-index: 65;
+                                display: none;
+                                padding: 10px;
+                            }}
+                            #all-meta-panel h4 {{
+                                margin: 0 0 8px 0;
+                                font-size: 13px;
+                                color: #0f172a;
+                            }}
+                            #zoom-rect {{
+                                position: absolute;
+                                display: none;
+                                border: 2px dashed #1d4ed8;
+                                background: rgba(59, 130, 246, 0.18);
+                                border-radius: 4px;
+                                pointer-events: none;
+                            }}
                         </style>
                         </head>
                         <body>
-                            <div id="cy"></div>
+                            <div id="graph-shell">
+                                <div id="toolbar">
+                                    <button id="reset-view-btn" class="graph-btn">Reset View</button>
+                                    <button id="box-zoom-btn" class="graph-btn">Right-Drag Zoom: Off</button>
+                                    <button id="all-meta-btn" class="graph-btn">Show All Metadata</button>
+                                    <button id="fullscreen-btn" class="graph-btn">⛶ Fullscreen</button>
+                                </div>
+                                <div id="all-meta-panel"></div>
+                                <div id="meta-layer">
+                                    <div id="hover-tooltip" class="meta-card"></div>
+                                    <div id="zoom-rect"></div>
+                                </div>
+                                <div id="cy"></div>
+                            </div>
                             <script>
                                 document.addEventListener('DOMContentLoaded', function() {{
                                     var elements = {graph_json};
+                                    var ABS_ZOOM_MIN = 0.02;
+                                    var ZOOM_MAX = 3.0;
+                                    var FIT_PADDING = 80;
+                                    var currentMinZoom = ABS_ZOOM_MIN;
+
                                     var cy = cytoscape({{
                                         container: document.getElementById('cy'),
                                         elements: elements,
+                                        minZoom: ABS_ZOOM_MIN,
+                                        maxZoom: ZOOM_MAX,
+                                        wheelSensitivity: 0.18,
+                                        boxSelectionEnabled: false,
                                         style: [
                                             {{
                                                 selector: 'node',
@@ -873,8 +1503,7 @@ else:
                                             rankSep: 50
                                         }}
                                     }});
-                                    
-                                    // Expand/collapse config
+
                                     var api = cy.expandCollapse({{
                                         layoutBy: {{
                                             name: "dagre",
@@ -886,6 +1515,522 @@ else:
                                         animate: true,
                                         undoable: false
                                     }});
+
+                                    var cyContainer = document.getElementById('cy');
+                                    var hoverTooltip = document.getElementById('hover-tooltip');
+                                    var metaLayer = document.getElementById('meta-layer');
+                                    var allMetaPanel = document.getElementById('all-meta-panel');
+                                    var zoomRect = document.getElementById('zoom-rect');
+                                    var resetBtn = document.getElementById('reset-view-btn');
+                                    var allMetaBtn = document.getElementById('all-meta-btn');
+                                    var boxZoomBtn = document.getElementById('box-zoom-btn');
+                                    var fsBtn = document.getElementById('fullscreen-btn');
+
+                                    var pinnedCards = {{}};
+                                    var showAllMetadata = false;
+                                    var boxZoomEnabled = false;
+                                    var rightDragActive = false;
+                                    var rightDragStart = null;
+
+                                    function clamp(val, min, max) {{
+                                        return Math.max(min, Math.min(max, val));
+                                    }}
+
+                                    function computeFitZoom(paddingPx) {{
+                                        var bb = cy.elements().boundingBox();
+                                        if (!isFinite(bb.x1) || !isFinite(bb.x2) || !isFinite(bb.y1) || !isFinite(bb.y2)) {{
+                                            return currentMinZoom;
+                                        }}
+                                        var graphW = Math.max(bb.x2 - bb.x1, 1e-6);
+                                        var graphH = Math.max(bb.y2 - bb.y1, 1e-6);
+                                        var viewW = Math.max(cy.width() - (paddingPx * 2), 1);
+                                        var viewH = Math.max(cy.height() - (paddingPx * 2), 1);
+                                        var fitZoom = Math.min(viewW / graphW, viewH / graphH);
+                                        if (!isFinite(fitZoom) || fitZoom <= 0) {{
+                                            return currentMinZoom;
+                                        }}
+                                        return clamp(fitZoom, ABS_ZOOM_MIN, ZOOM_MAX);
+                                    }}
+
+                                    function refreshMinZoomToFitGraph() {{
+                                        currentMinZoom = computeFitZoom(FIT_PADDING);
+                                        cy.minZoom(currentMinZoom);
+                                        if (cy.zoom() < currentMinZoom) {{
+                                            cy.zoom(currentMinZoom);
+                                        }}
+                                    }}
+
+                                    function esc(val) {{
+                                        return String(val === undefined || val === null ? '-' : val)
+                                            .replace(/&/g, "&amp;")
+                                            .replace(/</g, "&lt;")
+                                            .replace(/>/g, "&gt;")
+                                            .replace(/"/g, "&quot;")
+                                            .replace(/'/g, "&#39;");
+                                    }}
+
+                                    function nodeHasMetadata(node) {{
+                                        return !!node.data('var_name');
+                                    }}
+
+                                    function metadataHtml(node) {{
+                                        var t = node.data('var_name') || node.data('label') || node.id();
+                                        var inS = node.data('input_shape') || '-';
+                                        var outS = node.data('output_shape') || '-';
+                                        var args = node.data('module_args') || '';
+                                        var argsHtml = args
+                                            ? "<div style='margin-top:4px;color:#475569;font-size:11px;'>" + esc(args) + "</div>"
+                                            : "";
+                                        return "<div>" +
+                                            "<div style='font-weight:700;color:#0f172a;'>" + esc(t) + "</div>" +
+                                            argsHtml +
+                                            "<div style='margin-top:6px;'><b>In:</b> " + esc(inS) + "</div>" +
+                                            "<div><b>Out:</b> " + esc(outS) + "</div>" +
+                                            "</div>";
+                                    }}
+
+                                    function getPointerPosition(evt) {{
+                                        var rect = cyContainer.getBoundingClientRect();
+                                        return {{
+                                            x: clamp(evt.clientX - rect.left, 0, cy.width()),
+                                            y: clamp(evt.clientY - rect.top, 0, cy.height())
+                                        }};
+                                    }}
+
+                                    function getMetaScale() {{
+                                        // Keep metadata tied to graph zoom, but clamp for readability.
+                                        return clamp(cy.zoom(), 0.62, 1.35);
+                                    }}
+
+                                    function applyCardScale(card, scale) {{
+                                        card.style.transform = "scale(" + scale + ")";
+                                        card.style.transformOrigin = "top left";
+                                    }}
+
+                                    function toNodeArray(collection) {{
+                                        if (!collection) return [];
+                                        if (collection.toArray) return collection.toArray();
+                                        return Array.isArray(collection) ? collection : [collection];
+                                    }}
+
+                                    function normalizeHoverNodes(nodes) {{
+                                        var filtered = nodes.filter(function(node) {{ return nodeHasMetadata(node); }});
+                                        if (!filtered.length) return [];
+
+                                        // Prefer concrete leaf modules over compound/group containers.
+                                        var leafNodes = filtered.filter(function(node) {{
+                                            return !(node.isParent && node.isParent());
+                                        }});
+                                        if (leafNodes.length) {{
+                                            filtered = leafNodes;
+                                        }}
+
+                                        // Deduplicate identical metadata blobs.
+                                        var seen = {{}};
+                                        var unique = [];
+                                        filtered.forEach(function(node) {{
+                                            var key = [
+                                                node.data('var_name') || '',
+                                                node.data('input_shape') || '',
+                                                node.data('output_shape') || '',
+                                                node.data('module_args') || ''
+                                            ].join('|');
+                                            if (!seen[key]) {{
+                                                seen[key] = true;
+                                                unique.push(node);
+                                            }}
+                                        }});
+
+                                        // Keep only the top-most relevant hit for hover.
+                                        return unique.length ? [unique[0]] : [];
+                                    }}
+
+                                    function sortByRenderedPosition(a, b) {{
+                                        var ap = a.renderedPosition();
+                                        var bp = b.renderedPosition();
+                                        var dy = ap.y - bp.y;
+                                        if (Math.abs(dy) > 1e-6) return dy;
+                                        return ap.x - bp.x;
+                                    }}
+
+                                    function buildLayerOrderMap() {{
+                                        var allNodes = toNodeArray(cy.nodes());
+                                        var byId = {{}};
+                                        var indegree = {{}};
+                                        var outgoing = {{}};
+
+                                        allNodes.forEach(function(node) {{
+                                            var id = node.id();
+                                            byId[id] = node;
+                                            indegree[id] = 0;
+                                            outgoing[id] = [];
+                                        }});
+
+                                        toNodeArray(cy.edges()).forEach(function(edge) {{
+                                            var src = edge.source().id();
+                                            var dst = edge.target().id();
+                                            if (src in byId && dst in byId) {{
+                                                outgoing[src].push(dst);
+                                                indegree[dst] += 1;
+                                            }}
+                                        }});
+
+                                        var queue = allNodes
+                                            .filter(function(node) {{ return indegree[node.id()] === 0; }})
+                                            .sort(sortByRenderedPosition);
+
+                                        var ordered = [];
+                                        while (queue.length > 0) {{
+                                            var node = queue.shift();
+                                            ordered.push(node);
+
+                                            outgoing[node.id()].forEach(function(dstId) {{
+                                                indegree[dstId] -= 1;
+                                                if (indegree[dstId] === 0) {{
+                                                    queue.push(byId[dstId]);
+                                                    queue.sort(sortByRenderedPosition);
+                                                }}
+                                            }});
+                                        }}
+
+                                        if (ordered.length !== allNodes.length) {{
+                                            var seen = {{}};
+                                            ordered.forEach(function(node) {{ seen[node.id()] = true; }});
+                                            var leftovers = allNodes
+                                                .filter(function(node) {{ return !seen[node.id()]; }})
+                                                .sort(sortByRenderedPosition);
+                                            ordered = ordered.concat(leftovers);
+                                        }}
+
+                                        var orderMap = {{}};
+                                        ordered.forEach(function(node, idx) {{
+                                            orderMap[node.id()] = idx;
+                                        }});
+                                        return orderMap;
+                                    }}
+
+                                    function getNodesAtRenderedPoint(x, y) {{
+                                        if (typeof cy.elementsAtPoint === "function") {{
+                                            return normalizeHoverNodes(toNodeArray(
+                                                cy.elementsAtPoint(x, y).filter(function(ele) {{
+                                                    return ele.isNode && ele.isNode() && nodeHasMetadata(ele);
+                                                }})
+                                            ));
+                                        }}
+                                        return normalizeHoverNodes(toNodeArray(
+                                            cy.nodes().filter(function(node) {{
+                                                if (!nodeHasMetadata(node)) return false;
+                                                var bb = node.renderedBoundingBox();
+                                                return x >= bb.x1 && x <= bb.x2 && y >= bb.y1 && y <= bb.y2;
+                                            }})
+                                        ));
+                                    }}
+
+                                    function renderHoverMetadata(evt) {{
+                                        if (showAllMetadata || rightDragActive) {{
+                                            hoverTooltip.style.display = "none";
+                                            return;
+                                        }}
+                                        var p = getPointerPosition(evt);
+                                        var nodes = getNodesAtRenderedPoint(p.x, p.y);
+                                        if (!nodes.length) {{
+                                            hoverTooltip.style.display = "none";
+                                            return;
+                                        }}
+
+                                        hoverTooltip.innerHTML = nodes.map(function(node, idx) {{
+                                            var divider = idx < nodes.length - 1
+                                                ? "<div style='margin:8px 0;border-top:1px solid #e2e8f0;'></div>"
+                                                : "";
+                                            return metadataHtml(node) + divider;
+                                        }}).join("");
+                                        var scale = getMetaScale() * 0.92;
+                                        applyCardScale(hoverTooltip, scale);
+                                        var cardW = hoverTooltip.offsetWidth * scale;
+                                        var cardH = hoverTooltip.offsetHeight * scale;
+                                        var bounds = nodes.reduce(function(acc, node) {{
+                                            var bb = node.renderedBoundingBox();
+                                            acc.x1 = Math.min(acc.x1, bb.x1);
+                                            acc.y1 = Math.min(acc.y1, bb.y1);
+                                            acc.x2 = Math.max(acc.x2, bb.x2);
+                                            return acc;
+                                        }}, {{ x1: Infinity, y1: Infinity, x2: -Infinity }});
+                                        var gap = 12;
+                                        var left = bounds.x2 + gap;
+                                        if (left + cardW > cy.width() - 6) {{
+                                            left = bounds.x1 - gap - cardW;
+                                        }}
+                                        var top = bounds.y1;
+                                        left = clamp(left, 6, cy.width() - cardW - 6);
+                                        top = clamp(top, 6, cy.height() - cardH - 6);
+                                        if (!isFinite(left) || !isFinite(top)) {{
+                                            left = clamp(p.x + 18, 6, cy.width() - cardW - 6);
+                                            top = clamp(p.y + 18, 6, cy.height() - cardH - 6);
+                                        }}
+                                        hoverTooltip.style.left = left + "px";
+                                        hoverTooltip.style.top = top + "px";
+                                        hoverTooltip.style.display = "block";
+                                    }}
+
+                                    function hideHoverMetadata() {{
+                                        hoverTooltip.style.display = "none";
+                                    }}
+
+                                    function removePinnedCard(nodeId) {{
+                                        if (!pinnedCards[nodeId]) return;
+                                        pinnedCards[nodeId].remove();
+                                        delete pinnedCards[nodeId];
+                                    }}
+
+                                    function positionPinnedCard(nodeId) {{
+                                        var card = pinnedCards[nodeId];
+                                        if (!card) return;
+                                        var node = cy.getElementById(nodeId);
+                                        if (!node || node.empty()) {{
+                                            removePinnedCard(nodeId);
+                                            return;
+                                        }}
+                                        if (!node.visible()) {{
+                                            card.style.display = "none";
+                                            return;
+                                        }}
+
+                                        card.style.display = "block";
+                                        var scale = getMetaScale();
+                                        applyCardScale(card, scale);
+                                        var cardW = card.offsetWidth * scale;
+                                        var cardH = card.offsetHeight * scale;
+                                        var bb = node.renderedBoundingBox();
+                                        var gap = 12;
+                                        var left = bb.x2 + gap;
+                                        if (left + cardW > cy.width() - 6) {{
+                                            left = bb.x1 - gap - cardW;
+                                        }}
+                                        var top = bb.y1;
+                                        left = clamp(left, 6, cy.width() - cardW - 6);
+                                        top = clamp(top, 6, cy.height() - cardH - 6);
+                                        card.style.left = left + "px";
+                                        card.style.top = top + "px";
+                                    }}
+
+                                    function updatePinnedCards() {{
+                                        Object.keys(pinnedCards).forEach(positionPinnedCard);
+                                    }}
+
+                                    function clearPinnedCards() {{
+                                        Object.keys(pinnedCards).forEach(removePinnedCard);
+                                    }}
+
+                                    function togglePinnedCard(node) {{
+                                        if (!nodeHasMetadata(node)) return;
+                                        var nodeId = node.id();
+                                        if (pinnedCards[nodeId]) {{
+                                            removePinnedCard(nodeId);
+                                            return;
+                                        }}
+
+                                        var card = document.createElement("div");
+                                        card.className = "meta-card pinned-meta";
+                                        card.innerHTML = "<button class='meta-close' title='Close'>×</button>" + metadataHtml(node);
+                                        card.querySelector(".meta-close").addEventListener("click", function(e) {{
+                                            e.stopPropagation();
+                                            removePinnedCard(nodeId);
+                                        }});
+                                        metaLayer.appendChild(card);
+                                        pinnedCards[nodeId] = card;
+                                        positionPinnedCard(nodeId);
+                                    }}
+
+                                    function renderAllMetadataPanel() {{
+                                        var layerOrder = buildLayerOrderMap();
+                                        var nodes = toNodeArray(
+                                            cy.nodes().filter(function(node) {{ return nodeHasMetadata(node); }})
+                                        );
+                                        nodes.sort(function(a, b) {{
+                                            var ai = (a.id() in layerOrder) ? layerOrder[a.id()] : Number.MAX_SAFE_INTEGER;
+                                            var bi = (b.id() in layerOrder) ? layerOrder[b.id()] : Number.MAX_SAFE_INTEGER;
+                                            if (ai !== bi) return ai - bi;
+                                            var av = a.data('var_name') || a.id();
+                                            var bv = b.data('var_name') || b.id();
+                                            return av.localeCompare(bv, undefined, {{ numeric: true, sensitivity: 'base' }});
+                                        }});
+                                        var rows = nodes.map(function(node, idx) {{
+                                            var divider = idx < nodes.length - 1
+                                                ? "<div style='margin:8px 0;border-top:1px solid #e2e8f0;'></div>"
+                                                : "";
+                                            return metadataHtml(node) + divider;
+                                        }}).join("");
+                                        allMetaPanel.innerHTML = "<h4>All Node Metadata (Layer Order, " + nodes.length + ")</h4>" + rows;
+                                    }}
+
+                                    function setShowAllMetadata(enabled) {{
+                                        showAllMetadata = enabled;
+                                        allMetaBtn.classList.toggle("active", enabled);
+                                        allMetaBtn.textContent = enabled ? "Hide All Metadata" : "Show All Metadata";
+                                        if (enabled) {{
+                                            hideHoverMetadata();
+                                            renderAllMetadataPanel();
+                                            allMetaPanel.style.display = "block";
+                                        }} else {{
+                                            allMetaPanel.style.display = "none";
+                                        }}
+                                    }}
+
+                                    function setBoxZoomEnabled(enabled) {{
+                                        boxZoomEnabled = enabled;
+                                        boxZoomBtn.classList.toggle("active", enabled);
+                                        boxZoomBtn.textContent = enabled ? "Right-Drag Zoom: On" : "Right-Drag Zoom: Off";
+                                    }}
+
+                                    function constrainPan() {{
+                                        refreshMinZoomToFitGraph();
+                                        var bb = cy.elements().boundingBox();
+                                        if (!isFinite(bb.x1) || !isFinite(bb.x2) || !isFinite(bb.y1) || !isFinite(bb.y2)) return;
+                                        var zoom = cy.zoom();
+                                        var pan = cy.pan();
+                                        var vw = cy.width();
+                                        var vh = cy.height();
+                                        var pad = 160;
+
+                                        var minX = vw - (bb.x2 * zoom) - pad;
+                                        var maxX = - (bb.x1 * zoom) + pad;
+                                        var minY = vh - (bb.y2 * zoom) - pad;
+                                        var maxY = - (bb.y1 * zoom) + pad;
+
+                                        var targetX = (minX > maxX) ? ((minX + maxX) / 2) : clamp(pan.x, minX, maxX);
+                                        var targetY = (minY > maxY) ? ((minY + maxY) / 2) : clamp(pan.y, minY, maxY);
+
+                                        if (targetX !== pan.x || targetY !== pan.y) {{
+                                            cy.pan({{ x: targetX, y: targetY }});
+                                        }}
+                                    }}
+
+                                    function resetView() {{
+                                        hideHoverMetadata();
+                                        setShowAllMetadata(false);
+                                        clearPinnedCards();
+                                        refreshMinZoomToFitGraph();
+                                        cy.fit(cy.elements(), FIT_PADDING);
+                                        cy.zoom(clamp(cy.zoom(), currentMinZoom, ZOOM_MAX));
+                                        constrainPan();
+                                        updatePinnedCards();
+                                    }}
+
+                                    function updateZoomRectangle(start, end) {{
+                                        var x = Math.min(start.x, end.x);
+                                        var y = Math.min(start.y, end.y);
+                                        var w = Math.abs(end.x - start.x);
+                                        var h = Math.abs(end.y - start.y);
+                                        zoomRect.style.left = x + "px";
+                                        zoomRect.style.top = y + "px";
+                                        zoomRect.style.width = w + "px";
+                                        zoomRect.style.height = h + "px";
+                                        zoomRect.style.display = "block";
+                                    }}
+
+                                    cyContainer.addEventListener("mousemove", renderHoverMetadata);
+                                    cyContainer.addEventListener("mouseleave", hideHoverMetadata);
+                                    cy.on("tap", "node", function(evt) {{
+                                        hideHoverMetadata();
+                                        togglePinnedCard(evt.target);
+                                    }});
+                                    cy.on("pan zoom resize render position", function() {{
+                                        constrainPan();
+                                        updatePinnedCards();
+                                    }});
+
+                                    allMetaBtn.addEventListener("click", function(e) {{
+                                        e.stopPropagation();
+                                        setShowAllMetadata(!showAllMetadata);
+                                    }});
+
+                                    boxZoomBtn.addEventListener("click", function(e) {{
+                                        e.stopPropagation();
+                                        setBoxZoomEnabled(!boxZoomEnabled);
+                                    }});
+
+                                    resetBtn.addEventListener("click", function(e) {{
+                                        e.stopPropagation();
+                                        resetView();
+                                    }});
+
+                                    cyContainer.addEventListener("contextmenu", function(e) {{
+                                        if (boxZoomEnabled || rightDragActive) {{
+                                            e.preventDefault();
+                                        }}
+                                    }});
+
+                                    cyContainer.addEventListener("mousedown", function(e) {{
+                                        if (!boxZoomEnabled || e.button !== 2) return;
+                                        e.preventDefault();
+                                        rightDragActive = true;
+                                        rightDragStart = getPointerPosition(e);
+                                        updateZoomRectangle(rightDragStart, rightDragStart);
+                                    }});
+
+                                    window.addEventListener("mousemove", function(e) {{
+                                        if (!rightDragActive || !rightDragStart) return;
+                                        var current = getPointerPosition(e);
+                                        updateZoomRectangle(rightDragStart, current);
+                                    }});
+
+                                    window.addEventListener("mouseup", function(e) {{
+                                        if (!rightDragActive || !rightDragStart) return;
+                                        var end = getPointerPosition(e);
+                                        var start = rightDragStart;
+                                        rightDragActive = false;
+                                        rightDragStart = null;
+                                        zoomRect.style.display = "none";
+
+                                        var w = Math.abs(end.x - start.x);
+                                        var h = Math.abs(end.y - start.y);
+                                        if (w < 12 || h < 12) return;
+
+                                        var pan = cy.pan();
+                                        var zoom = cy.zoom();
+                                        var x1 = (Math.min(start.x, end.x) - pan.x) / zoom;
+                                        var x2 = (Math.max(start.x, end.x) - pan.x) / zoom;
+                                        var y1 = (Math.min(start.y, end.y) - pan.y) / zoom;
+                                        var y2 = (Math.max(start.y, end.y) - pan.y) / zoom;
+
+                                        cy.animate({{
+                                            fit: {{ boundingBox: {{ x1: x1, y1: y1, x2: x2, y2: y2 }}, padding: 24 }},
+                                            duration: 220
+                                        }});
+                                        setTimeout(function() {{
+                                            constrainPan();
+                                            updatePinnedCards();
+                                        }}, 240);
+                                    }});
+
+                                    ['mousedown', 'mouseup', 'click', 'touchstart', 'touchend'].forEach(function(evt) {{
+                                        [fsBtn, resetBtn, allMetaBtn, boxZoomBtn].forEach(function(btn) {{
+                                            btn.addEventListener(evt, function(e) {{ e.stopPropagation(); }});
+                                        }});
+                                    }});
+
+                                    fsBtn.addEventListener('click', function(e) {{
+                                        e.stopPropagation();
+                                        var elem = document.getElementById('graph-shell');
+                                        if (elem.requestFullscreen) {{
+                                            elem.requestFullscreen();
+                                        }} else if (elem.webkitRequestFullscreen) {{
+                                            elem.webkitRequestFullscreen();
+                                        }} else if (elem.msRequestFullscreen) {{
+                                            elem.msRequestFullscreen();
+                                        }}
+                                    }});
+
+                                    // Smart auto-expansion: collapse compound nodes EXCEPT if it's the first appearance
+                                    cy.nodes('$node > node').sort((a, b) => b.neighborhood().length - a.neighborhood().length).forEach(function(node) {{
+                                        if (!node.data('is_first_appearance')) {{
+                                            api.collapse(node);
+                                        }}
+                                    }});
+
+                                    setBoxZoomEnabled(false);
+                                    setShowAllMetadata(false);
+                                    resetView();
                                 }});
                             </script>
                         </body>

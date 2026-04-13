@@ -82,10 +82,16 @@ def main():
         
     print(f"Generated {len(all_configs)} total configurations in {config_output_dir}")
     
-    # 2. Run Batch
-    print("Starting batch execution...")
+    # 2. Run Configs Sequentially (explicit loop; runner handles single-run only)
+    print("Starting sequential execution...")
     runner = Runner()
-    results = runner.run_batch(all_configs, output_root=args.output_dir)
+    results = []
+    total = len(all_configs)
+    for idx, cfg in enumerate(all_configs, start=1):
+        out_name = cfg.get('output_name', f'run_{idx}')
+        print(f"Running config {idx}/{total}: {out_name}")
+        res = runner.run_single_logged(cfg, output_root=args.output_dir)
+        results.append(res)
     
     # 3. Aggregate Reports
     print("Aggregating results...")
@@ -97,7 +103,7 @@ def main():
     summary_md_path = os.path.splitext(summary_path)[0] + '.md'
     aggregator.aggregate(results, summary_md_path)
     
-    print("Batch run completed.")
+    print("Run completed.")
 
 if __name__ == "__main__":
     main()

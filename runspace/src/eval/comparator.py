@@ -57,7 +57,15 @@ class LayerComparator:
             def hook(model, input):
                 # Capture input to the layer
                 # input is a tuple (x,)
-                self.ref_activations[name] = input[0].detach().clone()
+                if isinstance(input, tuple) and len(input) > 0:
+                    inp = input[0]
+                else:
+                    inp = input
+                
+                if isinstance(inp, torch.Tensor):
+                    self.ref_activations[name] = inp.detach().clone()
+                else:
+                    self.ref_activations[name] = inp
             return hook
 
         supported_ops = tuple(OpRegistry.get_supported_ops().keys())
@@ -77,13 +85,16 @@ class LayerComparator:
         def get_hook(name):
             def hook(module, input, output):
                 # Capture input (tuple) -> tensor
-                if isinstance(input, tuple):
+                if isinstance(input, tuple) and len(input) > 0:
                     inp = input[0]
                 else:
                     inp = input
                 
                 # Store detached clone to avoid memory issues or in-place modifications
-                self.quant_activations[name] = inp.detach()
+                if isinstance(inp, torch.Tensor):
+                    self.quant_activations[name] = inp.detach()
+                else:
+                    self.quant_activations[name] = inp
             return hook
 
         from src.ops.quant_base import QuantizedLayerMixin
@@ -113,12 +124,31 @@ class LayerComparator:
         # they will be overwritten by real data during the comparison loop.
         self.coverage_report_lines, self.unquantized_supported_count = self._verify_coverage_fx()
         
-        print(f"Comparing models on {num_batches} batches...")
-        
+        loader_len = None
+        try:
+            loader_len = len(data_loader)
+        except Exception:
+            loader_len = None
+
+        if num_batches is None or num_batches <= 0:
+            total_batches = loader_len
+            requested_batches = loader_len if loader_len is not None else float('inf')
+        else:
+            total_batches = min(num_batches, loader_len) if loader_len is not None else num_batches
+            requested_batches = num_batches
+
+        print(f"Comparing models on {total_batches if total_batches is not None else 'unknown'} batches...")
+
         with torch.no_grad():
-            pbar = tqdm(enumerate(data_loader), total=num_batches, desc="Comparing", unit="batch")
-            for i, batch in pbar:
-                if i >= num_batches:
+            pbar = tqdm(
+                total=total_batches,
+                desc="Comparing",
+                unit="batch",
+                dynamic_ncols=True,
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
+            )
+            for i, batch in enumerate(data_loader):
+                if i >= requested_batches:
                     break
                 
                 # Prepare inputs for Ref Model (always unquantized)
@@ -172,6 +202,21 @@ class LayerComparator:
                 
                 # Compare Layers
                 self._compute_layer_metrics()
+
+                pbar.update(1)
+                ref_acc1 = (100.0 * self.ref_metrics.correct_1 / self.ref_metrics.total) if self.ref_metrics.total else 0.0
+                quant_acc1 = (100.0 * self.quant_metrics.correct_1 / self.quant_metrics.total) if self.quant_metrics.total else 0.0
+                remaining_batches = (
+                    max((total_batches or 0) - (i + 1), 0)
+                    if total_batches is not None else "?"
+                )
+                pbar.set_postfix({
+                    'ref_acc1': f"{ref_acc1:.2f}%",
+                    'quant_acc1': f"{quant_acc1:.2f}%",
+                    'remaining_batches': remaining_batches
+                })
+
+            pbar.close()
 
         self._generate_report()
 
@@ -394,8 +439,8 @@ class LayerComparator:
             elif name in self.quant_activations:
                  quant_input = self.quant_activations[name]
             
-            if quant_input is not None:
-                if ref_input is not None:
+            if quant_input is not None and isinstance(quant_input, torch.Tensor):
+                if ref_input is not None and isinstance(ref_input, torch.Tensor):
                     if ref_input.is_floating_point():
                         metrics['input_mse_sum'] += compute_mse(ref_input, quant_input)
                         metrics['input_cossim_sum'] += compute_cosine_similarity(ref_input, quant_input)

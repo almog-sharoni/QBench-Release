@@ -12,7 +12,7 @@ if PROJECT_ROOT not in sys.path:
 
 from src.registry.op_registry import OpRegistry
 from src.ops.quant_base import QuantizedLayerMixin
-from src.ops.quant_mha import DecomposedMultiheadAttention
+from src.ops.quant_mha import DecomposedMultiheadAttention, DecomposedQkvAttention, DecomposedMlpBlock
 
 import operator as _operator
 
@@ -110,8 +110,8 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
                 return _FalseProxy(node, self)
 
             def is_leaf_module(self, m: torch.nn.Module, module_qualified_name: str) -> bool:
-                # Always trace into DecomposedMHA to expose its Softmax/Linear
-                if isinstance(m, DecomposedMultiheadAttention):
+                # Always trace into decomposed attention/MLP blocks to expose internal ops.
+                if isinstance(m, (DecomposedMultiheadAttention, DecomposedQkvAttention, DecomposedMlpBlock)):
                     return False
 
                 # Quantized ops are leaves

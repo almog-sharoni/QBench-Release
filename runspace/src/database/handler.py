@@ -148,6 +148,105 @@ class RunDatabase:
             conn.commit()
             print(f"Logged run for {model_name} to {self.db_path}")
 
+    def run_exists(self, model_name, experiment_type=None, weight_dt=None, activation_dt=None, status="SUCCESS"):
+        """Return True if at least one matching run exists."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            query = "SELECT COUNT(*) FROM runs WHERE model_name = ?"
+            params = [model_name]
+
+            if experiment_type is not None:
+                query += " AND experiment_type = ?"
+                params.append(experiment_type)
+            if weight_dt is not None:
+                query += " AND weight_dt = ?"
+                params.append(weight_dt)
+            if activation_dt is not None:
+                query += " AND activation_dt = ?"
+                params.append(activation_dt)
+            if status is not None:
+                query += " AND status = ?"
+                params.append(status)
+
+            cursor.execute(query, params)
+            return cursor.fetchone()[0] > 0
+
+    def get_latest_run(self, model_name, experiment_type=None, weight_dt=None, activation_dt=None, status="SUCCESS"):
+        """Return latest matching run as dict, or None if not found."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            query = "SELECT * FROM runs WHERE model_name = ?"
+            params = [model_name]
+
+            if experiment_type is not None:
+                query += " AND experiment_type = ?"
+                params.append(experiment_type)
+            if weight_dt is not None:
+                query += " AND weight_dt = ?"
+                params.append(weight_dt)
+            if activation_dt is not None:
+                query += " AND activation_dt = ?"
+                params.append(activation_dt)
+            if status is not None:
+                query += " AND status = ?"
+                params.append(status)
+
+            query += " ORDER BY id DESC LIMIT 1"
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            return dict(row) if row is not None else None
+
+    def get_reference_metrics(self, model_name):
+        """
+        Returns latest fp32 reference tuple: (acc1, acc5, certainty), or None.
+        Looks for successful fp32/fp32 runs, prioritizing explicit fp32_ref experiment type.
+        """
+        ref_row = self.get_latest_run(
+            model_name=model_name,
+            experiment_type="fp32_ref",
+            weight_dt="fp32",
+            activation_dt="fp32",
+            status="SUCCESS",
+        )
+        if ref_row is None:
+            ref_row = self.get_latest_run(
+                model_name=model_name,
+                weight_dt="fp32",
+                activation_dt="fp32",
+                status="SUCCESS",
+            )
+        if ref_row is None:
+            return None
+        return (
+            float(ref_row.get('acc1', 0.0) or 0.0),
+            float(ref_row.get('acc5', 0.0) or 0.0),
+            float(ref_row.get('certainty', 0.0) or 0.0),
+        )
+
+    def get_best_run(self, model_name, experiment_type=None, weight_dt=None, activation_dt=None):
+        """Return best-acc1 successful run as dict, or None if none found."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            query = "SELECT * FROM runs WHERE model_name = ? AND status = 'SUCCESS'"
+            params = [model_name]
+
+            if experiment_type is not None:
+                query += " AND experiment_type = ?"
+                params.append(experiment_type)
+            if weight_dt is not None:
+                query += " AND weight_dt = ?"
+                params.append(weight_dt)
+            if activation_dt is not None:
+                query += " AND activation_dt = ?"
+                params.append(activation_dt)
+
+            query += " ORDER BY acc1 DESC, id DESC LIMIT 1"
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            return dict(row) if row is not None else None
+
     def get_runs(self, limit=None):
         """
         Retrieves runs as a Pandas DataFrame.

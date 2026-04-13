@@ -30,8 +30,12 @@ class QuantLinear(nn.Linear, QuantizedLayerMixin):
         # Quantize input (gated by self.input_quantization; pass-through if disabled)
         input_q = self.quantize_input(input)
 
-        # Dequantize weights: w = w_fp8_sim * scale  (both are float32 tensors)
-        w_decomp = self.weight_fp8.float() * self.weight_scale
+        # Dequantize weights: w = w_fp8_sim * scale.
+        # If calibration was skipped or weight quantization is disabled, use FP32 weights.
+        if self.weight_fp8 is not None and self.weight_scale is not None:
+            w_decomp = self.weight_fp8.float() * self.weight_scale
+        else:
+            w_decomp = self.weight
 
         if getattr(self, 'capture_activations', False):
             self.last_quant_weight = w_decomp.detach()

@@ -5,7 +5,7 @@ from ..registry.op_registry import OpRegistry
 from .quant_base import QuantizedLayerMixin
 from ..quantization.quantizer import quantize
 
-@OpRegistry.register("QuantLayerNorm", original_cls=nn.LayerNorm, under_construction=True)
+# @OpRegistry.register("QuantLayerNorm", original_cls=nn.LayerNorm, under_construction=True)
 class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
     """
     Quantized LayerNorm layer.
@@ -25,7 +25,7 @@ class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
         input_quant = self.quantize_input(input)
         
         # Dequantize weights if they are quantized
-        if self.elementwise_affine and self.weight_fp8 is not None:
+        if self.elementwise_affine and self.weight_fp8 is not None and self.weight_scale is not None:
              w_decomp = self.weight_fp8.float() * self.weight_scale
              b = self.bias
         else:

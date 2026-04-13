@@ -24,6 +24,7 @@ class GenericAdapter(BaseAdapter):
         model_source: str = "auto",
         weights: str = None,
         input_quantization: bool = True,
+        weight_quantization: bool = True,
         quantize_first_layer: bool = False,
         quantized_ops: list = None,
         excluded_ops: list = None,
@@ -44,14 +45,17 @@ class GenericAdapter(BaseAdapter):
         input_chunk_size: int = None,
         run_id: str = "default",
         skip_calibration: bool = False,
+        build_quantized: bool = True,
     ):
         super().__init__()
         self.skip_calibration = skip_calibration
+        self.build_quantized = bool(build_quantized)
         self.model_name = model_name
         self.base_model_instance = model
         self.model_source = model_source
         self.weights = weights
         self.input_quantization = input_quantization
+        self.weight_quantization = weight_quantization
         self.quantize_first_layer = quantize_first_layer
         self.quantized_ops = quantized_ops if quantized_ops is not None else ["Conv2d"]
         self.excluded_ops = excluded_ops if excluded_ops is not None else []
@@ -76,7 +80,12 @@ class GenericAdapter(BaseAdapter):
         self.simulate_tf32_accum = simulate_tf32_accum
         self.rounding = rounding
         self.input_chunk_size = input_chunk_size
-        self.model = self.build_model(quantized=True)
+        if not self.build_quantized:
+            print(
+                f"GenericAdapter: build_quantized=False for {self.model_name} "
+                "(no quantized ops/layer overrides requested)."
+            )
+        self.model = self.build_model(quantized=self.build_quantized)
 
     def _auto_detect_model_source(self) -> str:
         """Detect whether the model lives in torchvision or timm."""
@@ -129,27 +138,141 @@ class GenericAdapter(BaseAdapter):
                 # Load model without weights first
                 model = model_fn(weights=None)
                 try:
-                    state_dict = torch.load(self.weights, map_location='cpu')
-                    # Handle varying state dict formats
-                    if 'state_dict' in state_dict:
-                        state_dict = state_dict['state_dict']
-                    elif 'model' in state_dict:
-                        state_dict = state_dict['model']
-                        
-                    model.load_state_dict(state_dict, strict=False)
+                    self._load_custom_weights_into_model(model, self.weights)
                     return model
                 except Exception as e:
                     raise RuntimeError(f"Failed to load weights from {self.weights}: {e}")
 
-            # Try to get weights enum (e.g., ResNet18_Weights.IMAGENET1K_V1)
-            weights_enum = self._get_weights_enum()
-            if weights_enum:
-                return model_fn(weights=weights_enum)
-            else:
-                # Fall back to weights=True for legacy compatibility
-                return model_fn(weights=True)
+            # Resolve torchvision weights enum robustly (including ViT).
+            weights_enum = self._resolve_torchvision_weights(model_fn)
+            model = model_fn(weights=None)
+            if weights_enum is not None:
+                try:
+                    # Avoid torchvision constructor-side weight-loading path.
+                    # Load the resolved checkpoint into a skeleton model directly.
+                    state_dict = weights_enum.get_state_dict(progress=False)
+                    incompatible = model.load_state_dict(state_dict, strict=True)
+                    if incompatible is not None:
+                        missing = list(getattr(incompatible, 'missing_keys', []) or [])
+                        unexpected = list(getattr(incompatible, 'unexpected_keys', []) or [])
+                        if missing or unexpected:
+                            print(
+                                f"Torchvision load notes for {self.model_name}: "
+                                f"missing={len(missing)}, unexpected={len(unexpected)}"
+                            )
+                    return model
+                except Exception as e:
+                    print(
+                        f"Warning: direct state_dict load for {self.model_name} "
+                        f"failed ({e}); continuing with weights=None."
+                    )
+                    return model
+            print(
+                f"Warning: Could not resolve torchvision weights '{self.weights}' for "
+                f"{self.model_name}; falling back to weights=None."
+            )
+            return model
         else:
             return model_fn(weights=None)
+
+    def _resolve_torchvision_weights(self, model_fn):
+        """
+        Resolve a torchvision weights spec into a proper enum instance.
+        Avoids deprecated `weights=True` fallback paths.
+        """
+        weights_spec = self.weights
+        if weights_spec is None:
+            return None
+
+        # Already an enum/object: trust caller.
+        if not isinstance(weights_spec, (str, bool, int)):
+            return weights_spec
+
+        token = str(weights_spec).strip()
+        token_l = token.lower()
+        if token_l in ("", "none", "false", "0", "null"):
+            return None
+
+        wants_default = token_l in ("default", "true", "1")
+
+        # Preferred path: torchvision's official model-specific resolver.
+        try:
+            from torchvision.models import get_model_weights
+            weights_cls = get_model_weights(model_fn)
+            if wants_default and hasattr(weights_cls, "DEFAULT"):
+                return weights_cls.DEFAULT
+
+            if hasattr(weights_cls, token):
+                return getattr(weights_cls, token)
+
+            token_up = token.upper()
+            for attr in dir(weights_cls):
+                if attr.upper() == token_up:
+                    return getattr(weights_cls, attr)
+
+            if not wants_default and hasattr(weights_cls, "DEFAULT"):
+                print(
+                    f"Warning: Unknown torchvision weights token '{token}' for "
+                    f"{self.model_name}; using DEFAULT."
+                )
+                return weights_cls.DEFAULT
+        except Exception:
+            pass
+
+        # Legacy mapping fallback.
+        mapped = self._get_weights_enum()
+        if mapped is not None:
+            return mapped
+
+        return None
+
+    @staticmethod
+    def _extract_checkpoint_state_dict(checkpoint):
+        """Extract tensor state_dict from common checkpoint container layouts."""
+        if not isinstance(checkpoint, dict):
+            return checkpoint
+
+        for key in ('state_dict', 'model', 'model_state_dict', 'state_dict_ema'):
+            value = checkpoint.get(key)
+            if isinstance(value, dict):
+                return value
+
+        return checkpoint
+
+    @staticmethod
+    def _strip_common_prefixes(state_dict):
+        """Strip common wrappers (DataParallel / trainer containers) from keys."""
+        if not isinstance(state_dict, dict) or not state_dict:
+            return state_dict
+
+        normalized = state_dict
+        for prefix in ('module.', 'model.'):
+            keys = list(normalized.keys())
+            if keys and all(isinstance(k, str) and k.startswith(prefix) for k in keys):
+                normalized = {k[len(prefix):]: v for k, v in normalized.items()}
+        return normalized
+
+    def _load_custom_weights_into_model(self, model: nn.Module, weights_path: str):
+        """Load external checkpoint into model with tolerant key handling."""
+        checkpoint = torch.load(weights_path, map_location='cpu')
+        state_dict = self._extract_checkpoint_state_dict(checkpoint)
+        if not isinstance(state_dict, dict):
+            raise RuntimeError(
+                f"Checkpoint at {weights_path} did not contain a valid state_dict mapping."
+            )
+
+        state_dict = self._strip_common_prefixes(state_dict)
+        incompatible = model.load_state_dict(state_dict, strict=False)
+
+        # Helpful diagnostics without failing hard here; runner validation enforces correctness.
+        if incompatible is not None:
+            missing = list(getattr(incompatible, 'missing_keys', []) or [])
+            unexpected = list(getattr(incompatible, 'unexpected_keys', []) or [])
+            if missing or unexpected:
+                print(
+                    f"Checkpoint load notes for {weights_path}: "
+                    f"missing={len(missing)}, unexpected={len(unexpected)}"
+                )
 
     def _get_weights_enum(self):
         """Get the weights enum for the model if available."""
@@ -186,6 +309,10 @@ class GenericAdapter(BaseAdapter):
             "densenet121": "DenseNet121_Weights",
             "densenet169": "DenseNet169_Weights",
             "densenet201": "DenseNet201_Weights",
+            "vit_b_16": "ViT_B_16_Weights",
+            "vit_b_32": "ViT_B_32_Weights",
+            "vit_l_16": "ViT_L_16_Weights",
+            "vit_l_32": "ViT_L_32_Weights",
         }
         
         weight_class_name = weight_class_mappings.get(model_lower)
@@ -211,13 +338,26 @@ class GenericAdapter(BaseAdapter):
                 "Install it with: pip install timm"
             )
 
-        pretrained = bool(self.weights) and str(self.weights).lower() not in ('none', 'false', '0')
-        # print(f"Loading model {self.model_name} with pretrained={pretrained}")
+        custom_weight_file = isinstance(self.weights, str) and os.path.isfile(self.weights)
+        pretrained = (
+            bool(self.weights)
+            and str(self.weights).lower() not in ('none', 'false', '0')
+            and not custom_weight_file
+        )
         if not timm.is_model(self.model_name):
             raise ValueError(
                 f"Model '{self.model_name}' not found in timm. "
                 f"Check available models with: timm.list_models('{self.model_name}*')"
             )
+
+        if custom_weight_file:
+            print(f"Loading custom timm weights from {self.weights}...")
+            model = timm.create_model(self.model_name, pretrained=False)
+            try:
+                self._load_custom_weights_into_model(model, self.weights)
+            except Exception as e:
+                raise RuntimeError(f"Failed to load weights from {self.weights}: {e}")
+            return model
 
         model = timm.create_model(self.model_name, pretrained=pretrained)
         return model
@@ -353,7 +493,19 @@ class GenericAdapter(BaseAdapter):
         
         # Case 1: Custom from_native factory (e.g. MHA, BasicConv2d)
         if hasattr(QuantClass, 'from_native'):
-             return QuantClass.from_native(module, q_type=q_type, quantization_bias=bias)
+             created = QuantClass.from_native(module, q_type=q_type, quantization_bias=bias)
+             if isinstance(created, QuantizedLayerMixin):
+                 created.q_type = q_type
+                 created.quantization_bias = bias
+                 created.input_q_type = input_q_type if input_q_type else q_type
+                 created.input_quantization = self.input_quantization
+                 created.weight_quantization = self.weight_quantization
+                 created.input_mode = input_mode
+                 created.input_chunk_size = input_chunk_size
+                 created.weight_mode = weight_mode
+                 created.weight_chunk_size = weight_chunk_size
+                 created.rounding = rounding
+             return created
 
         # Case 2: Layer with weights (Conv, Linear, BN) - In-place class swap
         # We check if the QuantClass is a subclass of QuantizedLayerMixin
@@ -367,6 +519,7 @@ class GenericAdapter(BaseAdapter):
             module.input_q_type = input_q_type if input_q_type else q_type
             
             module.input_quantization = self.input_quantization
+            module.weight_quantization = self.weight_quantization
             module.input_mode = input_mode
             module.input_chunk_size = input_chunk_size
             module.weight_mode = weight_mode
@@ -424,33 +577,94 @@ class GenericAdapter(BaseAdapter):
         
         # Get supported ops from registry
         supported_ops = OpRegistry.get_supported_ops()
+        
+        def _contains_any(names, candidates):
+            return any(n in names for n in candidates)
+
+        def _is_timm_attention_like(m: nn.Module) -> bool:
+            return (
+                hasattr(m, "qkv") and isinstance(getattr(m, "qkv"), nn.Linear) and
+                hasattr(m, "proj") and isinstance(getattr(m, "proj"), nn.Linear) and
+                hasattr(m, "num_heads")
+            )
+
+        def _is_timm_mlp_like(m: nn.Module) -> bool:
+            return (
+                hasattr(m, "fc1") and isinstance(getattr(m, "fc1"), nn.Linear) and
+                hasattr(m, "fc2") and isinstance(getattr(m, "fc2"), nn.Linear)
+            )
 
         for name, module in model.named_children():
             full_name = f"{prefix}.{name}" if prefix else name
             new_module = None
             should_quantize = False
-            
-            # Check if module type is supported
-            if type(module) in supported_ops:
-                # Check if this specific op type is requested
-                # We use the class name (e.g., "Conv2d", "ReLU")
-                op_name = module.__class__.__name__
-                
-                if quantize_all or op_name in self.quantized_ops:
-                    should_quantize = True
-                    
-                    # Check for exclusions
-                    if op_name in self.excluded_ops:
-                        should_quantize = False
+            quant_class = None
+            matched_op_name = module.__class__.__name__
+            matched_original_name = None
 
-                    # Special check for MHA internals
-                    if op_name == "MultiheadAttention":
-                        # If MHA is requested, we decompose it.
-                        # If "Linear" is requested, we also decompose MHA to reach internal Linears.
-                        if not should_quantize and "Linear" in self.quantized_ops:
-                            # Only re-enable if Linear is NOT excluded
-                            if "Linear" not in self.excluded_ops:
-                                should_quantize = True
+            # Do not try to "re-quantize" modules that are already quantized.
+            if type(module) in supported_ops.values():
+                self._recursive_replace(module, prefix=full_name)
+                continue
+            
+            # Check if module type is supported (subclass-aware)
+            for original_cls, q_cls in supported_ops.items():
+                if isinstance(module, original_cls):
+                    quant_class = q_cls
+                    matched_original_name = original_cls.__name__
+                    break
+
+            if quant_class is not None:
+                requested_names = {matched_op_name}
+                if matched_original_name is not None:
+                    requested_names.add(matched_original_name)
+
+                if quantize_all or _contains_any(self.quantized_ops, requested_names):
+                    should_quantize = True
+
+                # If Linear is requested, decompose MHA as well to expose q/k/v internals.
+                if isinstance(module, nn.MultiheadAttention) and "Linear" in self.quantized_ops and "Linear" not in self.excluded_ops:
+                    should_quantize = True
+
+                if _contains_any(self.excluded_ops, requested_names):
+                    should_quantize = False
+
+                # timm uses BatchNormAct2d (subclass of nn.BatchNorm2d) in many
+                # CNN stems/blocks. In-place swapping that subclass to
+                # QuantBatchNorm2d drops its fused drop/activation behavior and
+                # breaks model math. Keep the native wrapper intact.
+                if (
+                    should_quantize and
+                    isinstance(module, nn.BatchNorm2d) and
+                    type(module) is not nn.BatchNorm2d and
+                    (hasattr(module, "act") or hasattr(module, "drop"))
+                ):
+                    from ..ops.quant_bn import QuantBatchNormAct2d
+                    quant_class = QuantBatchNormAct2d
+                    should_quantize = True
+
+            # timm-specific Attention / MLP decomposition
+            if not should_quantize and _is_timm_attention_like(module):
+                wants_attention = quantize_all or _contains_any(
+                    self.quantized_ops,
+                    {"Attention", "MultiheadAttention", "MHA", "QkvAttention"}
+                )
+                wants_internal_linear = "Linear" in self.quantized_ops and "Linear" not in self.excluded_ops
+                if wants_attention or wants_internal_linear:
+                    from ..ops.quant_mha import DecomposedQkvAttention
+                    quant_class = DecomposedQkvAttention
+                    should_quantize = True
+
+            if not should_quantize and _is_timm_mlp_like(module):
+                wants_mlp = quantize_all or _contains_any(
+                    self.quantized_ops,
+                    {"Mlp", "MLP", "FeedForward", "FFN", "MlpBlock"}
+                )
+                wants_internal_linear = "Linear" in self.quantized_ops and "Linear" not in self.excluded_ops
+                if wants_mlp or wants_internal_linear:
+                    from ..ops.quant_mha import DecomposedMlpBlock
+                    quant_class = DecomposedMlpBlock
+                    should_quantize = True
             
             # Check layer config for fp32 override
             if should_quantize and full_name in self.layer_config:
@@ -459,8 +673,7 @@ class GenericAdapter(BaseAdapter):
                     should_quantize = False
 
             if should_quantize:
-                QuantClass = OpRegistry.get_quantized_op(type(module))
-                new_module = self._create_quantized_module(module, QuantClass, name=full_name)
+                new_module = self._create_quantized_module(module, quant_class, name=full_name)
                 
                 # If we created a new instance (not in-place swap), we need to set it
                 if new_module is not module:
@@ -493,9 +706,10 @@ class GenericAdapter(BaseAdapter):
             # Replace layers with quantized versions
             self._replace_layers(model)
             
-            # Optimization: Move model to GPU for calibration if available
-            # This speeds up the heavy quantize_fp8_generic calls significantly
-            if torch.cuda.is_available():
+            # Optimization: Move model to GPU only when calibrating.
+            # For skip_calibration flows (file-backed load), keep model on CPU here
+            # and let runner move it after explicit state_dict loading.
+            if torch.cuda.is_available() and not self.skip_calibration:
                 device = torch.device('cuda')
                 model.to(device)
             

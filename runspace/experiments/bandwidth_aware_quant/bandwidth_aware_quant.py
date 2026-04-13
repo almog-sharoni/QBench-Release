@@ -22,7 +22,6 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from runspace.src.adapters.adapter_factory import create_adapter
 from runspace.src.registry.op_registry import OpRegistry
 from runspace.core.runner import Runner
 from runspace.core.report_aggregator import ReportAggregator
@@ -847,7 +846,44 @@ def run_evaluation(model, layer_results_map, best_formats, args, output_dir, met
             sigs.add(s)
             final_configs.append(c)
 
-    results = runner.run_batch_parallel(final_configs, output_root=output_dir)
+    # Add runner DB metadata so logging is centralized and consistent.
+    for cfg in final_configs:
+        out_name = cfg.get('output_name', '')
+        if out_name == 'ref_fp32':
+            exp_type = 'fp32_ref'
+            weight_dt = 'fp32'
+            activation_dt = 'fp32'
+        elif out_name.startswith('baseline_'):
+            exp_type = 'bandwidth_weight_baseline'
+            weight_dt = out_name.replace('baseline_', '')
+            activation_dt = 'fp32'
+        elif out_name.startswith('optimized_layer_'):
+            exp_type = 'bandwidth_weight_optimized_layer'
+            weight_dt = out_name.replace('optimized_', 'opt_')
+            activation_dt = 'fp32'
+        elif out_name.startswith('optimized_chunk_'):
+            exp_type = 'bandwidth_weight_optimized_chunk'
+            weight_dt = out_name.replace('optimized_', 'opt_')
+            activation_dt = 'fp32'
+        else:
+            exp_type = 'bandwidth_weight_eval'
+            weight_dt = out_name or DEFAULT_FORMAT
+            activation_dt = 'fp32'
+
+        cfg['experiment'] = {
+            'name': 'bandwidth_aware_quant',
+            'type': exp_type,
+            'weight_dt': weight_dt,
+            'activation_dt': activation_dt,
+        }
+
+    results = []
+    total_eval_runs = len(final_configs)
+    for idx, cfg in enumerate(final_configs, start=1):
+        out_name = cfg.get('output_name', f'run_{idx}')
+        print(f"[Eval] Running {idx}/{total_eval_runs}: {out_name}")
+        res = runner.run_single_logged(cfg, output_root=output_dir)
+        results.append(res)
 
     # Aggregate
     aggregator = ReportAggregator()
@@ -917,6 +953,7 @@ def process_single_model(args, device, metrics):
     print(f"Bandwidth-Aware Mixed-Precision Quantization: {model_name}")
     print(f"Output: {output_dir}")
     print(f"{'=' * 60}")
+    runner = Runner(device)
 
     # Step 1: Get bandwidth stats
     print("\n--- Step 1: Bandwidth Analysis ---")
@@ -934,8 +971,11 @@ def process_single_model(args, device, metrics):
         },
     }
     try:
-        adapter = create_adapter(config)
-        model = adapter.model
+        model_order_dir = os.path.join(output_dir, "model_order_probe")
+        model, adapter, _ = runner.prepare_model_with_materialized_weights(
+            config=config,
+            output_dir=model_order_dir
+        )
         model.to(device)
 
         # Build mapping from module name to its order in the model
@@ -983,8 +1023,11 @@ def process_single_model(args, device, metrics):
     print("\n--- Step 3: Weight Quantization Analysis ---")
     if model is None:
         try:
-            adapter = create_adapter(config)
-            model = adapter.model
+            analysis_dir = os.path.join(output_dir, "analysis_fp32")
+            model, adapter, _ = runner.prepare_model_with_materialized_weights(
+                config=config,
+                output_dir=analysis_dir
+            )
             model.to(device)
         except Exception as e:
             print(f"Failed to load model: {e}")

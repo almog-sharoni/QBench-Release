@@ -6,9 +6,7 @@ import json
 import yaml
 import argparse
 import torch
-import torch.nn as nn
-import numpy as np
-from tqdm import tqdm
+import copy
 
 # Fix for container permission issues
 os.environ['TORCH_HOME'] = '/tmp/torch'
@@ -19,18 +17,12 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from runspace.src.adapters.adapter_factory import create_adapter
 from runspace.src.registry.op_registry import OpRegistry
 from runspace.core.runner import Runner
-from runspace.src.quantization.quantizer import quantize
-from runspace.src.ops.quant_base import quantize_tensor, calculate_scale
-from runspace.src.database.handler import RunDatabase
-from runspace.src.eval.metrics import compute_certainty
 
 # Import weight-quant helpers
 from runspace.experiments.find_optimal_weight_quant.find_optimal_weight_quant import (
     get_quantized_tensor_sim,
-    calculate_error,
     create_quantized_state_dict,
     run_weight_quantization_analysis,
     baseline_formats as weight_baseline_formats,
@@ -38,85 +30,8 @@ from runspace.experiments.find_optimal_weight_quant.find_optimal_weight_quant im
 
 # Import input-quant helpers
 from runspace.experiments.find_optimal_input_quant.find_optimal_input_quant import (
-    DynamicInputQuantizer,
     candidate_formats as input_candidate_formats,
-    baseline_formats as input_baseline_formats,
 )
-
-from runspace.experiments.utils.plotting import plot_accuracy_comparison
-
-
-class UniformInputQuantizer:
-    """
-    Applies a fixed quantization format to every supported layer's input.
-    Drop-in replacement for DynamicInputQuantizer when activation_dt is a
-    plain format string (e.g. 'fp8_e1m6').
-    """
-    def __init__(self, model, fmt, chunk_size=128):
-        self.model = model
-        self.fmt = fmt
-        self.chunk_size = chunk_size
-        self.hooks = []
-        self._layer_names = []
-        self.supported_ops = tuple(OpRegistry.get_supported_ops().values())
-        self.stats = {'sum_l1_err': 0.0, 'sum_mse_err': 0.0,
-                      'sum_l1_norm': 0.0, 'sum_l2_norm': 0.0}
-
-    def _quantize_activation(self, x):
-        """Quantize activation tensor using per-chunk scale, same as DynamicInputQuantizer."""
-        original_shape = x.shape
-        flat = x.reshape(-1)
-        pad_len = 0
-        if flat.numel() % self.chunk_size != 0:
-            pad_len = self.chunk_size - (flat.numel() % self.chunk_size)
-            flat = torch.nn.functional.pad(flat, (0, pad_len))
-        chunks = flat.view(-1, self.chunk_size)
-        scale = calculate_scale(chunks.abs().amax(dim=1, keepdim=True).clamp(min=1e-5), self.fmt)
-        q_chunks = quantize(chunks / scale, q_type=self.fmt, validate=False) * scale
-        flat_q = q_chunks.reshape(-1)
-        if pad_len > 0:
-            flat_q = flat_q[:-pad_len]
-        return flat_q.reshape(original_shape)
-
-    def _make_hook(self, name):
-        def hook(module, inputs):
-            if not inputs or not isinstance(inputs[0], torch.Tensor):
-                return inputs
-            x = inputs[0]
-            x_q = self._quantize_activation(x)
-            with torch.no_grad():
-                diff = x - x_q
-                self.stats['sum_l1_err']  += diff.abs().sum().item()
-                self.stats['sum_mse_err'] += diff.pow(2).sum().item()
-                self.stats['sum_l1_norm'] += x.abs().sum().item()
-                self.stats['sum_l2_norm'] += x.pow(2).sum().item()
-            return (x_q,) + inputs[1:]
-        return hook
-
-    def register_hooks(self):
-        for name, module in self.model.named_modules():
-            if isinstance(module, self.supported_ops) or isinstance(module, (nn.Conv2d, nn.Linear)):
-                self.hooks.append(module.register_forward_pre_hook(self._make_hook(name)))
-                self._layer_names.append(name)
-
-    def cleanup(self):
-        for h in self.hooks:
-            h.remove()
-        self.hooks.clear()
-
-    def get_final_stats(self):
-        norm_l1  = self.stats['sum_l1_err']  / self.stats['sum_l1_norm']  if self.stats['sum_l1_norm']  > 0 else 0.0
-        norm_mse = self.stats['sum_mse_err'] / self.stats['sum_l2_norm'] if self.stats['sum_l2_norm'] > 0 else 0.0
-        return {'norm_l1': norm_l1, 'norm_mse': norm_mse,
-                'total_l1': self.stats['sum_l1_err'], 'total_mse': self.stats['sum_mse_err']}
-
-    @property
-    def layer_stats(self):
-        return {
-            name: {'format_counts': {self.fmt: 1}, 'total_chunks': 1}
-            for name in self._layer_names
-        }
-
 
 def get_args():
     parser = argparse.ArgumentParser(
@@ -202,7 +117,20 @@ def _make_weight_args(args):
     return wa
 
 
-def run_weight_phase(args, device, model_dir):
+def _base_runtime_config(args, model_name=None, weights=None):
+    return {
+        'model': {'name': model_name or args.model_name, 'weights': weights or args.weights},
+        'adapter': {'type': 'generic', 'quantized_ops': []},
+        'dataset': {
+            'name': args.dataset_name,
+            'path': args.dataset_path,
+            'batch_size': args.batch_size,
+            'num_workers': args.num_workers,
+        },
+    }
+
+
+def run_weight_phase(runner, args, device, model_dir):
     """
     Phase 1: analyse weights, build per-layer optimal quantized state dict.
 
@@ -214,18 +142,13 @@ def run_weight_phase(args, device, model_dir):
     weight_metrics = [m.strip() for m in args.weight_metrics.split(',')]
     wa = _make_weight_args(args)
 
-    # Load model once for analysis
-    config = {
-        'model': {'name': args.model_name, 'weights': args.weights},
-        'adapter': {'type': 'generic', 'quantized_ops': []},
-        'dataset': {
-            'name': args.dataset_name, 'path': args.dataset_path,
-            'batch_size': args.batch_size, 'num_workers': args.num_workers,
-        },
-    }
-    adapter = create_adapter(config)
-    model = adapter.model.to(device)
-    model.eval()
+    # Load model once for analysis from a materialized fp32 weights file.
+    config = _base_runtime_config(args)
+    analysis_dir = os.path.join(model_dir, "weight_phase_fp32")
+    model, adapter, _ = runner.prepare_model_with_materialized_weights(
+        config=config,
+        output_dir=analysis_dir,
+    )
 
     qt_options = weight_baseline_formats.copy()
     supported_ops = tuple(OpRegistry.get_supported_ops().keys())
@@ -304,92 +227,51 @@ def run_weight_phase(args, device, model_dir):
 # Inference helpers
 # ---------------------------------------------------------------------------
 
-def _build_loader(args, device):
-    config = {
-        'model': {'name': args.model_name, 'weights': args.weights},
-        'adapter': {'type': 'generic', 'quantized_ops': []},
-        'dataset': {
-            'name': args.dataset_name, 'path': args.dataset_path,
-            'batch_size': args.batch_size, 'num_workers': args.num_workers,
-        },
-    }
-    runner = Runner(device)
-    loader = runner.setup_data_loader(config)
-    return loader
+def _build_loader(args, device, runner):
+    config = _base_runtime_config(args)
+    return runner.setup_data_loader(config)
 
 
-def _run_inference(model, adapter, loader, device, args,
-                   input_quantizer=None, desc=""):
+def _run_inference(runner, model, adapter, loader, args, input_quant_cfg=None, desc=""):
     """
     Run one inference pass.  Returns (acc1, acc5, certainty, input_stats).
     input_stats is from input_quantizer.get_final_stats() if provided, else None.
     """
-    correct_top1 = correct_top5 = total = 0
-    total_certainty = 0.0
-    batch_count = 0
-    limit = args.limit_batches if args.limit_batches > 0 else float('inf')
-
-    with torch.no_grad():
-        for batch in tqdm(loader, desc=desc):
-            if batch_count >= limit:
-                break
-            images, labels = adapter.prepare_batch(batch)
-            images, labels = images.to(device), labels.to(device)
-
-            outputs = model(images)
-
-            total_certainty += compute_certainty(outputs) * images.size(0)
-
-            _, pred = outputs.topk(5, 1, True, True)
-            pred = pred.t()
-            correct = pred.eq(labels.view(1, -1).expand_as(pred))
-            correct_top1 += correct[:1].reshape(-1).float().sum().item()
-            correct_top5 += correct[:5].reshape(-1).float().sum().item()
-            total += labels.size(0)
-            batch_count += 1
-
-    acc1 = 100.0 * correct_top1 / total if total > 0 else 0.0
-    acc5 = 100.0 * correct_top5 / total if total > 0 else 0.0
-    certainty = total_certainty / total if total > 0 else 0.0
-    input_stats = input_quantizer.get_final_stats() if input_quantizer else None
-
-    return acc1, acc5, certainty, input_stats
+    eval_results = runner.evaluate_model(
+        model=model,
+        data_loader=loader,
+        adapter=adapter,
+        max_batches=args.limit_batches,
+        desc=desc,
+        input_quant_cfg=input_quant_cfg,
+    )
+    return (
+        eval_results.get('acc1', 0.0),
+        eval_results.get('acc5', 0.0),
+        eval_results.get('certainty', 0.0),
+        eval_results.get('input_quant')
+    )
 
 
-def _load_quantized_model(args, device, quant_weights_path):
+def _load_quantized_model(runner, args, device, quant_weights_path):
     """Load model and replace state dict with quantized weights."""
-    config = {
-        'model': {'name': args.model_name, 'weights': args.weights},
-        'adapter': {'type': 'generic', 'quantized_ops': []},
-        'dataset': {
-            'name': args.dataset_name, 'path': args.dataset_path,
-            'batch_size': args.batch_size, 'num_workers': args.num_workers,
-        },
-    }
-    adapter = create_adapter(config)
-    model = adapter.model
-
-    # Load quantized weights
-    q_state_dict = torch.load(quant_weights_path, map_location=device)
-    model.load_state_dict(q_state_dict, strict=False)
-    model.to(device)
-    model.eval()
+    config = _base_runtime_config(args)
+    model, adapter = runner.load_model_from_weight_file(
+        config=config,
+        weight_file_path=quant_weights_path,
+        skip_calibration=True
+    )
     return model, adapter
 
 
-def _load_fp32_model(args, device):
+def _load_fp32_model(runner, args, device):
     """Load model with original fp32 weights."""
-    config = {
-        'model': {'name': args.model_name, 'weights': args.weights},
-        'adapter': {'type': 'generic', 'quantized_ops': []},
-        'dataset': {
-            'name': args.dataset_name, 'path': args.dataset_path,
-            'batch_size': args.batch_size, 'num_workers': args.num_workers,
-        },
-    }
-    adapter = create_adapter(config)
-    model = adapter.model.to(device)
-    model.eval()
+    config = _base_runtime_config(args)
+    fp32_dir = os.path.join(args.output_dir, args.model_name, "fp32_ref")
+    model, adapter, _ = runner.prepare_model_with_materialized_weights(
+        config=config,
+        output_dir=fp32_dir
+    )
     return model, adapter
 
 
@@ -418,27 +300,6 @@ def _build_weight_map_json(quant_map, layer_types):
             "type": layer_types.get(layer, "unknown"),
         }
     return json.dumps(enriched)
-
-
-def _build_input_map_json(layer_stats, model):
-    """
-    Build enriched input quant map JSON:
-      {layer: {format, type, format_counts, total_chunks}}.
-    Dominant format = the format chosen for the most chunks in that layer.
-    """
-    layer_types = _layer_types_from_model(model)
-    result = {}
-    for layer_name, stats in layer_stats.items():
-        counts = stats.get('format_counts', {})
-        if counts:
-            total = sum(counts.values())
-            result[layer_name] = {
-                "format": max(counts, key=counts.get),
-                "type": layer_types.get(layer_name, "unknown"),
-                "format_counts": counts,
-                "total_chunks": total,
-            }
-    return json.dumps(result)
 
 
 def _summarise_quant_map(quant_map, w_metric=None):
@@ -556,7 +417,7 @@ def _parse_input_metric(activation_dt):
 # FP32 reference: fetch from DB or run inference
 # ---------------------------------------------------------------------------
 
-def _get_or_run_fp32_ref(args, device, db, model_name):
+def _get_or_run_fp32_ref(runner, args, device, db, model_name):
     """
     Return (ref_acc1, ref_acc5, ref_certainty).
 
@@ -590,25 +451,36 @@ def _get_or_run_fp32_ref(args, device, db, model_name):
 
     # --- 2. Not in DB — run inference ---
     print("[FP32 ref] Not found in DB. Running fp32 inference ...")
-    model, adapter = _load_fp32_model(args, device)
-    loader = _build_loader(args, device)
+    model, adapter = _load_fp32_model(runner, args, device)
+    loader = _build_loader(args, device, runner)
     acc1, acc5, certainty, _ = _run_inference(
-        model, adapter, loader, device, args, desc="FP32 ref"
+        runner, model, adapter, loader, args, desc="FP32 ref"
     )
     del model, adapter
     gc.collect()
     torch.cuda.empty_cache()
 
     print(f"[FP32 ref] Top1={acc1:.2f}%, Top5={acc5:.2f}%, Certainty={certainty:.4f}")
-    db.log_run(
-        model_name=model_name,
-        weight_dt="fp32",
-        activation_dt="fp32",
-        acc1=acc1, acc5=acc5,
-        ref_acc1=acc1, ref_acc5=acc5, ref_certainty=certainty,
-        experiment_type="fp32_ref",
-        status="SUCCESS",
-        certainty=certainty,
+    log_cfg = _base_runtime_config(args, model_name=model_name, weights=args.weights)
+    log_cfg['experiment'] = {
+        'name': 'find_optimal_hybrid_quant',
+        'type': 'fp32_ref',
+        'weight_dt': 'fp32',
+        'activation_dt': 'fp32',
+        'ref_acc1': acc1,
+        'ref_acc5': acc5,
+        'ref_certainty': certainty,
+        'metrics': {'certainty': certainty},
+    }
+    runner.log_experiment_result(
+        config=log_cfg,
+        result={
+            'model_name': model_name,
+            'status': 'SUCCESS',
+            'acc1': acc1,
+            'acc5': acc5,
+            'certainty': certainty,
+        },
     )
     return acc1, acc5, certainty
 
@@ -632,6 +504,55 @@ def _run_exists(db, model_name, experiment_type, weight_dt, activation_dt):
     return not match.empty
 
 
+def _log_hybrid_run(
+    runner,
+    base_config,
+    model_name,
+    experiment_type,
+    weight_dt,
+    activation_dt,
+    acc1,
+    acc5,
+    status,
+    ref_acc1=None,
+    ref_acc5=None,
+    ref_certainty=None,
+    certainty=None,
+    mse=None,
+    l1=None,
+    quant_map_json=None,
+    input_map_json=None,
+    input_quant_stats=None,
+):
+    cfg = copy.deepcopy(base_config)
+    cfg['experiment'] = {
+        'name': 'find_optimal_hybrid_quant',
+        'type': experiment_type,
+        'weight_dt': weight_dt,
+        'activation_dt': activation_dt,
+        'ref_acc1': ref_acc1,
+        'ref_acc5': ref_acc5,
+        'ref_certainty': ref_certainty,
+        'metrics': {
+            'mse': mse,
+            'l1': l1,
+            'certainty': certainty,
+        },
+        'quant_map_json': quant_map_json,
+        'input_map_json': input_map_json,
+    }
+    result = {
+        'model_name': model_name,
+        'status': status,
+        'acc1': acc1,
+        'acc5': acc5,
+        'certainty': certainty if certainty is not None else 0.0,
+    }
+    if input_quant_stats is not None:
+        result['input_quant'] = input_quant_stats
+    runner.log_experiment_result(cfg, result)
+
+
 # ---------------------------------------------------------------------------
 # Main processing for a single model
 # ---------------------------------------------------------------------------
@@ -643,8 +564,10 @@ def process_single_model(args, device):
 
     model_dir = os.path.join(args.output_dir, model_name)
     os.makedirs(model_dir, exist_ok=True)
+    base_config = _base_runtime_config(args, model_name=model_name, weights=args.weights)
 
-    db = RunDatabase()
+    runner = Runner(device)
+    db = runner._get_db()
 
     print(f"\n{'='*60}")
     print(f" HYBRID EXPERIMENT: {model_name}")
@@ -656,14 +579,14 @@ def process_single_model(args, device):
     # Phase 1 – Weight Analysis → produce quantized weights files
     # -----------------------------------------------------------------------
     quant_weights_paths, quant_maps, layer_results_map, layer_types = run_weight_phase(
-        args, device, model_dir
+        runner, args, device, model_dir
     )
 
     # -----------------------------------------------------------------------
     # FP32 reference — always resolved (from DB or fresh run)
     # -----------------------------------------------------------------------
     ref_acc1, ref_acc5, ref_certainty = _get_or_run_fp32_ref(
-        args, device, db, model_name
+        runner, args, device, db, model_name
     )
 
     # -----------------------------------------------------------------------
@@ -679,22 +602,27 @@ def process_single_model(args, device):
                 continue
             print(f"\n[Baseline] Quantized weights ({w_metric}) + FP32 inputs ...")
             q_path = quant_weights_paths[w_metric]
-            model, adapter = _load_quantized_model(args, device, q_path)
-            loader = _build_loader(args, device)
+            model, adapter = _load_quantized_model(runner, args, device, q_path)
+            loader = _build_loader(args, device, runner)
             acc1, acc5, certainty, _ = _run_inference(
-                model, adapter, loader, device, args,
+                runner, model, adapter, loader, args,
                 desc=f"W-only({w_metric})"
             )
             weight_dt_str = _summarise_quant_map(quant_maps[w_metric], w_metric=w_metric)
             print(f"  W-only ({w_metric}): Top1={acc1:.2f}%, Top5={acc5:.2f}%")
-            db.log_run(
+            _log_hybrid_run(
+                runner=runner,
+                base_config=base_config,
                 model_name=model_name,
+                experiment_type=f"hybrid_weight_only_{w_metric}",
                 weight_dt=weight_dt_str,
                 activation_dt="fp32",
-                acc1=acc1, acc5=acc5,
-                ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty,
-                experiment_type=f"hybrid_weight_only_{w_metric}",
+                acc1=acc1,
+                acc5=acc5,
                 status="SUCCESS",
+                ref_acc1=ref_acc1,
+                ref_acc5=ref_acc5,
+                ref_certainty=ref_certainty,
                 certainty=certainty,
                 quant_map_json=_build_weight_map_json(quant_maps[w_metric], layer_types),
             )
@@ -712,36 +640,38 @@ def process_single_model(args, device):
                 print(f"\n[Baseline] Skipping input-only ({i_metric}) — already in DB.")
                 continue
             print(f"\n[Baseline] FP32 weights + dynamic input quant ({i_metric}) ...")
-            model, adapter = _load_fp32_model(args, device)
-            loader = _build_loader(args, device)
-
-            quantizer_handler = DynamicInputQuantizer(
-                model, metric=i_metric, chunk_size=args.input_chunk_size
+            model, adapter = _load_fp32_model(runner, args, device)
+            loader = _build_loader(args, device, runner)
+            acc1, acc5, certainty, input_stats = _run_inference(
+                runner, model, adapter, loader, args,
+                input_quant_cfg={
+                    'enabled': True,
+                    'mode': 'dynamic',
+                    'metric': i_metric,
+                    'chunk_size': args.input_chunk_size,
+                    'candidate_formats': input_candidate_formats,
+                },
+                desc=f"I-only({i_metric})"
             )
-            quantizer_handler.register_hooks()
-
-            try:
-                acc1, acc5, certainty, input_stats = _run_inference(
-                    model, adapter, loader, device, args,
-                    input_quantizer=quantizer_handler,
-                    desc=f"I-only({i_metric})"
-                )
-            finally:
-                quantizer_handler.cleanup()
 
             print(f"  I-only ({i_metric}): Top1={acc1:.2f}%, Top5={acc5:.2f}%")
-            db.log_run(
+            _log_hybrid_run(
+                runner=runner,
+                base_config=base_config,
                 model_name=model_name,
+                experiment_type=f"hybrid_input_only_{i_metric}",
                 weight_dt="fp32",
                 activation_dt=f"dyn_input_{i_metric}",
-                acc1=acc1, acc5=acc5,
-                ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty,
-                experiment_type=f"hybrid_input_only_{i_metric}",
+                acc1=acc1,
+                acc5=acc5,
                 status="SUCCESS",
+                ref_acc1=ref_acc1,
+                ref_acc5=ref_acc5,
+                ref_certainty=ref_certainty,
+                certainty=certainty,
                 mse=input_stats['norm_mse'] if input_stats else None,
                 l1=input_stats['norm_l1'] if input_stats else None,
-                certainty=certainty,
-                input_map_json=_build_input_map_json(quantizer_handler.layer_stats, model),
+                input_quant_stats=input_stats,
             )
             del model, adapter
             gc.collect(); torch.cuda.empty_cache()
@@ -770,38 +700,41 @@ def process_single_model(args, device):
 
                 print(f"  Input  metric: {i_metric}  → {run_label}")
 
-                model, adapter = _load_quantized_model(args, device, q_path)
-                loader = _build_loader(args, device)
-
-                quantizer_handler = DynamicInputQuantizer(
-                    model, metric=i_metric, chunk_size=args.input_chunk_size
-                )
-                quantizer_handler.register_hooks()
+                model, adapter = _load_quantized_model(runner, args, device, q_path)
+                loader = _build_loader(args, device, runner)
 
                 try:
                     acc1, acc5, certainty, input_stats = _run_inference(
-                        model, adapter, loader, device, args,
-                        input_quantizer=quantizer_handler,
+                        runner, model, adapter, loader, args,
+                        input_quant_cfg={
+                            'enabled': True,
+                            'mode': 'dynamic',
+                            'metric': i_metric,
+                            'chunk_size': args.input_chunk_size,
+                            'candidate_formats': input_candidate_formats,
+                        },
                         desc=f"Hybrid w={w_metric} i={i_metric}"
                     )
                 except Exception as e:
                     print(f"  ERROR during {run_label}: {e}")
                     import traceback; traceback.print_exc()
-                    quantizer_handler.cleanup()
                     del model, adapter
                     gc.collect(); torch.cuda.empty_cache()
-                    db.log_run(
+                    _log_hybrid_run(
+                        runner=runner,
+                        base_config=base_config,
                         model_name=model_name,
+                        experiment_type="hybrid_quant",
                         weight_dt=weight_dt_str,
                         activation_dt=f"dyn_input_{i_metric}",
-                        acc1=0.0, acc5=0.0,
-                        ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty,
-                        experiment_type="hybrid_quant",
+                        acc1=0.0,
+                        acc5=0.0,
                         status="ERROR",
+                        ref_acc1=ref_acc1,
+                        ref_acc5=ref_acc5,
+                        ref_certainty=ref_certainty,
                     )
                     continue
-                finally:
-                    quantizer_handler.cleanup()
 
                 norm_l1  = input_stats['norm_l1']  if input_stats else None
                 norm_mse = input_stats['norm_mse'] if input_stats else None
@@ -810,23 +743,28 @@ def process_single_model(args, device):
                     + (f", NormL1={norm_l1:.4e}, NormMSE={norm_mse:.4e}"
                         if norm_l1 is not None else "")
                 )
-                db.log_run(
+                _log_hybrid_run(
+                    runner=runner,
+                    base_config=base_config,
                     model_name=model_name,
+                    experiment_type="hybrid_quant",
                     weight_dt=weight_dt_str,
                     activation_dt=f"dyn_input_{i_metric}",
-                    acc1=acc1, acc5=acc5,
-                    ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty,
-                    experiment_type="hybrid_quant",
+                    acc1=acc1,
+                    acc5=acc5,
                     status="SUCCESS",
-                    mse=norm_mse,
-                    quant_map_json=_build_weight_map_json(quant_maps[w_metric], layer_types),
-                    input_map_json=_build_input_map_json(quantizer_handler.layer_stats, model),
-                    l1=norm_l1,
+                    ref_acc1=ref_acc1,
+                    ref_acc5=ref_acc5,
+                    ref_certainty=ref_certainty,
                     certainty=certainty,
+                    mse=norm_mse,
+                    l1=norm_l1,
+                    quant_map_json=_build_weight_map_json(quant_maps[w_metric], layer_types),
+                    input_quant_stats=input_stats,
                 )
                 stats_path = os.path.join(out_dir, "layer_stats.json")
                 with open(stats_path, 'w') as f:
-                    save_data = dict(quantizer_handler.layer_stats)
+                    save_data = dict(input_stats.get('layer_stats', {}) if input_stats else {})
                     save_data['accuracy'] = {
                         'top1': acc1, 'top5': acc5, 'certainty': certainty,
                         'norm_l1': norm_l1, 'norm_mse': norm_mse,
@@ -881,24 +819,18 @@ def process_single_model(args, device):
                     if w_metric is None and not is_uniform:
                         print(f"[Best Combo] Cannot interpret weight_dt '{best_weight_dt}'. Skipping.")
                     elif is_uniform:
-                        # Plain baseline format — build uniform quant model in-memory
+                        # Plain baseline format — build uniform quant model, save weights, reload from file.
                         print(f"[Best Combo] Running: uniform_weight={best_weight_dt}, input={best_input_dt}")
-                        config = {
-                            'model': {'name': args.model_name, 'weights': args.weights},
-                            'adapter': {'type': 'generic', 'quantized_ops': []},
-                            'dataset': {
-                                'name': args.dataset_name, 'path': args.dataset_path,
-                                'batch_size': args.batch_size, 'num_workers': args.num_workers,
-                            },
-                        }
-                        adapter = create_adapter(config)
-                        model = adapter.model
+                        model_fp32, adapter_fp32 = _load_fp32_model(runner, args, device)
                         q_state_dict, uniform_quant_map = _build_uniform_quant_state_dict(
-                            model, best_weight_dt, chunk_size=args.weight_chunk_size
+                            model_fp32, best_weight_dt, chunk_size=args.weight_chunk_size
                         )
-                        model.load_state_dict(q_state_dict, strict=False)
-                        model.to(device)
-                        model.eval()
+                        uniform_weight_path = os.path.join(model_dir, "best_combo_uniform_weights.pt")
+                        torch.save(q_state_dict, uniform_weight_path)
+                        del model_fp32, adapter_fp32
+                        model, adapter = _load_quantized_model(
+                            runner, args, device, uniform_weight_path
+                        )
                         resolved_layer_types = _layer_types_from_model(model)
                         resolved_quant_map_json = _build_weight_map_json(uniform_quant_map, resolved_layer_types)
                     else:
@@ -908,55 +840,63 @@ def process_single_model(args, device):
                             print(f"[Best Combo] Quantized weights file not found: {q_path}")
                             print("[Best Combo]  Re-running weight phase to regenerate it ...")
                             quant_weights_paths, quant_maps, layer_results_map, layer_types = run_weight_phase(
-                                args, device, model_dir
+                                runner, args, device, model_dir
                             )
                             q_path = quant_weights_paths.get(w_metric)
                         if q_path is None or not os.path.exists(str(q_path)):
                             print("[Best Combo] Quantized weights still unavailable. Skipping.")
                             model = None
                         else:
-                            model, adapter = _load_quantized_model(args, device, q_path)
+                            model, adapter = _load_quantized_model(runner, args, device, q_path)
                             resolved_quant_map_json = _build_weight_map_json(
                                 quant_maps.get(w_metric, {}), layer_types
                             )
 
                     # --- Shared inference for both weight paths ---
                     if model is not None:
-                        loader = _build_loader(args, device)
-
+                        loader = _build_loader(args, device, runner)
                         if is_uniform_input:
-                            quantizer_handler = UniformInputQuantizer(
-                                model, fmt=best_input_dt, chunk_size=args.input_chunk_size
-                            )
+                            input_quant_cfg = {
+                                'enabled': True,
+                                'mode': 'uniform',
+                                'format': best_input_dt,
+                                'chunk_size': args.input_chunk_size,
+                            }
                         else:
-                            quantizer_handler = DynamicInputQuantizer(
-                                model, metric=i_metric, chunk_size=args.input_chunk_size
-                            )
-                        quantizer_handler.register_hooks()
+                            input_quant_cfg = {
+                                'enabled': True,
+                                'mode': 'dynamic',
+                                'metric': i_metric,
+                                'chunk_size': args.input_chunk_size,
+                                'candidate_formats': input_candidate_formats,
+                            }
 
                         try:
                             acc1, acc5, certainty, input_stats = _run_inference(
-                                model, adapter, loader, device, args,
-                                input_quantizer=quantizer_handler,
+                                runner, model, adapter, loader, args,
+                                input_quant_cfg=input_quant_cfg,
                                 desc="Best Combo"
                             )
                         except Exception as e:
                             print(f"[Best Combo] ERROR: {e}")
                             import traceback; traceback.print_exc()
-                            quantizer_handler.cleanup()
                             del model, adapter
                             gc.collect(); torch.cuda.empty_cache()
-                            db.log_run(
+                            _log_hybrid_run(
+                                runner=runner,
+                                base_config=base_config,
                                 model_name=model_name,
+                                experiment_type="hybrid_best_combo",
                                 weight_dt=best_weight_dt,
                                 activation_dt=best_input_dt,
-                                acc1=0.0, acc5=0.0,
-                                ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty,
-                                experiment_type="hybrid_best_combo",
+                                acc1=0.0,
+                                acc5=0.0,
                                 status="ERROR",
+                                ref_acc1=ref_acc1,
+                                ref_acc5=ref_acc5,
+                                ref_certainty=ref_certainty,
                             )
                         else:
-                            quantizer_handler.cleanup()
                             norm_l1  = input_stats['norm_l1']  if input_stats else None
                             norm_mse = input_stats['norm_mse'] if input_stats else None
                             print(
@@ -965,21 +905,24 @@ def process_single_model(args, device):
                                 + (f", NormL1={norm_l1:.4e}, NormMSE={norm_mse:.4e}"
                                    if norm_l1 is not None else "")
                             )
-                            db.log_run(
+                            _log_hybrid_run(
+                                runner=runner,
+                                base_config=base_config,
                                 model_name=model_name,
+                                experiment_type="hybrid_best_combo",
                                 weight_dt=best_weight_dt,
                                 activation_dt=best_input_dt,
-                                acc1=acc1, acc5=acc5,
-                                ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty,
-                                experiment_type="hybrid_best_combo",
+                                acc1=acc1,
+                                acc5=acc5,
                                 status="SUCCESS",
+                                ref_acc1=ref_acc1,
+                                ref_acc5=ref_acc5,
+                                ref_certainty=ref_certainty,
+                                certainty=certainty,
                                 mse=norm_mse,
                                 l1=norm_l1,
-                                certainty=certainty,
                                 quant_map_json=resolved_quant_map_json,
-                                input_map_json=_build_input_map_json(
-                                    quantizer_handler.layer_stats, model
-                                ),
+                                input_quant_stats=input_stats,
                             )
                             del model, adapter
                             gc.collect(); torch.cuda.empty_cache()

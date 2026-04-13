@@ -96,7 +96,7 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
             flat_input = torch.nn.functional.pad(flat_input, (0, pad_len))
             
         num_chunks = flat_input.shape[-1] // chunk_size
-        chunked = flat_input.view(batch_size, num_chunks, chunk_size) # [B, N, C]
+        chunked = flat_input.reshape(batch_size, num_chunks, chunk_size) # [B, N, C]
         
         best_error = torch.full((batch_size, num_chunks), float('inf'), device=input.device)
         best_dequant = torch.zeros_like(chunked)
@@ -152,8 +152,8 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
              
         # Reconstruct
         # Flatten chunks
-        dequant_flat = best_dequant.view(batch_size, -1)
-        scale_flat_packed = best_scale.view(batch_size, -1) # This is [B, Nchunks] -> we need [B, Nchunks*1]? No, packed scale.
+        dequant_flat = best_dequant.reshape(batch_size, -1)
+        scale_flat_packed = best_scale.reshape(batch_size, -1) # This is [B, Nchunks] -> we need [B, Nchunks*1]? No, packed scale.
         
         # Expand scale for return if needed
         scale_expanded = best_scale.expand(-1, -1, chunk_size).contiguous().reshape(batch_size, -1)
@@ -164,8 +164,8 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
             scale_expanded = scale_expanded[:, :num_elements]
             # scale_flat_packed is per chunk, so we keep it as is (ignoring partial chunk logic for packed?)
             
-        output_fp8 = dequant_flat.view_as(input)
-        s = scale_expanded.view_as(input)
+        output_fp8 = dequant_flat.reshape_as(input)
+        s = scale_expanded.reshape_as(input)
         
         # For return values
         max_val = output_fp8.abs().max() # Approx
@@ -202,7 +202,7 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
             
         # Reshape to [N, num_chunks, chunk_size]
         num_chunks = flat_input.shape[-1] // chunk_size
-        chunked = flat_input.view(batch_size, num_chunks, chunk_size)
+        chunked = flat_input.reshape(batch_size, num_chunks, chunk_size)
         
         if chunk_formats is not None:
             # Per-chunk format selection
@@ -220,7 +220,7 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
                 # Fallback: use first format
                 final_formats = [chunk_formats[0]] * total_chunks
                 
-            chunked_flat = chunked.view(-1, chunk_size)
+            chunked_flat = chunked.reshape(-1, chunk_size)
             quantized_chunks_flat = torch.zeros_like(chunked_flat)
             scale_chunks_flat = torch.zeros_like(chunked_flat)
             
@@ -240,8 +240,8 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
                 quantized_chunks_flat[idx_tensor] = q
                 scale_chunks_flat[idx_tensor] = scale
                 
-            dequant_padded = (quantized_chunks_flat * scale_chunks_flat).view(batch_size, -1)
-            s_padded = scale_chunks_flat.view(batch_size, -1)
+            dequant_padded = (quantized_chunks_flat * scale_chunks_flat).reshape(batch_size, -1)
+            s_padded = scale_chunks_flat.reshape(batch_size, -1)
             
             if num_elements % chunk_size != 0:
                 dequant_flat = dequant_padded[:, :num_elements]
@@ -250,8 +250,8 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
                 dequant_flat = dequant_padded
                 s_flat = s_padded
                 
-            output_fp8 = dequant_flat.view_as(input)
-            scale_b = s_flat.view_as(input)
+            output_fp8 = dequant_flat.reshape_as(input)
+            scale_b = s_flat.reshape_as(input)
             
             # For return, use max from scaled back if needed, but here let's just use approx
             max_val = output_fp8.abs().max()
@@ -284,9 +284,9 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
             
         # Reshape back to original input shape
         if input.dim() > 1:
-            s = s_expanded.view(input.shape)
+            s = s_expanded.reshape(input.shape)
         else:
-            s = s_expanded.view(input.shape)
+            s = s_expanded.reshape(input.shape)
             
         # For return_unscaled, we need a single max_val? 
         # Or should we return the max_val tensor?
@@ -363,6 +363,18 @@ class QuantizedLayerMixin:
         if not hasattr(self, 'weight') or self.weight is None:
             return
 
+        # Keep weights in FP32 path while still using quantized layer wrappers.
+        # This is useful for input-only quantization experiments where op replacement
+        # must remain identical to deployment code paths.
+        if not getattr(self, 'weight_quantization', True):
+            self.weight_fp8 = self.weight.detach()
+            self.weight_scale = torch.tensor(1.0, device=self.weight.device)
+            self.weight_scale_packed = self.weight_scale
+            if getattr(self, 'capture_activations', False):
+                self.last_quant_weight = self.weight.detach()
+                self.last_quant_weight_scale = self.weight_scale.detach()
+            return
+
 
 
         # Calculate max per output channel (dim 0)
@@ -390,7 +402,7 @@ class QuantizedLayerMixin:
                 flat_weight = torch.nn.functional.pad(flat_weight, (0, pad_len))
             
             num_chunks = flat_weight.shape[-1] // chunk_size
-            chunked = flat_weight.view(batch_size, num_chunks, chunk_size)
+            chunked = flat_weight.reshape(batch_size, num_chunks, chunk_size)
             
             # chunk_formats handling
             total_chunks = batch_size * num_chunks
@@ -410,7 +422,7 @@ class QuantizedLayerMixin:
                 final_formats = [chunk_formats[0]] * total_chunks
                 
             # Flatten chunks for processing: [total_chunks, chunk_size]
-            chunked_flat = chunked.view(-1, chunk_size)
+            chunked_flat = chunked.reshape(-1, chunk_size)
             
             quantized_flat = torch.zeros_like(chunked_flat)
             scale_flat = torch.zeros_like(chunked_flat) # Expanded scale
@@ -447,12 +459,12 @@ class QuantizedLayerMixin:
                 scale_flat[indices_tensor] = scale_expanded
 
             # Reshape back to [batch, num_chunks, chunk_size]
-            weight_fp8_chunked = quantized_flat.view(batch_size, num_chunks, chunk_size)
-            weight_scale_chunked = scale_flat.view(batch_size, num_chunks, chunk_size)
+            weight_fp8_chunked = quantized_flat.reshape(batch_size, num_chunks, chunk_size)
+            weight_scale_chunked = scale_flat.reshape(batch_size, num_chunks, chunk_size)
             
             # Reshape to flat [batch, num_elements_padded]
-            weight_fp8_flat = weight_fp8_chunked.view(batch_size, -1)
-            weight_scale_flat = weight_scale_chunked.view(batch_size, -1)
+            weight_fp8_flat = weight_fp8_chunked.reshape(batch_size, -1)
+            weight_scale_flat = weight_scale_chunked.reshape(batch_size, -1)
             
             # Remove padding
             if pad_len > 0:
@@ -460,8 +472,8 @@ class QuantizedLayerMixin:
                 weight_scale_flat = weight_scale_flat[:, :num_elements]
             
             # View as original shape (clone to ensure contiguous, non-overlapping memory)
-            self.weight_fp8 = weight_fp8_flat.view_as(self.weight).clone()
-            self.weight_scale = weight_scale_flat.view_as(self.weight).clone()
+            self.weight_fp8 = weight_fp8_flat.reshape_as(self.weight).clone()
+            self.weight_scale = weight_scale_flat.reshape_as(self.weight).clone()
             
             # Store chunk formats for reference
             self.weight_chunk_formats = final_formats
@@ -680,7 +692,10 @@ class QuantizedLayerMixin:
         if hasattr(self, 'weight'):
             original_weight = self.weight
             
-            if hasattr(self, 'weight_fp8') and self.weight_fp8 is not None:
+            if (
+                hasattr(self, 'weight_fp8') and self.weight_fp8 is not None and
+                hasattr(self, 'weight_scale') and self.weight_scale is not None
+            ):
                 w_decomp = self.weight_fp8.float() * self.weight_scale
                 self.weight = torch.nn.Parameter(w_decomp)
         

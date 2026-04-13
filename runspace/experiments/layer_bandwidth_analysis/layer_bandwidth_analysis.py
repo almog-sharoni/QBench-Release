@@ -18,7 +18,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from runspace.src.adapters.adapter_factory import create_adapter
+from runspace.core.runner import Runner
 from runspace.src.registry.op_registry import OpRegistry
 
 def get_args():
@@ -304,12 +304,15 @@ def process_single_model(model_name, weights, dataset_config, args, device):
         'dataset': dataset_config
     }
     
+    runner = Runner(device)
     try:
-        adapter = create_adapter(config)
-        model = adapter.model
-        # Instrument Residuals BEFORE moving to device
+        model_load_dir = os.path.join(output_dir, "materialized_model")
+        model, adapter, _ = runner.prepare_model_with_materialized_weights(
+            config=config,
+            output_dir=model_load_dir
+        )
+        # Instrument residual adds for hook visibility.
         model = instrument_residuals(model)
-        
         model.to(device)
         model.eval()
     except Exception as e:
@@ -319,8 +322,6 @@ def process_single_model(model_name, weights, dataset_config, args, device):
         return
 
     # Data Loader
-    from runspace.core.runner import Runner
-    runner = Runner(device)
     loader = None
     try:
         loader = runner.setup_data_loader(config)
@@ -1082,4 +1083,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

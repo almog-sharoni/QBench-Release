@@ -2,12 +2,11 @@
 import os
 import sys
 import torch
-import torch.nn as nn
 import argparse
 import numpy as np
 import yaml
 import gc
-from tqdm import tqdm
+import copy
 import matplotlib.pyplot as plt
 import json
 
@@ -16,14 +15,8 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from runspace.src.adapters.adapter_factory import create_adapter
 from runspace.src.registry.op_registry import OpRegistry
 from runspace.core.runner import Runner
-from runspace.src.quantization.quantizer import quantize
-from runspace.src.ops.quant_base import quantize_tensor, calculate_scale
-
-from runspace.src.database.handler import RunDatabase
-from runspace.src.eval.metrics import compute_certainty
 # from runspace.src.quantization.constants import get_quantization_bias
 
 # Fix for container permission issues
@@ -34,6 +27,7 @@ os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib'
 baseline_formats = [ 'fp32', 'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
     'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
 ]
+# baseline_formats = ['fp8_e4m3']
 
 candidate_formats = [
             # Signed FP8 (1 sign bit + 7 bits E/M)
@@ -56,6 +50,78 @@ candidate_formats = [
             'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
             'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
         ]
+
+# Keep experiments on the library replacement path (no manual tensor injection).
+# `weight_quantization` will be disabled in config for input-only studies.
+INPUT_ONLY_QUANTIZED_OPS = ["all"]
+
+
+def _iter_quantized_modules(model):
+    supported_quant_ops = tuple(OpRegistry.get_supported_ops().values())
+    for module in model.modules():
+        if isinstance(module, supported_quant_ops):
+            yield module
+
+
+def _build_input_quant_config(args, model_name, weights, default_format, quantize_first_layer=False):
+    """Build the actual runtime config used by this experiment."""
+    return {
+        'model': {'name': model_name, 'weights': weights},
+        'adapter': {
+            'type': 'generic',
+            'quantized_ops': INPUT_ONLY_QUANTIZED_OPS,
+            'excluded_ops': args.excluded_ops,
+            'quantize_first_layer': quantize_first_layer,
+            'input_quantization': True,
+            'weight_quantization': False,
+        },
+        'dataset': {
+            'name': args.dataset_name,
+            'path': args.dataset_path,
+            'batch_size': args.batch_size,
+            'num_workers': args.num_workers
+        },
+        'quantization': {
+            'format': default_format,
+            'input_format': default_format,
+            'mode': 'chunk',
+            'chunk_size': args.chunk_size,
+            'weight_mode': 'tensor',
+            'weight_chunk_size': args.chunk_size,
+            'rounding': 'nearest',
+            'calib_method': 'max'
+        }
+    }
+
+
+def _serialize_runtime_config(config, model=None, *, experiment_type=None, activation_dt=None, metric=None, limit_batches=None):
+    """Serialize the real runtime config + lightweight runtime metadata."""
+    cfg = copy.deepcopy(config)
+    cfg.setdefault('dataset', {})
+    if limit_batches is not None:
+        cfg['dataset']['limit_batches'] = limit_batches
+
+    if model is not None:
+        first_quant = next(_iter_quantized_modules(model), None)
+        if first_quant is not None:
+            cfg['runtime'] = {
+                'sample_quant_module': first_quant.__class__.__name__,
+                'q_type': str(getattr(first_quant, 'q_type', None)),
+                'input_q_type': str(getattr(first_quant, 'input_q_type', None)),
+                'input_mode': str(getattr(first_quant, 'input_mode', None)),
+                'input_chunk_size': int(getattr(first_quant, 'input_chunk_size', 0) or 0),
+                'rounding': str(getattr(first_quant, 'rounding', None)),
+                'input_quantization': bool(getattr(first_quant, 'input_quantization', False)),
+                'weight_quantization': bool(getattr(first_quant, 'weight_quantization', False)),
+            }
+
+    cfg['experiment'] = {
+        'type': experiment_type,
+        'activation_dt': activation_dt,
+        'metric': metric,
+    }
+    return json.dumps(cfg)
+
 def get_args():
     parser = argparse.ArgumentParser(description="Find optimal input quantization (Dynamic)")
     parser.add_argument("--model_name", type=str, default="resnet18", help="Model name")
@@ -63,17 +129,25 @@ def get_args():
     parser.add_argument("--models_file", type=str, default=None, help="Path to models.yaml file to run on multiple models")
     parser.add_argument("--dataset_name", type=str, default="imagenet", help="Dataset name")
     parser.add_argument("--dataset_path", type=str, default="/data/imagenet/val", help="Dataset path")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
-    parser.add_argument("--num_workers", type=int, default=16, help="Number of workers")
+    parser.add_argument("--batch_size", type=int, default=128, help="Batch size")
+    parser.add_argument("--num_workers", type=int, default=32, help="Number of workers")
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of batches to process (default: -1 for all)")
     parser.add_argument("--output_dir", type=str, default=os.path.join(os.path.dirname(__file__), "results"), help="Output directory")
     parser.add_argument("--metric", type=str, default="mse,l1", help="Comma-separated error metrics for dynamic selection (e.g. 'mse,l1')")
     parser.add_argument("--chunk_size", type=int, default=128, help="Chunk size for input quantization (blocks)")
+    parser.add_argument(
+        "--excluded_ops",
+        type=str,
+        default="LayerNorm",
+        help="Comma-separated op names to exclude from quantization (default: LayerNorm)"
+    )
     parser.add_argument("--only_dynamic", action="store_true", help="Skip baseline runs and only run dynamic optimization")
     parser.add_argument("--only_baselines", action="store_true", help="Skip dynamic runs and only run baseline runs")
     parser.add_argument("--force_rerun", action="store_true", help="Re-run all experiments even if already in DB")
     # Add other args as needed
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.excluded_ops = [op.strip() for op in args.excluded_ops.split(',') if op.strip()]
+    return args
 
 
 def _input_quant_run_exists(db, model_name, experiment_type, activation_dt):
@@ -90,465 +164,106 @@ def _input_quant_run_exists(db, model_name, experiment_type, activation_dt):
     ].empty
 
 
-class DynamicInputQuantizer:
-    def __init__(self, model, metric='mse', chunk_size=128):
-        self.model = model
-        self.metric = metric
-        self.chunk_size = chunk_size
-        self.hooks = []
-        self.layer_stats = {} # Store stats if needed
-        self.running_error = 0.0 # Accumulate selected error (the optimization metric)
-        self.total_chunks = 0
-        
-        # Comprehensive Error Tracking
-        self.stats = {
-            'sum_l1_err': 0.0,
-            'sum_mse_err': 0.0,
-            'sum_l1_norm': 0.0,
-            'sum_l2_norm': 0.0
-        }
-        
-        # Define candidate formats for dynamic selection
-        self.candidate_formats = candidate_formats
-        
-        # Supported ops to hook
-        self.supported_ops = tuple(OpRegistry.get_supported_ops().values())
-        
-        # Build the set of layer names that directly follow a ReLU/ReLU6.
-        # These will always be quantized with `self.ufp_format` instead of
-        # running the dynamic error-based selection.
-        self.post_relu_layers = self._find_post_relu_layers()
-
-        # Split candidates into UFP-only and non-UFP subsets for cheap filtering.
-        # Post-ReLU layers use ufp_candidates; all others use non_ufp_candidates.
-        self.ufp_candidates     = [f for f in candidate_formats if f.startswith('ufp')]
-        self.non_ufp_candidates = [f for f in candidate_formats if not f.startswith('ufp')]
-
-    # -----------------------------------------------------------------
-    # Helper: detect layers whose input comes directly after a ReLU
-    # -----------------------------------------------------------------
-    _RELU_TYPES = (nn.ReLU, nn.ReLU6)
-    _COMPUTE_TYPES = (nn.Conv2d, nn.Linear)
-
-    def _find_post_relu_layers(self):
-        """
-        Walk the module list sequentially. A Conv2d / Linear that immediately
-        follows a ReLU (or ReLU6) — with no other learnable layer in between —
-        is considered a *post-ReLU* layer and will always receive UFP-quantized
-        inputs.
-        """
-        post_relu = set()
-        prev_was_relu = False
-
-        for name, module in self.model.named_modules():
-            is_compute = isinstance(module, self._COMPUTE_TYPES) or \
-                         isinstance(module, self.supported_ops)
-            is_relu = isinstance(module, self._RELU_TYPES)
-
-            if is_compute:
-                if prev_was_relu:
-                    post_relu.add(name)
-                prev_was_relu = False  # Reset after a compute layer
-            elif is_relu:
-                prev_was_relu = True
-            elif not isinstance(module, (nn.Sequential, nn.ModuleList,
-                                         nn.BatchNorm2d, nn.BatchNorm1d,
-                                         nn.Dropout, nn.Identity,
-                                         nn.AdaptiveAvgPool2d, nn.AvgPool2d,
-                                         nn.MaxPool2d, nn.Flatten)):
-                # Any other "real" op resets the ReLU flag
-                prev_was_relu = False
-
-        return post_relu
-
-    def register_hooks(self):
-        """
-        Register forward PRE-hooks to intercept and quantize inputs before they enter the layer.
-        """
-        count_dynamic = 0
-        count_ufp = 0
-        compute_types = self._COMPUTE_TYPES + (tuple(self.supported_ops) if self.supported_ops else ())
-        for name, module in self.model.named_modules():
-            # Hook into supported ops (Conv2d, Linear, etc.)
-            if isinstance(module, self.supported_ops) or \
-               isinstance(module, (nn.Conv2d, nn.Linear)):
-                
-                # Use partial to capture layer name
-                hook = self._get_hook(name)
-                self.hooks.append(module.register_forward_pre_hook(hook))
-                if name in self.post_relu_layers:
-                    count_ufp += 1
-                else:
-                    count_dynamic += 1
-        print(f"Registered hooks on {count_dynamic + count_ufp} layers: "
-              f"{count_ufp} post-ReLU (UFP candidates only), "
-              f"{count_dynamic} other (non-UFP candidates only, metric={self.metric.upper()}).")
-        if not self.ufp_candidates:
-            print("  WARNING: no UFP formats in candidate_formats — post-ReLU layers will use non-UFP candidates.")
-        if not self.non_ufp_candidates:
-            print("  WARNING: no non-UFP formats in candidate_formats — other layers will use UFP candidates.")
-
-    def _get_hook(self, layer_name):
-        def hook_fn(module, args):
-            """
-            Pre-hook: Receives input arguments (tuple).
-            Must return modified arguments (tuple) or None.
-
-            - Post-ReLU layers: test only UFP candidates (inputs are non-negative).
-            - All other layers: test only non-UFP candidates (inputs can be negative).
-            Dynamic error-based selection picks the best from the filtered candidate set.
-            """
-            x = args[0]  # Input tensor
-            if not isinstance(x, torch.Tensor):
-                return None  # Skip if not tensor
-
-            # Choose candidate pool based on whether a ReLU precedes this layer.
-            # Post-ReLU inputs are non-negative → UFP formats are valid & optimal.
-            # Other inputs can be negative → only test signed (non-UFP) formats.
-            if layer_name in self.post_relu_layers:
-                candidates = self.ufp_candidates or self.non_ufp_candidates
-            else:
-                candidates = self.non_ufp_candidates or self.ufp_candidates
-
-            x_quantized = self._select_best_format(x, layer_name, candidates)
-
-            # ==========================================================
-            # Track Comprehensive Stats (L1, MSE, Norms)
-            # ==========================================================
-            with torch.no_grad():
-                diff = x - x_quantized
-                diff_flat = diff.reshape(-1)
-                x_flat = x.reshape(-1)
-
-                l1_err = diff_flat.abs().sum().item()
-                mse_err = diff_flat.pow(2).sum().item()
-
-                l1_norm = x_flat.abs().sum().item()
-                l2_norm = x_flat.pow(2).sum().item()
-
-                self.stats['sum_l1_err'] += l1_err
-                self.stats['sum_mse_err'] += mse_err
-                self.stats['sum_l1_norm'] += l1_norm
-                self.stats['sum_l2_norm'] += l2_norm
-
-            # Return new input tuple (replace x with x_quantized)
-            if len(args) > 1:
-                return (x_quantized,) + args[1:]
-            return (x_quantized,)
-
-        return hook_fn
-
-    def _select_best_format(self, tensor, layer_name, candidates):
-        """
-        Analyze tensor and return the QUANTIZED tensor using the best format PER CHUNK.
-        `candidates` is the list of formats to evaluate (pre-filtered by the caller).
-        """
-        return self._dynamic_quantize_per_chunk(tensor, layer_name, candidates)
-
-    def _dynamic_quantize_per_chunk(self, tensor, layer_name, candidates):
-        """
-        Full GPU implementation of per-chunk dynamic format selection.
-        Only evaluates `candidates` (pre-filtered by the caller).
-        1. Reshape to chunks.
-        2. Simulate all formats -> calculate error per chunk.
-        3. Select best format index per chunk.
-        4. Gather best quantized chunks.
-        5. Reconstruct tensor.
-        """
-        chunk_size = self.chunk_size
-        device = tensor.device
-        original_shape = tensor.shape
-        
-        # 1. Flatten and Pad to [TotalChunks, ChunkSize]
-        if tensor.dim() > 1:
-            flat = tensor.reshape(-1)
-        else:
-            flat = tensor
-            
-        num_elements = flat.numel()
-        pad_len = 0
-        if num_elements % chunk_size != 0:
-            pad_len = chunk_size - (num_elements % chunk_size)
-            flat = torch.nn.functional.pad(flat, (0, pad_len))
-            
-        num_chunks = flat.numel() // chunk_size
-        # View as [NumChunks, ChunkSize]
-        chunks = flat.view(num_chunks, chunk_size)
-        
-        # 2. Evaluate Candidates
-        # Stack errors: [NumCandidates, NumChunks]
-        # Store quantized versions: [NumCandidates, NumChunks, ChunkSize]
-        
-        candidate_errors = []
-        candidate_qs = []
-        
-        # Pre-calc to avoid repeated appends if possible, but list append is fast enough for <10 formats
-        
-        for fmt in candidates:
-            # Skip fp32 if present (we only want quantized)
-            if fmt == 'fp32': 
-                candidate_errors.append(torch.full((num_chunks,), float('inf'), device=tensor.device))
-                candidate_qs.append(chunks) # Placeholder
-                continue
-                
-            try:
-                # Quantize Chunked (Manual to allow re-use of chunks tensor)
-                # Calculate scale per chunk
-                max_val = chunks.abs().amax(dim=1, keepdim=True).clamp(min=1e-5)
-                # bias = get_quantization_bias(fmt)
-                scale = calculate_scale(max_val, fmt)
-                
-                # Quantize
-                # quantize() returns float32 simulated values
-                q_chunks_pre_scale = quantize(chunks / scale, q_type=fmt, validate=False) 
-                #raise error if not verified
-                # _,pass_rate = verify_mantissa(q_chunks_pre_scale, 1,1)
-                # if pass_rate < 1.0:
-                #     raise ValueError(f"Format {fmt} verification failed for layer {layer_name}, passrate: {pass_rate}")
-                    
-                q_chunks = q_chunks_pre_scale * scale
-                
-                # Error
-                diff = chunks - q_chunks
-                
-                if self.metric == 'mse':
-                    # Sum of squared error per chunk (mean or sum doesn't change relative ordering)
-                    # Using mean to be consistent with metric name
-                    err = diff.pow(2).mean(dim=1) 
-                elif self.metric == 'l1':
-                    err = diff.abs().mean(dim=1)
-                else:
-                    err = diff.pow(2).mean(dim=1)
-                    
-                candidate_errors.append(err)
-                candidate_qs.append(q_chunks)
-                
-            except Exception as e:
-                # Fallback for failed formats
-                candidate_errors.append(torch.full((num_chunks,), float('inf'), device=tensor.device))
-                candidate_qs.append(chunks)
-
-        # Stack
-        # Errors: [NumCandidates, NumChunks]
-        all_errors = torch.stack(candidate_errors, dim=0)
-        
-        # 3. Select Best Index per Chunk
-        # [NumChunks] -> Indices in [0, NumCandidates-1]
-        best_indices = torch.argmin(all_errors, dim=0)
-        
-        # 4. Gather Best Quantized Chunks
-        # We need to gather from candidate_qs which is list of [NumChunks, ChunkSize]
-        # Stack qs: [NumCandidates, NumChunks, ChunkSize]
-        all_qs = torch.stack(candidate_qs, dim=0)
-        
-        # Expand indices for gather: [1, NumChunks, ChunkSize]
-        # We want to select along dim 0.
-        # indices shape: [NumChunks] -> [1, NumChunks, ChunkSize]
-        gather_indices = best_indices.view(1, num_chunks, 1).expand(1, num_chunks, chunk_size)
-        
-        # Gather: Result [1, NumChunks, ChunkSize]
-        best_qs = torch.gather(all_qs, 0, gather_indices).squeeze(0)
-        
-        # 5. Reconstruct
-        flat_quantized = best_qs.view(-1)
-        
-        if pad_len > 0:
-            flat_quantized = flat_quantized[:num_elements]
-            
-        quantized_tensor = flat_quantized.view(original_shape)
-        
-        # --- Update Stats (Counts per format) ---
-        if layer_name not in self.layer_stats:
-            self.layer_stats[layer_name] = {'format_counts': {}}
-            
-        counts_dict = self.layer_stats[layer_name]['format_counts']
-        
-        # bincount on GPU is fast
-        counts = torch.bincount(best_indices, minlength=len(candidates))
-        counts_cpu = counts.cpu().tolist()
-        
-        for idx, count in enumerate(counts_cpu):
-            if count > 0:
-                fmt = candidates[idx]
-                counts_dict[fmt] = counts_dict.get(fmt, 0) + count
-        
-        # --- Update Error Stats (Optimization Metric) ---
-        # Gather best errors: [NumChunks]
-        best_errors = all_errors[best_indices, torch.arange(num_chunks, device=device)]
-        self.running_error += best_errors.sum().item()
-        self.total_chunks += num_chunks
-
-        return quantized_tensor
-
-
-    def get_selected_counts(self):
-        """Return a dictionary of format counts per layer."""
-        return self.layer_stats
-
-    def get_final_stats(self):
-        """Return computed normalized and total errors."""
-        norm_l1 = self.stats['sum_l1_err'] / self.stats['sum_l1_norm'] if self.stats['sum_l1_norm'] > 0 else 0
-        norm_mse = self.stats['sum_mse_err'] / self.stats['sum_l2_norm'] if self.stats['sum_l2_norm'] > 0 else 0
-        return {
-            'norm_l1': norm_l1,
-            'norm_mse': norm_mse,
-            'total_l1': self.stats['sum_l1_err'],
-            'total_mse': self.stats['sum_mse_err']
-        }
-
-    def cleanup(self):
-        for h in self.hooks:
-            h.remove()
-        self.hooks = []
-
-
-def run_baselines(args, device, formats):
+def run_baselines(args, device, formats, on_result=None):
     """
-    Run multiple baseline evaluations in a single pass.
-    Optimization: Loads model and data once, then for each batch, evaluates all formats.
+    Run baseline evaluations with strict per-format isolation.
+    Each format gets a fresh adapter/model so results are independent of
+    evaluation order and match single-format runs.
     """
     print(f"\n--- Running Baselines (Optimized: {formats}) ---")
-    
-    # 1. Load Model (FP32 Weights)
-    config = {
-        'model': {'name': args.model_name, 'weights': args.weights},
-        'adapter': {
-            'type': 'generic', 
-            'quantized_ops': [], # Ensure weights are FP32
-            'input_quantization': False # We will manually quantize inputs
-        },
-        'dataset': {
-             'name': args.dataset_name, 'path': args.dataset_path, 
-             'batch_size': args.batch_size, 'num_workers': args.num_workers
-        }
-    }
-    
-    runner = Runner(device)
-    adapter = create_adapter(config)
-    model = adapter.model
-    model.to(device)
-    model.eval()
-    
-    loader = runner.setup_data_loader(config)
-    
-    # 2. Initialize Stats
-    # Track: correct_top1, correct_top5, total, sum_l1_err, sum_mse_err, sum_l1_norm, sum_l2_norm
-    results = {fmt: {
-        'correct_top1': 0, 'correct_top5': 0, 'total': 0, 'sum_certainty': 0.0,
-        'sum_l1_err': 0.0, 'sum_mse_err': 0.0, 
-        'sum_l1_norm': 0.0, 'sum_l2_norm': 0.0
-    } for fmt in formats}
-    
-    batch_count = 0
-    limit = args.limit_batches if args.limit_batches > 0 else float('inf')
-    
-    with torch.no_grad():
-        for batch in tqdm(loader, desc="Baselines"):
-            if batch_count >= limit: break
-            
-            if adapter: images, labels = adapter.prepare_batch(batch)
-            else: images, labels = batch
-            
-            images = images.to(device)
-            labels = labels.to(device)
-            
-            # Pre-calculate norms for original image (for normalization)
-            # Flatten once
-            images_flat = images.reshape(-1)
-            l1_norm = images_flat.abs().sum().item()
-            l2_norm = images_flat.pow(2).sum().item() # Squared L2 norm
-            
-            # Evaluate each format
-            for fmt in formats:
-                x = images
-                l1_err = 0.0
-                mse_err = 0.0
-                
-                if fmt != 'fp32':
-                    try:
-                        # Chunk-wise quantization — matches find_optimal_w6a4 Phase B.
-                        chunk_size = args.chunk_size
-                        flat = x.reshape(-1)
-                        pad_len = 0
-                        if flat.numel() % chunk_size != 0:
-                            pad_len = chunk_size - (flat.numel() % chunk_size)
-                            flat = torch.nn.functional.pad(flat, (0, pad_len))
-                        chunks = flat.view(-1, chunk_size)
-                        scale = calculate_scale(
-                            chunks.abs().amax(dim=1, keepdim=True).clamp(min=1e-5), fmt
-                        )
-                        q_chunks = quantize(chunks / scale, q_type=fmt, validate=False) * scale
-                        flat_q = q_chunks.reshape(-1)
-                        if pad_len > 0:
-                            flat_q = flat_q[:-pad_len]
-                        x_quant = flat_q.reshape(x.shape)
-
-                    
-                        
-                        diff = x - x_quant
-                        diff_flat = diff.reshape(-1)
-                        l1_err = diff_flat.abs().sum().item()
-                        mse_err = diff_flat.pow(2).sum().item() # Sum of squared error
-                        
-                        x = x_quant # Use quantized for inference
-                    except Exception as e:
-                        print(f"Quantization error for {fmt}: {e}")
-                
-                # Inference
-                outputs = model(x)
-                
-                # Accuracy
-                _, pred = outputs.topk(5, 1, True, True)
-                pred = pred.t()
-                correct = pred.eq(labels.view(1, -1).expand_as(pred))
-                
-                res_top1 = correct[:1].reshape(-1).float().sum(0, keepdim=True).item()
-                res_top5 = correct[:5].reshape(-1).float().sum(0, keepdim=True).item()
-                
-                results[fmt]['total'] += labels.size(0)
-                results[fmt]['correct_top1'] += res_top1
-                results[fmt]['correct_top5'] += res_top5
-                results[fmt]['sum_certainty'] += compute_certainty(outputs) * labels.size(0)
-                results[fmt]['sum_l1_err'] += l1_err
-                results[fmt]['sum_mse_err'] += mse_err
-                results[fmt]['sum_l1_norm'] += l1_norm
-                results[fmt]['sum_l2_norm'] += l2_norm
-            
-            batch_count += 1
-            
-    # Calculate Final Metrics
     final_stats = {}
-    for fmt in formats:
-        total = results[fmt]['total']
-        if total > 0:
-            acc1 = 100. * results[fmt]['correct_top1'] / total
-            acc5 = 100. * results[fmt]['correct_top5'] / total
-            certainty = results[fmt]['sum_certainty'] / total
-            
-            norm_l1 = results[fmt]['sum_l1_err'] / results[fmt]['sum_l1_norm'] if results[fmt]['sum_l1_norm'] > 0 else 0
-            norm_mse = results[fmt]['sum_mse_err'] / results[fmt]['sum_l2_norm'] if results[fmt]['sum_l2_norm'] > 0 else 0
-            
-            total_l1 = results[fmt]['sum_l1_err']
-            total_mse = results[fmt]['sum_mse_err']
-        else:
-            acc1, acc5, certainty, norm_l1, norm_mse, total_l1, total_mse = 0, 0, 0, 0, 0, 0, 0
-            
-        final_stats[fmt] = {
-            'acc1': acc1, 'acc5': acc5, 'certainty': certainty,
-            'norm_l1': norm_l1, 'norm_mse': norm_mse,
-            'total_l1': total_l1, 'total_mse': total_mse
-        }
-        
-        print(f"Baseline {fmt}: Top1={acc1:.2f}%, Top5={acc5:.2f}%, Certainty={certainty:.4f}, NormL1={norm_l1:.4e}, NormMSE={norm_mse:.4e}")
-        
-    # Cleanup
-    del model
-    del adapter
-    del loader
-    gc.collect()
-    torch.cuda.empty_cache()
-        
-    return final_stats
+    config_json_by_fmt = {}
+    runner = Runner(device)
+
+    # Build one shared loader for all baseline formats to avoid worker respawn cost.
+    loader_cfg = _build_input_quant_config(
+        args,
+        args.model_name,
+        args.weights,
+        'fp32',
+        quantize_first_layer=False
+    )
+    loader = runner.setup_data_loader(loader_cfg)
+    if loader is None:
+        raise RuntimeError("Failed to build data loader for baseline runs.")
+
+    try:
+        for fmt in formats:
+            config = _build_input_quant_config(
+                args,
+                args.model_name,
+                args.weights,
+                fmt,
+                quantize_first_layer=False
+            )
+            baseline_run_dir = os.path.join(args.output_dir, args.model_name, f"baseline_{fmt}")
+            model, adapter, _ = runner.prepare_model_with_materialized_weights(
+                config=config,
+                output_dir=baseline_run_dir
+            )
+
+            eval_results = runner.evaluate_model(
+                model=model,
+                data_loader=loader,
+                adapter=adapter,
+                max_batches=args.limit_batches,
+                desc=f"Baseline ({fmt})",
+                input_quant_cfg=(
+                    None if fmt == 'fp32' else {
+                        'enabled': True,
+                        'mode': 'uniform',
+                        'format': fmt,
+                        'chunk_size': args.chunk_size,
+                    }
+                ),
+            )
+            acc1 = eval_results.get('acc1', 0.0)
+            acc5 = eval_results.get('acc5', 0.0)
+            certainty = eval_results.get('certainty', 0.0)
+            input_stats = eval_results.get('input_quant', {}) if fmt != 'fp32' else {}
+            norm_l1 = float(input_stats.get('norm_l1', 0.0) or 0.0)
+            norm_mse = float(input_stats.get('norm_mse', 0.0) or 0.0)
+
+            final_stats[fmt] = {
+                'acc1': acc1,
+                'acc5': acc5,
+                'certainty': certainty,
+                'norm_l1': norm_l1,
+                'norm_mse': norm_mse,
+                'total_l1': float(input_stats.get('total_l1', 0.0) or 0.0),
+                'total_mse': float(input_stats.get('total_mse', 0.0) or 0.0),
+                'layer_stats': input_stats.get('layer_stats', {}) if isinstance(input_stats, dict) else {},
+            }
+            config_json_by_fmt[fmt] = _serialize_runtime_config(
+                config,
+                model=model,
+                experiment_type="input_quant_baseline",
+                activation_dt=fmt,
+                metric=None,
+                limit_batches=args.limit_batches,
+            )
+            if on_result is not None:
+                try:
+                    on_result(fmt, final_stats[fmt], config_json_by_fmt[fmt])
+                except Exception as e:
+                    print(f"[DB] Failed to log baseline {fmt} immediately: {e}")
+
+            print(
+                f"Baseline {fmt}: Top1={acc1:.2f}%, Top5={acc5:.2f}%, "
+                f"Certainty={certainty:.4f}, NormL1={norm_l1:.4e}, NormMSE={norm_mse:.4e}"
+            )
+
+            del model
+            del adapter
+            gc.collect()
+            torch.cuda.empty_cache()
+    finally:
+        runner._shutdown_dataloader_workers(loader)
+        del loader
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    return final_stats, config_json_by_fmt
 
 def plot_format_histogram(layer_stats, output_dir):
     """Generate histogram of selected formats."""
@@ -647,8 +362,8 @@ def process_single_model(args, model_config, device, metrics):
     model_name = model_config['name']
     weights = model_config.get('weights', 'DEFAULT')
     
-    # Initialize Database for logging
-    db = RunDatabase()
+    runner = Runner(device)
+    db = runner._get_db()
     
     print(f"\n###########################################################")
     print(f" PROCESSING MODEL: {model_name} (Weights: {weights})")
@@ -691,7 +406,69 @@ def process_single_model(args, model_config, device, metrics):
         else:
             formats_to_run = list(baseline_formats)
 
-        new_baseline_stats = run_baselines(args, device, formats_to_run) if formats_to_run else {}
+        ref_acc1_live = cached_baseline_stats.get('fp32', {}).get('acc1', 0.0)
+        ref_acc5_live = cached_baseline_stats.get('fp32', {}).get('acc5', 0.0)
+        ref_certainty_live = cached_baseline_stats.get('fp32', {}).get('certainty', 0.0)
+
+        def _log_baseline_immediately(fmt, stats, cfg_json):
+            nonlocal ref_acc1_live, ref_acc5_live, ref_certainty_live
+            if fmt == 'fp32':
+                ref_acc1_live = float(stats.get('acc1', 0.0) or 0.0)
+                ref_acc5_live = float(stats.get('acc5', 0.0) or 0.0)
+                ref_certainty_live = float(stats.get('certainty', 0.0) or 0.0)
+                return
+
+            log_cfg = _build_input_quant_config(
+                args, model_name, weights, fmt, quantize_first_layer=False
+            )
+            log_cfg['experiment'] = {
+                'name': 'find_optimal_input_quant',
+                'type': 'input_quant_baseline',
+                'weight_dt': 'fp32',
+                'activation_dt': fmt,
+                'ref_acc1': ref_acc1_live,
+                'ref_acc5': ref_acc5_live,
+                'ref_certainty': ref_certainty_live,
+                'metrics': {
+                    'mse': stats.get('norm_mse', 0.0),
+                    'l1': stats.get('norm_l1', 0.0),
+                    'certainty': stats.get('certainty', 0.0),
+                },
+                'config_json': cfg_json,
+            }
+            runner.log_experiment_result(
+                config=log_cfg,
+                result={
+                    'model_name': model_name,
+                    'status': 'SUCCESS',
+                    'acc1': stats.get('acc1', 0.0),
+                    'acc5': stats.get('acc5', 0.0),
+                    'certainty': stats.get('certainty', 0.0),
+                    'input_quant': (
+                        {
+                            'mode': 'uniform',
+                            'format': fmt,
+                            'chunk_size': args.chunk_size,
+                            'norm_l1': stats.get('norm_l1', 0.0),
+                            'norm_mse': stats.get('norm_mse', 0.0),
+                            'total_l1': stats.get('total_l1', 0.0),
+                            'total_mse': stats.get('total_mse', 0.0),
+                            'layer_stats': stats.get('layer_stats', {}),
+                        }
+                        if fmt != 'fp32' else {}
+                    ),
+                },
+            )
+
+        new_baseline_stats, _ = (
+            run_baselines(
+                args,
+                device,
+                formats_to_run,
+                on_result=_log_baseline_immediately,
+            )
+            if formats_to_run else ({}, {})
+        )
         baseline_stats = {**cached_baseline_stats, **new_baseline_stats}
         
         # Identify Reference (fp32)
@@ -719,35 +496,9 @@ def process_single_model(args, model_config, device, metrics):
                     'norm_mse': stats['norm_mse']
                 }
             })
-            
-            # Log Baseline to Database with Reference
-            _cfg = json.dumps({
-                'model': {'name': model_name, 'weights': weights},
-                'dataset': {'name': args.dataset_name, 'path': args.dataset_path,
-                            'batch_size': args.batch_size, 'num_workers': args.num_workers,
-                            'limit_batches': args.limit_batches},
-                'quantization': {'activation_format': fmt, 'activation_mode': 'chunk',
-                                 'chunk_size': args.chunk_size},
-            })
-            db.log_run(
-                model_name=model_name,
-                weight_dt="fp32",
-                activation_dt=fmt,
-                acc1=stats['acc1'],
-                acc5=stats['acc5'],
-                ref_acc1=ref_acc1,
-                ref_acc5=ref_acc5,
-                ref_certainty=ref_certainty,
-                experiment_type="input_quant_baseline",
-                status="SUCCESS",
-                mse=stats['norm_mse'],
-                l1=stats['norm_l1'],
-                certainty=stats.get('certainty', 0.0),
-                config_json=_cfg,
-            )
     else:
         print("\nSkipping Baselines (--only_dynamic set)")
-        ref_acc1, ref_acc5 = None, None
+        ref_acc1, ref_acc5, ref_certainty = None, None, None
         
     
     # --- 2. Run Dynamic Optimization Loop ---
@@ -755,27 +506,25 @@ def process_single_model(args, model_config, device, metrics):
     # Pre-load Model and Data ONCE
     print(f"\n[Optimization] Loading model and dataset once for all metrics...")
     
-    config = {
-        'model': {'name': model_name, 'weights': weights},
-        'adapter': {'type': 'generic', 'quantized_ops': []}, 
-        'dataset': {
-             'name': args.dataset_name, 'path': args.dataset_path, 
-             'batch_size': args.batch_size, 'num_workers': args.num_workers
-        }
-    }
+    config = _build_input_quant_config(
+        args,
+        model_name,
+        weights,
+        baseline_formats[0] if baseline_formats else 'fp8_e4m3',
+        quantize_first_layer=False
+    )
     
     # Explicitly clean up before loading
     gc.collect()
     torch.cuda.empty_cache()
     if not args.only_baselines:
         try:
-            adapter = create_adapter(config)
-            model = adapter.model
-            model.to(device)
-            model.eval()
-            
-            runner = Runner(device)
+            # Build loader before CUDA model initialization to keep worker start fast/stable.
             loader = runner.setup_data_loader(config)
+            model, adapter, _ = runner.prepare_model_with_materialized_weights(
+                config=config,
+                output_dir=model_out_dir
+            )
             
             for metric in metrics:
                 activation_dt = f"dyn_input_{metric}"
@@ -789,90 +538,81 @@ def process_single_model(args, model_config, device, metrics):
                 
                 metric_out_dir = os.path.join(model_out_dir, metric)
                 os.makedirs(metric_out_dir, exist_ok=True)
-                
-                # Initialize Quantizer
-                quantizer_handler = DynamicInputQuantizer(model, metric=metric, chunk_size=args.chunk_size)
-                quantizer_handler.register_hooks()
-                
-                # Track Accuracy
-                correct_top1 = 0
-                correct_top5 = 0
-                total = 0
-                batch_count = 0
-                total_certainty = 0.0
-                limit = args.limit_batches if args.limit_batches > 0 else float('inf')
-                
+
                 try:
-                    with torch.no_grad():
-                        for batch in tqdm(loader, desc=f"Dynamic ({model_name}/{metric})"):
-                            if batch_count >= limit: break
-                            
-                            if adapter is not None:
-                                 images, labels = adapter.prepare_batch(batch)
-                            else:
-                                 images, labels = batch
-                            
-                            images, labels = images.to(device), labels.to(device)
-                            outputs = model(images)
-                            
-                            # Accumulate softmax certainty
-                            total_certainty += compute_certainty(outputs) * images.size(0)
-                            
-                            # Top-1 and Top-5
-                            _, pred = outputs.topk(5, 1, True, True)
-                            pred = pred.t()
-                            correct = pred.eq(labels.view(1, -1).expand_as(pred))
-                            
-                            res_top1 = correct[:1].reshape(-1).float().sum(0, keepdim=True).item()
-                            res_top5 = correct[:5].reshape(-1).float().sum(0, keepdim=True).item()
-                            
-                            total += labels.size(0)
-                            correct_top1 += res_top1
-                            correct_top5 += res_top5
-                            batch_count += 1
-                    
-                    acc1 = 100. * correct_top1 / total if total > 0 else 0
-                    acc5 = 100. * correct_top5 / total if total > 0 else 0
-                    certainty = total_certainty / total if total > 0 else 0
-                    
-                    final_stats = quantizer_handler.get_final_stats()
+                    config.setdefault('evaluation', {})
+                    config['evaluation']['dynamic_input_quant'] = {
+                        'enabled': True,
+                        'metric': metric,
+                        'chunk_size': args.chunk_size,
+                        'candidate_formats': candidate_formats,
+                    }
+                    eval_results = runner.evaluate_model(
+                        model=model,
+                        data_loader=loader,
+                        adapter=adapter,
+                        max_batches=args.limit_batches,
+                        desc=f"Dynamic ({model_name}/{metric})",
+                        dynamic_input_quant_cfg=config['evaluation']['dynamic_input_quant']
+                    )
+                    acc1 = eval_results.get('acc1', 0.0)
+                    acc5 = eval_results.get('acc5', 0.0)
+                    certainty = eval_results.get('certainty', 0.0)
+
+                    dyn_stats = eval_results.get('dynamic_input_quant', {})
+                    layer_stats = dyn_stats.get('layer_stats', {})
+                    final_stats = {
+                        'norm_l1': dyn_stats.get('norm_l1', 0.0),
+                        'norm_mse': dyn_stats.get('norm_mse', 0.0),
+                    }
                     
                     print(f"\nDynamic Run ({metric.upper()}): Top1={acc1:.2f}%, Top5={acc5:.2f}%, Certainty={certainty:.4f}")
                     print(f"Norm L1: {final_stats['norm_l1']:.4e}, Norm MSE: {final_stats['norm_mse']:.4e}")
                     
-                    # Log Dynamic Result to Database
-                    _cfg_dyn = json.dumps({
-                        'model': {'name': model_name, 'weights': weights},
-                        'dataset': {'name': args.dataset_name, 'path': args.dataset_path,
-                                    'batch_size': args.batch_size, 'num_workers': args.num_workers,
-                                    'limit_batches': args.limit_batches},
-                        'quantization': {'activation_mode': 'dynamic', 'metric': metric,
-                                         'chunk_size': args.chunk_size},
-                    })
-                    db.log_run(
-                        model_name=model_name,
-                        weight_dt="fp32",
-                        activation_dt=f"dyn_input_{metric}",
-                        acc1=acc1,
-                        acc5=acc5,
-                        ref_acc1=ref_acc1,
-                        ref_acc5=ref_acc5,
-                        ref_certainty=ref_certainty,
+                    # Log Dynamic Result to Database using the actual runtime config.
+                    _cfg_dyn = _serialize_runtime_config(
+                        config,
+                        model=model,
                         experiment_type="input_quant_dynamic",
-                        status="SUCCESS",
-                        mse=final_stats['norm_mse'],
-                        l1=final_stats['norm_l1'],
-                        certainty=certainty,
-                        config_json=_cfg_dyn,
+                        activation_dt=f"dyn_input_{metric}",
+                        metric=metric,
+                        limit_batches=args.limit_batches,
+                    )
+                    log_cfg = copy.deepcopy(config)
+                    log_cfg['experiment'] = {
+                        'name': 'find_optimal_input_quant',
+                        'type': 'input_quant_dynamic',
+                        'weight_dt': 'fp32',
+                        'activation_dt': f"dyn_input_{metric}",
+                        'ref_acc1': ref_acc1,
+                        'ref_acc5': ref_acc5,
+                        'ref_certainty': ref_certainty,
+                        'metrics': {
+                            'mse': final_stats['norm_mse'],
+                            'l1': final_stats['norm_l1'],
+                            'certainty': certainty,
+                        },
+                        'config_json': _cfg_dyn,
+                    }
+                    runner.log_experiment_result(
+                        config=log_cfg,
+                        result={
+                            'model_name': model_name,
+                            'status': 'SUCCESS',
+                            'acc1': acc1,
+                            'acc5': acc5,
+                            'certainty': certainty,
+                            'input_quant': dyn_stats,
+                        },
                     )
                     
-                    plot_format_histogram(quantizer_handler.layer_stats, metric_out_dir)
-                    plot_layer_format_distribution(quantizer_handler.layer_stats, metric_out_dir, metric)
+                    plot_format_histogram(layer_stats, metric_out_dir)
+                    plot_layer_format_distribution(layer_stats, metric_out_dir, metric)
                     
                     stats_path = os.path.join(metric_out_dir, "layer_stats.json")
                     with open(stats_path, 'w') as f:
                         # Save stats + accuracy
-                        save_data = quantizer_handler.layer_stats
+                        save_data = copy.deepcopy(layer_stats)
                         save_data['accuracy'] = {
                             'top1': acc1, 'top5': acc5,
                             'norm_l1': final_stats['norm_l1'],
@@ -882,23 +622,20 @@ def process_single_model(args, model_config, device, metrics):
                 
                 except KeyboardInterrupt:
                     print("\nInterrupted.")
-                    quantizer_handler.cleanup() # Clean hooks before returning
                     return 
                 except Exception as e:
                     print(f"Error processing {model_name} / {metric}: {e}")
                     import traceback
                     traceback.print_exc()
-                finally:
-                    # Always cleanup hooks for this metric so the model is clean for the next one
-                    quantizer_handler.cleanup()
-                    print("Hooks removed.") 
                     
         finally:
             # Clean up memory after ALL metrics are done for this model
             if 'model' in locals(): del model
             if 'adapter' in locals(): del adapter
+            if 'loader' in locals():
+                runner._shutdown_dataloader_workers(loader)
+                del loader
             if 'runner' in locals(): del runner
-            if 'loader' in locals(): del loader
             
             gc.collect()
             torch.cuda.empty_cache()
@@ -955,4 +692,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

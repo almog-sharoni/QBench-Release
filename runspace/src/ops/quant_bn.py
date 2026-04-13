@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import copy
 from ..registry.op_registry import OpRegistry
 from ..quantization.quantizer import quantize
 from .quant_base import QuantizedLayerMixin, quantize_tensor
@@ -28,7 +29,7 @@ class QuantBatchNorm2d(nn.BatchNorm2d, QuantizedLayerMixin):
         input_fp8 = self.quantize_input(input)
     
         # Dequantize weights (gamma)
-        if self.weight_fp8 is not None:
+        if self.weight_fp8 is not None and self.weight_scale is not None:
             w_decomp = self.weight_fp8.float() * self.weight_scale
             if getattr(self, 'capture_activations', False):
                 self.last_quant_weight = w_decomp.detach()
@@ -83,3 +84,89 @@ class QuantBatchNorm2d(nn.BatchNorm2d, QuantizedLayerMixin):
             self.eps
         )
 
+
+@OpRegistry.register("QuantBatchNormAct2d")
+class QuantBatchNormAct2d(nn.Module, QuantizedLayerMixin):
+    """
+    Quantized wrapper for timm-style BatchNormAct2d blocks.
+    Preserves drop/activation behavior while quantizing the internal BN op.
+    """
+    def __init__(
+        self,
+        num_features: int,
+        eps: float = 1e-5,
+        momentum: float = 0.1,
+        affine: bool = True,
+        track_running_stats: bool = True,
+        drop: nn.Module = None,
+        act: nn.Module = None,
+        q_type: str = "fp8_e4m3",
+        quantization_bias: int = None,
+    ):
+        super().__init__()
+        self.q_type = q_type
+        self.quantization_bias = quantization_bias
+
+        self.bn = QuantBatchNorm2d(
+            num_features=num_features,
+            eps=eps,
+            momentum=momentum,
+            affine=affine,
+            track_running_stats=track_running_stats,
+            q_type=q_type,
+        )
+        self.drop = copy.deepcopy(drop) if drop is not None else nn.Identity()
+        self.act = copy.deepcopy(act) if act is not None else nn.Identity()
+
+    def _sync_runtime_config(self):
+        # Mirror adapter/layer runtime knobs to the internal quant BN.
+        for attr in (
+            "q_type",
+            "quantization_bias",
+            "input_q_type",
+            "input_quantization",
+            "weight_quantization",
+            "input_mode",
+            "input_chunk_size",
+            "weight_mode",
+            "weight_chunk_size",
+            "rounding",
+            "chunk_formats",
+            "run_id",
+            "layer_name",
+            "capture_activations",
+        ):
+            if hasattr(self, attr):
+                setattr(self.bn, attr, getattr(self, attr))
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        self._sync_runtime_config()
+        x = self.bn(input)
+        x = self.drop(x)
+        x = self.act(x)
+        return x
+
+    @classmethod
+    def from_native(cls, native_bn_act, q_type="fp8_e4m3", quantization_bias: int = None):
+        wrapped = cls(
+            num_features=native_bn_act.num_features,
+            eps=native_bn_act.eps,
+            momentum=native_bn_act.momentum,
+            affine=native_bn_act.affine,
+            track_running_stats=native_bn_act.track_running_stats,
+            drop=getattr(native_bn_act, "drop", None),
+            act=getattr(native_bn_act, "act", None),
+            q_type=q_type,
+            quantization_bias=quantization_bias,
+        )
+
+        if native_bn_act.affine:
+            wrapped.bn.weight.data.copy_(native_bn_act.weight.data)
+            wrapped.bn.bias.data.copy_(native_bn_act.bias.data)
+
+        if native_bn_act.track_running_stats:
+            wrapped.bn.running_mean.data.copy_(native_bn_act.running_mean.data)
+            wrapped.bn.running_var.data.copy_(native_bn_act.running_var.data)
+            wrapped.bn.num_batches_tracked.data.copy_(native_bn_act.num_batches_tracked.data)
+
+        return wrapped

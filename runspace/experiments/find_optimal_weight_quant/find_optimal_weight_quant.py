@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import warnings
 import json
+import gc
+import subprocess
 from tqdm import tqdm
 
 # Add project root to sys.path
@@ -21,10 +23,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from runspace.src.adapters.adapter_factory import create_adapter
-from runspace.src.ops.quant_base import calculate_scale, quantize_tensor
-from runspace.src.database.handler import RunDatabase
-from runspace.src.quantization.quantizer import quantize 
+from runspace.src.ops.quant_base import quantize_tensor
 # from runspace.src.quantization.quantizer import quantize_fp_generic_i32 as quantize_i32
 from runspace.src.quantization.constants import get_quantization_bias
 # Late import
@@ -40,7 +39,7 @@ baseline_formats = [
     #  'fp5_e1m3' , 'fp5_e2m2', 'fp5_e3m1', 'fp5_e4m0'
     'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
     'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
-
+    # 'fp6_e1m4', 'fp6_e2m3', 'fp6_e3m2', 'fp6_e4m1', 'fp6_e5m0'
 ]
 
 
@@ -50,7 +49,7 @@ def get_args():
     parser.add_argument("--weights", type=str, default="DEFAULT", help="Model weights")
     parser.add_argument("--include_fp32", action="store_true", help="Include FP32 in search")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory (default: runspace/experiments/optimal_layer_quant)")
-    parser.add_argument("--models_config", type=str, default=None, help="Path to a YAML file containing a list of models to run")
+    parser.add_argument("--models_file", type=str, default=None, help="Path to a YAML file containing a list of models to run")
     
     # Validation / Metric Args
     parser.add_argument("--metrics", type=str, default="l1,mse", help="Comma-separated metrics: l1, mse, sqnr, cosine OR 'all'")
@@ -62,16 +61,31 @@ def get_args():
     parser.add_argument("--run_eval", action="store_true", help="Run evaluation on FP32, FP8, and Optimized models")
     parser.add_argument("--dataset_name", type=str, default="imagenet", help="Dataset name")
     parser.add_argument("--dataset_path", type=str, default="/data/imagenet/val", help="Dataset path")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=128, help="Batch size")
     parser.add_argument("--num_workers", type=int, default=32, help="Number of workers")
     parser.add_argument("--weight_chunk_size", type=int, default=128, help="Weight/Input chunk size (blocks). If set, enables chunked quantization.")
     parser.add_argument("--per_chunk_format", action="store_true", help="Enable per-chunk format selection (each chunk gets its own optimal format)")
     parser.add_argument("--plot_layers", action="store_true", help="Generate error bar plots for every single layer (warning: slow)")
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of batches to process (default: -1 for all)")
     parser.add_argument("--baseline_formats", type=str, default=','.join(baseline_formats), help="Comma-separated list of formats to run as baselines (full eval)")
+    parser.add_argument("--skip_baselines", action="store_true", help="Skip baseline evaluations (run ref + optimized only)")
     parser.add_argument("--skip_layer_wise", action="store_true", help="Skip the layer-wise optimization experiment (only run chunk/baselines)")
     parser.add_argument("--force_recalc", action="store_true", help="Force recalculation of layer errors even if results exist")
     parser.add_argument("--force_rerun", action="store_true", help="Re-run all evaluations even if already in DB")
+    parser.add_argument(
+        "--verify_saved_weights",
+        action="store_true",
+        help=(
+            "After writing quantized weight files, validate each mapped weight tensor "
+            "against its expected quantization format (including per-chunk maps)."
+        ),
+    )
+    parser.add_argument(
+        "--verify_atol",
+        type=float,
+        default=1e-7,
+        help="Absolute tolerance used by --verify_saved_weights checks.",
+    )
 
     return parser.parse_args()
 
@@ -111,6 +125,122 @@ def _get_ref_from_db(existing_runs, model_name):
     return float(r.get('acc1', 0.0) or 0.0), float(r.get('acc5', 0.0) or 0.0), float(r.get('certainty', 0.0) or 0.0)
 
 
+def _runtime_base_config(args):
+    return {
+        'model': {'name': args.model_name, 'weights': args.weights},
+        'adapter': {
+            'type': 'generic',
+            'quantized_ops': [],
+            'build_quantized': False,
+            'weight_quantization': False,
+            'input_quantization': False,
+        },
+        'dataset': {
+            'name': args.dataset_name,
+            'path': args.dataset_path,
+            'batch_size': args.batch_size,
+            'num_workers': args.num_workers,
+        }
+    }
+
+
+def _log_weight_quant_run(
+    runner,
+    args,
+    model_name,
+    model_weights,
+    experiment_type,
+    weight_dt,
+    acc1,
+    acc5,
+    status,
+    ref_acc1,
+    ref_acc5,
+    ref_certainty,
+    certainty=0.0,
+    mse=None,
+    l1=None,
+    quant_map_json=None,
+    config_json=None,
+):
+    cfg = _runtime_base_config(args)
+    if model_weights:
+        cfg.setdefault('model', {})
+        cfg['model']['weights'] = model_weights
+    cfg['experiment'] = {
+        'name': 'find_optimal_weight_quant',
+        'type': experiment_type,
+        'weight_dt': weight_dt,
+        'activation_dt': 'fp32',
+        'ref_acc1': ref_acc1,
+        'ref_acc5': ref_acc5,
+        'ref_certainty': ref_certainty,
+        'metrics': {
+            'mse': mse,
+            'l1': l1,
+            'certainty': certainty,
+        },
+        'quant_map_json': quant_map_json,
+        'config_json': config_json,
+    }
+    result = {
+        'model_name': model_name,
+        'status': status,
+        'acc1': acc1,
+        'acc5': acc5,
+        'certainty': certainty if certainty is not None else 0.0,
+    }
+    runner.log_experiment_result(cfg, result)
+
+
+def _layer_types_from_model(model):
+    """Return {layer_name: class_name} for each named module."""
+    return {
+        name: type(module).__name__
+        for name, module in model.named_modules()
+        if name
+    }
+
+
+def _build_weight_map_json(quant_map, layer_types):
+    """
+    Build enriched weight quant map JSON:
+    {
+      "<layer>": {
+        "format": <fmt or [fmt...]>,
+        "type": "<module class>",
+        "format_counts": {fmt: count, ...},
+        "total_chunks": N,
+        "dominant_format": "<fmt>"
+      }
+    }
+    """
+    enriched = {}
+    for layer, fmt_spec in quant_map.items():
+        counts = {}
+        if isinstance(fmt_spec, list):
+            for fmt in fmt_spec:
+                key = str(fmt)
+                counts[key] = counts.get(key, 0) + 1
+        elif fmt_spec is not None:
+            key = str(fmt_spec)
+            counts[key] = counts.get(key, 0) + 1
+
+        dominant = None
+        if counts:
+            dominant = sorted(counts.items(), key=lambda x: (-x[1], x[0]))[0][0]
+
+        enriched[layer] = {
+            "format": fmt_spec,
+            "type": layer_types.get(layer, "unknown"),
+            "format_counts": counts,
+            "total_chunks": int(sum(counts.values())),
+            "dominant_format": dominant,
+        }
+
+    return json.dumps(enriched)
+
+
 def get_quantized_tensor_sim(tensor, q_type, chunk_size=None, chunk_formats=None, mode=None):
     """
     Returns the dequantized tensor (simulated quantization).
@@ -123,15 +253,14 @@ def get_quantized_tensor_sim(tensor, q_type, chunk_size=None, chunk_formats=None
     if mode == 'tensor':
         return quantize_tensor(tensor, q_type=q_type, mode='tensor', rounding='nearest', validate=False)
 
-    # Default: per output-channel (dim 0) — note: quantize_tensor 'channel' mode uses dim 1,
-    # which is wrong for weights, so we keep the explicit per-output-channel logic here.
+    # Default: per output-channel (dim 0) via quantize_tensor channel mode.
+    # quantize_tensor(channel) preserves dim=1, so transpose [O, ...] -> [..., O]
+    # to make channel axis align with output channels.
     out_channels = tensor.shape[0]
-    flat = tensor.view(out_channels, -1)
-    max_val_per_channel = flat.abs().amax(dim=1, keepdim=True).clamp(min=1e-9)
-    scale = calculate_scale(max_val_per_channel, q_type)
-    scaled = flat / scale
-    quant = quantize(scaled, q_type=q_type, rounding="nearest", validate=False)
-    dequant = (quant * scale).view_as(tensor)
+    flat = tensor.view(out_channels, -1).transpose(0, 1).contiguous()  # [K, O]
+    deq_t, _ = quantize_tensor(flat, q_type=q_type, mode='channel', rounding='nearest', validate=False)
+    dequant = deq_t.transpose(0, 1).contiguous().view_as(tensor)
+    max_val_per_channel = tensor.view(out_channels, -1).abs().amax(dim=1, keepdim=True).clamp(min=1e-9)
     return dequant, max_val_per_channel.max().item()
 
 
@@ -322,7 +451,12 @@ def create_quantized_state_dict(model, layer_results_map, args, metric, use_chun
                 if not indices: continue
                 idx_tensor = torch.tensor(indices, device=w.device)
                 target_chunks = w_chunked_flat[idx_tensor]
-                dq_chunks, _ = get_quantized_tensor_sim(target_chunks, fmt)
+                # IMPORTANT: keep chunk semantics (one quantized chunk per row).
+                dq_chunks, _ = get_quantized_tensor_sim(
+                    target_chunks,
+                    fmt,
+                    chunk_size=chunk_size_,
+                )
                 w_dequant_flat[idx_tensor] = dq_chunks
             if len(current_formats) < total_chunks:
                 w_dequant_flat[len(current_formats):] = w_chunked_flat[len(current_formats):]
@@ -382,9 +516,189 @@ def create_quantized_state_dict(model, layer_results_map, args, metric, use_chun
 
     return state_dict, quant_map
 
+
+def _resolve_weight_tensor_for_map_entry(state_dict, layer_name):
+    """
+    Resolve a quant-map layer key to the corresponding weight tensor in state_dict.
+    Supports both regular modules ("<name>.weight") and MHA virtual entries:
+    "<mha>.q_proj", "<mha>.k_proj", "<mha>.v_proj".
+    """
+    if layer_name.endswith('.q_proj') or layer_name.endswith('.k_proj') or layer_name.endswith('.v_proj'):
+        parent = layer_name.rsplit('.', 1)[0]
+        in_proj_key = f"{parent}.in_proj_weight"
+        if in_proj_key not in state_dict:
+            return None
+        w_in = state_dict[in_proj_key]
+        embed_dim = w_in.shape[0] // 3
+        if layer_name.endswith('.q_proj'):
+            return w_in[0:embed_dim].contiguous()
+        if layer_name.endswith('.k_proj'):
+            return w_in[embed_dim:2 * embed_dim].contiguous()
+        return w_in[2 * embed_dim:3 * embed_dim].contiguous()
+
+    weight_key = f"{layer_name}.weight"
+    if weight_key not in state_dict:
+        return None
+    return state_dict[weight_key].contiguous()
+
+
+def _apply_chunk_format_map(tensor, chunk_formats, chunk_size):
+    """
+    Re-apply the chunk-wise format map on a tensor and return the reconstructed
+    dequantized tensor (same logic used when creating chunk-quantized weights).
+    """
+    w_chunked, original_shape, pad_len = get_chunked_tensor(tensor, chunk_size=chunk_size)
+    batch_size, num_chunks, chunk_size_ = w_chunked.shape
+    w_chunked_flat = w_chunked.reshape(-1, chunk_size_)
+    total_chunks = w_chunked_flat.shape[0]
+    w_dequant_flat = torch.zeros_like(w_chunked_flat)
+
+    current_formats = chunk_formats[:total_chunks]
+    fmt_to_indices = {}
+    for idx, fmt in enumerate(current_formats):
+        fmt_to_indices.setdefault(fmt, []).append(idx)
+
+    for fmt, indices in fmt_to_indices.items():
+        if not indices:
+            continue
+        idx_tensor = torch.tensor(indices, dtype=torch.long, device=w_chunked_flat.device)
+        target_chunks = w_chunked_flat[idx_tensor]
+        # Match creation path: quantize each row as one logical chunk.
+        dq_chunks, _ = get_quantized_tensor_sim(
+            target_chunks,
+            fmt,
+            chunk_size=chunk_size_,
+        )
+        w_dequant_flat[idx_tensor] = dq_chunks
+
+    if len(current_formats) < total_chunks:
+        w_dequant_flat[len(current_formats):] = w_chunked_flat[len(current_formats):]
+
+    w_dequant_chunked = w_dequant_flat.view(batch_size, num_chunks, chunk_size_)
+    flat = w_dequant_chunked.view(batch_size, -1)
+    if pad_len > 0:
+        flat = flat[:, :-pad_len]
+    return flat.view(original_shape)
+
+
+def verify_quantized_weights_file(weights_path, quant_map, args, atol=1e-7):
+    """
+    Validate that each weight tensor in `weights_path` is already quantized
+    according to `quant_map`.
+    """
+    print(f"Verifying quantized weights file: {weights_path}")
+    state_dict = torch.load(weights_path, map_location='cpu')
+
+    total = 0
+    passed = 0
+    failed = []
+
+    for layer_name, fmt_spec in quant_map.items():
+        total += 1
+        tensor = _resolve_weight_tensor_for_map_entry(state_dict, layer_name)
+        if tensor is None:
+            failed.append((layer_name, "missing_weight", float('inf')))
+            continue
+
+        tensor = tensor.detach().clone().contiguous()
+        if not torch.isfinite(tensor).all():
+            failed.append((layer_name, "non_finite_weights", float('inf')))
+            continue
+        try:
+            if isinstance(fmt_spec, list):
+                expected = _apply_chunk_format_map(
+                    tensor=tensor,
+                    chunk_formats=fmt_spec,
+                    chunk_size=args.weight_chunk_size,
+                )
+            else:
+                expected, _ = get_quantized_tensor_sim(
+                    tensor,
+                    str(fmt_spec),
+                    chunk_size=args.weight_chunk_size
+                )
+        except Exception as e:
+            failed.append((layer_name, f"quantize_error:{e}", float('inf')))
+            continue
+        if not torch.isfinite(expected).all():
+            failed.append((layer_name, "non_finite_expected", float('inf')))
+            continue
+
+        if tensor.numel() == 0:
+            max_abs_err = 0.0
+        else:
+            max_abs_err = (tensor - expected).abs().max().item()
+
+        if max_abs_err <= atol:
+            passed += 1
+        else:
+            failed.append((layer_name, fmt_spec, max_abs_err))
+
+    if failed:
+        print(f"[VERIFY] FAILED {len(failed)}/{total} layers in {weights_path}")
+        for layer_name, fmt, err in failed[:20]:
+            print(f"  - {layer_name}: fmt={fmt}, max_abs_err={err:.3e}")
+        if len(failed) > 20:
+            print(f"  ... and {len(failed) - 20} more failures")
+        raise RuntimeError(
+            f"Quantized weight verification failed for {len(failed)}/{total} layers "
+            f"(atol={atol})."
+        )
+
+    print(f"[VERIFY] PASSED {passed}/{total} layers (atol={atol})")
+
+
+def summarize_state_dict_delta(reference_state_dict, candidate_state_dict, eps=0.0):
+    """
+    Summarize how much `candidate_state_dict` differs from `reference_state_dict`.
+    Returns a compact dict for logging/debugging.
+    """
+    tensors_compared = 0
+    tensors_changed = 0
+    elems_compared = 0
+    elems_changed = 0
+    max_abs_diff = 0.0
+    l1_sum = 0.0
+
+    for key, cand in candidate_state_dict.items():
+        ref = reference_state_dict.get(key)
+        if ref is None or not torch.is_tensor(cand) or not torch.is_tensor(ref):
+            continue
+        if ref.shape != cand.shape:
+            continue
+
+        tensors_compared += 1
+        diff = (cand - ref).abs()
+        if diff.numel() == 0:
+            continue
+        elems_compared += diff.numel()
+        l1 = diff.sum().item()
+        l1_sum += l1
+        cur_max = diff.max().item()
+        if cur_max > max_abs_diff:
+            max_abs_diff = cur_max
+
+        changed_mask = diff > eps
+        changed_count = int(changed_mask.sum().item())
+        elems_changed += changed_count
+        if changed_count > 0:
+            tensors_changed += 1
+
+    mean_abs_diff = (l1_sum / elems_compared) if elems_compared > 0 else 0.0
+    pct_elems_changed = (100.0 * elems_changed / elems_compared) if elems_compared > 0 else 0.0
+    return {
+        'tensors_compared': tensors_compared,
+        'tensors_changed': tensors_changed,
+        'elems_compared': elems_compared,
+        'elems_changed': elems_changed,
+        'pct_elems_changed': pct_elems_changed,
+        'max_abs_diff': max_abs_diff,
+        'mean_abs_diff': mean_abs_diff,
+    }
+
 def process_single_model(args, device, metrics, base_root):
-    # Initialize Database
-    db = RunDatabase()
+    runner = Runner(device)
+    db = runner._get_db()
     
     # Valid model path: base_root / model_name
     model_dir = os.path.join(base_root, args.model_name)
@@ -397,22 +711,18 @@ def process_single_model(args, device, metrics, base_root):
     
     # Load Model
     print(f"Loading model {args.model_name}...")
-    config = {
-        'model': {'name': args.model_name, 'weights': args.weights},
-        'adapter': {'type': 'generic', 'quantized_ops': []},
-        'dataset': {
-             'name': args.dataset_name, 'path': args.dataset_path, 
-             'batch_size': args.batch_size, 'num_workers': args.num_workers
-        }
-    }
+    config = _runtime_base_config(args)
     
     try:
-        adapter = create_adapter(config)
-        model = adapter.model
-        model.to(device)
+        analysis_dir = os.path.join(model_dir, "analysis_fp32")
+        model, adapter, _ = runner.prepare_model_with_materialized_weights(
+            config=config,
+            output_dir=analysis_dir
+        )
     except Exception as e:
         print(f"Failed to load model: {e}")
         return
+    layer_types = _layer_types_from_model(model)
 
     qt_options = baseline_formats.copy()
         
@@ -431,6 +741,14 @@ def process_single_model(args, device, metrics, base_root):
     for m in metrics:
         metric_dir = os.path.join(model_dir, m)
         csv_path = os.path.join(metric_dir, "layer_errors.csv")
+        need_chunk_details = bool(args.per_chunk_format and args.weight_chunk_size)
+        if need_chunk_details and os.path.exists(csv_path) and not args.force_recalc:
+            print(
+                f"Metric {m}: per-chunk format enabled; cached CSV lacks full chunk winner lists. "
+                "Recomputing this metric."
+            )
+            metrics_to_calc.append(m)
+            continue
         
         if not args.force_recalc and os.path.exists(csv_path):
             cached_results, success = load_cached_results(csv_path, m)
@@ -506,38 +824,52 @@ def process_single_model(args, device, metrics, base_root):
         else:
             ref_config = {
                 'model': {'name': args.model_name, 'weights': args.weights},
-                'adapter': {'type': 'generic', 'quantized_ops': []},
+                'adapter': {
+                    'type': 'generic',
+                    'quantized_ops': [],
+                    'build_quantized': False,
+                    'weight_quantization': False,
+                    'input_quantization': False,
+                },
                 'evaluation': eval_config,
                 'dataset': dataset_base,
                 'output_name': "ref_fp32"
             }
             configs_to_run.append(ref_config)
 
-        # Parse baseline formats and strip whitespace
-        requested_baselines = [fmt.strip() for fmt in args.baseline_formats.split(',') if fmt.strip()]
+        if args.skip_baselines:
+            print("[Eval] --skip_baselines set: skipping baseline_* configs.")
+        else:
+            # Parse baseline formats and strip whitespace
+            requested_baselines = [fmt.strip() for fmt in args.baseline_formats.split(',') if fmt.strip()]
 
-        for fmt in requested_baselines:
-            if _weight_quant_run_exists(existing_runs, args.model_name, 'weight_quant_baseline', fmt):
-                print(f"[DB] Skipping baseline_{fmt} — already in DB")
-                continue
+            for fmt in requested_baselines:
+                if _weight_quant_run_exists(existing_runs, args.model_name, 'weight_quant_baseline', fmt):
+                    print(f"[DB] Skipping baseline_{fmt} — already in DB")
+                    continue
 
-            b_cfg = {
-                'model': {'name': args.model_name, 'weights': args.weights},
-                'adapter': {
-                    'type': 'generic',
-                    'quantized_ops': ['-1'],
-                    'input_quantization': False,
-                },
-                'quantization': {
-                    'format': fmt,
-                    'weight_mode': 'chunk',
-                    'weight_chunk_size': args.weight_chunk_size
-                },
-                'evaluation': eval_config,
-                'dataset': dataset_base,
-                'output_name': f"baseline_{fmt}"
-            }
-            configs_to_run.append(b_cfg)
+                b_cfg = {
+                    'model': {'name': args.model_name, 'weights': args.weights},
+                    'adapter': {
+                        'type': 'generic',
+                        'quantized_ops': ['all'],
+                        'build_quantized': True,
+                        'weight_quantization': True,
+                        'input_quantization': False,
+                    },
+                    'quantization': {
+                        'format': fmt,
+                        'weight_mode': 'chunk',
+                        'weight_chunk_size': args.weight_chunk_size
+                    },
+                    'evaluation': eval_config,
+                    'dataset': dataset_base,
+                    'output_name': f"baseline_{fmt}"
+                }
+                configs_to_run.append(b_cfg)
+
+    # Map run output_name -> enriched quant map JSON (for DB logging / dashboard)
+    weight_quant_map_json_by_output = {}
 
     # Initialize total_errors_by_config for all metrics upfront
     for m in metrics:
@@ -736,7 +1068,9 @@ def process_single_model(args, device, metrics, base_root):
         base_adapter_config = {
             'type': 'generic', 
             'input_quantization': False,
+            'weight_quantization': False,
             'quantized_ops': [],
+            'build_quantized': False,
             'quantize_first_layer': False,
         }
         
@@ -751,9 +1085,24 @@ def process_single_model(args, device, metrics, base_root):
         if not args.skip_layer_wise:
             # Create Quantized Weights
             q_state_dict, q_map = create_quantized_state_dict(model, layer_results_map, args, m, use_chunking=False)
+            layer_delta = summarize_state_dict_delta(model.state_dict(), q_state_dict)
+            print(
+                "[Layer-Opt Delta] "
+                f"changed_tensors={layer_delta['tensors_changed']}/{layer_delta['tensors_compared']}, "
+                f"changed_elems={layer_delta['pct_elems_changed']:.2f}%, "
+                f"max_abs_diff={layer_delta['max_abs_diff']:.3e}, "
+                f"mean_abs_diff={layer_delta['mean_abs_diff']:.3e}"
+            )
             q_weights_path = os.path.join(metric_dir, "quantized_weights_layer.pt")
             torch.save(q_state_dict, q_weights_path)
             print(f"Saved quantized weights to {q_weights_path}")
+            if args.verify_saved_weights:
+                verify_quantized_weights_file(
+                    weights_path=q_weights_path,
+                    quant_map=q_map,
+                    args=args,
+                    atol=args.verify_atol,
+                )
             
             # Save Map
             q_map_path = os.path.join(metric_dir, "quantization_map_layer.json")
@@ -782,17 +1131,37 @@ def process_single_model(args, device, metrics, base_root):
             
             if args.run_eval:
                 run_config = layer_opt_config.copy()
-                run_config['output_name'] = f"optimized_layer_{m}"
+                out_name = f"optimized_layer_{m}"
+                run_config['output_name'] = out_name
                 configs_to_run.append(run_config)
+                weight_quant_map_json_by_output[out_name] = _build_weight_map_json(
+                    q_map,
+                    layer_types=layer_types,
+                )
         
         
         # 2. OPTIMIZED CHUNK CONFIG (If Chunking Enabled)
         if args.weight_chunk_size and args.per_chunk_format and layer_config_per_chunk:
             # Create Quantized Weights (Chunked)
             q_state_dict_chunk, q_map_chunk = create_quantized_state_dict(model, layer_results_map, args, m, use_chunking=True)
+            chunk_delta = summarize_state_dict_delta(model.state_dict(), q_state_dict_chunk)
+            print(
+                "[Chunk-Opt Delta] "
+                f"changed_tensors={chunk_delta['tensors_changed']}/{chunk_delta['tensors_compared']}, "
+                f"changed_elems={chunk_delta['pct_elems_changed']:.2f}%, "
+                f"max_abs_diff={chunk_delta['max_abs_diff']:.3e}, "
+                f"mean_abs_diff={chunk_delta['mean_abs_diff']:.3e}"
+            )
             q_weights_path_chunk = os.path.join(metric_dir, "quantized_weights_chunk.pt")
             torch.save(q_state_dict_chunk, q_weights_path_chunk)
             print(f"Saved chunk-quantized weights to {q_weights_path_chunk}")
+            if args.verify_saved_weights:
+                verify_quantized_weights_file(
+                    weights_path=q_weights_path_chunk,
+                    quant_map=q_map_chunk,
+                    args=args,
+                    atol=args.verify_atol,
+                )
             
             # Save Map
             q_map_chunk_path = os.path.join(metric_dir, "quantization_map_chunk.json")
@@ -819,8 +1188,13 @@ def process_single_model(args, device, metrics, base_root):
             
             if args.run_eval:
                 run_config = chunk_opt_config.copy()
-                run_config['output_name'] = f"optimized_chunk_{m}"
+                out_name = f"optimized_chunk_{m}"
+                run_config['output_name'] = out_name
                 configs_to_run.append(run_config)
+                weight_quant_map_json_by_output[out_name] = _build_weight_map_json(
+                    q_map_chunk,
+                    layer_types=layer_types,
+                )
 
             
     # Evaluation Logic (same as before)
@@ -831,8 +1205,7 @@ def process_single_model(args, device, metrics, base_root):
         # I removed the full execution block in replace, so I must re-include it.
         # ...
         print("\n--- Starting Evaluation Batch ---")
-        runner = Runner()
-        print("Using Parallel Execution...")
+        print("Using Sequential Execution (one config at a time)...")
         
         # Dedupe logic (baselines already filtered by DB at build time above)
         final_configs = []
@@ -869,85 +1242,123 @@ def process_single_model(args, device, metrics, base_root):
             print("Warning: Could not import OracleTracker. Oracle visualization disabled.")
             tracker = None
 
-        results = runner.run_batch_parallel(final_configs, output_root=model_dir)
-        
-        # --- Log Results to Database ---
-        # 1. Identify Reference (ref_fp32) — use cached DB value if ref was skipped
+        results = []
+        # Keep reference metrics available while logging each run immediately.
         if cached_ref is not None:
             ref_acc1, ref_acc5, ref_certainty = cached_ref
         else:
             ref_acc1, ref_acc5, ref_certainty = 0.0, 0.0, 0.0
-            for res in results:
-                if res.get('output_name') == 'ref_fp32':
-                    ref_acc1 = res.get('acc1', 0.0)
-                    ref_acc5 = res.get('acc5', 0.0)
-                    ref_certainty = res.get('certainty', 0.0)
-                    break
-        
-        # 2. Log all results
-        for res in results:
+
+        total_elements = sum(r.get('numel', 0) for r in layer_results)
+
+        def _log_result_immediately(res):
+            nonlocal ref_acc1, ref_acc5, ref_certainty
             out_name = res.get('output_name', '')
+
             if out_name == 'ref_fp32':
-                if res.get('status') == 'SUCCESS':
-                    db.log_run(
-                        model_name=res.get('model_name', args.model_name),
-                        weight_dt='fp32',
-                        activation_dt='fp32',
-                        acc1=ref_acc1,
-                        acc5=ref_acc5,
-                        ref_acc1=ref_acc1,
-                        ref_acc5=ref_acc5,
-                        ref_certainty=ref_certainty,
-                        experiment_type='fp32_ref',
-                        status='SUCCESS',
-                        certainty=ref_certainty,
-                        config_json=json.dumps({'model': {'name': args.model_name, 'weights': args.weights},
-                                                'dataset': {'name': args.dataset_name, 'path': args.dataset_path,
-                                                            'batch_size': args.batch_size}}),
-                    )
-                continue
-                
-            # For weight optimization, activation is usually fp32
-            # Weight DT is based on out_name (baseline_xxx or optimized_xxx)
+                if float(res.get('acc1', 0.0) or 0.0) > 0.0:
+                    ref_acc1 = float(res.get('acc1', 0.0) or 0.0)
+                    ref_acc5 = float(res.get('acc5', 0.0) or 0.0)
+                    ref_certainty = float(res.get('certainty', 0.0) or 0.0)
+                ref_status = res.get('status', 'SUCCESS')
+                if ref_status in ('SUCCESS', 'NO_QUANT') and ref_acc1 > 0.0:
+                    ref_status = 'SUCCESS'
+                _log_weight_quant_run(
+                    runner=runner,
+                    args=args,
+                    model_name=res.get('model_name', args.model_name),
+                    model_weights=res.get('materialized_weight_path'),
+                    experiment_type='fp32_ref',
+                    weight_dt='fp32',
+                    acc1=float(res.get('acc1', 0.0) or 0.0),
+                    acc5=float(res.get('acc5', 0.0) or 0.0),
+                    status=ref_status,
+                    ref_acc1=ref_acc1,
+                    ref_acc5=ref_acc5,
+                    ref_certainty=ref_certainty,
+                    certainty=float(res.get('certainty', 0.0) or 0.0),
+                    quant_map_json=None,
+                    config_json={
+                        'model': {'name': args.model_name, 'weights': args.weights},
+                        'dataset': {
+                            'name': args.dataset_name,
+                            'path': args.dataset_path,
+                            'batch_size': args.batch_size,
+                            'num_workers': args.num_workers,
+                        },
+                        'evaluation': {'output_name': 'ref_fp32'},
+                    },
+                )
+                return
+
+            # For weight optimization, activation is usually fp32.
             weight_dt = out_name.replace('baseline_', '').replace('optimized_', 'opt_')
-            
-            # Fetch MSE/L1 if available and normalize
-            total_elements = sum(r.get('numel', 0) for r in layer_results)
-            
+
             mse = total_errors_by_config.get('mse', {}).get(out_name)
             if mse is not None and total_elements > 0:
-                 mse /= total_elements
+                mse /= total_elements
 
             l1 = total_errors_by_config.get('l1', {}).get(out_name)
             if l1 is not None and total_elements > 0:
-                 l1 /= total_elements
-            
-            # Certainty (softmax based)
-            certainty = res.get('certainty', 0.0)
-            acc1 = res.get('acc1', 0.0)
+                l1 /= total_elements
 
-            db.log_run(
+            _log_weight_quant_run(
+                runner=runner,
+                args=args,
                 model_name=res.get('model_name', args.model_name),
+                model_weights=res.get('materialized_weight_path'),
+                experiment_type=(
+                    "weight_quant_baseline"
+                    if out_name.startswith('baseline_')
+                    else "weight_quant_optimized"
+                ),
                 weight_dt=weight_dt,
-                activation_dt="fp32",
-                acc1=acc1,
-                acc5=res.get('acc5', 0.0),
+                acc1=float(res.get('acc1', 0.0) or 0.0),
+                acc5=float(res.get('acc5', 0.0) or 0.0),
+                status=res.get('status', 'SUCCESS'),
                 ref_acc1=ref_acc1,
                 ref_acc5=ref_acc5,
                 ref_certainty=ref_certainty,
-                experiment_type="weight_quant_baseline" if out_name.startswith('baseline_') else "weight_quant_optimized",
-                status=res.get('status', 'SUCCESS'),
                 mse=mse,
                 l1=l1,
-                certainty=certainty,
-                config_json=json.dumps({
+                certainty=float(res.get('certainty', 0.0) or 0.0),
+                quant_map_json=weight_quant_map_json_by_output.get(out_name),
+                config_json={
                     'model': {'name': args.model_name, 'weights': args.weights},
-                    'dataset': {'name': args.dataset_name, 'path': args.dataset_path,
-                                'batch_size': args.batch_size},
-                    'quantization': {'weight_format': weight_dt, 'weight_mode': 'chunk',
-                                     'weight_chunk_size': args.weight_chunk_size},
-                }),
+                    'dataset': {
+                        'name': args.dataset_name,
+                        'path': args.dataset_path,
+                        'batch_size': args.batch_size,
+                        'num_workers': args.num_workers,
+                    },
+                    'quantization': {
+                        'weight_format': weight_dt,
+                        'weight_mode': 'chunk',
+                        'weight_chunk_size': args.weight_chunk_size,
+                    },
+                    'evaluation': {'output_name': out_name},
+                },
             )
+
+        total_eval_runs = len(final_configs)
+        for idx, run_cfg in enumerate(final_configs, start=1):
+            out_name = run_cfg.get('output_name', f'run_{idx}')
+            print(f"[Eval] Running {idx}/{total_eval_runs}: {out_name}")
+            res = runner.run_single(run_cfg, output_root=model_dir)
+            results.append(res)
+            try:
+                _log_result_immediately(res)
+            except Exception as log_err:
+                print(f"[DB] Failed to log {out_name}: {log_err}")
+
+        failed = [r for r in results if r.get('status') not in ('SUCCESS', 'NO_QUANT')]
+        if failed:
+            print(f"\n[Evaluation] {len(failed)} run(s) failed:")
+            for r in failed:
+                print(
+                    f"  - {r.get('output_name', '<unknown>')}: "
+                    f"status={r.get('status')} error={r.get('exec_error')}"
+                )
         
         # Plot Oracle Heatmaps
         if tracker:
@@ -1163,9 +1574,9 @@ def main():
     else:
         base_root = os.path.join(os.path.dirname(__file__), "results")
 
-    if args.models_config:
-        print(f"Loading models from config: {args.models_config}")
-        with open(args.models_config, 'r') as f:
+    if args.models_file:
+        print(f"Loading models from config: {args.models_file}")
+        with open(args.models_file, 'r') as f:
             config = yaml.safe_load(f)
         
         # Support both {'models': [...]} and direct list [...]
@@ -1178,6 +1589,38 @@ def main():
             return
 
         print(f"Found {len(models_list)} models to process.")
+
+        # Run each model in an isolated subprocess to avoid cross-model native state
+        # leakage (CUDA/UCX/DataLoader workers) in long multi-model sessions.
+        def _base_cli_without_model_overrides():
+            raw = sys.argv[1:]
+            filtered = []
+            i = 0
+            while i < len(raw):
+                tok = raw[i]
+                if tok == '--models_file':
+                    i += 2
+                    continue
+                if tok.startswith('--models_file='):
+                    i += 1
+                    continue
+                if tok == '--model_name':
+                    i += 2
+                    continue
+                if tok.startswith('--model_name='):
+                    i += 1
+                    continue
+                if tok == '--weights':
+                    i += 2
+                    continue
+                if tok.startswith('--weights='):
+                    i += 1
+                    continue
+                filtered.append(tok)
+                i += 1
+            return filtered
+
+        base_cli = _base_cli_without_model_overrides()
         
         for model_cfg in models_list:
             # Extract name and weights
@@ -1201,11 +1644,29 @@ def main():
             print(f"===========================================")
             
             try:
-                process_single_model(args, device, metrics, base_root)
+                cmd = [
+                    sys.executable,
+                    os.path.abspath(__file__),
+                    '--model_name', str(name),
+                    '--weights', str(weights),
+                ] + base_cli
+                print(f"[Isolated Run] {' '.join(cmd)}")
+                proc = subprocess.run(cmd)
+                if proc.returncode != 0:
+                    print(f"[Isolated Run] Model {name} failed with exit code {proc.returncode}")
             except Exception as e:
                 print(f"Error processing model {name}: {e}")
                 import traceback
                 traceback.print_exc()
+            finally:
+                # Hard boundary between models to avoid cross-model residual state.
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    try:
+                        torch.cuda.ipc_collect()
+                    except Exception:
+                        pass
                 
     else:
         # Single model mode
