@@ -2,7 +2,7 @@
   source: torchvision
   weights: DEFAULT
 
-- name: mobilevit_xxs
+- name: mobilevit_s
   source: timm
   weights: DEFAULT
 

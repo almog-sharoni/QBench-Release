@@ -116,6 +116,11 @@ def _make_weight_quant_config(args, fmt, chunk_size):
             'name': args.dataset_name, 'path': args.dataset_path,
             'batch_size': args.batch_size, 'num_workers': args.num_workers,
         },
+        'experiment': {
+            'materialize_weights': {
+                'force_rebuild': bool(getattr(args, 'force_rerun', False)),
+            },
+        },
     }
 
 
@@ -182,6 +187,11 @@ def _make_config(args):
         'dataset': {
             'name': args.dataset_name, 'path': args.dataset_path,
             'batch_size': args.batch_size, 'num_workers': args.num_workers,
+        },
+        'experiment': {
+            'materialize_weights': {
+                'force_rebuild': bool(getattr(args, 'force_rerun', False)),
+            },
         },
     }
 
