@@ -4,7 +4,6 @@ from typing import Any, Dict, Optional
 
 import torch
 import torchvision.datasets as datasets
-import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
 
@@ -14,18 +13,83 @@ def _resolve_dataset_dir(path: str, project_root: str) -> str:
     return os.path.join(project_root, path)
 
 
-def _build_transform(dataset_config: Dict[str, Any]):
-    image_size = dataset_config.get("image_size", 224)
-    resize_size = dataset_config.get("resize_size", 256)
+def _build_torchvision_transform(model_name: str, dataset_config: Dict[str, Any]):
+    from torchvision.models import get_model_weights
 
-    return transforms.Compose(
-        [
-            transforms.Resize(resize_size),
-            transforms.CenterCrop(image_size),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
+    weights = get_model_weights(model_name).DEFAULT
+    transform = weights.transforms()
+
+    # Allow dataset_config overrides (e.g. crop_size, resize_size, mean, std).
+    for key, value in dataset_config.items():
+        if hasattr(transform, key):
+            setattr(transform, key, value)
+
+    print(
+        f"[datasets] Using torchvision transforms for '{model_name}': "
+        f"crop_size={getattr(transform, 'crop_size', '?')}, "
+        f"mean={getattr(transform, 'mean', '?')}, std={getattr(transform, 'std', '?')}"
     )
+    return transform
+
+
+def _build_timm_transform(model_name: str, dataset_config: Dict[str, Any]):
+    import timm
+
+    tmp_model = timm.create_model(model_name, pretrained=False)
+    data_cfg = timm.data.resolve_model_data_config(tmp_model)
+    del tmp_model
+
+    # Allow dataset_config overrides on top of timm's model defaults.
+    data_cfg.update({k: v for k, v in dataset_config.items() if k in data_cfg})
+
+    transform = timm.data.create_transform(**data_cfg, is_training=False)
+    print(
+        f"[datasets] Using timm transforms for '{model_name}': "
+        f"input_size={data_cfg.get('input_size')}, "
+        f"mean={data_cfg.get('mean')}, std={data_cfg.get('std')}"
+    )
+    return transform
+
+
+def _detect_source(model_name: str) -> str:
+    import timm as _timm
+    return "timm" if _timm.is_model(model_name) else "torchvision"
+
+
+# Each entry: source → {"builder": callable(model_name, dataset_config), "defaults": dict}
+# Defaults are merged with dataset_config (dataset_config takes precedence).
+# Register new sources here without touching _resolve_transform.
+_SOURCE_REGISTRY: Dict[str, Any] = {
+    "timm": {
+        "builder": _build_timm_transform,
+        "defaults": {},  # timm derives its own defaults from the model
+    },
+    "torchvision": {
+        "builder": _build_torchvision_transform,
+        "defaults": {},  # torchvision derives its own defaults from the model weights
+    },
+}
+
+
+def _resolve_transform(config: Dict[str, Any]):
+    model_config = config.get("model", {})
+    dataset_config = config.get("dataset", {})
+
+    model_name = model_config.get("name", "")
+    model_source = model_config.get("source", "auto")
+
+    if model_source == "auto":
+        model_source = _detect_source(model_name)
+
+    entry = _SOURCE_REGISTRY.get(model_source)
+    if entry is None:
+        raise ValueError(
+            f"No transform builder registered for model source '{model_source}'. "
+            f"Known sources: {list(_SOURCE_REGISTRY)}"
+        )
+
+    merged_config = {**entry["defaults"], **dataset_config}
+    return entry["builder"](model_name, merged_config)
 
 
 def _apply_class_index_mapping(dataset, index_path: str) -> None:
@@ -49,8 +113,10 @@ def _apply_class_index_mapping(dataset, index_path: str) -> None:
 
 
 def build_classification_data_loader(
-    dataset_config: Dict[str, Any], project_root: str
+    config: Dict[str, Any], project_root: str
 ) -> Optional[DataLoader]:
+    dataset_config = config.get("dataset", {})
+
     path = dataset_config.get("path")
     if not path:
         raise ValueError("Missing required dataset.path for dataset.type='classification'.")
@@ -60,7 +126,7 @@ def build_classification_data_loader(
         print(f"Warning: Data directory {data_dir} does not exist. Skipping data loading.")
         return None
 
-    transform = _build_transform(dataset_config)
+    transform = _resolve_transform(config)
     dataset = datasets.ImageFolder(data_dir, transform=transform)
 
     class_index_path = dataset_config.get("class_index_path")

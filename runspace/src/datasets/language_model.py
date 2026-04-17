@@ -4,12 +4,13 @@ from torch.utils.data import DataLoader
 
 
 def build_language_model_data_loader(
-    dataset_config: Dict[str, Any], project_root: str
+    config: Dict[str, Any], project_root: str
 ) -> DataLoader:
     import importlib
 
     load_dataset = importlib.import_module("datasets").load_dataset
 
+    dataset_config = config.get("dataset", config)  # accept full config or bare dataset_config
     dataset_name = dataset_config.get("name")
     dataset_path = dataset_config.get("path")
     if not dataset_name or not dataset_path:

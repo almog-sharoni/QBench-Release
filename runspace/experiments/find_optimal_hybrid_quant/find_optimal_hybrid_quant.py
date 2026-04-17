@@ -129,6 +129,7 @@ def get_args():
                         help="YAML file with list of models to run on multiple models")
 
     # Dataset
+    parser.add_argument("--dataset_type", type=str, default="classification")
     parser.add_argument("--dataset_name", type=str, default="imagenet")
     parser.add_argument("--dataset_path", type=str, default="/data/imagenet/val")
     parser.add_argument("--batch_size", type=int, default=32)
@@ -219,6 +220,7 @@ def run_weight_phase(args, device, model_dir):
         'model': {'name': args.model_name, 'weights': args.weights},
         'adapter': {'type': 'generic', 'quantized_ops': []},
         'dataset': {
+            'type': args.dataset_type,
             'name': args.dataset_name, 'path': args.dataset_path,
             'batch_size': args.batch_size, 'num_workers': args.num_workers,
         },
@@ -309,6 +311,7 @@ def _build_loader(args, device):
         'model': {'name': args.model_name, 'weights': args.weights},
         'adapter': {'type': 'generic', 'quantized_ops': []},
         'dataset': {
+            'type': args.dataset_type,
             'name': args.dataset_name, 'path': args.dataset_path,
             'batch_size': args.batch_size, 'num_workers': args.num_workers,
         },
@@ -362,6 +365,7 @@ def _load_quantized_model(args, device, quant_weights_path):
         'model': {'name': args.model_name, 'weights': args.weights},
         'adapter': {'type': 'generic', 'quantized_ops': []},
         'dataset': {
+            'type': args.dataset_type,
             'name': args.dataset_name, 'path': args.dataset_path,
             'batch_size': args.batch_size, 'num_workers': args.num_workers,
         },
@@ -383,6 +387,7 @@ def _load_fp32_model(args, device):
         'model': {'name': args.model_name, 'weights': args.weights},
         'adapter': {'type': 'generic', 'quantized_ops': []},
         'dataset': {
+            'type': args.dataset_type,
             'name': args.dataset_name, 'path': args.dataset_path,
             'batch_size': args.batch_size, 'num_workers': args.num_workers,
         },
@@ -604,6 +609,7 @@ def _get_or_run_fp32_ref(args, device, db, model_name):
         model_name=model_name,
         weight_dt="fp32",
         activation_dt="fp32",
+        task_type=args.dataset_type,
         acc1=acc1, acc5=acc5,
         ref_acc1=acc1, ref_acc5=acc5, ref_certainty=certainty,
         experiment_type="fp32_ref",
@@ -691,6 +697,7 @@ def process_single_model(args, device):
                 model_name=model_name,
                 weight_dt=weight_dt_str,
                 activation_dt="fp32",
+                task_type=args.dataset_type,
                 acc1=acc1, acc5=acc5,
                 ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty,
                 experiment_type=f"hybrid_weight_only_{w_metric}",
@@ -734,6 +741,7 @@ def process_single_model(args, device):
                 model_name=model_name,
                 weight_dt="fp32",
                 activation_dt=f"dyn_input_{i_metric}",
+                task_type=args.dataset_type,
                 acc1=acc1, acc5=acc5,
                 ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty,
                 experiment_type=f"hybrid_input_only_{i_metric}",
@@ -794,6 +802,7 @@ def process_single_model(args, device):
                         model_name=model_name,
                         weight_dt=weight_dt_str,
                         activation_dt=f"dyn_input_{i_metric}",
+                        task_type=args.dataset_type,
                         acc1=0.0, acc5=0.0,
                         ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty,
                         experiment_type="hybrid_quant",
@@ -814,6 +823,7 @@ def process_single_model(args, device):
                     model_name=model_name,
                     weight_dt=weight_dt_str,
                     activation_dt=f"dyn_input_{i_metric}",
+                    task_type=args.dataset_type,
                     acc1=acc1, acc5=acc5,
                     ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty,
                     experiment_type="hybrid_quant",
@@ -950,6 +960,7 @@ def process_single_model(args, device):
                                 model_name=model_name,
                                 weight_dt=best_weight_dt,
                                 activation_dt=best_input_dt,
+                                task_type=args.dataset_type,
                                 acc1=0.0, acc5=0.0,
                                 ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty,
                                 experiment_type="hybrid_best_combo",
@@ -969,6 +980,7 @@ def process_single_model(args, device):
                                 model_name=model_name,
                                 weight_dt=best_weight_dt,
                                 activation_dt=best_input_dt,
+                                task_type=args.dataset_type,
                                 acc1=acc1, acc5=acc5,
                                 ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty,
                                 experiment_type="hybrid_best_combo",

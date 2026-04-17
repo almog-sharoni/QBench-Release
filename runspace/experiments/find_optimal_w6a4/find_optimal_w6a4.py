@@ -62,6 +62,7 @@ def get_args():
                         help="YAML file with list of models (runs all models sequentially)")
 
     # Dataset
+    parser.add_argument("--dataset_type", type=str, default="classification")
     parser.add_argument("--dataset_name", type=str, default="imagenet")
     parser.add_argument("--dataset_path", type=str, default="/data/imagenet/val")
     parser.add_argument("--batch_size", type=int, default=32)
@@ -121,6 +122,7 @@ def _make_weight_quant_config(args, fmt, chunk_size):
             'weight_chunk_size': chunk_size,
         },
         'dataset': {
+            'type': args.dataset_type,
             'name': args.dataset_name, 'path': args.dataset_path,
             'batch_size': args.batch_size, 'num_workers': args.num_workers,
         },
@@ -288,6 +290,7 @@ def _make_config(args):
         'model': {'name': args.model_name, 'weights': args.weights, 'source': args.model_source},
         'adapter': {'type': 'generic', 'quantized_ops': []},
         'dataset': {
+            'type': args.dataset_type,
             'name': args.dataset_name, 'path': args.dataset_path,
             'batch_size': args.batch_size, 'num_workers': args.num_workers,
         },
@@ -401,6 +404,7 @@ def _get_or_run_fp32_ref(args, device, db, model_name):
     print(f"[FP32 ref] Top1={acc1:.2f}%, Top5={acc5:.2f}%")
     db.log_run(
         model_name=model_name, weight_dt="fp32", activation_dt="fp32",
+        task_type=args.dataset_type,
         acc1=acc1, acc5=acc5, ref_acc1=acc1, ref_acc5=acc5, ref_certainty=cert,
         experiment_type="fp32_ref", status="SUCCESS", certainty=cert,
         config_json=_serialize_config(_make_config(args)),
@@ -499,6 +503,7 @@ def process_single_model(args, device):
                 print(f"  [A] ERROR ({w_fmt}): {e}")
                 db.log_run(
                     model_name=model_name, weight_dt=w_fmt, activation_dt="fp32",
+                    task_type=args.dataset_type,
                     acc1=0.0, acc5=0.0, ref_acc1=ref_acc1, ref_acc5=ref_acc5,
                     ref_certainty=ref_cert, experiment_type="w6a4_weight_only",
                     status="ERROR",
@@ -513,6 +518,7 @@ def process_single_model(args, device):
             print(f"      Top1={acc1:.2f}%, Top5={acc5:.2f}%")
             db.log_run(
                 model_name=model_name, weight_dt=w_fmt, activation_dt="fp32",
+                task_type=args.dataset_type,
                 acc1=acc1, acc5=acc5, ref_acc1=ref_acc1, ref_acc5=ref_acc5,
                 ref_certainty=ref_cert, experiment_type="w6a4_weight_only",
                 status="SUCCESS", certainty=cert,
@@ -551,6 +557,7 @@ def process_single_model(args, device):
                 print(f"  [B] ERROR ({a_fmt}): {e}")
                 db.log_run(
                     model_name=model_name, weight_dt="fp32", activation_dt=a_fmt,
+                    task_type=args.dataset_type,
                     acc1=0.0, acc5=0.0, ref_acc1=ref_acc1, ref_acc5=ref_acc5,
                     ref_certainty=ref_cert, experiment_type="w6a4_input_only",
                     status="ERROR",
@@ -567,6 +574,7 @@ def process_single_model(args, device):
             )
             db.log_run(
                 model_name=model_name, weight_dt="fp32", activation_dt=a_fmt,
+                task_type=args.dataset_type,
                 acc1=acc1, acc5=acc5, ref_acc1=ref_acc1, ref_acc5=ref_acc5,
                 ref_certainty=ref_cert, experiment_type="w6a4_input_only",
                 status="SUCCESS", certainty=cert,
@@ -612,6 +620,7 @@ def process_single_model(args, device):
                     act_q.cleanup()
                     db.log_run(
                         model_name=model_name, weight_dt=w_fmt, activation_dt=a_fmt,
+                        task_type=args.dataset_type,
                         acc1=0.0, acc5=0.0, ref_acc1=ref_acc1, ref_acc5=ref_acc5,
                         ref_certainty=ref_cert, experiment_type="w6a4_cross",
                         status="ERROR",
@@ -634,6 +643,7 @@ def process_single_model(args, device):
                 )
                 db.log_run(
                     model_name=model_name, weight_dt=w_fmt, activation_dt=a_fmt,
+                    task_type=args.dataset_type,
                     acc1=acc1, acc5=acc5, ref_acc1=ref_acc1, ref_acc5=ref_acc5,
                     ref_certainty=ref_cert, experiment_type="w6a4_cross",
                     status="SUCCESS", certainty=cert,

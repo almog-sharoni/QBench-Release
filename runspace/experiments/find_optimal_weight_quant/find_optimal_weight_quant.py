@@ -896,6 +896,7 @@ def process_single_model(args, device, metrics, base_root):
                         model_name=res.get('model_name', args.model_name),
                         weight_dt='fp32',
                         activation_dt='fp32',
+                        task_type=args.dataset_type,
                         acc1=ref_acc1,
                         acc5=ref_acc5,
                         ref_acc1=ref_acc1,

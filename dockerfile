@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m pip install --no-cache-dir --upgrade pip && \
     python -m pip uninstall -y pynvml || true && \
     python -m pip install --no-cache-dir \
-      numpy matplotlib pandas scikit-learn pyyaml tqdm optuna pytest nvidia-ml-py pydot
+      numpy matplotlib pandas scikit-learn pyyaml tqdm optuna pytest nvidia-ml-py pydot timm
 
 WORKDIR /app
 CMD ["/bin/bash"]

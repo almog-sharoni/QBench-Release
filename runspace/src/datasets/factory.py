@@ -4,6 +4,7 @@ from .classification import build_classification_data_loader
 from .language_model import build_language_model_data_loader
 
 
+# Builders receive the full config so they can inspect model/adapter sections if needed.
 DatasetBuilder = Callable[[Dict[str, Any], str], Any]
 
 DATASET_BUILDERS: Dict[str, DatasetBuilder] = {
@@ -28,4 +29,4 @@ def build_data_loader(config: Dict[str, Any], project_root: str):
             f"Unknown dataset type '{dataset_type}'. Available dataset types: {available}"
         )
 
-    return DATASET_BUILDERS[dataset_type](dataset_config, project_root)
+    return DATASET_BUILDERS[dataset_type](config, project_root)
