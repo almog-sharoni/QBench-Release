@@ -1,0 +1,214 @@
+import numpy as np
+import torch
+
+
+def _compute_epipolar_error(kpts0: np.ndarray, kpts1: np.ndarray,
+                             T_0to1: np.ndarray, K0: np.ndarray,
+                             K1: np.ndarray) -> np.ndarray:
+    """Sampson distance between matched keypoints given ground-truth pose."""
+    kpts0 = (kpts0 - K0[[0, 1], [2, 2]][None]) / K0[[0, 1], [0, 1]][None]
+    kpts1 = (kpts1 - K1[[0, 1], [2, 2]][None]) / K1[[0, 1], [0, 1]][None]
+
+    kpts0 = np.concatenate([kpts0, np.ones((len(kpts0), 1))], axis=1)
+    kpts1 = np.concatenate([kpts1, np.ones((len(kpts1), 1))], axis=1)
+
+    R = T_0to1[:3, :3]
+    t = T_0to1[:3, 3]
+    tx = np.array([[0, -t[2], t[1]], [t[2], 0, -t[0]], [-t[1], t[0], 0]])
+    E = tx @ R
+
+    Ep0 = kpts0 @ E.T
+    p1Ep0 = np.sum(kpts1 * Ep0, axis=1)
+    Etp1 = kpts1 @ E
+    d = p1Ep0 ** 2 * (1.0 / (Ep0[:, 0] ** 2 + Ep0[:, 1] ** 2) +
+                      1.0 / (Etp1[:, 0] ** 2 + Etp1[:, 1] ** 2))
+    return d
+
+
+def _angle_error_vec(v1: np.ndarray, v2: np.ndarray) -> float:
+    n = np.linalg.norm(v1) * np.linalg.norm(v2)
+    if n == 0:
+        return np.inf
+    return np.rad2deg(np.arccos(np.clip(np.dot(v1, v2) / n, -1.0, 1.0)))
+
+
+def _angle_error_mat(R1: np.ndarray, R2: np.ndarray) -> float:
+    cos = (np.trace(R1.T @ R2) - 1) / 2
+    return np.rad2deg(np.abs(np.arccos(np.clip(cos, -1.0, 1.0))))
+
+
+def _compute_pose_error(T_0to1: np.ndarray, R: np.ndarray,
+                        t: np.ndarray) -> tuple[float, float]:
+    R_gt = T_0to1[:3, :3]
+    t_gt = T_0to1[:3, 3]
+    err_t = _angle_error_vec(t.squeeze(), t_gt)
+    err_t = min(err_t, 180 - err_t)
+    err_R = _angle_error_mat(R, R_gt)
+    return err_t, err_R
+
+
+def _pose_auc(errors: list[float], thresholds: list[int]) -> list[float]:
+    sort_idx = np.argsort(errors)
+    errors_sorted = np.array(errors)[sort_idx]
+    aucs = []
+    for thr in thresholds:
+        recall = np.sum(errors_sorted < thr) / len(errors_sorted)
+        recall_curve = np.linspace(0, recall, 100)
+        _trapz = getattr(np, 'trapezoid', None) or np.trapz
+        aucs.append(float(_trapz(recall_curve) / (len(recall_curve) - 1)))
+    return aucs
+
+
+def _estimate_pose(kpts0: np.ndarray, kpts1: np.ndarray,
+                   K0: np.ndarray, K1: np.ndarray,
+                   thresh: float) -> tuple | None:
+    try:
+        import cv2
+    except ImportError:
+        return None
+    if len(kpts0) < 5:
+        return None
+    f_mean = np.mean([K0[0, 0], K1[1, 1], K0[1, 1], K1[0, 0]])
+    norm_thresh = thresh / f_mean
+    kpts0n = (kpts0 - K0[[0, 1], [2, 2]][None]) / K0[[0, 1], [0, 1]][None]
+    kpts1n = (kpts1 - K1[[0, 1], [2, 2]][None]) / K1[[0, 1], [0, 1]][None]
+    E, mask = cv2.findEssentialMat(kpts0n, kpts1n, np.eye(3), threshold=norm_thresh,
+                                   prob=0.99999, method=cv2.RANSAC)
+    if E is None:
+        return None
+    best_num = 0
+    best = None
+    for _E in np.split(E, len(E) // 3):
+        n, R, t, _ = cv2.recoverPose(_E, kpts0n, kpts1n, np.eye(3), 1e9, mask=mask)
+        if n > best_num:
+            best_num = n
+            best = (R, t[:, 0], mask[:, 0].astype(bool))
+    return best
+
+
+class MatchingMetrics:
+    """
+    Measures image-pair matching quality produced by a SuperPoint+SuperGlue pipeline.
+
+    When targets contain 'T_0to1', 'K0', 'K1' (from ScanNetPairsDataset):
+      - precision: fraction of matches satisfying epipolar constraint (< 5e-4 Sampson dist)
+      - matching_score: correct_inliers / total_keypoints_in_image0
+      - pose_auc_5 / _10 / _20: AUC of max(err_t, err_R) at 5/10/20 deg thresholds
+
+    Without GT (image_directory dataset):
+      - precision is undefined (set to 0)
+      - mean_num_matches: average number of matches per image
+      - mean_matching_score: matches / keypoints
+    """
+
+    EPIPOLAR_THRESH = 5e-4
+    POSE_THRESH_PX = 1.0
+
+    def __init__(self):
+        self._reset()
+
+    def _reset(self):
+        self._total_pairs = 0
+        self._sum_precision = 0.0
+        self._sum_matching_score = 0.0
+        self._sum_num_matches = 0.0
+        self._sum_match_certainty = 0.0
+        self._pairs_with_matches = 0
+        self._pose_errors: list[float] = []
+        self._has_gt = False
+
+    def update(self, outputs: dict, targets) -> None:
+        """
+        outputs: dict from Matching.forward():
+            'keypoints0':       List[Tensor[N0, 2]]
+            'keypoints1':       List[Tensor[N1, 2]]
+            'matches0':         Tensor[batch, N0]   (index into kpts1, -1 = unmatched)
+            'matching_scores0': Tensor[batch, N0]
+        targets: batch dict; may contain 'T_0to1', 'K0', 'K1' for GT evaluation.
+        """
+        kpts0_list = outputs['keypoints0']
+        kpts1_list = outputs['keypoints1']
+        matches0 = outputs['matches0']
+        scores0 = outputs['matching_scores0']
+
+        has_gt = (isinstance(targets, dict) and
+                  'T_0to1' in targets and 'K0' in targets and 'K1' in targets)
+        if has_gt:
+            self._has_gt = True
+
+        batch_size = matches0.shape[0]
+        for i in range(batch_size):
+            kp0 = kpts0_list[i].cpu().numpy()   # [N0, 2]
+            kp1 = kpts1_list[i].cpu().numpy()   # [N1, 2]
+            m0 = matches0[i].cpu().numpy()        # [N0]
+            sc0 = scores0[i].cpu().numpy()        # [N0]
+
+            valid = m0 > -1
+            mkpts0 = kp0[valid]
+            mkpts1 = kp1[m0[valid]]
+            num_matches = int(valid.sum())
+            self._sum_num_matches += num_matches
+            self._total_pairs += 1
+
+            if num_matches > 0:
+                self._sum_match_certainty += float(sc0[valid].mean())
+                self._pairs_with_matches += 1
+
+            if len(kp0) > 0:
+                self._sum_matching_score += num_matches / len(kp0)
+
+            if has_gt and num_matches > 0:
+                T = targets['T_0to1'][i].cpu().numpy()
+                K0 = targets['K0'][i].cpu().numpy()
+                K1 = targets['K1'][i].cpu().numpy()
+
+                epi_errs = _compute_epipolar_error(mkpts0, mkpts1, T, K0, K1)
+                correct = epi_errs < self.EPIPOLAR_THRESH
+                precision = float(correct.mean()) if len(correct) > 0 else 0.0
+                num_correct = int(correct.sum())
+                self._sum_precision += precision
+
+                ret = _estimate_pose(mkpts0, mkpts1, K0, K1, self.POSE_THRESH_PX)
+                if ret is not None:
+                    R, t, _ = ret
+                    err_t, err_R = _compute_pose_error(T, R, t)
+                    self._pose_errors.append(max(err_t, err_R))
+                else:
+                    self._pose_errors.append(np.inf)
+            elif has_gt:
+                self._sum_precision += 0.0
+                self._pose_errors.append(np.inf)
+
+    def compute(self) -> dict:
+        if self._total_pairs == 0:
+            return {
+                'matching_precision': 0.0,
+                'matching_score': 0.0,
+                'mean_num_matches': 0.0,
+                'match_certainty': 0.0,
+                'pose_auc_5': 0.0,
+                'pose_auc_10': 0.0,
+                'pose_auc_20': 0.0,
+            }
+
+        result = {
+            'matching_precision': self._sum_precision / self._total_pairs if self._has_gt else 0.0,
+            'matching_score': self._sum_matching_score / self._total_pairs,
+            'mean_num_matches': self._sum_num_matches / self._total_pairs,
+            'match_certainty': (self._sum_match_certainty / self._pairs_with_matches
+                                if self._pairs_with_matches > 0 else 0.0),
+            'pose_auc_5': 0.0,
+            'pose_auc_10': 0.0,
+            'pose_auc_20': 0.0,
+        }
+
+        if self._pose_errors:
+            aucs = _pose_auc(self._pose_errors, [5, 10, 20])
+            result['pose_auc_5'] = aucs[0]
+            result['pose_auc_10'] = aucs[1]
+            result['pose_auc_20'] = aucs[2]
+
+        return result
+
+    def reset(self) -> None:
+        self._reset()

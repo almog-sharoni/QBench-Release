@@ -11,14 +11,13 @@ class RunDatabase:
     A simple database handler for tracking experiment runs.
     Uses SQLite backend with Pandas-compatible methods.
     """
+    @staticmethod
+    def _default_db_path() -> str:
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+        return os.path.join(project_root, "runspace/database/runs.db")
+
     def __init__(self, db_path=None):
-        if db_path is None:
-            # Default path relative to project root
-            # src/database/handler.py -> src/database -> src -> runspace -> root
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
-            self.db_path = os.path.join(project_root, "runspace/database/runs.db")
-        else:
-            self.db_path = db_path
+        self.db_path = db_path if db_path is not None else self._default_db_path()
             
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db()
@@ -113,7 +112,36 @@ class RunDatabase:
             except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN status TEXT")
             except sqlite3.OperationalError: pass
-                
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS fm_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    model_name TEXT NOT NULL,
+                    weight_dt TEXT,
+                    activation_dt TEXT,
+                    experiment_type TEXT,
+                    run_date TEXT,
+                    status TEXT,
+                    fm_num_keypoints REAL,
+                    fm_mean_score REAL,
+                    fm_desc_norm REAL,
+                    fm_repeatability REAL,
+                    matching_precision REAL,
+                    matching_score REAL,
+                    mean_num_matches REAL,
+                    pose_auc_5 REAL,
+                    pose_auc_10 REAL,
+                    pose_auc_20 REAL,
+                    ref_matching_precision REAL,
+                    ref_matching_score REAL,
+                    ref_mean_num_matches REAL,
+                    ref_pose_auc_5 REAL,
+                    ref_pose_auc_10 REAL,
+                    ref_pose_auc_20 REAL,
+                    config_json TEXT
+                )
+            ''')
+
             conn.commit()
 
     def log_run(self, model_name, weight_dt, activation_dt, acc1, acc5, status="SUCCESS",
@@ -308,6 +336,74 @@ class RunDatabase:
         if df.empty:
             return "No runs found."
         return df.groupby(['model_name', 'status']).size().unstack(fill_value=0)
+
+    # ============= FEATURE MATCHING METHODS =============
+
+    def log_fm_run(self, model_name, weight_dt, activation_dt, experiment_type=None,
+                   status="SUCCESS", run_date=None,
+                   fm_num_keypoints=None, fm_mean_score=None, fm_desc_norm=None,
+                   fm_repeatability=None, matching_precision=None, matching_score=None,
+                   mean_num_matches=None, pose_auc_5=None, pose_auc_10=None,
+                   pose_auc_20=None, ref_matching_precision=None, ref_matching_score=None,
+                   ref_mean_num_matches=None, ref_pose_auc_5=None, ref_pose_auc_10=None,
+                   ref_pose_auc_20=None, config_json=None):
+        """Logs a feature-matching run to the fm_runs table."""
+        if run_date is None:
+            run_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO fm_runs (
+                    model_name, weight_dt, activation_dt, experiment_type, run_date, status,
+                    fm_num_keypoints, fm_mean_score, fm_desc_norm, fm_repeatability,
+                    matching_precision, matching_score, mean_num_matches,
+                    pose_auc_5, pose_auc_10, pose_auc_20,
+                    ref_matching_precision, ref_matching_score, ref_mean_num_matches,
+                    ref_pose_auc_5, ref_pose_auc_10, ref_pose_auc_20,
+                    config_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                model_name, weight_dt, activation_dt, experiment_type, run_date, status,
+                fm_num_keypoints, fm_mean_score, fm_desc_norm, fm_repeatability,
+                matching_precision, matching_score, mean_num_matches,
+                pose_auc_5, pose_auc_10, pose_auc_20,
+                ref_matching_precision, ref_matching_score, ref_mean_num_matches,
+                ref_pose_auc_5, ref_pose_auc_10, ref_pose_auc_20,
+                config_json,
+            ))
+            conn.commit()
+            print(f"Logged FM run for {model_name} to {self.db_path}")
+
+    def fm_run_exists(self, model_name, experiment_type=None, weight_dt=None,
+                      activation_dt=None, status="SUCCESS"):
+        """Return True if a matching fm_runs row exists."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            query = "SELECT COUNT(*) FROM fm_runs WHERE model_name = ?"
+            params = [model_name]
+            if experiment_type is not None:
+                query += " AND experiment_type = ?"
+                params.append(experiment_type)
+            if weight_dt is not None:
+                query += " AND weight_dt = ?"
+                params.append(weight_dt)
+            if activation_dt is not None:
+                query += " AND activation_dt = ?"
+                params.append(activation_dt)
+            if status is not None:
+                query += " AND status = ?"
+                params.append(status)
+            cursor.execute(query, params)
+            return cursor.fetchone()[0] > 0
+
+    def get_fm_runs(self, limit=None):
+        """Returns fm_runs as a Pandas DataFrame."""
+        query = "SELECT * FROM fm_runs ORDER BY id DESC"
+        if limit:
+            query += f" LIMIT {limit}"
+        with sqlite3.connect(self.db_path) as conn:
+            return pd.read_sql_query(query, conn)
 
     # ============= MODEL GRAPH METHODS =============
     

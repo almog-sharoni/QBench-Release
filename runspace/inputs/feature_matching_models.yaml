@@ -1,0 +1,9 @@
+- name: superpoint
+  source: custom
+  weights: ../custom/SuperGluePretrainedNetwork/models/weights/superpoint_v1.pth
+  repo_path: ../custom/SuperGluePretrainedNetwork
+
+- name: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork

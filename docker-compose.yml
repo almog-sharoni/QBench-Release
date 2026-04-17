@@ -1,0 +1,23 @@
+services:
+  qbench:
+    build:
+      context: .
+      dockerfile: dockerfile
+    image: qbench:latest
+    container_name: qbench
+    working_dir: /app
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    shm_size: 8gb
+    gpus: all
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      HOME: /tmp
+      PYTHONUNBUFFERED: "1"
+      PYTHONNOUSERSITE: "1"
+      TORCH_HOME: /app/.cache/torch
+      PYTORCH_KERNEL_CACHE_PATH: /app/.cache/torch/kernels
+    volumes:
+      - ./:/app
+      - ${IMAGENET_HOST_PATH:-/data/imagenet}:/data/imagenet

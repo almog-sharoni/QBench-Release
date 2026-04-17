@@ -9,6 +9,7 @@ import json
 import os
 
 from .base_adapter import BaseAdapter
+from ..quantization.constants import DEFAULT_QUANTIZATION_TYPE
 
 
 def _should_print_adapter_config(config: dict) -> bool:
@@ -90,7 +91,7 @@ def create_adapter(config: dict) -> BaseAdapter:
     # Check for quantization type in adapter config first, then in quantization section
     quantization_config = config.get('quantization', {})
     # quantization_type is now solely determined by quantization.format
-    quantization_type = quantization_config.get('format', 'fp8_e4m3')
+    quantization_type = quantization_config.get('format', DEFAULT_QUANTIZATION_TYPE)
     quantization_bias = quantization_config.get('bias', None)
     
     # Extract global input format if present
@@ -197,12 +198,36 @@ def create_adapter(config: dict) -> BaseAdapter:
             _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)
         return SLMAdapter(**resolved_kwargs)
 
-        
+    elif adapter_type == 'feature_matching':
+        from .feature_matching_adapter import FeatureMatchingAdapter
+        resolved_kwargs = dict(
+            pipeline_name=model_config['name'],
+            model_cfg=model_config,
+            quantization_type=quantization_type,
+            quantized_ops=quantized_ops,
+            excluded_ops=excluded_ops,
+            quantize_first_layer=quantize_first_layer,
+            weight_quantization=weight_quantization,
+            input_quantization=input_quantization,
+            layer_config=layer_config,
+            quant_mode=quant_mode,
+            chunk_size=chunk_size,
+            weight_mode=weight_mode,
+            weight_chunk_size=weight_chunk_size,
+            rounding=rounding,
+            run_id=run_id,
+            skip_calibration=skip_calibration,
+            build_quantized=build_quantized,
+            quantize_components=adapter_config.get('quantize_components', []),
+        )
+        if _should_print_adapter_config(config):
+            _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)
+        return FeatureMatchingAdapter(**resolved_kwargs)
 
     else:
         raise ValueError(
             f"Unknown adapter type: '{adapter_type}'. "
-            f"Available types: 'generic', 'resnet', 'slm'"
+            f"Available types: 'generic', 'resnet', 'slm', 'feature_matching'"
         )
 
 
@@ -289,11 +314,11 @@ def validate_config(config: dict):
     
     # Define allowed keys
     schema = {
-        'model': ['name', 'source', 'weights'],
-        'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'weight_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size', 'skip_calibration', 'build_quantized'],
-        'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format'], # 'type' and 'enabled' for backward compat/fp4 example
-        'dataset': ['name', 'path', 'batch_size', 'num_workers'],
-        'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms', 'max_batches', 'graph_only', 'dynamic_input_quant', 'input_quant'] # dataset/batch_size allowed here too?
+        'model': ['name', 'source', 'weights', 'repo_path', 'sg_weights', 'sp_config', 'sg_config'],
+        'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'weight_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size', 'skip_calibration', 'build_quantized', 'quantize_components'],
+        'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format'],
+        'dataset': ['name', 'path', 'batch_size', 'num_workers', 'image_size', 'grayscale', 'pairs_file', 'max_pairs', 'resize_size', 'multiprocessing_context', 'persistent_workers', 'prefetch_factor'],
+        'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms', 'max_batches', 'graph_only', 'dynamic_input_quant', 'input_quant', 'save_visualizations', 'num_viz_samples']
     }
     
     # Check top-level keys

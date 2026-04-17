@@ -94,16 +94,46 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
         # 1. Trace the model
         # We need a custom tracer to treat quantized layers as leaves
         class _FalseProxy(torch.fx.Proxy):
-            """Proxy that evaluates to False on any boolean check.
+            """Proxy that handles dynamic control flow during symbolic tracing.
 
-            Models like timm MobileViT guard reshape ops with checks such as
-            'if H % patch_h != 0' to handle arbitrary input sizes. For standard
-            ImageNet-sized inputs these checks are always False (dimensions are
-            divisible by the patch size), so returning False keeps the trace on
-            the correct path without needing a real input tensor.
+            • __bool__  → False  : handles 'if tensor_condition:' guards
+            • __iter__  → single proxy yield : handles 'for x in tensor:' loops
+              (models like SuperPoint iterate over per-image result lists)
+            • __len__   → 1      : satisfies len() calls on proxy sequences
             """
             def __bool__(self):
                 return False
+
+            def __len__(self):
+                return 1
+
+            def __iter__(self):
+                # torch.fx.Proxy.__iter__ already handles UNPACK_SEQUENCE
+                # (e.g. "b, _, h, w = scores.shape") by inspecting the calling
+                # bytecode and yielding the correct number of getitem proxies.
+                # We preserve that behaviour and only intercept plain for-loops
+                # ("for s in scores:") which need one batch-element proxy.
+                import dis, inspect
+                frame = inspect.currentframe().f_back
+                try:
+                    instrs = list(dis.get_instructions(frame.f_code))
+                    idx = frame.f_lasti // 2
+                    op = instrs[idx].opname if idx < len(instrs) else ''
+                except Exception:
+                    op = ''
+                if op == 'UNPACK_SEQUENCE':
+                    # Let parent yield the right number of getitem proxies.
+                    yield from super().__iter__()
+                else:
+                    # For-loop over a batched tensor: yield one element proxy.
+                    yield self[0]
+
+        def _is_external_module(m: torch.nn.Module) -> bool:
+            """True for modules defined outside torch.nn and our project (e.g. SuperPoint)."""
+            pkg = getattr(type(m), '__module__', '') or ''
+            return not (pkg.startswith('torch') or
+                        pkg.startswith('src.') or
+                        pkg.startswith('runspace.'))
 
         class CoverageTracer(torch.fx.Tracer):
             def proxy(self, node):
@@ -117,6 +147,12 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
                 # Quantized ops are leaves
                 quantized_ops = tuple(OpRegistry.get_supported_ops().values())
                 if isinstance(m, quantized_ops):
+                    return True
+
+                # External pipeline models (e.g. SuperPoint, Matching from external repos)
+                # cannot be FX-traced due to dynamic post-processing code.
+                # Mark as leaf; their internals are expanded as DOT cluster subgraphs below.
+                if _is_external_module(m):
                     return True
 
                 return super().is_leaf_module(m, module_qualified_name)
@@ -136,7 +172,7 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
         dot = drawer.get_dot_graph()
         
         # 3. Style the nodes
-        # Get registry info
+        import pydot
         supported_modules = tuple(OpRegistry.get_supported_ops().keys())
         quantized_ops = tuple(OpRegistry.get_supported_ops().values())
         supported_functions = OpRegistry.get_supported_functions()
@@ -174,7 +210,35 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
                     elif isinstance(module, supported_modules):
                         color = "#FFD700" # Gold
                     elif isinstance(module, (torch.nn.ReLU, torch.nn.Identity, torch.nn.Dropout)):
-                         color = "#D3D3D3" # Gray
+                        color = "#D3D3D3" # Gray
+                    elif _is_external_module(module):
+                        # External leaf: determine color from its internal layers
+                        internal_quant  = any(isinstance(c, quantized_ops)    for _, c in module.named_modules())
+                        internal_supported = any(isinstance(c, supported_modules) for _, c in module.named_modules())
+                        color = "#90EE90" if internal_quant else ("#FFD700" if internal_supported else "#D3D3D3")
+                        # Expand internals as a DOT cluster subgraph
+                        cluster = pydot.Subgraph(
+                            graph_name=f'cluster_{node_name}',
+                            label=f'{type(module).__name__} internals',
+                            style='dashed', color='#888888', fontsize='10',
+                        )
+                        for child_name, child_mod in module.named_modules():
+                            if not child_name or '.' in child_name:
+                                continue  # only direct children
+                            if isinstance(child_mod, quantized_ops):
+                                c_color = "#90EE90"
+                            elif isinstance(child_mod, supported_modules):
+                                c_color = "#FFD700"
+                            else:
+                                continue  # skip non-tracked internals
+                            c_id = f'cluster_{node_name}_{child_name}'
+                            cluster.add_node(pydot.Node(
+                                f'"{c_id}"',
+                                label=f'{child_name}\\n({type(child_mod).__name__})',
+                                shape='box', style='filled', fillcolor=c_color, fontsize='9',
+                            ))
+                            legend_items[type(child_mod).__name__] = c_color
+                        dot.add_subgraph(cluster)
                     else:
                         color = "#FFB6C1" # LightPink (Unsupported)
 
@@ -217,7 +281,6 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
                 edge.set_style('invis')
 
         # Add Legend
-        import pydot
         legend = pydot.Subgraph(graph_name="cluster_legend", label="Legend", rank="source", style="solid", color="black", fontsize="50",ranksep="0.1")
         
         # Sort legend items by color priority then name

@@ -30,3 +30,8 @@ class BaseAdapter(ABC):
     def get_layer_names(self, model) -> list[str]:
         """Returns a list of layer names where custom layers can be inserted."""
         pass
+
+    @abstractmethod
+    def create_metrics(self):
+        """Returns a metrics accumulator appropriate for this adapter's task."""
+        pass

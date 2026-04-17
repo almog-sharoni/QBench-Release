@@ -4,6 +4,7 @@ import torchvision.models as models
 import os
 from .base_adapter import BaseAdapter
 from ..registry.op_registry import OpRegistry
+from ..quantization.constants import DEFAULT_QUANTIZATION_TYPE
 try:
     import src.ops # Ensure all ops are registered
 except ImportError:
@@ -28,7 +29,7 @@ class GenericAdapter(BaseAdapter):
         quantize_first_layer: bool = False,
         quantized_ops: list = None,
         excluded_ops: list = None,
-        quantization_type: str = "fp8_e4m3",
+        quantization_type: str = DEFAULT_QUANTIZATION_TYPE,
         quantization_bias: int = None,
         layer_config: dict = None,
         per_chunk_format: bool = False,
@@ -46,8 +47,10 @@ class GenericAdapter(BaseAdapter):
         run_id: str = "default",
         skip_calibration: bool = False,
         build_quantized: bool = True,
+        target_module_prefixes: list = None,
     ):
         super().__init__()
+        self.target_module_prefixes = target_module_prefixes or []
         self.skip_calibration = skip_calibration
         self.build_quantized = bool(build_quantized)
         self.model_name = model_name
@@ -533,19 +536,18 @@ class GenericAdapter(BaseAdapter):
             module.register_buffer('weight_scale', None)
             module.register_buffer('weight_fp8', None)
             
-            # Set TF32 simulation flag if supported (QuantConv2d)
-            if QuantClass.__name__ == "QuantConv2d":
+            # Set TF32 simulation flag if supported
+            if hasattr(module, 'simulate_tf32_accum') or QuantClass.__name__ in ("QuantConv2d", "QuantConv1d"):
                 module.simulate_tf32_accum = self.simulate_tf32_accum
-            
-            # Handle first layer logic
-            if isinstance(module, nn.Conv2d):
-                 is_first = not self._first_layer_found
-                 if is_first:
-                     self._first_layer_found = True
-                 
-                 module.is_first_layer = is_first
-                 if module.in_channels == 3 and is_first:
-                     module.quantize_first_layer = self.quantize_first_layer
+
+            # Handle first layer logic for conv layers
+            if isinstance(module, (nn.Conv2d, nn.Conv1d)):
+                is_first = not self._first_layer_found
+                if is_first:
+                    self._first_layer_found = True
+                module.is_first_layer = is_first
+                if isinstance(module, nn.Conv2d) and module.in_channels == 3 and is_first:
+                    module.quantize_first_layer = self.quantize_first_layer
             
             return module
 
@@ -599,6 +601,15 @@ class GenericAdapter(BaseAdapter):
             new_module = None
             should_quantize = False
             quant_class = None
+
+            # If target_module_prefixes is set, only quantize layers whose full path
+            # starts with one of the declared prefixes; others are recursed but skipped.
+            if self.target_module_prefixes and not any(
+                full_name.startswith(p) or p.startswith(full_name)
+                for p in self.target_module_prefixes
+            ):
+                self._recursive_replace(module, prefix=full_name)
+                continue
             matched_op_name = module.__class__.__name__
             matched_original_name = None
 
@@ -872,6 +883,11 @@ class GenericAdapter(BaseAdapter):
     def get_layer_names(self, model: nn.Module) -> list[str]:
         """Return all module names for layer insertion."""
         return [name for name, _ in model.named_modules()]
+
+    def create_metrics(self):
+        """Returns a MetricsEngine for classification/SLM evaluation."""
+        from src.eval.metrics import MetricsEngine
+        return MetricsEngine()
 
     def build_reference_model(self) -> nn.Module:
         """Build a reference (FP32) model for comparison."""

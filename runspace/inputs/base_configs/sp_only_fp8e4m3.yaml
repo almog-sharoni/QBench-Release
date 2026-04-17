@@ -1,0 +1,23 @@
+adapter:
+  type: feature_matching
+  quantize_components: ["superpoint"]
+  quantized_ops: ["Conv2d"]
+  weight_quantization: true
+  input_quantization: false
+
+quantization:
+  format: fp8_e4m3
+  weight_mode: channel
+  calib_method: max
+
+dataset:
+  name: image_directory_pairs
+  path: ../custom/SuperGluePretrainedNetwork/assets/phototourism_sample_images
+  batch_size: 1
+  num_workers: 0
+  image_size: [480, 640]
+  grayscale: true
+
+evaluation:
+  mode: compare
+  compare_batches: 5

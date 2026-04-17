@@ -20,10 +20,6 @@ class QuantConv2d(nn.Conv2d, QuantizedLayerMixin):
     # calibrate_weights is provided by QuantizedLayerMixin
 
     def forward(self, input):
-        # Check for FP8 support
-        if not hasattr(torch, 'float8_e4m3fn'):
-             raise RuntimeError("FP8 support (torch.float8_e4m3fn) is required but not available.")
-
         if self.weight_fp8 is not None and self.weight_scale is not None:
             w_decomp = self.weight_fp8.float() * self.weight_scale
         else:

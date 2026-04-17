@@ -10,6 +10,6 @@ from .quant_dropout import *
 from .quant_matmul import *
 from .quant_arithmetic import *
 # from .quant_embedding import *
-# from .quant_conv1d import *
+from .quant_conv1d import *
 # from .quant_newgelu import *
-# from .quant_pooling import *
+from .quant_pooling import *

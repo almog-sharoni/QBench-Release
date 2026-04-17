@@ -85,6 +85,48 @@ class QuantBatchNorm2d(nn.BatchNorm2d, QuantizedLayerMixin):
         )
 
 
+@OpRegistry.register("QuantBatchNorm1d", original_cls=nn.BatchNorm1d)
+class QuantBatchNorm1d(nn.BatchNorm1d, QuantizedLayerMixin):
+    """
+    Quantized BatchNorm1d: quantizes input and gamma (weight); bias / running stats stay FP32.
+    """
+    def __init__(self, *args, q_type="fp8_e4m3", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.q_type = q_type
+        self.register_buffer('weight_scale', None)
+        self.register_buffer('weight_fp8', None)
+
+    def forward(self, input):
+        if not hasattr(torch, 'float8_e4m3fn'):
+            raise RuntimeError("FP8 support (torch.float8_e4m3fn) is required but not available.")
+
+        input_fp8 = self.quantize_input(input)
+
+        if self.weight_fp8 is not None and self.weight_scale is not None:
+            w_decomp = self.weight_fp8.float() * self.weight_scale
+            if getattr(self, 'capture_activations', False):
+                self.last_quant_weight = w_decomp.detach()
+        else:
+            w_decomp = self.weight
+
+        if getattr(self, 'capture_activations', False):
+            if self.running_mean is not None:
+                self.last_quant_rm = self.running_mean
+            if self.running_var is not None:
+                self.last_quant_rv = self.running_var
+
+        return F.batch_norm(
+            input_fp8,
+            self.running_mean,
+            self.running_var,
+            w_decomp,
+            self.bias,
+            self.training,
+            self.momentum,
+            self.eps,
+        )
+
+
 @OpRegistry.register("QuantBatchNormAct2d")
 class QuantBatchNormAct2d(nn.Module, QuantizedLayerMixin):
     """
