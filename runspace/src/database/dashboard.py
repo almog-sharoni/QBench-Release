@@ -22,6 +22,7 @@ class NpEncoder(json.JSONEncoder):
 
 PRESETS_FILE = os.path.join(os.path.dirname(__file__), "presets.json")
 DB_PATH = os.path.join(PROJECT_ROOT, "runspace/database/runs.db")
+FM_DB_PATH = os.path.join(PROJECT_ROOT, "runspace/database/fm_runs.db")
 RUN_WINDOW_TO_LIMIT = {
     "200 (fastest)": 200,
     "500": 500,
@@ -121,6 +122,13 @@ def parse_dt(dt_str):
 def get_runs(limit):
     db = RunDatabase(db_path=DB_PATH)
     return db.get_runs(limit=limit)
+
+
+def get_fm_runs(limit):
+    if not os.path.exists(FM_DB_PATH):
+        return pd.DataFrame()
+    db = RunDatabase(db_path=FM_DB_PATH)
+    return db.get_fm_runs(limit=limit)
 
 
 def delete_runs_by_ids(run_ids):
@@ -543,6 +551,48 @@ load_graphs_on_demand = st.sidebar.checkbox(
     help="Delays model graph JSON fetch/decompression until you explicitly request a graph.",
 )
 st.sidebar.caption("Use `Refresh Data` after new experiments complete.")
+
+st.markdown("---")
+
+with st.expander(f"🔍 Feature Matching Runs (`fm_runs.db`)", expanded=False):
+    fm_df = get_fm_runs(selected_run_limit)
+    if fm_df.empty:
+        st.info(f"No feature-matching runs found at `{FM_DB_PATH}`.")
+    else:
+        st.caption(f"Showing {len(fm_df)} FM runs from {FM_DB_PATH}.")
+
+        fm_models = sorted(fm_df['model_name'].dropna().unique().tolist())
+        fm_formats = _sort_quant_formats(fm_df['weight_dt'].dropna().unique().tolist())
+        c1, c2 = st.columns(2)
+        sel_models = c1.multiselect("Model", fm_models, default=fm_models, key="fm_model_filter")
+        sel_formats = c2.multiselect("Weight format", fm_formats, default=fm_formats, key="fm_fmt_filter")
+        fm_view = fm_df[fm_df['model_name'].isin(sel_models) & fm_df['weight_dt'].isin(sel_formats)].copy()
+
+        # Δ vs reference for the matching metrics that have a ref_* counterpart.
+        for metric in ['matching_precision', 'matching_score', 'mean_num_matches',
+                       'pose_auc_5', 'pose_auc_10', 'pose_auc_20']:
+            ref_col = f'ref_{metric}'
+            if metric in fm_view.columns and ref_col in fm_view.columns:
+                fm_view[f'Δ_{metric}'] = pd.to_numeric(fm_view[metric], errors='coerce') \
+                    - pd.to_numeric(fm_view[ref_col], errors='coerce')
+
+        display_cols = [c for c in [
+            'id', 'model_name', 'weight_dt', 'activation_dt', 'experiment_type',
+            'status', 'run_date',
+            'matching_precision', 'ref_matching_precision', 'Δ_matching_precision',
+            'matching_score', 'ref_matching_score', 'Δ_matching_score',
+            'mean_num_matches', 'ref_mean_num_matches', 'Δ_mean_num_matches',
+            'pose_auc_5', 'ref_pose_auc_5', 'Δ_pose_auc_5',
+            'pose_auc_10', 'ref_pose_auc_10', 'Δ_pose_auc_10',
+            'pose_auc_20', 'ref_pose_auc_20', 'Δ_pose_auc_20',
+            'fm_num_keypoints', 'fm_mean_score', 'fm_desc_norm', 'fm_repeatability',
+        ] if c in fm_view.columns]
+        st.dataframe(fm_view[display_cols], use_container_width=True, hide_index=True)
+
+        with st.expander("Show config_json for selected rows", expanded=False):
+            for _, row in fm_view.iterrows():
+                st.markdown(f"**[{row['id']}] {row['model_name']} — {row['weight_dt']}/{row['activation_dt']}**")
+                st.json(_safe_json_load(row.get('config_json')))
 
 st.markdown("---")
 

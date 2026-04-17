@@ -116,6 +116,14 @@ class MatchingMetrics:
         self._pairs_with_matches = 0
         self._pose_errors: list[float] = []
         self._has_gt = False
+        # SuperPoint-side health metrics (per-image, averaged over both images in each pair)
+        self._total_images = 0
+        self._sum_num_keypoints = 0.0
+        self._sum_kp_score = 0.0
+        self._sum_desc_norm = 0.0
+        # Repeatability: per-pair, epipolar-based (fraction of kp0 within Sampson tolerance of any kp1)
+        self._sum_repeatability = 0.0
+        self._repeat_pairs = 0
 
     def update(self, outputs: dict, targets) -> None:
         """
@@ -131,6 +139,12 @@ class MatchingMetrics:
         matches0 = outputs['matches0']
         scores0 = outputs['matching_scores0']
 
+        # SuperPoint-side tensors (keypoint confidences, descriptors) — optional.
+        kp_scores0_list = outputs.get('scores0')
+        kp_scores1_list = outputs.get('scores1')
+        desc0_list = outputs.get('descriptors0')
+        desc1_list = outputs.get('descriptors1')
+
         has_gt = (isinstance(targets, dict) and
                   'T_0to1' in targets and 'K0' in targets and 'K1' in targets)
         if has_gt:
@@ -142,6 +156,23 @@ class MatchingMetrics:
             kp1 = kpts1_list[i].cpu().numpy()   # [N1, 2]
             m0 = matches0[i].cpu().numpy()        # [N0]
             sc0 = scores0[i].cpu().numpy()        # [N0]
+
+            # Accumulate SuperPoint-side health metrics for both images in the pair.
+            for kp, sc_opt, desc_opt in (
+                (kp0, kp_scores0_list[i] if kp_scores0_list is not None else None,
+                      desc0_list[i] if desc0_list is not None else None),
+                (kp1, kp_scores1_list[i] if kp_scores1_list is not None else None,
+                      desc1_list[i] if desc1_list is not None else None),
+            ):
+                self._total_images += 1
+                self._sum_num_keypoints += float(len(kp))
+                if sc_opt is not None:
+                    sc_arr = sc_opt.detach().cpu().numpy() if hasattr(sc_opt, 'detach') else np.asarray(sc_opt)
+                    if sc_arr.size > 0:
+                        self._sum_kp_score += float(sc_arr.mean())
+                if desc_opt is not None and hasattr(desc_opt, 'shape') and desc_opt.numel() > 0:
+                    # SuperPoint convention: (D, N) with D=256. L2-norm along feature axis.
+                    self._sum_desc_norm += float(desc_opt.detach().float().norm(p=2, dim=0).mean().item())
 
             valid = m0 > -1
             mkpts0 = kp0[valid]
@@ -168,6 +199,19 @@ class MatchingMetrics:
                 num_correct = int(correct.sum())
                 self._sum_precision += precision
 
+                # Repeatability: fraction of kp0 whose nearest kp1 under the GT
+                # epipolar geometry is within EPIPOLAR_THRESH Sampson distance.
+                # Measures keypoint detector stability independent of the matcher.
+                if len(kp0) > 0 and len(kp1) > 0:
+                    n0 = len(kp0)
+                    n1 = len(kp1)
+                    kp0_rep = np.repeat(kp0, n1, axis=0)
+                    kp1_tile = np.tile(kp1, (n0, 1))
+                    d = _compute_epipolar_error(kp0_rep, kp1_tile, T, K0, K1).reshape(n0, n1)
+                    repeated = (d.min(axis=1) < self.EPIPOLAR_THRESH)
+                    self._sum_repeatability += float(repeated.mean())
+                    self._repeat_pairs += 1
+
                 ret = _estimate_pose(mkpts0, mkpts1, K0, K1, self.POSE_THRESH_PX)
                 if ret is not None:
                     R, t, _ = ret
@@ -189,6 +233,10 @@ class MatchingMetrics:
                 'pose_auc_5': 0.0,
                 'pose_auc_10': 0.0,
                 'pose_auc_20': 0.0,
+                'fm_num_keypoints': 0.0,
+                'fm_mean_score': 0.0,
+                'fm_desc_norm': 0.0,
+                'fm_repeatability': 0.0,
             }
 
         result = {
@@ -200,6 +248,14 @@ class MatchingMetrics:
             'pose_auc_5': 0.0,
             'pose_auc_10': 0.0,
             'pose_auc_20': 0.0,
+            'fm_num_keypoints': (self._sum_num_keypoints / self._total_images
+                                 if self._total_images > 0 else 0.0),
+            'fm_mean_score':    (self._sum_kp_score / self._total_images
+                                 if self._total_images > 0 else 0.0),
+            'fm_desc_norm':     (self._sum_desc_norm / self._total_images
+                                 if self._total_images > 0 else 0.0),
+            'fm_repeatability': (self._sum_repeatability / self._repeat_pairs
+                                 if self._repeat_pairs > 0 else 0.0),
         }
 
         if self._pose_errors:
