@@ -11,7 +11,8 @@
       "Read(//tmp/**)",
       "Bash(awk '{print NF}' /tmp/_test_pairs.txt)",
       "Bash(python runspace/run_interactive.py --base-config sp_sg_scannet_local_fp8e4m3_gt.yaml --models-file feature_matching_models.yaml --models superpoint_superglue --batches -1 --no-histograms)",
-      "Bash(python runspace/run_interactive.py --base-config sp_sg_scannet_local_fp8e4m3_gt.yaml --models-file feature_matching_models.yaml --models superpoint_superglue --batches 5 --no-histograms)"
+      "Bash(python runspace/run_interactive.py --base-config sp_sg_scannet_local_fp8e4m3_gt.yaml --models-file feature_matching_models.yaml --models superpoint_superglue --batches 5 --no-histograms)",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\)\\) for f in ['runspace/src/eval/metrics/matching.py','runspace/src/eval/metrics/feature_matching.py','runspace/src/adapters/pipelines/superpoint.py','runspace/src/adapters/pipelines/superpoint_superglue.py','runspace/src/adapters/feature_matching_adapter.py','runspace/src/adapters/pipeline_registry.py']]; print\\('OK'\\)\")"
     ]
   }
 }

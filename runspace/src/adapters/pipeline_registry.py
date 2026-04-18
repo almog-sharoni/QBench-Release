@@ -11,8 +11,10 @@ def register_pipeline(name: str, metrics_cls: Optional[Type] = None,
     """
     Decorator to register a feature-matching pipeline loader.
 
-    metrics_cls: metrics class to instantiate for this pipeline.
-                 If None, FeatureMatchingAdapter falls back to FeatureMatchingMetrics.
+    metrics_cls: zero-argument factory (class or callable) that returns a metrics
+                 accumulator. Must be callable with no arguments — wrap parameterized
+                 classes in a lambda at registration. If None, FeatureMatchingAdapter
+                 falls back to FeatureMatchingMetrics.
     components:  dict mapping logical component names to module path prefixes,
                  e.g. {'superpoint': 'backbone.superpoint', 'superglue': 'backbone.superglue'}.
                  Used to resolve quantize_components config values.
@@ -32,8 +34,16 @@ def load_pipeline(name: str, model_cfg: dict) -> nn.Module:
 
 
 def get_pipeline_metrics_cls(name: str) -> Optional[Type]:
+    """
+    Returns the registered metrics factory for a pipeline, or None if the
+    pipeline registered no custom metrics class.
+
+    Raises KeyError if the pipeline itself is not registered.
+    """
     if name not in _REGISTRY:
-        return None
+        raise KeyError(
+            f"Pipeline '{name}' not registered. Available: {list(_REGISTRY.keys())}"
+        )
     _, metrics_cls, _ = _REGISTRY[name]
     return metrics_cls
 

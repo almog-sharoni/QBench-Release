@@ -20,8 +20,9 @@ def _compute_epipolar_error(kpts0: np.ndarray, kpts1: np.ndarray,
     Ep0 = kpts0 @ E.T
     p1Ep0 = np.sum(kpts1 * Ep0, axis=1)
     Etp1 = kpts1 @ E
-    d = p1Ep0 ** 2 * (1.0 / (Ep0[:, 0] ** 2 + Ep0[:, 1] ** 2) +
-                      1.0 / (Etp1[:, 0] ** 2 + Etp1[:, 1] ** 2))
+    denom0 = np.maximum(Ep0[:, 0] ** 2 + Ep0[:, 1] ** 2, 1e-12)
+    denom1 = np.maximum(Etp1[:, 0] ** 2 + Etp1[:, 1] ** 2, 1e-12)
+    d = p1Ep0 ** 2 * (1.0 / denom0 + 1.0 / denom1)
     return d
 
 
@@ -48,14 +49,25 @@ def _compute_pose_error(T_0to1: np.ndarray, R: np.ndarray,
 
 
 def _pose_auc(errors: list[float], thresholds: list[int]) -> list[float]:
-    sort_idx = np.argsort(errors)
-    errors_sorted = np.array(errors)[sort_idx]
+    """
+    Pose AUC per SuperGluePretrainedNetwork: for each threshold t, build the
+    cumulative-recall curve r(e) over sorted errors, clip to [0, t], and
+    integrate against the normalized error axis [0, 1].
+    """
+    errors_sorted = np.sort(np.array(errors, dtype=float))
+    n = len(errors_sorted)
+    if n == 0:
+        return [0.0 for _ in thresholds]
+    recall = np.arange(1, n + 1) / n
+    errors_ext = np.concatenate([[0.0], errors_sorted])
+    recall_ext = np.concatenate([[0.0], recall])
+    _trapz = getattr(np, 'trapezoid', None) or np.trapz
     aucs = []
     for thr in thresholds:
-        recall = np.sum(errors_sorted < thr) / len(errors_sorted)
-        recall_curve = np.linspace(0, recall, 100)
-        _trapz = getattr(np, 'trapezoid', None) or np.trapz
-        aucs.append(float(_trapz(recall_curve) / (len(recall_curve) - 1)))
+        last = np.searchsorted(errors_ext, thr, side='right')
+        e = np.concatenate([errors_ext[:last], [float(thr)]])
+        r = np.concatenate([recall_ext[:last], [recall_ext[last - 1]]])
+        aucs.append(float(_trapz(r, e) / thr))
     return aucs
 
 

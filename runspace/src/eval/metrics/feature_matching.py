@@ -60,7 +60,10 @@ class FeatureMatchingMetrics:
 
         ones = torch.ones(kp0.shape[0], 1, device=kp0.device)
         kp0_h = torch.cat([kp0, ones], dim=1)  # [N, 3]
-        pts0_cam = torch.linalg.solve(K0, kp0_h.T)  # [3, N]
+        try:
+            pts0_cam = torch.linalg.solve(K0, kp0_h.T)  # [3, N]
+        except torch._C._LinAlgError:
+            return None
         pts0_cam_h = torch.cat([pts0_cam, torch.ones(1, pts0_cam.shape[1], device=kp0.device)], dim=0)
         pts1_cam_h = T_0to1 @ pts0_cam_h
         pts1_proj = K1 @ pts1_cam_h[:3]

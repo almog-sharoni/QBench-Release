@@ -1,3 +1,4 @@
+import copy
 import torch
 import torch.nn as nn
 from .generic_adapter import GenericAdapter
@@ -54,6 +55,7 @@ class FeatureMatchingAdapter(GenericAdapter):
     ):
         self._pipeline_name = pipeline_name
         self._model_cfg = model_cfg
+        self._reference_model = None
 
         target_prefixes = []
         if quantize_components:
@@ -87,7 +89,7 @@ class FeatureMatchingAdapter(GenericAdapter):
 
         if quantized:
             self._replace_layers(model)
-            if torch.cuda.is_available() and not self.skip_calibration:
+            if torch.cuda.is_available():
                 model.to(torch.device('cuda'))
             if not self.skip_calibration:
                 self._calibrate_model(model)
@@ -103,12 +105,15 @@ class FeatureMatchingAdapter(GenericAdapter):
         return FeatureMatchingMetrics()
 
     def prepare_batch(self, batch: dict) -> tuple:
-        return batch, batch
+        inputs = {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)
+                  and k not in ('T_0to1', 'K0', 'K1')}
+        return inputs, batch
 
     def forward(self, model: nn.Module, batch: tuple) -> dict:
         inputs, _ = batch
-        tensor_inputs = {k: v for k, v in inputs.items() if isinstance(v, torch.Tensor)}
-        return model(tensor_inputs)
+        return model(inputs)
 
     def build_reference_model(self) -> nn.Module:
-        return self.build_model(quantized=False)
+        if self._reference_model is None:
+            self._reference_model = self.build_model(quantized=False)
+        return copy.deepcopy(self._reference_model)

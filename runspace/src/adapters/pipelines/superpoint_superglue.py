@@ -5,10 +5,23 @@ from src.adapters.pipeline_registry import register_pipeline
 from src.eval.metrics.matching import MatchingMetrics
 
 
-def _inject_repo(repo_path: str) -> None:
+def _require(cfg: dict, key: str, pipeline_name: str):
+    if key not in cfg:
+        raise ValueError(
+            f"Pipeline '{pipeline_name}': missing required config key '{key}'. "
+            f"Got keys: {sorted(cfg.keys())}"
+        )
+    return cfg[key]
+
+
+def _inject_repo(repo_path: str, pipeline_name: str) -> None:
     abs_path = os.path.abspath(repo_path)
+    if not os.path.isdir(abs_path):
+        raise FileNotFoundError(
+            f"Pipeline '{pipeline_name}': repo_path does not exist: {abs_path}"
+        )
     if abs_path not in sys.path:
-        sys.path.insert(0, abs_path)
+        sys.path.append(abs_path)
 
 
 @register_pipeline(
@@ -35,10 +48,10 @@ def _load_superpoint_superglue(model_cfg: dict) -> torch.nn.Module:
       - ["superglue"]  → only SuperGlue Conv1d layers
       - omit           → all eligible ops in both models
     """
-    repo_path = model_cfg['repo_path']
-    sg_weights = model_cfg['sg_weights']
+    repo_path = _require(model_cfg, 'repo_path', 'superpoint_superglue')
+    sg_weights = _require(model_cfg, 'sg_weights', 'superpoint_superglue')
 
-    _inject_repo(repo_path)
+    _inject_repo(repo_path, 'superpoint_superglue')
 
     from models.matching import Matching
 
