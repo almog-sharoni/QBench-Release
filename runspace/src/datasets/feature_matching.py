@@ -51,7 +51,7 @@ def _collate_fn(batch: list[dict]) -> dict:
     }
 
 
-@register_dataset('image_directory')
+@register_dataset('image_directory', provided_keys=('image', 'image_path'))
 def build_feature_matching_data_loader(dataset_cfg: dict) -> DataLoader:
     raw_path = dataset_cfg['path']
     root = raw_path if os.path.isabs(raw_path) else os.path.join(_PROJECT_ROOT, raw_path)
@@ -110,7 +110,8 @@ def _collate_pairs_fn(batch: list[dict]) -> dict:
     }
 
 
-@register_dataset('image_directory_pairs')
+@register_dataset('image_directory_pairs',
+                  provided_keys=('image0', 'image1', 'image_path0', 'image_path1'))
 def build_image_directory_pairs_data_loader(dataset_cfg: dict) -> DataLoader:
     """
     Pairs consecutive images in a directory. Suitable for testing pair-based pipelines.

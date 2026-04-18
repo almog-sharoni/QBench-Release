@@ -724,6 +724,9 @@ class Runner:
             )
 
         adapter = create_adapter(cfg)
+        # Preserve original weights spec so build_reference_model can reload
+        # pretrained weights via the original source (e.g. torchvision enum).
+        adapter._reference_weights_spec = source_weights
         state_obj = torch.load(weight_file_path, map_location='cpu')
         state_dict = self._extract_raw_state_dict(state_obj)
         self._load_state_dict_resilient(adapter.model, state_dict)
@@ -1314,11 +1317,87 @@ class Runner:
 
     @staticmethod
     def _resolve_paths(cfg: dict, keys: tuple) -> dict:
-        """Resolve relative path values in cfg against PROJECT_ROOT (runspace/)."""
+        """Resolve relative path values in cfg against PROJECT_ROOT (runspace/).
+
+        Skips torchvision/timm weight-enum sentinels (e.g. 'DEFAULT',
+        'IMAGENET1K_V1') and bare names without separators or known checkpoint
+        suffixes — these are not filesystem paths and must not be rewritten.
+        """
+        _path_suffixes = ('.pt', '.pth', '.bin', '.ckpt', '.safetensors')
         for key in keys:
-            if key in cfg and isinstance(cfg[key], str) and not os.path.isabs(cfg[key]):
-                cfg[key] = os.path.normpath(os.path.join(PROJECT_ROOT, cfg[key]))
+            if key not in cfg or not isinstance(cfg[key], str):
+                continue
+            value = cfg[key]
+            if os.path.isabs(value):
+                continue
+            looks_pathy = (
+                ('/' in value) or ('\\' in value)
+                or value.endswith(_path_suffixes)
+            )
+            if not looks_pathy:
+                continue
+            cfg[key] = os.path.normpath(os.path.join(PROJECT_ROOT, value))
         return cfg
+
+    @staticmethod
+    def _check_dataset_pipeline_compatibility(config: dict) -> None:
+        """
+        Fail fast when a feature-matching pipeline is paired with an
+        incompatible dataset or a `quantize_components` list referencing
+        components the pipeline does not declare. Silently skips for non-FM
+        adapters and for pipelines/datasets that didn't declare their keys.
+        """
+        adapter_cfg = config.get('adapter', {})
+        if adapter_cfg.get('type') != 'feature_matching':
+            return
+
+        pipeline_name = config.get('model', {}).get('name')
+        dataset_name = config.get('dataset', {}).get('name')
+        if not pipeline_name:
+            return
+
+        import src.adapters.pipelines  # noqa: F401 — trigger registrations
+        import src.datasets  # noqa: F401 — trigger registrations
+        from src.adapters.pipeline_registry import (
+            get_pipeline_components,
+            get_pipeline_required_keys,
+        )
+        from src.datasets.dataset_registry import get_dataset_provided_keys
+
+        # 1) quantize_components ⊆ pipeline-declared components
+        requested_components = adapter_cfg.get('quantize_components') or []
+        if requested_components:
+            try:
+                declared = get_pipeline_components(pipeline_name)
+            except KeyError:
+                declared = None
+            if declared is not None:
+                unknown = [c for c in requested_components if c not in declared]
+                if unknown:
+                    raise ValueError(
+                        f"Pipeline '{pipeline_name}' declares components "
+                        f"{sorted(declared)}, but adapter.quantize_components "
+                        f"requests {sorted(requested_components)}. "
+                        f"Unknown: {sorted(unknown)}."
+                    )
+
+        # 2) dataset provided_keys ⊇ pipeline required_input_keys
+        if not dataset_name:
+            return
+        try:
+            required = set(get_pipeline_required_keys(pipeline_name))
+            provided = set(get_dataset_provided_keys(dataset_name))
+        except KeyError:
+            return
+        if not required or not provided:
+            return
+        missing = required - provided
+        if missing:
+            raise ValueError(
+                f"Dataset '{dataset_name}' provides keys {sorted(provided)}, but "
+                f"pipeline '{pipeline_name}' requires {sorted(required)}. "
+                f"Missing: {sorted(missing)}."
+            )
 
     def setup_data_loader(self, config: dict):
         """Setup the data loader from config via DatasetRegistry."""
@@ -1336,6 +1415,8 @@ class Runner:
         model_config = config.get('model', {})
         self._resolve_paths(model_config, ('weights', 'repo_path', 'root', 'path'))
         model_name = model_config.get('name', 'unknown')
+
+        self._check_dataset_pipeline_compatibility(config)
         weights_spec = model_config.get('weights')
         has_file_backed_weights = (
             isinstance(weights_spec, str)

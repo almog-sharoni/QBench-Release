@@ -1,3 +1,5 @@
+target_pipeline: superpoint_superglue
+
 adapter:
   type: feature_matching
   quantize_components: ["superglue"]

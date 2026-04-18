@@ -133,6 +133,12 @@ Examples:
         help="Number of batches (-1 for all). Skips the batches prompt.",
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        metavar="N",
+        help="Override dataset.num_workers for all generated configs.",
+    )
+    parser.add_argument(
         "--histograms",
         action="store_true",
         default=None,
@@ -239,6 +245,13 @@ Examples:
     if not all_configs:
         print("Error: Failed to generate configuration.")
         sys.exit(1)
+
+    # 3.4. Workers override
+    if args.workers is not None:
+        for config in all_configs:
+            config.setdefault('dataset', {})
+            config['dataset']['num_workers'] = args.workers
+        print(f"dataset.num_workers set to {args.workers} (from --workers).")
 
     # 3.5. Batches
     if not args.graph_only:

@@ -322,7 +322,7 @@ def validate_config(config: dict):
     }
     
     # Check top-level keys
-    allowed_top_level = list(schema.keys()) + ['output_name', 'meta', 'debug', 'experiment']  # metadata/debug keys used by runners
+    allowed_top_level = list(schema.keys()) + ['output_name', 'meta', 'debug', 'experiment', 'target_pipeline']  # metadata/debug keys used by runners
     for key in config:
         if key not in allowed_top_level:
             warnings.warn(f"Unknown top-level config key: '{key}'")

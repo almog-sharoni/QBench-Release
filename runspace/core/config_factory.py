@@ -36,8 +36,16 @@ class ConfigFactory:
             base_config_data = base_config
 
         generated_configs = []
+        target_pipeline = base_config_data.get('target_pipeline')
 
         for model in models:
+            # Skip models that don't match the base config's declared pipeline.
+            # This prevents Cartesian-product sweeps from generating incompatible
+            # config × model combos (e.g. a scannet_pairs config paired with a
+            # single-image pipeline).
+            if target_pipeline and model.get('name') != target_pipeline:
+                continue
+
             # Deep copy the base config to avoid modifying it for other models
             new_config = copy.deepcopy(base_config_data)
 

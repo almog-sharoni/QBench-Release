@@ -890,5 +890,17 @@ class GenericAdapter(BaseAdapter):
         return MetricsEngine()
 
     def build_reference_model(self) -> nn.Module:
-        """Build a reference (FP32) model for comparison."""
-        return self._load_base_model()
+        """Build a reference (FP32) model for comparison.
+
+        If the runner's materialize-weights flow clobbered self.weights to None
+        (so the adapter builds a skeleton and loads from a .pt), the runner
+        stashes the original spec on `self._reference_weights_spec`. Use it so
+        the reference model gets real pretrained weights, not random init.
+        """
+        ref_weights = getattr(self, '_reference_weights_spec', None) or self.weights
+        saved = self.weights
+        try:
+            self.weights = ref_weights
+            return self._load_base_model()
+        finally:
+            self.weights = saved

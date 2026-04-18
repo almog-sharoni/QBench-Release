@@ -22,7 +22,9 @@ def _inject_repo(repo_path: str, pipeline_name: str) -> None:
         sys.path.append(repo_path)
 
 
-@register_pipeline('superpoint', components={'superpoint': 'backbone'})
+@register_pipeline('superpoint',
+                   components={'superpoint': 'backbone'},
+                   required_input_keys=('image',))
 def _load_superpoint(model_cfg: dict) -> torch.nn.Module:
     repo_path = os.path.abspath(_require(model_cfg, 'repo_path', 'superpoint'))
     weights_path = os.path.abspath(_require(model_cfg, 'weights', 'superpoint'))

@@ -129,7 +129,8 @@ def _collate_fn(batch: list[dict]) -> dict:
     }
 
 
-@register_dataset('scannet_pairs')
+@register_dataset('scannet_pairs',
+                  provided_keys=('image0', 'image1', 'T_0to1', 'K0', 'K1', 'pair_id'))
 def build_scannet_pairs_data_loader(dataset_cfg: dict) -> DataLoader:
     root = dataset_cfg['path']
     pairs_file = dataset_cfg['pairs_file']

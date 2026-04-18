@@ -31,6 +31,7 @@ def _inject_repo(repo_path: str, pipeline_name: str) -> None:
         'superpoint': 'backbone.superpoint',
         'superglue':  'backbone.superglue',
     },
+    required_input_keys=('image0', 'image1'),
 )
 def _load_superpoint_superglue(model_cfg: dict) -> torch.nn.Module:
     """

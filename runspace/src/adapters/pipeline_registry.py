@@ -1,13 +1,15 @@
-from typing import Callable, Optional, Type
+from typing import Callable, Iterable, Optional, Type
 import torch.nn as nn
 
-# Registry value: (loader_fn, metrics_cls, components_map)
+# Registry value: (loader_fn, metrics_cls, components_map, required_input_keys)
 # components_map: dict[logical_name -> module_path_prefix]
-_REGISTRY: dict[str, tuple[Callable[[dict], nn.Module], Optional[Type], dict[str, str]]] = {}
+# required_input_keys: tuple of top-level dict keys the pipeline's forward needs
+_REGISTRY: dict[str, tuple[Callable[[dict], nn.Module], Optional[Type], dict[str, str], tuple[str, ...]]] = {}
 
 
 def register_pipeline(name: str, metrics_cls: Optional[Type] = None,
-                      components: Optional[dict[str, str]] = None) -> Callable:
+                      components: Optional[dict[str, str]] = None,
+                      required_input_keys: Optional[Iterable[str]] = None) -> Callable:
     """
     Decorator to register a feature-matching pipeline loader.
 
@@ -18,9 +20,12 @@ def register_pipeline(name: str, metrics_cls: Optional[Type] = None,
     components:  dict mapping logical component names to module path prefixes,
                  e.g. {'superpoint': 'backbone.superpoint', 'superglue': 'backbone.superglue'}.
                  Used to resolve quantize_components config values.
+    required_input_keys: top-level dict keys the pipeline's forward expects (e.g.
+                 ('image',) for SuperPoint, ('image0', 'image1') for SuperPoint+SuperGlue).
+                 Used by the runner to pre-check dataset compatibility before building models.
     """
     def decorator(fn: Callable[[dict], nn.Module]) -> Callable:
-        _REGISTRY[name] = (fn, metrics_cls, components or {})
+        _REGISTRY[name] = (fn, metrics_cls, components or {}, tuple(required_input_keys or ()))
         return fn
     return decorator
 
@@ -29,7 +34,7 @@ def load_pipeline(name: str, model_cfg: dict) -> nn.Module:
     if name not in _REGISTRY:
         available = list(_REGISTRY.keys())
         raise KeyError(f"Pipeline '{name}' not registered. Available: {available}")
-    loader, _, _ = _REGISTRY[name]
+    loader, _, _, _ = _REGISTRY[name]
     return loader(model_cfg)
 
 
@@ -44,8 +49,36 @@ def get_pipeline_metrics_cls(name: str) -> Optional[Type]:
         raise KeyError(
             f"Pipeline '{name}' not registered. Available: {list(_REGISTRY.keys())}"
         )
-    _, metrics_cls, _ = _REGISTRY[name]
+    _, metrics_cls, _, _ = _REGISTRY[name]
     return metrics_cls
+
+
+def get_pipeline_components(name: str) -> dict[str, str]:
+    """
+    Returns the pipeline's declared logical-component → module-prefix map.
+    Empty dict means the pipeline declares no components.
+
+    Raises KeyError if the pipeline itself is not registered.
+    """
+    if name not in _REGISTRY:
+        raise KeyError(
+            f"Pipeline '{name}' not registered. Available: {list(_REGISTRY.keys())}"
+        )
+    return dict(_REGISTRY[name][2])
+
+
+def get_pipeline_required_keys(name: str) -> tuple[str, ...]:
+    """
+    Returns the tuple of top-level input-dict keys the pipeline's forward
+    expects. Empty tuple means the pipeline did not declare any (no pre-check).
+
+    Raises KeyError if the pipeline itself is not registered.
+    """
+    if name not in _REGISTRY:
+        raise KeyError(
+            f"Pipeline '{name}' not registered. Available: {list(_REGISTRY.keys())}"
+        )
+    return _REGISTRY[name][3]
 
 
 def resolve_component_prefixes(pipeline_name: str,
@@ -56,7 +89,7 @@ def resolve_component_prefixes(pipeline_name: str,
     """
     if pipeline_name not in _REGISTRY:
         raise KeyError(f"Pipeline '{pipeline_name}' not registered.")
-    _, _, components = _REGISTRY[pipeline_name]
+    _, _, components, _ = _REGISTRY[pipeline_name]
     prefixes = []
     for comp in component_names:
         if comp not in components:

@@ -1,3 +1,5 @@
+target_pipeline: superpoint
+
 adapter:
   type: feature_matching
   quantize_first_layer: false
