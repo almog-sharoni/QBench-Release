@@ -6,7 +6,12 @@
       "Bash(python -c ' *)",
       "Bash(grep -E \"^\\(sp_|sg_|  FP32|  Quant|$\\)\")",
       "Bash(python runspace/run_interactive.py)",
-      "Bash(xargs grep *)"
+      "Bash(xargs grep *)",
+      "Bash(python tools/generate_scannet_pairs.py --root D:/scannet/posed_images --scenes-file /tmp/_scene1.txt --min-stride 30 --max-stride 60 --pairs-per-scene 3 --workers 1 --out /tmp/_test_pairs.txt)",
+      "Read(//tmp/**)",
+      "Bash(awk '{print NF}' /tmp/_test_pairs.txt)",
+      "Bash(python runspace/run_interactive.py --base-config sp_sg_scannet_local_fp8e4m3_gt.yaml --models-file feature_matching_models.yaml --models superpoint_superglue --batches -1 --no-histograms)",
+      "Bash(python runspace/run_interactive.py --base-config sp_sg_scannet_local_fp8e4m3_gt.yaml --models-file feature_matching_models.yaml --models superpoint_superglue --batches 5 --no-histograms)"
     ]
   }
 }

@@ -600,10 +600,16 @@ class LayerComparator:
         RESET = "\033[0m"
 
         def _wpad(s, width):
-            # Emojis like ✅/❌/🚧 render as 2 display columns but count as 1
-            # char in len(), so subtract extra columns when padding.
+            # Emojis render as 2 display cells but count as 1 char in len().
+            # east_asian_width catches ✅/❌ but misses 🚧 (classified 'N'),
+            # so also treat the SMP emoji blocks as wide.
             import unicodedata
-            extra = sum(1 for ch in s if unicodedata.east_asian_width(ch) == 'W')
+            def _is_wide(ch):
+                if unicodedata.east_asian_width(ch) in ('W', 'F'):
+                    return True
+                cp = ord(ch)
+                return 0x1F000 <= cp <= 0x1FFFF
+            extra = sum(1 for ch in s if _is_wide(ch))
             pad = max(0, width - extra)
             return f"{s:<{pad}}"
 
@@ -618,9 +624,10 @@ class LayerComparator:
                 return f"{RED}{_wpad(status, width)}{RESET}"
 
         report_lines.append("--- FP8 Compliance Check (Value-Based) ---")
-        # Header: Layer(46) | Type(20) | Shape(15) | Weight Check(20) | Input Check(20)
-        report_lines.append(f"{'Layer':<46} | {'Type':<20} | {'Shape':<15} | {'Weight Check':<20} | {'Input Check':<20}")
-        report_lines.append("-" * 131)
+        _NAME_W, _TYPE_W, _SHAPE_W, _CHECK_W = 52, 28, 18, 22
+        _SEP_W = _NAME_W + _TYPE_W + _SHAPE_W + 2 * _CHECK_W + 4 * 3
+        report_lines.append(f"{'Layer':<{_NAME_W}} | {'Type':<{_TYPE_W}} | {'Shape':<{_SHAPE_W}} | {'Weight Check':<{_CHECK_W}} | {'Input Check':<{_CHECK_W}}")
+        report_lines.append("-" * _SEP_W)
         
         # Import FP8/FP4/INT8 table getters and compliance checker
         from ..quantization.quantizer import (
@@ -694,7 +701,7 @@ class LayerComparator:
                 
                 # Check for Under Construction Status
                 is_under_construction = OpRegistry.is_under_construction(layer_type)
-                under_construction_str = f"{RED}{_wpad('🚧 UNDER CONSTRUCTION', 20)}{RESET}"
+                under_construction_str = f"{RED}{_wpad('🚧 UNDER CONSTRUCTION', _CHECK_W)}{RESET}"
 
                 # Determine whether to use table-based or mantissa-precision compliance
                 use_mant_check = q_type not in _NATIVE_FORMATS
@@ -702,8 +709,8 @@ class LayerComparator:
 
                 # Check Parameters (Weights + Stats)
                 unknown_fmt = valid_values is None and mant_bits is None
-                unknown_fmt_str = f"{'N/A (Unknown fmt)':<20}"
-                weight_str = f"{'N/A':<20}"
+                unknown_fmt_str = f"{'N/A (Unknown fmt)':<{_CHECK_W}}"
+                weight_str = f"{'N/A':<{_CHECK_W}}"
 
                 def _compliance_check(tensor):
                     """Run the appropriate compliance check and return (passed, inv_count, examples)."""
@@ -718,12 +725,12 @@ class LayerComparator:
                 # 1. Weights (Main Table)
                 elif hasattr(module, 'weight_fp8') and module.weight_fp8 is not None:
                     passed, inv_count, examples = _compliance_check(module.weight_fp8.float())
-                    weight_str = format_status(passed, inv_count, 20, examples)
+                    weight_str = format_status(passed, inv_count, _CHECK_W, examples)
                     if not passed:
                         detailed_failures.append((name, layer_type, 'weight_fp8', inv_count, examples))
                 elif hasattr(module, 'q_type') and hasattr(module, 'weight') and module.weight is not None:
                     passed, inv_count, examples = _compliance_check(module.weight)
-                    weight_str = format_status(passed, inv_count, 20, examples)
+                    weight_str = format_status(passed, inv_count, _CHECK_W, examples)
                     if not passed:
                         detailed_failures.append((name, layer_type, 'weight', inv_count, examples))
                     
@@ -747,7 +754,7 @@ class LayerComparator:
                                 detailed_failures.append((name, layer_type, stat_name, inv_count, examples))
 
                 # Check Inputs
-                input_str = f"{'N/A (No Capture)':<20}"
+                input_str = f"{'N/A (No Capture)':<{_CHECK_W}}"
 
                 # Check for custom compliance status in registry
                 custom_status = OpRegistry.get_compliance_status(module.__class__.__name__)
@@ -762,22 +769,22 @@ class LayerComparator:
                         input_str = under_construction_str
                 elif custom_status:
                      # Just custom status (Orange)
-                     input_str = f"{ORANGE}{custom_status:<20}{RESET}"
+                     input_str = f"{ORANGE}{_wpad(custom_status, _CHECK_W)}{RESET}"
                 # Prefer internal unscaled capture for Quant layers
                 elif hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
                     input_passed, i_inv_count, i_examples = _compliance_check(module.last_quant_input_unscaled)
-                    input_str = format_status(input_passed, i_inv_count, 20, i_examples)
+                    input_str = format_status(input_passed, i_inv_count, _CHECK_W, i_examples)
                 # Check output for activation layers (they quantize output, not input)
                 elif hasattr(module, 'last_quant_output_unscaled') and module.last_quant_output_unscaled is not None:
                     input_passed, i_inv_count, i_examples = _compliance_check(module.last_quant_output_unscaled)
-                    input_str = format_status(input_passed, i_inv_count, 20, i_examples)
+                    input_str = format_status(input_passed, i_inv_count, _CHECK_W, i_examples)
                 # Fallback to hook capture
                 elif name in self.quant_activations:
                     # We captured the raw input, which is likely FP32 in a simulated quantization setup.
                     # Checking it against FP8 will fail and is technically incorrect unless we expect
                     # the previous layer to output quantized values (which QuantConv2d does not, it outputs FP32).
                     # So we mark it as N/A (FP32).
-                    input_str = f"{'N/A (FP32 Input)':<20}"
+                    input_str = f"{'N/A (FP32 Input)':<{_CHECK_W}}"
                 
                 # Get Shape
                 shape_str = "N/A"
@@ -792,19 +799,19 @@ class LayerComparator:
                     elif hasattr(module, 'last_quant_output_unscaled') and module.last_quant_output_unscaled is not None:
                          shape_str = str(tuple(module.last_quant_output_unscaled.shape[1:]))
 
-                report_lines.append(f"{name:<46} | {layer_type:<20} | {shape_str:<15} | {weight_str} | {input_str}")
-        report_lines.append("-" * 131)
-        report_lines.append("-" * 131)
+                report_lines.append(f"{name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {shape_str:<{_SHAPE_W}} | {weight_str} | {input_str}")
+        report_lines.append("-" * _SEP_W)
+        report_lines.append("-" * _SEP_W)
         report_lines.append("\n")
         
         # Detailed Parameter Compliance Table
         if detailed_failures:
             report_lines.append("--- Detailed Parameter Compliance Failures ---")
-            report_lines.append(f"{'Layer':<46} | {'Param Name':<20} | {'Invalid Count':<15} | {'Examples'}")
-            report_lines.append("-" * 116)
+            report_lines.append(f"{'Layer':<{_NAME_W}} | {'Param Name':<20} | {'Invalid Count':<15} | {'Examples'}")
+            report_lines.append("-" * (_NAME_W + 3 + 20 + 3 + 15 + 3 + 8))
             for name, layer_type, param_name, count, examples in detailed_failures:
-                 report_lines.append(f"{name:<46} | {param_name:<20} | {str(count):<15} | {examples}")
-            report_lines.append("-" * 116)
+                 report_lines.append(f"{name:<{_NAME_W}} | {param_name:<20} | {str(count):<15} | {examples}")
+            report_lines.append("-" * (_NAME_W + 3 + 20 + 3 + 15 + 3 + 8))
             report_lines.append("\n")
 
         # 3. Quantization Coverage Verification
@@ -834,8 +841,9 @@ class LayerComparator:
 
         # 4. Layer-Level Comparison (Average)
         report_lines.append(f"--- Layer Comparison (Average over {self.total_batches} Batches) ---")
-        report_lines.append(f"{'Layer':<46} | {'Type':<20} | {'Input MSE':<10} | {'Input CosSim':<12} | {'Weight MSE':<10} | {'Weight CosSim':<12} | {'XMax Orig':<10} | {'XMax Deq':<10} | {'XMax Err %':<10} | {'Zeros % (I)':<12} | {'Zeros % (W)':<12}")
-        report_lines.append("-" * 201)
+        report_lines.append(f"{'Layer':<{_NAME_W}} | {'Type':<{_TYPE_W}} | {'Input MSE':<10} | {'Input CosSim':<12} | {'Weight MSE':<10} | {'Weight CosSim':<12} | {'XMax Orig':<10} | {'XMax Deq':<10} | {'XMax Err %':<10} | {'Zeros % (I)':<12} | {'Zeros % (W)':<12}")
+        _LAYER_CMP_W = _NAME_W + 3 + _TYPE_W + 3 + 10 + 3 + 12 + 3 + 10 + 3 + 12 + 3 + 10 + 3 + 10 + 3 + 10 + 3 + 12 + 3 + 12
+        report_lines.append("-" * _LAYER_CMP_W)
         
         for name, metrics in self.layer_metrics.items():
             count = max(1, metrics['count'])
@@ -900,16 +908,17 @@ class LayerComparator:
                  xmax_err_str = f"{mean_error_pct:.2f}%"
 
             layer_type = metrics['type']
-            line = f"{name:<46} | {layer_type:<20} | {input_mse_str:<10} | {input_cossim_str:<12} | {weight_mse_str:<10} | {weight_cossim_str:<12} | {xmax_orig_str:<10} | {xmax_deq_str:<10} | {xmax_err_str:<10} | {f'{zeros_pct_input:.2f}%':<12} | {zeros_pct_weight_str:<12}"
+            line = f"{name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {input_mse_str:<10} | {input_cossim_str:<12} | {weight_mse_str:<10} | {weight_cossim_str:<12} | {xmax_orig_str:<10} | {xmax_deq_str:<10} | {xmax_err_str:<10} | {f'{zeros_pct_input:.2f}%':<12} | {zeros_pct_weight_str:<12}"
             report_lines.append(line)
 
-        report_lines.append("-" * 201)
+        report_lines.append("-" * _LAYER_CMP_W)
         report_lines.append("\n")
 
         # 5. Chunk-wise Scale Factors (Exponents)
         report_lines.append("--- Chunk-wise Scale Factors (Log2 Exponents) ---")
-        report_lines.append(f"{'Layer':<46} | {'Type':<15} | {'Source':<10} | {'Num Chunks':<10} | {'Min Exp':<12} | {'Max Exp':<12} | {'Mean Exp':<12} | {'Detailed Exponents (if few)'}")
-        report_lines.append("-" * 156)
+        report_lines.append(f"{'Layer':<{_NAME_W}} | {'Type':<{_TYPE_W}} | {'Source':<10} | {'Num Chunks':<10} | {'Min Exp':<12} | {'Max Exp':<12} | {'Mean Exp':<12} | {'Detailed Exponents (if few)'}")
+        _CHUNK_W = _NAME_W + 3 + _TYPE_W + 3 + 10 + 3 + 10 + 3 + 12 + 3 + 12 + 3 + 12 + 3 + 27
+        report_lines.append("-" * _CHUNK_W)
 
         for name, metrics in self.layer_metrics.items():
             for source, scales_list in [('Input', metrics['input_scales']), ('Weight', metrics['weight_scales'])]:
@@ -932,9 +941,9 @@ class LayerComparator:
                         flat_exps = torch.round(log_scales.flatten()).int()
                         detailed = ", ".join([f"{e.item():d}" for e in flat_exps])
                     
-                    report_lines.append(f"{name:<46} | {metrics['type']:<15} | {source:<10} | {num_chunks:<10} | {min_e:<12d} | {max_e:<12d} | {mean_e:<12.2f} | {detailed}")
+                    report_lines.append(f"{name:<{_NAME_W}} | {metrics['type']:<{_TYPE_W}} | {source:<10} | {num_chunks:<10} | {min_e:<12d} | {max_e:<12d} | {mean_e:<12.2f} | {detailed}")
 
-        report_lines.append("-" * 156)
+        report_lines.append("-" * _CHUNK_W)
         report_lines.append("\n")
         
         # Print Report (with colors)

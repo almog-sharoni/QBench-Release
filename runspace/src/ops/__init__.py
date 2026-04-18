@@ -13,3 +13,4 @@ from .quant_arithmetic import *
 from .quant_conv1d import *
 # from .quant_newgelu import *
 from .quant_pooling import *
+from .observed_ops import *

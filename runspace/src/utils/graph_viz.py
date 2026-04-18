@@ -240,7 +240,9 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
                             legend_items[type(child_mod).__name__] = c_color
                         dot.add_subgraph(cluster)
                     else:
-                        color = "#FFB6C1" # LightPink (Unsupported)
+                        from ..registry.op_registry import OpRegistry as _OR
+                        _cs = _OR.get_compliance_status(type(module).__name__)
+                        color = "#FFD580" if _cs == "FP32 required" else "#FFB6C1"
 
                 elif fx_node.op == 'call_function':
                     label_text = getattr(fx_node.target, '__name__', str(fx_node.target))
@@ -289,14 +291,16 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
             priority = {
                 "#90EE90": 0, # Green (Quantized)
                 "#FFD700": 1, # Gold (Supported)
-                "#FFB6C1": 2, # Pink (Unsupported)
-                "#D3D3D3": 3  # Gray (Structural)
+                "#FFD580": 2, # Amber (FP32 required)
+                "#FFB6C1": 3, # Pink (Unsupported)
+                "#D3D3D3": 4  # Gray (Structural)
             }
             return (priority.get(color, 4), name)
 
         section_titles = {
             "#90EE90": "Quantized Layers",
             "#FFD700": "Supported Layers (Unquantized)",
+            "#FFD580": "FP32 Required (coord/interp)",
             "#FFB6C1": "Unsupported Layers",
             "#D3D3D3": "Structural / Other"
         }

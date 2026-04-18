@@ -1,55 +1,91 @@
-"""
-Quantized pooling ops.
-
-MaxPool preserves its inputs bit-for-bit (the output is one of the input
-values), so when the upstream tensor is FP8-representable the pool output is
-too. No quantization math is needed — this is a pass-through that participates
-in activation capture and registry-based layer replacement.
-"""
-
-import torch
+#not supported yet
 import torch.nn as nn
 from ..registry.op_registry import OpRegistry
+from .quant_base import QuantizedLayerMixin
 
 
-@OpRegistry.register("QuantMaxPool2d", original_cls=nn.MaxPool2d)
-class QuantMaxPool2d(nn.MaxPool2d):
+@OpRegistry.register("QuantMaxPool2d", original_cls=nn.MaxPool2d , under_construction=True)
+class QuantMaxPool2d(nn.MaxPool2d, QuantizedLayerMixin):
     """
-    Pass-through MaxPool2d that supports activation capture.
+    Quantized MaxPool2d layer.
     """
-    def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
-                 return_indices=False, ceil_mode=False,
-                 q_type="fp8_e4m3", quantization_bias=None,
-                 quant_mode="tensor", chunk_size=None):
-        super().__init__(kernel_size=kernel_size, stride=stride, padding=padding,
-                         dilation=dilation, return_indices=return_indices,
-                         ceil_mode=ceil_mode)
+    def __init__(self, *args, q_type="fp8_e4m3", **kwargs):
+        super().__init__(*args, **kwargs)
         self.q_type = q_type
-        self.quantization_bias = quantization_bias
+        # MaxPool doesn't have weights, so no weight_scale/weight_fp8 needed
+        # But QuantizedLayerMixin might expect them if we call certain methods?
+        # calibrate_weights checks for self.weight, so it's safe.
+        
         self.capture_activations = False
-        self.last_quant_input_unscaled = None
-        self.last_quant_output_unscaled = None
 
-    @classmethod
-    def from_native(cls, module: nn.MaxPool2d, q_type="fp8_e4m3", quantization_bias=None):
-        return cls(
-            kernel_size=module.kernel_size,
-            stride=module.stride,
-            padding=module.padding,
-            dilation=module.dilation,
-            return_indices=module.return_indices,
-            ceil_mode=module.ceil_mode,
-            q_type=q_type,
-            quantization_bias=quantization_bias,
-        )
+    def forward(self, input):
+        # Quantize input
+        input_fp8 = self.quantize_input(input)
+        
+        # Run MaxPool
+        output = super().forward(input_fp8)
+        
+        # Capture activations if enabled
+        if getattr(self, 'capture_activations', False):
+            # last_quant_input is already captured in quantize_input
+            self.last_quant_output = output.detach()
+            
+        return output
 
-    def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
-        output = super().forward(input)
 
-        if self.capture_activations:
-            self.last_quant_input_unscaled = input.detach()
-            self.last_quant_output_unscaled = (
-                output[0].detach() if isinstance(output, tuple) else output.detach()
-            )
+@OpRegistry.register("QuantAdaptiveAvgPool2d", original_cls=nn.AdaptiveAvgPool2d , under_construction=True)
+class QuantAdaptiveAvgPool2d(nn.AdaptiveAvgPool2d, QuantizedLayerMixin):
+    """
+    Quantized AdaptiveAvgPool2d layer.
+    """
+    def __init__(self, *args, q_type="fp8_e4m3", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.q_type = q_type
+        self.capture_activations = False
 
+    def forward(self, input):
+        # Quantize input
+        input_fp8 = self.quantize_input(input)
+        
+        # Run AvgPool
+        # Note: AvgPool on quantized data (which are floats) works fine mathematically.
+        # But the output might not be perfectly quantized anymore (averages of FP8 are not necessarily FP8).
+        # Should we requantize the output?
+        # For now, let's return the float result of averaging.
+        # If the next layer is quantized, it will quantize this input anyway.
+        output = super().forward(input_fp8)
+        
+        # Capture activations if enabled
+        if getattr(self, 'capture_activations', False):
+            self.last_quant_output = output.detach()
+            
+        return output
+
+
+@OpRegistry.register("QuantAvgPool2d", original_cls=nn.AvgPool2d , under_construction=True)
+class QuantAvgPool2d(nn.AvgPool2d, QuantizedLayerMixin):
+    """
+    Quantized AvgPool2d layer.
+    """
+    def __init__(self, *args, q_type="fp8_e4m3", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.q_type = q_type
+        self.capture_activations = False
+
+    def forward(self, input):
+        # Quantize input
+        input_fp8 = self.quantize_input(input)
+        
+        # Run AvgPool
+        # Note: AvgPool on quantized data (which are floats) works fine mathematically.
+        # But the output might not be perfectly quantized anymore (averages of FP8 are not necessarily FP8).
+        # Should we requantize the output?
+        # For now, let's return the float result of averaging.
+        # If the next layer is quantized, it will quantize this input anyway.
+        output = super().forward(input_fp8)
+        
+        # Capture activations if enabled
+        if getattr(self, 'capture_activations', False):
+            self.last_quant_output = output.detach()
+            
         return output

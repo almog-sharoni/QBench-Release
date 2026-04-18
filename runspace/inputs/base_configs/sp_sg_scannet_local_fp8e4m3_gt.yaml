@@ -1,0 +1,25 @@
+adapter:
+  type: feature_matching
+  quantized_ops: ["all"]
+  weight_quantization: true
+  input_quantization: true
+
+quantization:
+  format: fp8_e4m3
+  weight_mode: channel
+  calib_method: max
+
+dataset:
+  name: scannet_pairs
+  path: D:/scannet/posed_images
+  pairs_file: D:/scannet/pairs_val.txt
+  image_size: [480, 640]
+  batch_size: 1
+  num_workers: 0
+  max_pairs: 100
+
+evaluation:
+  mode: compare
+  save_visualizations: true
+  num_viz_samples: 15
+  compare_batches: -1
