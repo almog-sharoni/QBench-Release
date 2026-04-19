@@ -200,7 +200,9 @@ class ObservedConcat(nn.Module, QuantizedLayerMixin):
         self.quantization_bias = quantization_bias
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
-        self.input_quantization = False
+        # Default True because these ops are not touched by the adapter's class-swap path
+        # (no original_cls registered), so nothing else flips this to True downstream.
+        self.input_quantization = True
 
     def forward(self, *tensors):
         if len(tensors) == 1 and isinstance(tensors[0], (list, tuple)):
@@ -218,7 +220,9 @@ class ObservedAdd(nn.Module, QuantizedLayerMixin):
         self.quantization_bias = quantization_bias
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
-        self.input_quantization = False
+        # Default True because these ops are not touched by the adapter's class-swap path
+        # (no original_cls registered), so nothing else flips this to True downstream.
+        self.input_quantization = True
 
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         q1 = self.quantize_input(x)
@@ -240,7 +244,9 @@ class ObservedAttentionScores(nn.Module, QuantizedLayerMixin):
         self.quantization_bias = quantization_bias
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
-        self.input_quantization = False
+        # Default True because these ops are not touched by the adapter's class-swap path
+        # (no original_cls registered), so nothing else flips this to True downstream.
+        self.input_quantization = True
 
     def forward(self, query: torch.Tensor, key: torch.Tensor) -> torch.Tensor:
         q = self.quantize_input(query)
@@ -261,7 +267,9 @@ class ObservedAttentionApply(nn.Module, QuantizedLayerMixin):
         self.quantization_bias = quantization_bias
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
-        self.input_quantization = False
+        # Default True because these ops are not touched by the adapter's class-swap path
+        # (no original_cls registered), so nothing else flips this to True downstream.
+        self.input_quantization = True
 
     def forward(self, prob: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
         p = self.quantize_input(prob)
@@ -269,15 +277,27 @@ class ObservedAttentionApply(nn.Module, QuantizedLayerMixin):
         return torch.einsum('bhnm,bdhm->bdhn', p, v)
 
 
-@OpRegistry.register("ObservedDescMatmul", under_construction=True)
-class ObservedDescMatmul(nn.Module):
-    """Descriptor similarity matmul: einsum + scale by sqrt(dim)."""
-    def __init__(self, descriptor_dim: int):
+@OpRegistry.register("ObservedDescMatmul", is_activation=False)
+class ObservedDescMatmul(nn.Module, QuantizedLayerMixin):
+    """Descriptor similarity einsum (desc0 · desc1ᵀ / √d).
+
+    Quantizes both operands to FP8 before the einsum, mirroring QuantMatMul.
+    """
+    def __init__(self, descriptor_dim: int, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
         super().__init__()
         self.scale = descriptor_dim ** 0.5
+        self.q_type = q_type
+        self.quantization_bias = quantization_bias
+        self.quant_mode = quant_mode
+        self.chunk_size = chunk_size
+        # Default True because these ops are not touched by the adapter's class-swap path
+        # (no original_cls registered), so nothing else flips this to True downstream.
+        self.input_quantization = True
 
     def forward(self, mdesc0: torch.Tensor, mdesc1: torch.Tensor) -> torch.Tensor:
-        return torch.einsum('bdn,bdm->bnm', mdesc0, mdesc1) / self.scale
+        q0 = self.quantize_input(mdesc0)
+        q1 = self.quantize_input(mdesc1)
+        return torch.einsum('bdn,bdm->bnm', q0, q1) / self.scale
 
 
 # --- FP32-required op --------------------------------------------------------

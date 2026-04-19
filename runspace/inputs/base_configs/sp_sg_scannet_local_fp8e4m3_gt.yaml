@@ -10,6 +10,7 @@ quantization:
   format: fp8_e4m3
   weight_mode: channel
   calib_method: max
+  strict_format_check: true
 
 dataset:
   name: scannet_pairs
@@ -22,6 +23,6 @@ dataset:
 
 evaluation:
   mode: compare
-  save_visualizations: true
-  num_viz_samples: 1500
+  save_visualizations: false
+  num_viz_samples: 15
   compare_batches: -1

@@ -52,6 +52,7 @@ class FeatureMatchingAdapter(GenericAdapter):
         skip_calibration: bool = False,
         build_quantized: bool = True,
         quantize_components: list = None,
+        strict_format_check: bool = False,
     ):
         self._pipeline_name = pipeline_name
         self._model_cfg = model_cfg
@@ -81,6 +82,7 @@ class FeatureMatchingAdapter(GenericAdapter):
             skip_calibration=skip_calibration,
             build_quantized=build_quantized,
             target_module_prefixes=target_prefixes,
+            strict_format_check=strict_format_check,
         )
 
     def build_model(self, quantized: bool = False) -> nn.Module:
