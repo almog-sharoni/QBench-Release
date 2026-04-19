@@ -112,7 +112,7 @@ class LayerComparator:
                     self.quant_activations[name] = inp
             return hook
 
-        from src.ops.quant_base import QuantizedLayerMixin
+        from runspace.src.ops.quant_base import QuantizedLayerMixin
         from src.ops.quant_mha import DecomposedMultiheadAttention
 
         quantized_ops = tuple(OpRegistry.get_supported_ops().values())
@@ -253,7 +253,7 @@ class LayerComparator:
         """
         import torch.nn as nn
         import torch.nn.functional as F
-        from src.ops.quant_base import QuantizedLayerMixin
+        from runspace.src.ops.quant_base import QuantizedLayerMixin
         from src.ops.quant_mha import DecomposedMultiheadAttention
         
         report_lines = []
@@ -298,6 +298,9 @@ class LayerComparator:
                     module = self.quant_model.get_submodule(node.target)
                     if isinstance(module, quantized_ops):
                         quantized_nodes.append(f"{node.name} ({module.__class__.__name__})")
+                    elif OpRegistry.is_passthrough(module.__class__.__name__):
+                        # Non-quantized pass-through op (e.g. ObservedSimpleNMS); out of scope for coverage.
+                        continue
                     elif isinstance(module, supported_modules):
                         unquantized_supported_nodes.append(f"{node.name} ({module.__class__.__name__})")
                     else:
@@ -349,9 +352,11 @@ class LayerComparator:
             for name, module in self.quant_model.named_modules():
                 # Check if leaf (no children) OR DecomposedMHA
                 if len(list(module.children())) == 0 or isinstance(module, DecomposedMultiheadAttention):
-                    
                     if isinstance(module, QuantizedLayerMixin) or isinstance(module, quantized_ops):
                         quantized_count += 1
+                    elif OpRegistry.is_passthrough(module.__class__.__name__):
+                        # Non-quantized pass-through op (e.g. ObservedSimpleNMS); out of scope for coverage.
+                        continue
                     elif isinstance(module, tuple(supported_layers.keys())):
                         unquantized_supported.append(f"{name} ({module.__class__.__name__})")
                     else:
@@ -386,7 +391,7 @@ class LayerComparator:
 
     def _compute_layer_metrics(self):
         from src.eval.metrics import compute_mse, compute_cosine_similarity
-        from src.ops.quant_base import QuantizedLayerMixin
+        from runspace.src.ops.quant_base import QuantizedLayerMixin
         from src.eval.compression import calculate_compression_stats
         
         # Track previous module type for fusion heuristic
@@ -533,7 +538,7 @@ class LayerComparator:
         print("Generating evaluation report... (this might take a moment)")
         from src.eval.metrics import compute_mse, compute_cosine_similarity, compute_min_max, check_fp8_compliance
         from src.quantization.quantizer import get_fp8_e4m3_table, get_fp8_e5m2_table
-        from src.ops.quant_base import QuantizedLayerMixin
+        from runspace.src.ops.quant_base import QuantizedLayerMixin
         from src.ops.quant_mha import DecomposedMultiheadAttention
         import os
         import torch.nn as nn
@@ -597,6 +602,7 @@ class LayerComparator:
         GREEN = "\033[92m"
         RED = "\033[91m"
         ORANGE = "\033[33m"
+        BLUE = "\033[94m"
         RESET = "\033[0m"
 
         def _wpad(s, width):
@@ -676,15 +682,28 @@ class LayerComparator:
         # If it's a GraphModule, use graph nodes to get topological order
         import torch.fx
         modules_to_process = []
-        
+
         if isinstance(self.quant_model, torch.fx.GraphModule):
             for node in self.quant_model.graph.nodes:
                 if node.op == 'call_module':
                     module = self.quant_model.get_submodule(node.target)
                     modules_to_process.append((node.target, module))
         else:
-            # Fallback to named_modules()
-            modules_to_process = list(self.quant_model.named_modules())
+            # Forward hooks populate self.quant_activations in execution order,
+            # so its keys give the true forward-call order for every leaf that ran.
+            # Fall back to named_modules() for any leaf that never fired so the
+            # table still lists them.
+            seen = set()
+            for name in self.quant_activations.keys():
+                try:
+                    module = self.quant_model.get_submodule(name)
+                except AttributeError:
+                    continue
+                modules_to_process.append((name, module))
+                seen.add(name)
+            for name, module in self.quant_model.named_modules():
+                if name not in seen:
+                    modules_to_process.append((name, module))
 
         for name, module in modules_to_process:
             # Check leaf modules or DecomposedMHA
@@ -702,6 +721,17 @@ class LayerComparator:
                 # Check for Under Construction Status
                 is_under_construction = OpRegistry.is_under_construction(layer_type)
                 under_construction_str = f"{RED}{_wpad('🚧 UNDER CONSTRUCTION', _CHECK_W)}{RESET}"
+
+                # Pass-through ops forward to the next quantized layer and own
+                # neither weight nor activation quantization. Short-circuit the
+                # row with a distinct tag; skip all compliance checks.
+                if OpRegistry.is_passthrough(layer_type):
+                    passthrough_str = f"{BLUE}{_wpad('↪ PASS-THROUGH', _CHECK_W)}{RESET}"
+                    shape_str = "N/A"
+                    if name in self.ref_activations:
+                        shape_str = str(tuple(self.ref_activations[name].shape[1:]))
+                    report_lines.append(f"{name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {shape_str:<{_SHAPE_W}} | {passthrough_str} | {passthrough_str}")
+                    continue
 
                 # Determine whether to use table-based or mantissa-precision compliance
                 use_mant_check = q_type not in _NATIVE_FORMATS
