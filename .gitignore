@@ -6,7 +6,7 @@ outputs/
 .env
 tests/
 .cache/
-
+runspace/inputs/scannet/
 # Apptainer
 Apptainer.def
 qbench_sandbox/

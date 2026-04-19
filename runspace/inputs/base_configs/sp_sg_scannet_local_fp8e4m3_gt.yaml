@@ -13,15 +13,15 @@ quantization:
 
 dataset:
   name: scannet_pairs
-  path: D:/scannet/posed_images
-  pairs_file: D:/scannet/pairs_val.txt
+  path: /data/scannet/posed_images
+  pairs_file: /app/runspace/inputs/scannet/pairs_val_1500.txt
   image_size: [480, 640]
   batch_size: 1
-  num_workers: 0
-  max_pairs: 100
+  num_workers: 8
+  max_pairs: 1500
 
 evaluation:
   mode: compare
   save_visualizations: true
-  num_viz_samples: 15
+  num_viz_samples: 1500
   compare_batches: -1

@@ -29,7 +29,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip && \
     streamlit \
     timm \
     torchview \
-    opencv-python \
+    opencv-python-headless \
     nvidia-ml-py
 
 WORKDIR /app

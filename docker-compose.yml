@@ -21,3 +21,4 @@ services:
     volumes:
       - ./:/app
       - ${IMAGENET_HOST_PATH:-/data/imagenet}:/data/imagenet
+      - ${SCANNET_HOST_PATH:-/data/shared_data/scannet/scannet}:/data/scannet:ro

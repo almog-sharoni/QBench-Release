@@ -86,15 +86,15 @@ def _info_header(quant_info, batch_metrics):
 
 
 def _add_info_box(fig, text):
-    """Add a styled text box below the suptitle."""
+    """Add a styled info box below the figure (bbox_inches='tight' will include it)."""
     if not text:
         return
     fig.text(
-        0.5, 0.995, text,
+        0.5, -0.005, text,
         ha='center', va='top',
-        fontsize=8.5,
+        fontsize=9,
         family='monospace',
-        bbox=dict(boxstyle='round,pad=0.4', facecolor='#1e1e2e', edgecolor='#444', alpha=0.88),
+        bbox=dict(boxstyle='round,pad=0.5', facecolor='#1e1e2e', edgecolor='#444', alpha=0.92),
         color='#cdd6f4',
         transform=fig.transFigure,
     )
@@ -155,7 +155,7 @@ def save_matching_viz(batch, ref_outputs, quant_outputs, output_path,
     )
     _draw_matches_on_ax(
         axes[1], img0, img1, q_kpts0, q_kpts1, q_mkpts0, q_mkpts1,
-        line_color='royalblue', kpt_color='royalblue',
+        line_color='deepskyblue', kpt_color='deepskyblue',
         title=f"Quantized  |  {len(q_mkpts0)} matches  "
               f"({len(q_kpts0)} / {len(q_kpts1)} kpts){q_prec_str}",
     )
@@ -170,7 +170,7 @@ def save_matching_viz(batch, ref_outputs, quant_outputs, output_path,
     for (x0, y0), (x1, y1) in zip(ref_mkpts0, ref_mkpts1):
         axes[2].plot([x0, x1 + W], [y0, y1], color='lime', linewidth=0.7, alpha=0.55)
     for (x0, y0), (x1, y1) in zip(q_mkpts0, q_mkpts1):
-        axes[2].plot([x0, x1 + W], [y0, y1], color='royalblue', linewidth=0.7, alpha=0.55)
+        axes[2].plot([x0, x1 + W], [y0, y1], color='deepskyblue', linewidth=0.7, alpha=0.55)
 
     label = pair_id if pair_id else "unknown"
     fig.suptitle(f"Match Comparison — {label}", fontsize=11, y=1.0)
@@ -219,7 +219,7 @@ def save_superglue_keypoints_viz(batch, ref_outputs, quant_outputs, output_path,
 
         for col, (kpts, color, title) in enumerate([
             (ref_kpts, 'lime',      f"{lbl} — Reference  |  {len(ref_kpts)} kpts"),
-            (q_kpts,   'royalblue', f"{lbl} — Quantized  |  {len(q_kpts)} kpts  "
+            (q_kpts,   'deepskyblue', f"{lbl} — Quantized  |  {len(q_kpts)} kpts  "
                                     f"(Δ {len(q_kpts)-len(ref_kpts):+d})"),
         ]):
             ax = axes[row, col]
@@ -241,7 +241,7 @@ def save_superglue_keypoints_viz(batch, ref_outputs, quant_outputs, output_path,
             ax.scatter(pts_ref_only[:, 0], pts_ref_only[:, 1], c='lime', s=5,
                        linewidths=0, label=f'Ref only ({len(pts_ref_only)})')
         if len(pts_q_only):
-            ax.scatter(pts_q_only[:, 0], pts_q_only[:, 1], c='royalblue', s=5,
+            ax.scatter(pts_q_only[:, 0], pts_q_only[:, 1], c='deepskyblue', s=5,
                        linewidths=0, label=f'Quant only ({len(pts_q_only)})')
         ax.legend(fontsize=7, markerscale=2, loc='upper right')
         ax.set_title(
@@ -297,7 +297,7 @@ def save_keypoints_viz(batch, ref_outputs, quant_outputs, output_path,
     for ax, kpts, color, title in [
         (axes[0], ref_kpts, 'lime',
          f"Reference  |  {len(ref_kpts)} keypoints"),
-        (axes[1], q_kpts, 'royalblue',
+        (axes[1], q_kpts, 'deepskyblue',
          f"Quantized  |  {len(q_kpts)} keypoints  (Δ {len(q_kpts)-len(ref_kpts):+d})"),
     ]:
         ax.imshow(img)
@@ -314,7 +314,7 @@ def save_keypoints_viz(batch, ref_outputs, quant_outputs, output_path,
         axes[2].scatter(pts_ref_only[:, 0], pts_ref_only[:, 1], c='lime', s=5,
                         linewidths=0, label=f'Ref only ({len(pts_ref_only)})')
     if len(pts_q_only):
-        axes[2].scatter(pts_q_only[:, 0], pts_q_only[:, 1], c='royalblue', s=5,
+        axes[2].scatter(pts_q_only[:, 0], pts_q_only[:, 1], c='deepskyblue', s=5,
                         linewidths=0, label=f'Quant only ({len(pts_q_only)})')
     axes[2].legend(fontsize=8, markerscale=2, loc='upper right')
     axes[2].set_title(
