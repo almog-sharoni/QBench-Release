@@ -12,17 +12,23 @@ quantization:
   calib_method: max
   strict_format_check: true
 
+# Diagnostic subset: first 20 pairs, for apples-to-apples compare vs upstream match_pairs.py
 dataset:
   name: scannet_pairs
-  path: /data/scannet/posed_images
-  pairs_file: /app/runspace/inputs/scannet/pairs_val_1500.txt
+  path: /data/scannet/ref
+  pairs_file: /app/runspace/inputs/scannet/pairs_test_paper_20subset.txt
   image_size: [480, 640]
   batch_size: 1
-  num_workers: 8
-  max_pairs: 1500
+  num_workers: 0
+  max_pairs: 20
+
+model:
+  sp_config:
+    max_keypoints: 1024
 
 evaluation:
   mode: compare
-  save_visualizations: true
-  num_viz_samples: 1500
+  save_visualizations: false
+  num_viz_samples: 0
   compare_batches: -1
+  max_batches: -1

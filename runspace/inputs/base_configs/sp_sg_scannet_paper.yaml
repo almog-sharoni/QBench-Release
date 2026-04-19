@@ -12,17 +12,25 @@ quantization:
   calib_method: max
   strict_format_check: true
 
+# Paper-aligned ScanNet benchmark: SuperGlue's own test pairs
+# (assets/scannet_test_pairs_with_gt.txt) covering all 100 test scenes.
+# Yields the full 1500 paper pairs.
 dataset:
   name: scannet_pairs
-  path: /data/scannet/posed_images
-  pairs_file: /app/runspace/inputs/scannet/pairs_val_1500.txt
+  path: /data/scannet/ref
+  pairs_file: /app/runspace/inputs/scannet/pairs_test_paper_100scenes.txt
   image_size: [480, 640]
   batch_size: 1
   num_workers: 8
   max_pairs: 1500
 
+model:
+  sp_config:
+    max_keypoints: 1024
+
 evaluation:
   mode: compare
-  save_visualizations: true
+  save_visualizations: false
   num_viz_samples: 1500
   compare_batches: -1
+  max_batches: -1
