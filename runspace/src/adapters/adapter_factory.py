@@ -207,7 +207,7 @@ def create_adapter(config: dict) -> BaseAdapter:
     elif adapter_type == 'feature_matching':
         from .feature_matching_adapter import FeatureMatchingAdapter
         resolved_kwargs = dict(
-            pipeline_name=model_config['name'],
+            pipeline_name=model_config.get('pipeline', model_config['name']),
             model_cfg=model_config,
             quantization_type=quantization_type,
             quantized_ops=quantized_ops,
@@ -321,7 +321,7 @@ def validate_config(config: dict):
     
     # Define allowed keys
     schema = {
-        'model': ['name', 'source', 'weights', 'repo_path', 'sg_weights', 'sp_config', 'sg_config'],
+        'model': ['name', 'pipeline', 'source', 'weights', 'repo_path', 'sg_weights', 'sp_config', 'sg_config'],
         'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'weight_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size', 'skip_calibration', 'build_quantized', 'quantize_components'],
         'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format', 'strict_format_check'],
         'dataset': ['name', 'path', 'batch_size', 'num_workers', 'image_size', 'grayscale', 'pairs_file', 'max_pairs', 'resize_size', 'multiprocessing_context', 'persistent_workers', 'prefetch_factor'],

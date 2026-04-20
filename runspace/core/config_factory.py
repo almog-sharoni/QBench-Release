@@ -43,7 +43,8 @@ class ConfigFactory:
             # This prevents Cartesian-product sweeps from generating incompatible
             # config × model combos (e.g. a scannet_pairs config paired with a
             # single-image pipeline).
-            if target_pipeline and model.get('name') != target_pipeline:
+            model_pipeline = model.get('pipeline', model.get('name'))
+            if target_pipeline and model_pipeline != target_pipeline:
                 continue
 
             # Deep copy the base config to avoid modifying it for other models
