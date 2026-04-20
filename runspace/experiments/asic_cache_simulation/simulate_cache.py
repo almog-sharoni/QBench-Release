@@ -107,12 +107,13 @@ RULES = {
         'on_chip':        True,
         'xin_from_cache': True,
         'ctx_guard':      lambda ctx: ctx['output_banked'] >= ctx['input_banked'],
-        'stay_condition': 'xout + weights + 2 banks ≤ cache',
+        'stay_condition': 'xout + weights + 1 bank ≤ cache',
         'permanents':     'weights + xout',
-        'notes':          'xout is the larger tensor — hold xout+weights; xin reads from cache then is freed.',
+        'pipeline_banks': 1,
+        'notes':          'xout is the larger tensor; xin is written onto xout\'s space. 1 bank overhead for read/write pipeline boundary.',
         'perm':  lambda ctx: ctx['weight_banked'] + ctx['output_banked'],
         'stay':  lambda ctx: (
-            ctx['output_banked'] + 2 * ctx['bank_size'] + ctx['weight_banked']
+            ctx['output_banked'] + 1 * ctx['bank_size'] + ctx['weight_banked']
             <= ctx['cache_elements']
         ),
     },
@@ -121,12 +122,13 @@ RULES = {
         'on_chip':        True,
         'xin_from_cache': True,
         'ctx_guard':      lambda ctx: ctx['input_banked'] > ctx['output_banked'],
-        'stay_condition': 'xin + weights + 2 banks ≤ cache',
+        'stay_condition': 'xin + weights + 1 bank ≤ cache',
         'permanents':     'weights + xin',
-        'notes':          'xin is the larger tensor — held resident across the sliding-window sweep.',
+        'pipeline_banks': 1,
+        'notes':          'xin is the larger tensor; xout is written onto xin\'s space. 1 bank overhead for read/write pipeline boundary.',
         'perm':  lambda ctx: ctx['weight_banked'] + ctx['input_banked'],
         'stay':  lambda ctx: (
-            ctx['input_banked'] + 2 * ctx['bank_size'] + ctx['weight_banked']
+            ctx['input_banked'] + 1 * ctx['bank_size'] + ctx['weight_banked']
             <= ctx['cache_elements']
         ),
     },
@@ -182,14 +184,27 @@ RULES = {
             <= ctx['cache_elements']
         ),
     },
+
+    'conv_stream_xin_out': {
+        'on_chip':        False,
+        'xin_from_cache': True,
+        'stay_condition': 'xin + weights + 2 banks ≤ cache',
+        'permanents':     'xin + weights (held while streaming xout)',
+        'notes':          'xin from cache, weights resident, xout streamed to external.',
+        'perm':  lambda ctx: ctx['input_banked'],
+        'stay':  lambda ctx: (
+            ctx['input_banked'] + ctx['weight_banked'] + 2 * ctx['bank_size']
+            <= ctx['cache_elements']
+        ),
+    },
 }
 
 
 # Layer type → ordered list of rule keys to try (priority order).
 # Linear intentionally skips conv/pool-specific rules and falls through to fallback.
 LAYER_RULES = {
-    'Conv2d':            ['conv_output_dominated', 'conv_input_dominated', 'global_fit', 
-                          'stream_xin_keep_xout', 'fallback'],
+    'Conv2d':            ['conv_output_dominated', 'conv_input_dominated', 'global_fit',
+                          'stream_xin_keep_xout', 'conv_stream_xin_out', 'fallback'],
     'Linear':            ['global_fit', 'linear_stream_xout', 'fallback'],
     'Residual':          ['residual', 'fallback'],
     'MaxPool2d':         ['global_fit', 'pool', 'fallback'],
@@ -389,13 +404,14 @@ def serialize_rules() -> list:
         else:
             applies_to = ', '.join(layer_types) or 'N/A'
         result.append({
-            'name':           name,
-            'on_chip':        rule['on_chip'],
-            'xin_from_cache': rule['xin_from_cache'],
-            'applies_to':     applies_to,
-            'stay_condition': rule.get('stay_condition', ''),
-            'permanents':     rule.get('permanents', ''),
-            'notes':          rule.get('notes', ''),
+            'name':            name,
+            'on_chip':         rule['on_chip'],
+            'xin_from_cache':  rule['xin_from_cache'],
+            'applies_to':      applies_to,
+            'stay_condition':  rule.get('stay_condition', ''),
+            'permanents':      rule.get('permanents', ''),
+            'pipeline_banks':  rule.get('pipeline_banks', 0),
+            'notes':           rule.get('notes', ''),
         })
     return result
 

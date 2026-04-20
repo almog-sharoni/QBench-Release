@@ -2487,14 +2487,17 @@ def _build_bank_states(layers, num_banks, bank_size, rule_meta=None):
     import math
 
     # Build fast per-rule lookups.
-    # xin_full:   True  → xin fully resident in cache during execution
-    # wt_shows:   True  → weight banks are explicitly held during execution
-    _xin_full  = {}
-    _wt_shows  = {}
+    # xin_full:        True  → xin fully resident in cache during execution
+    # wt_shows:        True  → weight banks are explicitly held during execution
+    # pipeline_banks:  int   → extra boundary banks for xin-on-xout overlap rules (xin not shown separately)
+    _xin_full       = {}
+    _wt_shows       = {}
+    _pipeline_banks = {}
     if rule_meta:
         for name, meta in rule_meta.items():
-            _xin_full[name] = bool(meta.get('xin_from_cache', False))
-            _wt_shows[name] = 'weight' in meta.get('permanents', '').lower()
+            _xin_full[name]       = bool(meta.get('xin_from_cache', False))
+            _wt_shows[name]       = 'weight' in meta.get('permanents', '').lower()
+            _pipeline_banks[name] = int(meta.get('pipeline_banks', 0))
     else:
         # Legacy fallback: covers both old (r1_/r2_/r3_) and new short names.
         for name in ('r1_global_fit', 'r2_residual', 'r2_pool',
@@ -2504,8 +2507,9 @@ def _build_bank_states(layers, num_banks, bank_size, rule_meta=None):
         for name in ('r2_conv_output_dominated', 'r2_conv_input_dominated',
                      'conv_output_dominated', 'conv_input_dominated',
                      'linear_stream_xout'):
-            _xin_full[name] = True
-            _wt_shows[name] = True
+            _xin_full[name]       = True
+            _wt_shows[name]       = True
+            _pipeline_banks[name] = 1
         for name in ('r2_stream_xin_keep_xout', 'stream_xin_keep_xout',
                      'r3_weights_plus_4banks', 'fallback'):
             _xin_full[name] = False
@@ -2527,10 +2531,15 @@ def _build_bank_states(layers, num_banks, bank_size, rule_meta=None):
         wb = min(wb, num_banks)
         ib = min(ib, num_banks)
 
-        xin_full = _xin_full.get(rule, False)
-        wt_shows = _wt_shows.get(rule, False)
+        xin_full      = _xin_full.get(rule, False)
+        wt_shows      = _wt_shows.get(rule, False)
+        pipeline_b    = _pipeline_banks.get(rule, 0)
 
-        if xin_full:
+        if pipeline_b > 0:
+            # xin is written onto the dominant tensor's space; only pipeline boundary banks shown
+            xin_b    = 0
+            stream_b = pipeline_b
+        elif xin_full:
             xin_b    = ib
             stream_b = 0
         else:
