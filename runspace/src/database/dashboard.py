@@ -12,6 +12,20 @@ if PROJECT_ROOT not in sys.path:
 from runspace.src.database.handler import RunDatabase
 import json
 import numpy as np
+from datetime import datetime
+
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
+try:
+    from runspace.src.adapters.generic_adapter import GenericAdapter
+    from runspace.src.utils.architecture_viz import generate_hierarchical_json
+    GRAPH_VIZ_AVAILABLE = True
+except Exception:
+    GRAPH_VIZ_AVAILABLE = False
 
 class NpEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -47,19 +61,188 @@ def save_presets(presets):
 def inject_global_styles():
     st.markdown("""
     <style>
+    :root {
+        --dashboard-app-bg:
+            radial-gradient(circle at top left, rgba(20, 184, 166, 0.10), transparent 30%),
+            radial-gradient(circle at top right, rgba(59, 130, 246, 0.12), transparent 28%),
+            linear-gradient(180deg, #f8fbff 0%, #f4f7fb 100%);
+        --dashboard-app-bg-color: #f4f7fb;
+        --dashboard-sidebar-bg:
+            linear-gradient(180deg, rgba(248, 250, 252, 0.97), rgba(241, 245, 249, 0.98));
+        --dashboard-sidebar-bg-color: #f1f5f9;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --dashboard-app-bg:
+                radial-gradient(circle at top left, rgba(45, 212, 191, 0.14), transparent 34%),
+                radial-gradient(circle at top right, rgba(59, 130, 246, 0.16), transparent 30%),
+                linear-gradient(180deg, #020617 0%, #000000 100%);
+            --dashboard-app-bg-color: #000000;
+            --dashboard-sidebar-bg:
+                linear-gradient(180deg, rgba(2, 6, 23, 0.98), rgba(0, 0, 0, 0.99));
+            --dashboard-sidebar-bg-color: #000000;
+        }
+    }
+
+    html[data-theme="dark"],
+    body[data-theme="dark"],
+    [data-theme="dark"] {
+        --dashboard-app-bg:
+            radial-gradient(circle at top left, rgba(45, 212, 191, 0.14), transparent 34%),
+            radial-gradient(circle at top right, rgba(59, 130, 246, 0.16), transparent 30%),
+            linear-gradient(180deg, #020617 0%, #000000 100%);
+        --dashboard-app-bg-color: #000000;
+        --dashboard-sidebar-bg:
+            linear-gradient(180deg, rgba(2, 6, 23, 0.98), rgba(0, 0, 0, 0.99));
+        --dashboard-sidebar-bg-color: #000000;
+    }
+
+    html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+        background-color: var(--dashboard-app-bg-color);
+    }
+
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+        background: var(--dashboard-app-bg);
+    }
+
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2.5rem;
+    }
+
+    .dashboard-hero {
+        padding: 1.2rem 1.3rem;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 20px;
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(15, 118, 110, 0.90));
+        box-shadow: 0 18px 42px rgba(15, 23, 42, 0.14);
+        color: #f8fafc;
+        margin-bottom: 1rem;
+    }
+
+    .dashboard-hero__eyebrow {
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-size: 0.76rem;
+        font-weight: 700;
+        color: rgba(244, 247, 251, 0.78);
+        margin-bottom: 0.45rem;
+    }
+
+    .dashboard-hero h1 {
+        margin: 0;
+        font-size: 2rem;
+        line-height: 1.05;
+        letter-spacing: -0.03em;
+    }
+
+    .dashboard-hero p {
+        margin: 0.7rem 0 0;
+        max-width: 60rem;
+        color: rgba(248, 250, 252, 0.86);
+        font-size: 0.98rem;
+    }
+
+    .dashboard-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin: 0.45rem 0 0.2rem;
+    }
+
+    .dashboard-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        background: rgba(255, 255, 255, 0.74);
+        color: #0f172a;
+        padding: 0.35rem 0.7rem;
+        font-size: 0.82rem;
+        font-weight: 600;
+    }
+
+    .dashboard-chip--dark {
+        background: rgba(255, 255, 255, 0.14);
+        color: #f8fafc;
+        border-color: rgba(255, 255, 255, 0.18);
+    }
+
+    .dashboard-section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin: 0.3rem 0 0.65rem;
+    }
+
+    .dashboard-section-title h3 {
+        margin: 0;
+        font-size: 1.15rem;
+        letter-spacing: -0.02em;
+    }
+
+    .dashboard-section-title p {
+        margin: 0.2rem 0 0;
+        color: #475569;
+        font-size: 0.9rem;
+    }
+
+    .dashboard-selection-banner {
+        border: 1px solid rgba(20, 184, 166, 0.24);
+        background: linear-gradient(135deg, rgba(236, 253, 245, 0.98), rgba(239, 246, 255, 0.96));
+        border-radius: 16px;
+        padding: 0.8rem 0.95rem;
+        margin: 0.7rem 0 1rem;
+    }
+
+    .dashboard-selection-banner strong {
+        color: #0f172a;
+    }
+
+    .dashboard-selection-banner span {
+        color: #475569;
+        font-size: 0.9rem;
+    }
+
+    .dashboard-filter-note {
+        color: #475569;
+        font-size: 0.84rem;
+        margin: 0.25rem 0 0.55rem;
+    }
+
+    div[data-testid="stMetric"] {
+        border: 1px solid rgba(203, 213, 225, 0.9);
+        background: rgba(255, 255, 255, 0.88);
+        border-radius: 16px;
+        padding: 0.25rem 0.2rem;
+        box-shadow: 0 8px 24px rgba(148, 163, 184, 0.12);
+    }
+
+    div[data-testid="stMetricLabel"] {
+        color: #475569;
+        font-weight: 600;
+    }
+
+    div[data-testid="stMetricValue"] {
+        color: #0f172a;
+    }
+
     .stButton > button {
         transition: background-color 0.1s ease, border 0.1s ease !important;
-        border-radius: 4px !important;
+        border-radius: 10px !important;
     }
 
     div[data-testid="stHorizontalBlock"] .stButton > button {
-        background-color: #fb7185 !important;
-        color: white !important;
-        border: 1px solid #e11d48 !important;
+        background-color: #ffffff !important;
+        color: #334155 !important;
+        border: 1px solid #cbd5e1 !important;
         padding: 0px 8px !important;
-        min-height: 24px !important;
-        height: 24px !important;
-        font-size: 10px !important;
+        min-height: 32px !important;
+        height: 32px !important;
+        font-size: 11px !important;
         line-height: normal !important;
         font-weight: 600;
         white-space: nowrap !important;
@@ -70,13 +253,22 @@ def inject_global_styles():
 
     div[data-testid="stHorizontalBlock"] .stButton > button[kind="primary"],
     div[data-testid="stHorizontalBlock"] .stButton > button[data-testid*="primary"] {
-        background-color: #10b981 !important;
+        background-color: #0f766e !important;
         color: white !important;
-        border: 1px solid #059669 !important;
+        border: 1px solid #0f766e !important;
     }
 
     div[data-testid="stHorizontalBlock"] {
         gap: 6px !important;
+    }
+
+    section[data-testid="stSidebar"] {
+        background-color: var(--dashboard-sidebar-bg-color);
+        background: var(--dashboard-sidebar-bg);
+    }
+
+    [data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child {
+        border-color: #0f766e !important;
     }
 
     [data-testid="stDialog"] [data-testid="stVerticalBlock"] {
@@ -397,14 +589,40 @@ def _compute_weight_win_rate_views(raw_json):
     return summary_df, layer_df, layer_chunk_df, meta
 
 
-def get_model_graph_json(model_name):
-    db = RunDatabase(db_path=DB_PATH)
-    return db.get_model_graph_json(model_name)
+def generate_live_model_graph_bundle(model_name, graph_depth=12):
+    if not TORCH_AVAILABLE:
+        raise RuntimeError("torch is not available in this environment.")
+    if not GRAPH_VIZ_AVAILABLE:
+        raise RuntimeError("Graph visualization dependencies are not available.")
 
+    adapter = GenericAdapter(
+        model_name=model_name,
+        quantized_ops=["all"],
+        input_quantization=False,
+        enable_fx_quantization=False,
+    )
+    model = adapter.model
+    model.eval()
 
-def get_model_graph_metadata(model_name):
-    db = RunDatabase(db_path=DB_PATH)
-    return db.get_model_graph_metadata(model_name)
+    graph_json = generate_hierarchical_json(
+        model,
+        input_size=(1, 3, 224, 224),
+        model_name=model_name,
+        depth=graph_depth,
+    )
+
+    parsed_json = json.loads(graph_json)
+    num_nodes = sum(1 for e in parsed_json if e.get('data', {}).get('type') in ('node', 'compound'))
+    num_quantized = sum(1 for e in parsed_json if '#a7f3d0' in str(e.get('data', {}).get('color', '')))
+
+    return graph_json, {
+        'model_name': model_name,
+        'graph_size_original': len(graph_json.encode('utf-8')),
+        'num_nodes': num_nodes,
+        'num_quantized_layers': num_quantized,
+        'generated_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'status': 'LIVE',
+    }
 
 
 def _render_win_rates(raw_map_json, title_prefix, empty_info):
@@ -525,9 +743,19 @@ def _resolve_maps_for_display(run_row):
 
     return raw_weight_map, raw_input_map, is_input_exp
 
-st.set_page_config(page_title="QBench Experiment Dashboard", layout="wide")
 
-st.title("🚀 QBench Experiment Tracker")
+def render_dashboard_intro():
+    st.markdown(
+        """
+        <div class="dashboard-hero">
+            <h1>QBench Experiment Dashboard</h1>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+st.set_page_config(page_title="QBench Experiment Dashboard", layout="wide")
 inject_global_styles()
 flash_message = st.session_state.pop("dashboard_flash_message", None)
 if flash_message:
@@ -546,9 +774,9 @@ run_window_label = st.sidebar.selectbox(
 )
 selected_run_limit = RUN_WINDOW_TO_LIMIT[run_window_label]
 load_graphs_on_demand = st.sidebar.checkbox(
-    "Load Graphs On Demand",
+    "Generate Graphs On Demand",
     value=True,
-    help="Delays model graph JSON fetch/decompression until you explicitly request a graph.",
+    help="Generates architecture graphs only when requested. Graphs are not cached.",
 )
 st.sidebar.caption("Use `Refresh Data` after new experiments complete.")
 
@@ -596,6 +824,14 @@ with st.expander(f"🔍 Feature Matching Runs (`fm_runs.db`)", expanded=False):
 
 st.markdown("---")
 
+tab_exp, tab_cache, tab_graph = st.tabs(["📊 Experiments", "🗄️ Cache Simulation", "🏗️ Architecture Graph"])
+
+# Renderer exposed by the else: block below; None if db is empty.
+_graph_renderer_fn = None
+
+# Enter the Experiments tab context without re-indenting the existing block.
+tab_exp.__enter__()
+
 with st.spinner("Loading experiment runs..."):
     df = get_runs(selected_run_limit)
 
@@ -604,7 +840,6 @@ if df.empty:
 else:
     with st.spinner("Preparing dashboard data..."):
         df = preprocess_runs_df(df)
-    st.caption(f"Showing {len(df)} runs from the selected load window ({run_window_label}).")
     @st.dialog("🔬 Layer Quantization Breakdown", width="large")
     def show_layer_breakdown(run_row):
         model = run_row.get('model_name', '')
@@ -804,9 +1039,6 @@ else:
             )
             for key in (
                 f"table_{table_index}",
-                f"graph_payload_{table_index}",
-                f"graph_meta_{table_index}",
-                f"graph_payload_model_{table_index}",
             ):
                 st.session_state.pop(key, None)
             st.rerun()
@@ -857,51 +1089,916 @@ else:
             'width': chart_width
         }, use_container_width=False)
         st.info("💡 Tip: Use the horizontal scrollbar above to see all models. Click '...' to save.")
+
+    def render_full_graph_viewer(selected_model, graph_json, graph_meta, download_key):
+            # Display metadata
+            meta_col1, meta_col2, meta_col3 = st.columns(3)
+            if graph_meta:
+                meta_col1.metric("JSON Size", f"{graph_meta.get('graph_size_original', 0)/1024:.1f} KB")
+                meta_col2.metric("Nodes", f"{graph_meta.get('num_nodes', 0)}")
+                meta_col3.metric("Quantized Nodes", f"{graph_meta.get('num_quantized_layers', 0)}")
+                generated_at = graph_meta.get('generated_at')
+                if generated_at:
+                    st.caption(f"Generated live at {generated_at}")
+            
+            st.markdown("**Green** = Quantized Layers ")
+            st.info("💡 **Interactive**: Click on dashed boxes (compound nodes) to collapse/expand them! Use mouse wheel to zoom.")
+            
+            import streamlit.components.v1 as components
+            
+            html_template = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+            <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/cytoscape-expand-collapse@4.1.0/cytoscape-expand-collapse.min.js"></script>
+            <style>
+                html, body {{
+                    margin: 0;
+                    padding: 0;
+                    background: #f8fafc;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                }}
+                #graph-shell {{
+                    position: relative;
+                    width: 100%;
+                    height: 810px;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 10px;
+                    background: #f8fafc;
+                    overflow: hidden;
+                }}
+                #cy {{
+                    position: absolute;
+                    inset: 0;
+                    z-index: 1;
+                    background-color: #f8fafc;
+                }}
+                #toolbar {{
+                    position: absolute;
+                    top: 12px;
+                    right: 12px;
+                    z-index: 70;
+                    display: flex;
+                    gap: 8px;
+                    flex-wrap: wrap;
+                    justify-content: flex-end;
+                    max-width: 90%;
+                }}
+                .graph-btn {{
+                    cursor: pointer;
+                    background: #ffffff;
+                    border: 1px solid #bfdbfe;
+                    border-radius: 8px;
+                    color: #1d4ed8;
+                    padding: 7px 10px;
+                    font-size: 12px;
+                    font-weight: 600;
+                    box-shadow: 0 3px 10px rgba(0,0,0,0.12);
+                    user-select: none;
+                    transition: transform 0.08s ease, background-color 0.12s ease;
+                }}
+                .graph-btn:hover {{
+                    background: #eff6ff;
+                    transform: translateY(-1px);
+                }}
+                .graph-btn.active {{
+                    background: #1d4ed8;
+                    color: #ffffff;
+                    border-color: #1e40af;
+                }}
+                #meta-layer {{
+                    position: absolute;
+                    inset: 0;
+                    z-index: 45;
+                    pointer-events: none;
+                }}
+                .meta-card {{
+                    background: #ffffff;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 8px;
+                    padding: 7px 9px;
+                    font-size: 11px;
+                    color: #111827;
+                    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.18);
+                    max-width: 260px;
+                    line-height: 1.25;
+                }}
+                #hover-tooltip {{
+                    position: absolute;
+                    display: none;
+                    pointer-events: none;
+                }}
+                .pinned-meta {{
+                    position: absolute;
+                    border-left: 3px solid #2563eb;
+                    pointer-events: auto;
+                    min-width: 180px;
+                }}
+                .meta-close {{
+                    float: right;
+                    border: none;
+                    background: #e2e8f0;
+                    color: #0f172a;
+                    border-radius: 5px;
+                    width: 20px;
+                    height: 20px;
+                    cursor: pointer;
+                    font-weight: 700;
+                    line-height: 18px;
+                    padding: 0;
+                    margin-left: 6px;
+                }}
+                .meta-close:hover {{
+                    background: #cbd5e1;
+                }}
+                #all-meta-panel {{
+                    position: absolute;
+                    right: 12px;
+                    top: 54px;
+                    width: 340px;
+                    max-height: 72%;
+                    overflow: auto;
+                    background: #ffffff;
+                    border: 1px solid #93c5fd;
+                    border-radius: 10px;
+                    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.2);
+                    z-index: 65;
+                    display: none;
+                    padding: 10px;
+                }}
+                #all-meta-panel h4 {{
+                    margin: 0 0 8px 0;
+                    font-size: 13px;
+                    color: #0f172a;
+                }}
+                #zoom-rect {{
+                    position: absolute;
+                    display: none;
+                    border: 2px dashed #1d4ed8;
+                    background: rgba(59, 130, 246, 0.18);
+                    border-radius: 4px;
+                    pointer-events: none;
+                }}
+            </style>
+            </head>
+            <body>
+                <div id="graph-shell">
+                    <div id="toolbar">
+                        <button id="reset-view-btn" class="graph-btn">Reset View</button>
+                        <button id="box-zoom-btn" class="graph-btn">Right-Drag Zoom: Off</button>
+                        <button id="all-meta-btn" class="graph-btn">Show All Metadata</button>
+                        <button id="fullscreen-btn" class="graph-btn">⛶ Fullscreen</button>
+                    </div>
+                    <div id="all-meta-panel"></div>
+                    <div id="meta-layer">
+                        <div id="hover-tooltip" class="meta-card"></div>
+                        <div id="zoom-rect"></div>
+                    </div>
+                    <div id="cy"></div>
+                </div>
+                <script>
+                    document.addEventListener('DOMContentLoaded', function() {{
+                        var elements = {graph_json};
+                        var ABS_ZOOM_MIN = 0.02;
+                        var ZOOM_MAX = 3.0;
+                        var FIT_PADDING = 80;
+                        var currentMinZoom = ABS_ZOOM_MIN;
+
+                        var cy = cytoscape({{
+                            container: document.getElementById('cy'),
+                            elements: elements,
+                            minZoom: ABS_ZOOM_MIN,
+                            maxZoom: ZOOM_MAX,
+                            wheelSensitivity: 0.18,
+                            boxSelectionEnabled: false,
+                            style: [
+                                {{
+                                    selector: 'node',
+                                    style: {{
+                                        'content': 'data(label)',
+                                        'text-valign': 'center',
+                                        'text-halign': 'center',
+                                        'background-color': 'data(color)',
+                                        'border-width': 1,
+                                        'border-color': '#94a3b8',
+                                        'shape': 'round-rectangle',
+                                        'width': 'label',
+                                        'height': 'label',
+                                        'padding': '10px',
+                                        'font-size': '12px'
+                                    }}
+                                }},
+                                {{
+                                    selector: '$node > node',
+                                    style: {{
+                                        'background-color': '#e2e8f0',
+                                        'padding-top': '25px',
+                                        'padding-left': '10px',
+                                        'padding-bottom': '10px',
+                                        'padding-right': '10px',
+                                        'text-valign': 'top',
+                                        'text-halign': 'center',
+                                        'border-color': '#94a3b8',
+                                        'border-width': 2,
+                                        'border-style': 'dashed',
+                                        'font-size': '14px',
+                                        'font-weight': 'bold'
+                                    }}
+                                }},
+                                {{
+                                    selector: 'edge',
+                                    style: {{
+                                        'curve-style': 'bezier',
+                                        'target-arrow-shape': 'triangle',
+                                        'line-color': '#cbd5e1',
+                                        'target-arrow-color': '#cbd5e1',
+                                        'width': 2
+                                    }}
+                                }},
+                                {{
+                                    selector: 'node.cy-expand-collapse-collapsed-node',
+                                    style: {{
+                                        'background-color': '#cbd5e1',
+                                        'border-color': '#64748b',
+                                        'border-width': 3,
+                                        'shape': 'round-rectangle',
+                                        'padding': '10px'
+                                    }}
+                                }}
+                            ],
+                            layout: {{
+                                name: 'dagre',
+                                rankDir: 'TB',
+                                nodeSep: 50,
+                                edgeSep: 10,
+                                rankSep: 50
+                            }}
+                        }});
+
+                        var api = cy.expandCollapse({{
+                            layoutBy: {{
+                                name: "dagre",
+                                animate: true,
+                                randomize: false,
+                                fit: false
+                            }},
+                            fisheye: false,
+                            animate: true,
+                            undoable: false
+                        }});
+
+                        var cyContainer = document.getElementById('cy');
+                        var hoverTooltip = document.getElementById('hover-tooltip');
+                        var metaLayer = document.getElementById('meta-layer');
+                        var allMetaPanel = document.getElementById('all-meta-panel');
+                        var zoomRect = document.getElementById('zoom-rect');
+                        var resetBtn = document.getElementById('reset-view-btn');
+                        var allMetaBtn = document.getElementById('all-meta-btn');
+                        var boxZoomBtn = document.getElementById('box-zoom-btn');
+                        var fsBtn = document.getElementById('fullscreen-btn');
+
+                        var pinnedCards = {{}};
+                        var showAllMetadata = false;
+                        var boxZoomEnabled = false;
+                        var rightDragActive = false;
+                        var rightDragStart = null;
+
+                        function clamp(val, min, max) {{
+                            return Math.max(min, Math.min(max, val));
+                        }}
+
+                        function computeFitZoom(paddingPx) {{
+                            var bb = cy.elements().boundingBox();
+                            if (!isFinite(bb.x1) || !isFinite(bb.x2) || !isFinite(bb.y1) || !isFinite(bb.y2)) {{
+                                return currentMinZoom;
+                            }}
+                            var graphW = Math.max(bb.x2 - bb.x1, 1e-6);
+                            var graphH = Math.max(bb.y2 - bb.y1, 1e-6);
+                            var viewW = Math.max(cy.width() - (paddingPx * 2), 1);
+                            var viewH = Math.max(cy.height() - (paddingPx * 2), 1);
+                            var fitZoom = Math.min(viewW / graphW, viewH / graphH);
+                            if (!isFinite(fitZoom) || fitZoom <= 0) {{
+                                return currentMinZoom;
+                            }}
+                            return clamp(fitZoom, ABS_ZOOM_MIN, ZOOM_MAX);
+                        }}
+
+                        function refreshMinZoomToFitGraph() {{
+                            currentMinZoom = computeFitZoom(FIT_PADDING);
+                            cy.minZoom(currentMinZoom);
+                            if (cy.zoom() < currentMinZoom) {{
+                                cy.zoom(currentMinZoom);
+                            }}
+                        }}
+
+                        function esc(val) {{
+                            return String(val === undefined || val === null ? '-' : val)
+                                .replace(/&/g, "&amp;")
+                                .replace(/</g, "&lt;")
+                                .replace(/>/g, "&gt;")
+                                .replace(/"/g, "&quot;")
+                                .replace(/'/g, "&#39;");
+                        }}
+
+                        function nodeHasMetadata(node) {{
+                            return !!node.data('var_name');
+                        }}
+
+                        function metadataHtml(node) {{
+                            var t = node.data('var_name') || node.data('label') || node.id();
+                            var inS = node.data('input_shape') || '-';
+                            var outS = node.data('output_shape') || '-';
+                            var args = node.data('module_args') || '';
+                            var argsHtml = args
+                                ? "<div style='margin-top:4px;color:#475569;font-size:11px;'>" + esc(args) + "</div>"
+                                : "";
+                            return "<div>" +
+                                "<div style='font-weight:700;color:#0f172a;'>" + esc(t) + "</div>" +
+                                argsHtml +
+                                "<div style='margin-top:6px;'><b>In:</b> " + esc(inS) + "</div>" +
+                                "<div><b>Out:</b> " + esc(outS) + "</div>" +
+                                "</div>";
+                        }}
+
+                        function getPointerPosition(evt) {{
+                            var rect = cyContainer.getBoundingClientRect();
+                            return {{
+                                x: clamp(evt.clientX - rect.left, 0, cy.width()),
+                                y: clamp(evt.clientY - rect.top, 0, cy.height())
+                            }};
+                        }}
+
+                        function getMetaScale() {{
+                            // Keep metadata tied to graph zoom, but clamp for readability.
+                            return clamp(cy.zoom(), 0.62, 1.35);
+                        }}
+
+                        function applyCardScale(card, scale) {{
+                            card.style.transform = "scale(" + scale + ")";
+                            card.style.transformOrigin = "top left";
+                        }}
+
+                        function toNodeArray(collection) {{
+                            if (!collection) return [];
+                            if (collection.toArray) return collection.toArray();
+                            return Array.isArray(collection) ? collection : [collection];
+                        }}
+
+                        function normalizeHoverNodes(nodes) {{
+                            var filtered = nodes.filter(function(node) {{ return nodeHasMetadata(node); }});
+                            if (!filtered.length) return [];
+
+                            // Prefer concrete leaf modules over compound/group containers.
+                            var leafNodes = filtered.filter(function(node) {{
+                                return !(node.isParent && node.isParent());
+                            }});
+                            if (leafNodes.length) {{
+                                filtered = leafNodes;
+                            }}
+
+                            // Deduplicate identical metadata blobs.
+                            var seen = {{}};
+                            var unique = [];
+                            filtered.forEach(function(node) {{
+                                var key = [
+                                    node.data('var_name') || '',
+                                    node.data('input_shape') || '',
+                                    node.data('output_shape') || '',
+                                    node.data('module_args') || ''
+                                ].join('|');
+                                if (!seen[key]) {{
+                                    seen[key] = true;
+                                    unique.push(node);
+                                }}
+                            }});
+
+                            // Keep only the top-most relevant hit for hover.
+                            return unique.length ? [unique[0]] : [];
+                        }}
+
+                        function sortByRenderedPosition(a, b) {{
+                            var ap = a.renderedPosition();
+                            var bp = b.renderedPosition();
+                            var dy = ap.y - bp.y;
+                            if (Math.abs(dy) > 1e-6) return dy;
+                            return ap.x - bp.x;
+                        }}
+
+                        function buildLayerOrderMap() {{
+                            var allNodes = toNodeArray(cy.nodes());
+                            var byId = {{}};
+                            var indegree = {{}};
+                            var outgoing = {{}};
+
+                            allNodes.forEach(function(node) {{
+                                var id = node.id();
+                                byId[id] = node;
+                                indegree[id] = 0;
+                                outgoing[id] = [];
+                            }});
+
+                            toNodeArray(cy.edges()).forEach(function(edge) {{
+                                var src = edge.source().id();
+                                var dst = edge.target().id();
+                                if (src in byId && dst in byId) {{
+                                    outgoing[src].push(dst);
+                                    indegree[dst] += 1;
+                                }}
+                            }});
+
+                            var queue = allNodes
+                                .filter(function(node) {{ return indegree[node.id()] === 0; }})
+                                .sort(sortByRenderedPosition);
+
+                            var ordered = [];
+                            while (queue.length > 0) {{
+                                var node = queue.shift();
+                                ordered.push(node);
+
+                                outgoing[node.id()].forEach(function(dstId) {{
+                                    indegree[dstId] -= 1;
+                                    if (indegree[dstId] === 0) {{
+                                        queue.push(byId[dstId]);
+                                        queue.sort(sortByRenderedPosition);
+                                    }}
+                                }});
+                            }}
+
+                            if (ordered.length !== allNodes.length) {{
+                                var seen = {{}};
+                                ordered.forEach(function(node) {{ seen[node.id()] = true; }});
+                                var leftovers = allNodes
+                                    .filter(function(node) {{ return !seen[node.id()]; }})
+                                    .sort(sortByRenderedPosition);
+                                ordered = ordered.concat(leftovers);
+                            }}
+
+                            var orderMap = {{}};
+                            ordered.forEach(function(node, idx) {{
+                                orderMap[node.id()] = idx;
+                            }});
+                            return orderMap;
+                        }}
+
+                        function getNodesAtRenderedPoint(x, y) {{
+                            if (typeof cy.elementsAtPoint === "function") {{
+                                return normalizeHoverNodes(toNodeArray(
+                                    cy.elementsAtPoint(x, y).filter(function(ele) {{
+                                        return ele.isNode && ele.isNode() && nodeHasMetadata(ele);
+                                    }})
+                                ));
+                            }}
+                            return normalizeHoverNodes(toNodeArray(
+                                cy.nodes().filter(function(node) {{
+                                    if (!nodeHasMetadata(node)) return false;
+                                    var bb = node.renderedBoundingBox();
+                                    return x >= bb.x1 && x <= bb.x2 && y >= bb.y1 && y <= bb.y2;
+                                }})
+                            ));
+                        }}
+
+                        function renderHoverMetadata(evt) {{
+                            if (showAllMetadata || rightDragActive) {{
+                                hoverTooltip.style.display = "none";
+                                return;
+                            }}
+                            var p = getPointerPosition(evt);
+                            var nodes = getNodesAtRenderedPoint(p.x, p.y);
+                            if (!nodes.length) {{
+                                hoverTooltip.style.display = "none";
+                                return;
+                            }}
+
+                            hoverTooltip.innerHTML = nodes.map(function(node, idx) {{
+                                var divider = idx < nodes.length - 1
+                                    ? "<div style='margin:8px 0;border-top:1px solid #e2e8f0;'></div>"
+                                    : "";
+                                return metadataHtml(node) + divider;
+                            }}).join("");
+                            var scale = getMetaScale() * 0.92;
+                            applyCardScale(hoverTooltip, scale);
+                            var cardW = hoverTooltip.offsetWidth * scale;
+                            var cardH = hoverTooltip.offsetHeight * scale;
+                            var bounds = nodes.reduce(function(acc, node) {{
+                                var bb = node.renderedBoundingBox();
+                                acc.x1 = Math.min(acc.x1, bb.x1);
+                                acc.y1 = Math.min(acc.y1, bb.y1);
+                                acc.x2 = Math.max(acc.x2, bb.x2);
+                                return acc;
+                            }}, {{ x1: Infinity, y1: Infinity, x2: -Infinity }});
+                            var gap = 12;
+                            var left = bounds.x2 + gap;
+                            if (left + cardW > cy.width() - 6) {{
+                                left = bounds.x1 - gap - cardW;
+                            }}
+                            var top = bounds.y1;
+                            left = clamp(left, 6, cy.width() - cardW - 6);
+                            top = clamp(top, 6, cy.height() - cardH - 6);
+                            if (!isFinite(left) || !isFinite(top)) {{
+                                left = clamp(p.x + 18, 6, cy.width() - cardW - 6);
+                                top = clamp(p.y + 18, 6, cy.height() - cardH - 6);
+                            }}
+                            hoverTooltip.style.left = left + "px";
+                            hoverTooltip.style.top = top + "px";
+                            hoverTooltip.style.display = "block";
+                        }}
+
+                        function hideHoverMetadata() {{
+                            hoverTooltip.style.display = "none";
+                        }}
+
+                        function removePinnedCard(nodeId) {{
+                            if (!pinnedCards[nodeId]) return;
+                            pinnedCards[nodeId].remove();
+                            delete pinnedCards[nodeId];
+                        }}
+
+                        function positionPinnedCard(nodeId) {{
+                            var card = pinnedCards[nodeId];
+                            if (!card) return;
+                            var node = cy.getElementById(nodeId);
+                            if (!node || node.empty()) {{
+                                removePinnedCard(nodeId);
+                                return;
+                            }}
+                            if (!node.visible()) {{
+                                card.style.display = "none";
+                                return;
+                            }}
+
+                            card.style.display = "block";
+                            var scale = getMetaScale();
+                            applyCardScale(card, scale);
+                            var cardW = card.offsetWidth * scale;
+                            var cardH = card.offsetHeight * scale;
+                            var bb = node.renderedBoundingBox();
+                            var gap = 12;
+                            var left = bb.x2 + gap;
+                            if (left + cardW > cy.width() - 6) {{
+                                left = bb.x1 - gap - cardW;
+                            }}
+                            var top = bb.y1;
+                            left = clamp(left, 6, cy.width() - cardW - 6);
+                            top = clamp(top, 6, cy.height() - cardH - 6);
+                            card.style.left = left + "px";
+                            card.style.top = top + "px";
+                        }}
+
+                        function updatePinnedCards() {{
+                            Object.keys(pinnedCards).forEach(positionPinnedCard);
+                        }}
+
+                        function clearPinnedCards() {{
+                            Object.keys(pinnedCards).forEach(removePinnedCard);
+                        }}
+
+                        function togglePinnedCard(node) {{
+                            if (!nodeHasMetadata(node)) return;
+                            var nodeId = node.id();
+                            if (pinnedCards[nodeId]) {{
+                                removePinnedCard(nodeId);
+                                return;
+                            }}
+
+                            var card = document.createElement("div");
+                            card.className = "meta-card pinned-meta";
+                            card.innerHTML = "<button class='meta-close' title='Close'>×</button>" + metadataHtml(node);
+                            card.querySelector(".meta-close").addEventListener("click", function(e) {{
+                                e.stopPropagation();
+                                removePinnedCard(nodeId);
+                            }});
+                            metaLayer.appendChild(card);
+                            pinnedCards[nodeId] = card;
+                            positionPinnedCard(nodeId);
+                        }}
+
+                        function renderAllMetadataPanel() {{
+                            var layerOrder = buildLayerOrderMap();
+                            var nodes = toNodeArray(
+                                cy.nodes().filter(function(node) {{ return nodeHasMetadata(node); }})
+                            );
+                            nodes.sort(function(a, b) {{
+                                var ai = (a.id() in layerOrder) ? layerOrder[a.id()] : Number.MAX_SAFE_INTEGER;
+                                var bi = (b.id() in layerOrder) ? layerOrder[b.id()] : Number.MAX_SAFE_INTEGER;
+                                if (ai !== bi) return ai - bi;
+                                var av = a.data('var_name') || a.id();
+                                var bv = b.data('var_name') || b.id();
+                                return av.localeCompare(bv, undefined, {{ numeric: true, sensitivity: 'base' }});
+                            }});
+                            var rows = nodes.map(function(node, idx) {{
+                                var divider = idx < nodes.length - 1
+                                    ? "<div style='margin:8px 0;border-top:1px solid #e2e8f0;'></div>"
+                                    : "";
+                                return metadataHtml(node) + divider;
+                            }}).join("");
+                            allMetaPanel.innerHTML = "<h4>All Node Metadata (Layer Order, " + nodes.length + ")</h4>" + rows;
+                        }}
+
+                        function setShowAllMetadata(enabled) {{
+                            showAllMetadata = enabled;
+                            allMetaBtn.classList.toggle("active", enabled);
+                            allMetaBtn.textContent = enabled ? "Hide All Metadata" : "Show All Metadata";
+                            if (enabled) {{
+                                hideHoverMetadata();
+                                renderAllMetadataPanel();
+                                allMetaPanel.style.display = "block";
+                            }} else {{
+                                allMetaPanel.style.display = "none";
+                            }}
+                        }}
+
+                        function setBoxZoomEnabled(enabled) {{
+                            boxZoomEnabled = enabled;
+                            boxZoomBtn.classList.toggle("active", enabled);
+                            boxZoomBtn.textContent = enabled ? "Right-Drag Zoom: On" : "Right-Drag Zoom: Off";
+                        }}
+
+                        function constrainPan() {{
+                            refreshMinZoomToFitGraph();
+                            var bb = cy.elements().boundingBox();
+                            if (!isFinite(bb.x1) || !isFinite(bb.x2) || !isFinite(bb.y1) || !isFinite(bb.y2)) return;
+                            var zoom = cy.zoom();
+                            var pan = cy.pan();
+                            var vw = cy.width();
+                            var vh = cy.height();
+                            var pad = 160;
+
+                            var minX = vw - (bb.x2 * zoom) - pad;
+                            var maxX = - (bb.x1 * zoom) + pad;
+                            var minY = vh - (bb.y2 * zoom) - pad;
+                            var maxY = - (bb.y1 * zoom) + pad;
+
+                            var targetX = (minX > maxX) ? ((minX + maxX) / 2) : clamp(pan.x, minX, maxX);
+                            var targetY = (minY > maxY) ? ((minY + maxY) / 2) : clamp(pan.y, minY, maxY);
+
+                            if (targetX !== pan.x || targetY !== pan.y) {{
+                                cy.pan({{ x: targetX, y: targetY }});
+                            }}
+                        }}
+
+                        function resetView() {{
+                            hideHoverMetadata();
+                            setShowAllMetadata(false);
+                            clearPinnedCards();
+                            refreshMinZoomToFitGraph();
+                            cy.fit(cy.elements(), FIT_PADDING);
+                            cy.zoom(clamp(cy.zoom(), currentMinZoom, ZOOM_MAX));
+                            constrainPan();
+                            updatePinnedCards();
+                        }}
+
+                        function updateZoomRectangle(start, end) {{
+                            var x = Math.min(start.x, end.x);
+                            var y = Math.min(start.y, end.y);
+                            var w = Math.abs(end.x - start.x);
+                            var h = Math.abs(end.y - start.y);
+                            zoomRect.style.left = x + "px";
+                            zoomRect.style.top = y + "px";
+                            zoomRect.style.width = w + "px";
+                            zoomRect.style.height = h + "px";
+                            zoomRect.style.display = "block";
+                        }}
+
+                        cyContainer.addEventListener("mousemove", renderHoverMetadata);
+                        cyContainer.addEventListener("mouseleave", hideHoverMetadata);
+                        cy.on("tap", "node", function(evt) {{
+                            hideHoverMetadata();
+                            togglePinnedCard(evt.target);
+                        }});
+                        cy.on("pan zoom resize render position", function() {{
+                            constrainPan();
+                            updatePinnedCards();
+                        }});
+
+                        allMetaBtn.addEventListener("click", function(e) {{
+                            e.stopPropagation();
+                            setShowAllMetadata(!showAllMetadata);
+                        }});
+
+                        boxZoomBtn.addEventListener("click", function(e) {{
+                            e.stopPropagation();
+                            setBoxZoomEnabled(!boxZoomEnabled);
+                        }});
+
+                        resetBtn.addEventListener("click", function(e) {{
+                            e.stopPropagation();
+                            resetView();
+                        }});
+
+                        cyContainer.addEventListener("contextmenu", function(e) {{
+                            if (boxZoomEnabled || rightDragActive) {{
+                                e.preventDefault();
+                            }}
+                        }});
+
+                        cyContainer.addEventListener("mousedown", function(e) {{
+                            if (!boxZoomEnabled || e.button !== 2) return;
+                            e.preventDefault();
+                            rightDragActive = true;
+                            rightDragStart = getPointerPosition(e);
+                            updateZoomRectangle(rightDragStart, rightDragStart);
+                        }});
+
+                        window.addEventListener("mousemove", function(e) {{
+                            if (!rightDragActive || !rightDragStart) return;
+                            var current = getPointerPosition(e);
+                            updateZoomRectangle(rightDragStart, current);
+                        }});
+
+                        window.addEventListener("mouseup", function(e) {{
+                            if (!rightDragActive || !rightDragStart) return;
+                            var end = getPointerPosition(e);
+                            var start = rightDragStart;
+                            rightDragActive = false;
+                            rightDragStart = null;
+                            zoomRect.style.display = "none";
+
+                            var w = Math.abs(end.x - start.x);
+                            var h = Math.abs(end.y - start.y);
+                            if (w < 12 || h < 12) return;
+
+                            var pan = cy.pan();
+                            var zoom = cy.zoom();
+                            var x1 = (Math.min(start.x, end.x) - pan.x) / zoom;
+                            var x2 = (Math.max(start.x, end.x) - pan.x) / zoom;
+                            var y1 = (Math.min(start.y, end.y) - pan.y) / zoom;
+                            var y2 = (Math.max(start.y, end.y) - pan.y) / zoom;
+
+                            cy.animate({{
+                                fit: {{ boundingBox: {{ x1: x1, y1: y1, x2: x2, y2: y2 }}, padding: 24 }},
+                                duration: 220
+                            }});
+                            setTimeout(function() {{
+                                constrainPan();
+                                updatePinnedCards();
+                            }}, 240);
+                        }});
+
+                        ['mousedown', 'mouseup', 'click', 'touchstart', 'touchend'].forEach(function(evt) {{
+                            [fsBtn, resetBtn, allMetaBtn, boxZoomBtn].forEach(function(btn) {{
+                                btn.addEventListener(evt, function(e) {{ e.stopPropagation(); }});
+                            }});
+                        }});
+
+                        fsBtn.addEventListener('click', function(e) {{
+                            e.stopPropagation();
+                            var elem = document.getElementById('graph-shell');
+                            if (elem.requestFullscreen) {{
+                                elem.requestFullscreen();
+                            }} else if (elem.webkitRequestFullscreen) {{
+                                elem.webkitRequestFullscreen();
+                            }} else if (elem.msRequestFullscreen) {{
+                                elem.msRequestFullscreen();
+                            }}
+                        }});
+
+                        // Smart auto-expansion: collapse compound nodes EXCEPT if it's the first appearance
+                        cy.nodes('$node > node').sort((a, b) => b.neighborhood().length - a.neighborhood().length).forEach(function(node) {{
+                            if (!node.data('is_first_appearance')) {{
+                                api.collapse(node);
+                            }}
+                        }});
+
+                        setBoxZoomEnabled(false);
+                        setShowAllMetadata(false);
+                        resetView();
+                    }});
+                </script>
+            </body>
+            </html>
+            """
+            components.html(html_template, height=820)
+            
+            # Download button
+            st.download_button(
+                label="⬇️ Download Graph JSON",
+                data=graph_json,
+                file_name=f"{selected_model}_architecture.json",
+                mime="application/json",
+                key=download_key
+            )
+
+    # Expose renderer for the Architecture Graph tab (defined here inside else:).
+    _graph_renderer_fn = render_full_graph_viewer
+
+    @st.dialog("🏗️ Architecture Graph Viewer", width="large")
+    def show_graph_viewer(table_index, available_models):
+        if not available_models:
+            st.info("No models are available for this table.")
+            return
+
+        selected_model = st.selectbox(
+            "Model",
+            options=available_models,
+            key=f"graph_model_dialog_{table_index}",
+            help="Pick a model to generate its architecture graph live from the current code.",
+        )
+
+        graph_json = None
+        graph_meta = None
+
+        should_load_now = True
+        if load_graphs_on_demand:
+            if st.button("📊 Generate Selected Graph", key=f"load_graph_dialog_{table_index}", type="primary", use_container_width=True):
+                should_load_now = True
+            else:
+                should_load_now = False
+
+        if should_load_now:
+            try:
+                with st.spinner(f"Generating live architecture graph for {selected_model}..."):
+                    graph_json, graph_meta = generate_live_model_graph_bundle(selected_model)
+            except Exception as exc:
+                st.error(f"Failed to generate live graph for `{selected_model}`: {exc}")
+                return
+
+        if load_graphs_on_demand and not should_load_now:
+            st.info("Select a model and click `Generate Selected Graph`. The viewer does not use cached graph JSON.")
+        elif graph_json:
+            render_full_graph_viewer(
+                selected_model=selected_model,
+                graph_json=graph_json,
+                graph_meta=graph_meta,
+                download_key=f"dl_json_dialog_{table_index}",
+            )
+        else:
+            st.info(f"No live architecture graph was generated for `{selected_model}`.")
     # --- Multi-Table Session State ---
     if 'num_tables' not in st.session_state:
         st.session_state.num_tables = 1
 
-    def toggle_button_group(label, options, session_key, default_state=True, format_func=str):
-        st.markdown(f"**{label}**")
-        
-        # Initialize state explicitly if missing
-        if session_key not in st.session_state:
-            st.session_state[session_key] = {opt: True for opt in options}
-        state = st.session_state[session_key]
-        
-        # Ensure all current options are mapped in the state
+    def normalize_filter_selection(raw_value, options, default_to_all=True):
+        options = list(options)
+        option_set = set(options)
+        if isinstance(raw_value, dict):
+            normalized = [opt for opt, enabled in raw_value.items() if enabled and opt in option_set]
+        elif isinstance(raw_value, (list, tuple, set)):
+            normalized = [opt for opt in raw_value if opt in option_set]
+        elif raw_value in option_set:
+            normalized = [raw_value]
+        else:
+            normalized = []
+
+        if default_to_all and raw_value is None:
+            return options
+        return normalized
+
+    def _sync_filter_checkboxes(session_key, options, selected_values):
+        selected_set = set(selected_values)
         for opt in options:
-            if opt not in state:
-                state[opt] = True
-        
-        # Global selection buttons
-        c1, c2, _ = st.columns([0.75, 0.75, 3])
-        if c1.button("Turn All On", key=f"{session_key}_all_on", type="primary", use_container_width=True):
-            for opt in options:
-                state[opt] = True
+            st.session_state[f"{session_key}_choice_{repr(opt)}"] = opt in selected_set
+
+    def render_filter_checklist(label, options, session_key, format_func=str, help_text=None):
+        st.markdown(f"**{label}**")
+        options = list(options)
+        if not options:
+            st.caption("No options available for the current data slice.")
+            return []
+
+        if session_key not in st.session_state:
+            st.session_state[session_key] = options.copy()
+        else:
+            st.session_state[session_key] = normalize_filter_selection(
+                st.session_state.get(session_key),
+                options,
+                default_to_all=False,
+            )
+        if st.session_state.pop(f"{session_key}_sync_required", False):
+            _sync_filter_checkboxes(session_key, options, st.session_state[session_key])
+
+        if help_text:
+            st.caption(help_text)
+
+        action_col1, action_col2, action_col3, info_col = st.columns([1, 1, 1, 1.4])
+        if action_col1.button("Select all", key=f"{session_key}_select_all", use_container_width=True):
+            st.session_state[session_key] = options.copy()
+            _sync_filter_checkboxes(session_key, options, st.session_state[session_key])
             st.rerun()
-        if c2.button("Turn All Off", key=f"{session_key}_all_off", type="secondary", use_container_width=True):
-            for opt in options:
-                state[opt] = False
+        if action_col2.button("Inverse", key=f"{session_key}_inverse", use_container_width=True):
+            selected_set = set(st.session_state[session_key])
+            st.session_state[session_key] = [opt for opt in options if opt not in selected_set]
+            _sync_filter_checkboxes(session_key, options, st.session_state[session_key])
             st.rerun()
-            
-        # Draw dynamic adaptive columns for toggle buttons
-        if not options: return []
-        max_label_len = max(len(format_func(o)) for o in options)
-        num_cols = 2 if max_label_len > 15 else (3 if max_label_len > 10 else (4 if max_label_len > 6 else 7))
-        
-        cols = st.columns(num_cols)
-        for idx, opt in enumerate(options):
-            is_on = state[opt]
-            btn_label = format_func(opt)
-            
-            with cols[idx % num_cols]:
-                if st.button(btn_label, key=f"{session_key}_btn_{idx}", type="primary" if is_on else "secondary", use_container_width=True):
-                    state[opt] = not is_on
-                    st.rerun()
-                    
-        # Return list of selected strings natively compatible with downstream logic
-        return [opt for opt, is_on in state.items() if is_on]
+        if action_col3.button("Clear", key=f"{session_key}_clear", use_container_width=True):
+            st.session_state[session_key] = []
+            _sync_filter_checkboxes(session_key, options, st.session_state[session_key])
+            st.rerun()
+
+        selected_values = []
+        for opt in options:
+            widget_key = f"{session_key}_choice_{repr(opt)}"
+            if widget_key not in st.session_state:
+                st.session_state[widget_key] = opt in st.session_state[session_key]
+            checked = st.checkbox(format_func(opt), key=widget_key)
+            if checked:
+                selected_values.append(opt)
+
+        st.session_state[session_key] = selected_values
+        info_col.caption(f"{len(selected_values)} of {len(options)} selected")
+        return selected_values
         
     def add_table():
         st.session_state.num_tables += 1
@@ -910,18 +2007,35 @@ else:
         if st.session_state.num_tables > 1:
             # Shift session state for all tables above the removed index
             for i in range(index, st.session_state.num_tables - 1):
-                keys_to_shift = ['filter_m', 'filter_e', 'filter_wb', 'filter_we', 'filter_wm', 'filter_ab', 'filter_ae', 'filter_am', 'name_input']
+                keys_to_shift = [
+                    'filter_m', 'filter_e', 'filter_wb', 'filter_we', 'filter_wm',
+                    'filter_ab', 'filter_ae', 'filter_am', 'name_input'
+                ]
                 for prefix in keys_to_shift:
                     old_key = f"{prefix}_{i+1}"
                     new_key = f"{prefix}_{i}"
                     if old_key in st.session_state:
                         st.session_state[new_key] = st.session_state[old_key]
+                    old_sync_key = f"{prefix}_{i+1}_sync_required"
+                    new_sync_key = f"{prefix}_{i}_sync_required"
+                    if old_sync_key in st.session_state:
+                        st.session_state[new_sync_key] = st.session_state[old_sync_key]
+                    for key in list(st.session_state.keys()):
+                        old_choice_prefix = f"{prefix}_{i+1}_choice_"
+                        if key.startswith(old_choice_prefix):
+                            suffix = key[len(old_choice_prefix):]
+                            st.session_state[f"{prefix}_{i}_choice_{suffix}"] = st.session_state[key]
             
             # Delete the last table's keys
             last_idx = st.session_state.num_tables - 1
             for prefix in ['filter_m', 'filter_e', 'filter_wb', 'filter_we', 'filter_wm', 'filter_ab', 'filter_ae', 'filter_am', 'name_input']:
                 if f"{prefix}_{last_idx}" in st.session_state:
                     del st.session_state[f"{prefix}_{last_idx}"]
+                if f"{prefix}_{last_idx}_sync_required" in st.session_state:
+                    del st.session_state[f"{prefix}_{last_idx}_sync_required"]
+                for key in list(st.session_state.keys()):
+                    if key.startswith(f"{prefix}_{last_idx}_choice_"):
+                        del st.session_state[key]
                     
             st.session_state.num_tables -= 1
             st.rerun()
@@ -930,9 +2044,15 @@ else:
     st.sidebar.header("Global Filters & Settings")
     
     # Date Filter
-    df['run_date_dt'] = pd.to_datetime(df['run_date'])
-    min_date = df['run_date_dt'].min().date()
-    max_date = df['run_date_dt'].max().date()
+    df['run_date_dt'] = pd.to_datetime(df['run_date'], errors='coerce')
+    valid_run_dates = df['run_date_dt'].dropna()
+    if valid_run_dates.empty:
+        fallback_date = pd.Timestamp.utcnow().date()
+        min_date = fallback_date
+        max_date = fallback_date
+    else:
+        min_date = valid_run_dates.min().date()
+        max_date = valid_run_dates.max().date()
     date_range = st.sidebar.date_input("Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
 
     if len(date_range) == 2:
@@ -950,6 +2070,7 @@ else:
         
     # Sidebar Controls
     st.sidebar.markdown("### 🏷️ Filter Presets")
+    st.sidebar.caption("Load saved slices into a fresh comparison table so you can keep the current view intact.")
     
     preset_options = ["None"] + sorted(list(st.session_state.presets.keys()))
     selected_preset = st.sidebar.selectbox("Load Preset", options=preset_options)
@@ -976,16 +2097,11 @@ else:
             
             for preset_key, (session_key, options) in mapping.items():
                 if preset_key in preset_data:
-                    val = preset_data[preset_key]
-                    if isinstance(val, list):
-                        # Validate: Only keep items that actually exist in current options
-                        # Convert legacy list format to dictionary toggle schema mappings
-                        valid_val = [v for v in val if v in options]
-                        st.session_state[session_key] = {o: (o in valid_val) for o in options}
-                    elif isinstance(val, dict):
-                        st.session_state[session_key] = val
-                    else:
-                        st.session_state[session_key] = val
+                    st.session_state[session_key] = normalize_filter_selection(
+                        preset_data[preset_key],
+                        options,
+                    )
+                    st.session_state[f"{session_key}_sync_required"] = True
             
             st.sidebar.success(f"Loaded '{selected_preset}'")
             st.rerun()
@@ -999,9 +2115,6 @@ else:
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ⚙️ Controls")
     if st.sidebar.button("🔄 Refresh Data", type="primary", use_container_width=True):
-        for key in list(st.session_state.keys()):
-            if key.startswith("graph_payload_") or key.startswith("graph_meta_"):
-                del st.session_state[key]
         st.rerun()
     
     if st.sidebar.button("🧹 Reset All Filters", use_container_width=True):
@@ -1035,84 +2148,96 @@ else:
     - **Drop**: Accuracy loss relative to FP32 reference
     """)
     st.sidebar.markdown("---")
+    render_dashboard_intro()
+    st.markdown("---")
 
     # Render Tables
     for i in range(st.session_state.num_tables):
         col_header, col_rm = st.columns([8, 1])
-        col_header.subheader(f"Table {i+1}")
+        with col_header:
+            st.markdown(
+                f"""
+                <div class="dashboard-section-title">
+                    <div>
+                        <h3>Comparison Table {i+1}</h3>
+                        <p>Mix broad model filters with datatype constraints, then select rows to inspect or compare.</p>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         if st.session_state.num_tables > 1:
             if col_rm.button("🗑️", key=f"rm_table_{i}", help=f"Remove Table {i+1}"):
                 remove_table(i)
-        
+
         # Local filters for each table
+        st.markdown("<div class='dashboard-filter-note'>Core filters stay visible here; deeper datatype filters and preset saving live just below.</div>", unsafe_allow_html=True)
         col_f1, col_f2 = st.columns(2)
         with col_f1:
-            selected_models = toggle_button_group(
+            selected_models = render_filter_checklist(
                 f"Models (T{i+1})", 
                 options=models, 
                 session_key=f"filter_m_{i}",
-                default_state=True
+                help_text="Tick the models you want included."
             )
         with col_f2:
-            selected_exprs = toggle_button_group(
+            selected_exprs = render_filter_checklist(
                 f"Experiment Types (T{i+1})", 
                 options=expr_types, 
                 session_key=f"filter_e_{i}",
-                default_state=True
+                help_text="Tick the experiment families you want included."
             )
         
         # Advanced DT Filtering
         with st.expander(f"Advanced Datatype Filters (T{i+1})"):
-            col_bits, _ = st.columns([1,1])   # left column narrower
-            with col_bits:
+            st.caption("Use these only when you want to narrow by datatype internals such as bit-width, exponent, or mantissa.")
+            weight_col, activation_col = st.columns(2)
+            with weight_col:
+                st.markdown("**Weight Filters**")
                 w_bits_options = sorted(df['w_bits'].dropna().unique())
-                selected_w_bits = toggle_button_group(
+                selected_w_bits = render_filter_checklist(
                     "Weight Bits", 
                     options=w_bits_options, 
                     session_key=f"filter_wb_{i}",
-                    default_state=True,
-                    format_func=lambda x: "Dynamic" if x == 0 else f"{int(x)} Bits"
+                    format_func=lambda x: "Dynamic" if x == 0 else f"{int(x)} Bits",
                 )
             
                 w_exp_options = sorted(df['w_exp'].dropna().unique())
-                selected_w_exp = toggle_button_group(
+                selected_w_exp = render_filter_checklist(
                     "Weight Exponent", 
                     options=w_exp_options, 
                     session_key=f"filter_we_{i}",
-                    default_state=True
                 )
                 
                 w_mant_options = sorted(df['w_mant'].dropna().unique())
-                selected_w_mant = toggle_button_group(
+                selected_w_mant = render_filter_checklist(
                     "Weight Mantissa", 
                     options=w_mant_options, 
                     session_key=f"filter_wm_{i}",
-                    default_state=True
                 )
 
+            with activation_col:
+                st.markdown("**Activation Filters**")
                 a_bits_options = sorted(df['a_bits'].dropna().unique())
-                selected_a_bits = toggle_button_group(
+                selected_a_bits = render_filter_checklist(
                     "Activation Bits", 
                     options=a_bits_options, 
                     session_key=f"filter_ab_{i}",
-                    default_state=True,
-                    format_func=lambda x: "Dynamic" if x == 0 else f"{int(x)} Bits"
+                    format_func=lambda x: "Dynamic" if x == 0 else f"{int(x)} Bits",
                 )
                 
                 a_exp_options = sorted(df['a_exp'].dropna().unique())
-                selected_a_exp = toggle_button_group(
+                selected_a_exp = render_filter_checklist(
                     "Activation Exponent", 
                     options=a_exp_options, 
                     session_key=f"filter_ae_{i}",
-                    default_state=True
                 )
                 
                 a_mant_options = sorted(df['a_mant'].dropna().unique())
-                selected_a_mant = toggle_button_group(
+                selected_a_mant = render_filter_checklist(
                     "Activation Mantissa", 
                     options=a_mant_options, 
                     session_key=f"filter_am_{i}",
-                    default_state=True
                 )
 
             # Save Preset UI under each table's filters
@@ -1194,7 +2319,8 @@ else:
             # Render Interactive Dataframe with modern Selection
             event = st.dataframe(
                 display_df, 
-                width='stretch',
+                use_container_width=True,
+                hide_index=True,
                 selection_mode="multi-row",
                 on_select="rerun",
                 key=f"table_{i}",
@@ -1225,6 +2351,21 @@ else:
                 orig_indices = [display_df.index[j] for j in selected_indices]
                 selected_run_rows = [filtered_df.loc[idx].to_dict() for idx in orig_indices]
 
+            selected_count = len(selected_indices)
+            if selected_count:
+                st.markdown(
+                    f"""
+                    <div class="dashboard-selection-banner">
+                        <strong>{selected_count} row{'s' if selected_count != 1 else ''} selected.</strong>
+                        <span> Use the actions below to open configs, inspect layer formats, compare accuracy, or remove rows from the database.</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.info("Select one or more rows to unlock run details, comparison charts, and deletion tools.")
+
+            st.markdown("#### Actions")
             if len(selected_indices) == 1:
                 orig_idx = display_df.index[selected_indices[0]]
                 run_row = filtered_df.loc[orig_idx].to_dict()
@@ -1235,9 +2376,10 @@ else:
                 has_input_map = (
                     _safe_json_load(input_map_json) is not None
                 )
-                if has_weight_map or has_input_map:
-                    if st.button("🔬 View Layer Formats", key=f"btn_layers_{i}"):
-                        show_layer_breakdown(run_row)
+            else:
+                run_row = None
+                has_weight_map = False
+                has_input_map = False
 
             if len(selected_indices) >= 1:
                 rows_with_details = [
@@ -1258,13 +2400,12 @@ else:
                         )
                     )
                 ]
+                num_runs = len(selected_indices)
                 if rows_with_details:
                     label = (
                         f"⚙️ View Config + Win Rates ({len(rows_with_details)})"
                         if len(rows_with_details) > 1 else "⚙️ View Config + Win Rates"
                     )
-                    if st.button(label, key=f"btn_config_{i}"):
-                        show_run_config(rows_with_details)
 
                 selected_run_ids = []
                 for row in selected_run_rows:
@@ -1272,27 +2413,60 @@ else:
                     if pd.notna(run_id):
                         selected_run_ids.append(int(run_id))
                 selected_run_ids = sorted(set(selected_run_ids))
+
+                if selected_count:
+                    st.caption(f"Ready to work with {num_runs} selected run{'s' if num_runs != 1 else ''}.")
+
+                action_specs = []
+                if len(selected_indices) == 1 and (has_weight_map or has_input_map):
+                    action_specs.append({
+                        "label": "🔬 View Layer Formats",
+                        "key": f"btn_layers_{i}",
+                        "type": "secondary",
+                        "handler": lambda run_row=run_row: show_layer_breakdown(run_row),
+                    })
+                if rows_with_details:
+                    action_specs.append({
+                        "label": label,
+                        "key": f"btn_config_{i}",
+                        "type": "secondary",
+                        "handler": lambda rows_with_details=rows_with_details: show_run_config(rows_with_details),
+                    })
+                action_specs.append({
+                    "label": f"📈 Generate Comparison ({num_runs})",
+                    "key": f"btn_plot_{i}",
+                    "type": "primary",
+                    "handler": None,
+                })
                 if selected_run_ids:
                     delete_label = (
                         f"🗑️ Delete Selected Rows ({len(selected_run_ids)})"
                         if len(selected_run_ids) > 1 else "🗑️ Delete Selected Row"
                     )
-                    if st.button(delete_label, key=f"btn_delete_rows_{i}", use_container_width=True):
-                        show_delete_runs_dialog(selected_run_rows, i)
+                    action_specs.append({
+                        "label": delete_label,
+                        "key": f"btn_delete_rows_{i}",
+                        "type": "secondary",
+                        "handler": lambda selected_run_rows=selected_run_rows, table_index=i: show_delete_runs_dialog(selected_run_rows, table_index),
+                    })
 
-            st.markdown(f"#### 📊 Visualization Options")
-            # viz_all = st.checkbox("Visualize ALL filtered runs (ignores table selection)", key=f"viz_all_{i}")
-            viz_all = False
-            if viz_all or selected_indices:
-                num_runs = len(display_df) if viz_all else len(selected_indices)
-                st.success(f"Ready to visualize {num_runs} runs.")
-                
-                if st.button(f"📈 Generate Comparison ({num_runs})", key=f"btn_plot_{i}", type="primary", use_container_width=True):
+                action_cols = st.columns(len(action_specs))
+                run_comparison = False
+                for col, spec in zip(action_cols, action_specs):
+                    if col.button(
+                        spec["label"],
+                        key=spec["key"],
+                        type=spec["type"],
+                        use_container_width=True,
+                    ):
+                        if spec["key"] == f"btn_plot_{i}":
+                            run_comparison = True
+                        elif spec["handler"] is not None:
+                            spec["handler"]()
+
+                if run_comparison:
                     with st.spinner(f"Building comparison chart for {num_runs} runs..."):
-                        if viz_all:
-                            selected_df = display_df.copy()
-                        else:
-                            selected_df = display_df.iloc[selected_indices].copy()
+                        selected_df = display_df.iloc[selected_indices].copy()
 
                         # Create labels
                         selected_df['run_label'] = selected_df['model_name'] + " (" + \
@@ -1323,861 +2497,22 @@ else:
                         chart_df = pd.DataFrame(chart_data)
                     show_large_chart(chart_df)
             else:
-                st.info("👆 Select rows in the table above to generate a chart.")
+                st.caption("Pick rows above to enable the action buttons.")
         else:
-            st.info("No data for selected filters.")
+            st.warning("No rows match the current filter set. Relax a model, experiment type, or datatype filter to repopulate the table.")
         
         st.markdown("---")
         
         # --- Model Architecture Graph Visualization ---
         st.markdown(f"#### 🏗️ Model Architecture & Quantization")
-
-        graph_enabled_key = f"graph_section_enabled_{i}"
-        graph_payload_key = f"graph_payload_{i}"
-        graph_meta_key = f"graph_meta_{i}"
-        graph_model_loaded_key = f"graph_payload_model_{i}"
-        if graph_enabled_key not in st.session_state:
-            st.session_state[graph_enabled_key] = not load_graphs_on_demand
-
         if not filtered_df.empty:
-            if load_graphs_on_demand and not st.session_state.get(graph_enabled_key, False):
-                if st.button("⚡ Enable Architecture Graph Tools", key=f"enable_graph_section_{i}", use_container_width=True):
-                    st.session_state[graph_enabled_key] = True
-                    st.rerun()
-                st.info("Graph data is fetched only when needed. Enable the tools to start loading graph assets.")
-                st.markdown("---")
-                continue
-
-            # Get unique models in filtered data
             available_models = sorted(filtered_df['model_name'].unique())
-            selected_model = st.selectbox(
-                f"View quantization graph for (T{i+1})",
-                options=available_models,
-                key=f"graph_model_{i}"
+            graph_status_col, graph_action_col = st.columns([3, 2])
+            graph_status_col.caption(
+                "Open the dedicated graph viewer to generate a fresh architecture graph from the current code."
             )
-            
-            if selected_model:
-                loaded_model = st.session_state.get(graph_model_loaded_key)
-                should_load_now = False
-                if load_graphs_on_demand:
-                    lcol, rcol = st.columns([2, 1])
-                    if lcol.button("📊 Load Selected Graph", key=f"load_graph_{i}", type="primary", use_container_width=True):
-                        should_load_now = True
-                    if rcol.button("🧹 Unload Graph", key=f"unload_graph_{i}", use_container_width=True):
-                        for key in (graph_payload_key, graph_meta_key, graph_model_loaded_key):
-                            st.session_state.pop(key, None)
-                        st.rerun()
-                else:
-                    should_load_now = (
-                        loaded_model != selected_model or
-                        graph_payload_key not in st.session_state
-                    )
-
-                if should_load_now:
-                    with st.spinner(f"Loading architecture graph for {selected_model}..."):
-                        graph_json, _ = get_model_graph_json(selected_model)
-                        graph_meta = get_model_graph_metadata(selected_model)
-                    st.session_state[graph_payload_key] = graph_json
-                    st.session_state[graph_meta_key] = graph_meta
-                    st.session_state[graph_model_loaded_key] = selected_model
-
-                graph_json = st.session_state.get(graph_payload_key)
-                graph_meta = st.session_state.get(graph_meta_key)
-
-                if load_graphs_on_demand and st.session_state.get(graph_model_loaded_key) != selected_model:
-                    st.info("Select a model and click `Load Selected Graph` to fetch and render that graph.")
-                elif graph_json:
-                    with st.expander(f"📊 {selected_model} - Architecture Graph", expanded=False):
-                        # Display metadata
-                        meta_col1, meta_col2, meta_col3 = st.columns(3)
-                        if graph_meta:
-                            meta_col1.metric("Original Size", f"{graph_meta.get('graph_size_original', 0)/1024:.1f} KB")
-                            meta_col2.metric("Compressed Size", f"{graph_meta.get('graph_size_compressed', 0)/1024:.1f} KB")
-                            compression = 100 * (1 - graph_meta.get('graph_size_compressed', 1) / max(graph_meta.get('graph_size_original', 1), 1))
-                            meta_col3.metric("Compression", f"{compression:.0f}%")
-                        
-                        st.markdown("**Green** = Quantized Layers | **Gold** = Supported (Unquantized) | **Gray** = Structural/Other")
-                        st.info("💡 **Interactive**: Click on dashed boxes (compound nodes) to collapse/expand them! Use mouse wheel to zoom.")
-                        
-                        import streamlit.components.v1 as components
-                        
-                        html_template = f"""
-                        <!DOCTYPE html>
-                        <html>
-                        <head>
-                        <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
-                        <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
-                        <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
-                        <script src="https://cdn.jsdelivr.net/npm/cytoscape-expand-collapse@4.1.0/cytoscape-expand-collapse.min.js"></script>
-                        <style>
-                            html, body {{
-                                margin: 0;
-                                padding: 0;
-                                background: #f8fafc;
-                                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                            }}
-                            #graph-shell {{
-                                position: relative;
-                                width: 100%;
-                                height: 810px;
-                                border: 1px solid #e2e8f0;
-                                border-radius: 10px;
-                                background: #f8fafc;
-                                overflow: hidden;
-                            }}
-                            #cy {{
-                                position: absolute;
-                                inset: 0;
-                                z-index: 1;
-                                background-color: #f8fafc;
-                            }}
-                            #toolbar {{
-                                position: absolute;
-                                top: 12px;
-                                right: 12px;
-                                z-index: 70;
-                                display: flex;
-                                gap: 8px;
-                                flex-wrap: wrap;
-                                justify-content: flex-end;
-                                max-width: 90%;
-                            }}
-                            .graph-btn {{
-                                cursor: pointer;
-                                background: #ffffff;
-                                border: 1px solid #bfdbfe;
-                                border-radius: 8px;
-                                color: #1d4ed8;
-                                padding: 7px 10px;
-                                font-size: 12px;
-                                font-weight: 600;
-                                box-shadow: 0 3px 10px rgba(0,0,0,0.12);
-                                user-select: none;
-                                transition: transform 0.08s ease, background-color 0.12s ease;
-                            }}
-                            .graph-btn:hover {{
-                                background: #eff6ff;
-                                transform: translateY(-1px);
-                            }}
-                            .graph-btn.active {{
-                                background: #1d4ed8;
-                                color: #ffffff;
-                                border-color: #1e40af;
-                            }}
-                            #meta-layer {{
-                                position: absolute;
-                                inset: 0;
-                                z-index: 45;
-                                pointer-events: none;
-                            }}
-                            .meta-card {{
-                                background: #ffffff;
-                                border: 1px solid #cbd5e1;
-                                border-radius: 8px;
-                                padding: 7px 9px;
-                                font-size: 11px;
-                                color: #111827;
-                                box-shadow: 0 6px 16px rgba(15, 23, 42, 0.18);
-                                max-width: 260px;
-                                line-height: 1.25;
-                            }}
-                            #hover-tooltip {{
-                                position: absolute;
-                                display: none;
-                                pointer-events: none;
-                            }}
-                            .pinned-meta {{
-                                position: absolute;
-                                border-left: 3px solid #2563eb;
-                                pointer-events: auto;
-                                min-width: 180px;
-                            }}
-                            .meta-close {{
-                                float: right;
-                                border: none;
-                                background: #e2e8f0;
-                                color: #0f172a;
-                                border-radius: 5px;
-                                width: 20px;
-                                height: 20px;
-                                cursor: pointer;
-                                font-weight: 700;
-                                line-height: 18px;
-                                padding: 0;
-                                margin-left: 6px;
-                            }}
-                            .meta-close:hover {{
-                                background: #cbd5e1;
-                            }}
-                            #all-meta-panel {{
-                                position: absolute;
-                                right: 12px;
-                                top: 54px;
-                                width: 340px;
-                                max-height: 72%;
-                                overflow: auto;
-                                background: #ffffff;
-                                border: 1px solid #93c5fd;
-                                border-radius: 10px;
-                                box-shadow: 0 8px 18px rgba(15, 23, 42, 0.2);
-                                z-index: 65;
-                                display: none;
-                                padding: 10px;
-                            }}
-                            #all-meta-panel h4 {{
-                                margin: 0 0 8px 0;
-                                font-size: 13px;
-                                color: #0f172a;
-                            }}
-                            #zoom-rect {{
-                                position: absolute;
-                                display: none;
-                                border: 2px dashed #1d4ed8;
-                                background: rgba(59, 130, 246, 0.18);
-                                border-radius: 4px;
-                                pointer-events: none;
-                            }}
-                        </style>
-                        </head>
-                        <body>
-                            <div id="graph-shell">
-                                <div id="toolbar">
-                                    <button id="reset-view-btn" class="graph-btn">Reset View</button>
-                                    <button id="box-zoom-btn" class="graph-btn">Right-Drag Zoom: Off</button>
-                                    <button id="all-meta-btn" class="graph-btn">Show All Metadata</button>
-                                    <button id="fullscreen-btn" class="graph-btn">⛶ Fullscreen</button>
-                                </div>
-                                <div id="all-meta-panel"></div>
-                                <div id="meta-layer">
-                                    <div id="hover-tooltip" class="meta-card"></div>
-                                    <div id="zoom-rect"></div>
-                                </div>
-                                <div id="cy"></div>
-                            </div>
-                            <script>
-                                document.addEventListener('DOMContentLoaded', function() {{
-                                    var elements = {graph_json};
-                                    var ABS_ZOOM_MIN = 0.02;
-                                    var ZOOM_MAX = 3.0;
-                                    var FIT_PADDING = 80;
-                                    var currentMinZoom = ABS_ZOOM_MIN;
-
-                                    var cy = cytoscape({{
-                                        container: document.getElementById('cy'),
-                                        elements: elements,
-                                        minZoom: ABS_ZOOM_MIN,
-                                        maxZoom: ZOOM_MAX,
-                                        wheelSensitivity: 0.18,
-                                        boxSelectionEnabled: false,
-                                        style: [
-                                            {{
-                                                selector: 'node',
-                                                style: {{
-                                                    'content': 'data(label)',
-                                                    'text-valign': 'center',
-                                                    'text-halign': 'center',
-                                                    'background-color': 'data(color)',
-                                                    'border-width': 1,
-                                                    'border-color': '#94a3b8',
-                                                    'shape': 'round-rectangle',
-                                                    'width': 'label',
-                                                    'height': 'label',
-                                                    'padding': '10px',
-                                                    'font-size': '12px'
-                                                }}
-                                            }},
-                                            {{
-                                                selector: '$node > node',
-                                                style: {{
-                                                    'background-color': '#e2e8f0',
-                                                    'padding-top': '25px',
-                                                    'padding-left': '10px',
-                                                    'padding-bottom': '10px',
-                                                    'padding-right': '10px',
-                                                    'text-valign': 'top',
-                                                    'text-halign': 'center',
-                                                    'border-color': '#94a3b8',
-                                                    'border-width': 2,
-                                                    'border-style': 'dashed',
-                                                    'font-size': '14px',
-                                                    'font-weight': 'bold'
-                                                }}
-                                            }},
-                                            {{
-                                                selector: 'edge',
-                                                style: {{
-                                                    'curve-style': 'bezier',
-                                                    'target-arrow-shape': 'triangle',
-                                                    'line-color': '#cbd5e1',
-                                                    'target-arrow-color': '#cbd5e1',
-                                                    'width': 2
-                                                }}
-                                            }},
-                                            {{
-                                                selector: 'node.cy-expand-collapse-collapsed-node',
-                                                style: {{
-                                                    'background-color': '#cbd5e1',
-                                                    'border-color': '#64748b',
-                                                    'border-width': 3,
-                                                    'shape': 'round-rectangle',
-                                                    'padding': '10px'
-                                                }}
-                                            }}
-                                        ],
-                                        layout: {{
-                                            name: 'dagre',
-                                            rankDir: 'TB',
-                                            nodeSep: 50,
-                                            edgeSep: 10,
-                                            rankSep: 50
-                                        }}
-                                    }});
-
-                                    var api = cy.expandCollapse({{
-                                        layoutBy: {{
-                                            name: "dagre",
-                                            animate: true,
-                                            randomize: false,
-                                            fit: false
-                                        }},
-                                        fisheye: false,
-                                        animate: true,
-                                        undoable: false
-                                    }});
-
-                                    var cyContainer = document.getElementById('cy');
-                                    var hoverTooltip = document.getElementById('hover-tooltip');
-                                    var metaLayer = document.getElementById('meta-layer');
-                                    var allMetaPanel = document.getElementById('all-meta-panel');
-                                    var zoomRect = document.getElementById('zoom-rect');
-                                    var resetBtn = document.getElementById('reset-view-btn');
-                                    var allMetaBtn = document.getElementById('all-meta-btn');
-                                    var boxZoomBtn = document.getElementById('box-zoom-btn');
-                                    var fsBtn = document.getElementById('fullscreen-btn');
-
-                                    var pinnedCards = {{}};
-                                    var showAllMetadata = false;
-                                    var boxZoomEnabled = false;
-                                    var rightDragActive = false;
-                                    var rightDragStart = null;
-
-                                    function clamp(val, min, max) {{
-                                        return Math.max(min, Math.min(max, val));
-                                    }}
-
-                                    function computeFitZoom(paddingPx) {{
-                                        var bb = cy.elements().boundingBox();
-                                        if (!isFinite(bb.x1) || !isFinite(bb.x2) || !isFinite(bb.y1) || !isFinite(bb.y2)) {{
-                                            return currentMinZoom;
-                                        }}
-                                        var graphW = Math.max(bb.x2 - bb.x1, 1e-6);
-                                        var graphH = Math.max(bb.y2 - bb.y1, 1e-6);
-                                        var viewW = Math.max(cy.width() - (paddingPx * 2), 1);
-                                        var viewH = Math.max(cy.height() - (paddingPx * 2), 1);
-                                        var fitZoom = Math.min(viewW / graphW, viewH / graphH);
-                                        if (!isFinite(fitZoom) || fitZoom <= 0) {{
-                                            return currentMinZoom;
-                                        }}
-                                        return clamp(fitZoom, ABS_ZOOM_MIN, ZOOM_MAX);
-                                    }}
-
-                                    function refreshMinZoomToFitGraph() {{
-                                        currentMinZoom = computeFitZoom(FIT_PADDING);
-                                        cy.minZoom(currentMinZoom);
-                                        if (cy.zoom() < currentMinZoom) {{
-                                            cy.zoom(currentMinZoom);
-                                        }}
-                                    }}
-
-                                    function esc(val) {{
-                                        return String(val === undefined || val === null ? '-' : val)
-                                            .replace(/&/g, "&amp;")
-                                            .replace(/</g, "&lt;")
-                                            .replace(/>/g, "&gt;")
-                                            .replace(/"/g, "&quot;")
-                                            .replace(/'/g, "&#39;");
-                                    }}
-
-                                    function nodeHasMetadata(node) {{
-                                        return !!node.data('var_name');
-                                    }}
-
-                                    function metadataHtml(node) {{
-                                        var t = node.data('var_name') || node.data('label') || node.id();
-                                        var inS = node.data('input_shape') || '-';
-                                        var outS = node.data('output_shape') || '-';
-                                        var args = node.data('module_args') || '';
-                                        var argsHtml = args
-                                            ? "<div style='margin-top:4px;color:#475569;font-size:11px;'>" + esc(args) + "</div>"
-                                            : "";
-                                        return "<div>" +
-                                            "<div style='font-weight:700;color:#0f172a;'>" + esc(t) + "</div>" +
-                                            argsHtml +
-                                            "<div style='margin-top:6px;'><b>In:</b> " + esc(inS) + "</div>" +
-                                            "<div><b>Out:</b> " + esc(outS) + "</div>" +
-                                            "</div>";
-                                    }}
-
-                                    function getPointerPosition(evt) {{
-                                        var rect = cyContainer.getBoundingClientRect();
-                                        return {{
-                                            x: clamp(evt.clientX - rect.left, 0, cy.width()),
-                                            y: clamp(evt.clientY - rect.top, 0, cy.height())
-                                        }};
-                                    }}
-
-                                    function getMetaScale() {{
-                                        // Keep metadata tied to graph zoom, but clamp for readability.
-                                        return clamp(cy.zoom(), 0.62, 1.35);
-                                    }}
-
-                                    function applyCardScale(card, scale) {{
-                                        card.style.transform = "scale(" + scale + ")";
-                                        card.style.transformOrigin = "top left";
-                                    }}
-
-                                    function toNodeArray(collection) {{
-                                        if (!collection) return [];
-                                        if (collection.toArray) return collection.toArray();
-                                        return Array.isArray(collection) ? collection : [collection];
-                                    }}
-
-                                    function normalizeHoverNodes(nodes) {{
-                                        var filtered = nodes.filter(function(node) {{ return nodeHasMetadata(node); }});
-                                        if (!filtered.length) return [];
-
-                                        // Prefer concrete leaf modules over compound/group containers.
-                                        var leafNodes = filtered.filter(function(node) {{
-                                            return !(node.isParent && node.isParent());
-                                        }});
-                                        if (leafNodes.length) {{
-                                            filtered = leafNodes;
-                                        }}
-
-                                        // Deduplicate identical metadata blobs.
-                                        var seen = {{}};
-                                        var unique = [];
-                                        filtered.forEach(function(node) {{
-                                            var key = [
-                                                node.data('var_name') || '',
-                                                node.data('input_shape') || '',
-                                                node.data('output_shape') || '',
-                                                node.data('module_args') || ''
-                                            ].join('|');
-                                            if (!seen[key]) {{
-                                                seen[key] = true;
-                                                unique.push(node);
-                                            }}
-                                        }});
-
-                                        // Keep only the top-most relevant hit for hover.
-                                        return unique.length ? [unique[0]] : [];
-                                    }}
-
-                                    function sortByRenderedPosition(a, b) {{
-                                        var ap = a.renderedPosition();
-                                        var bp = b.renderedPosition();
-                                        var dy = ap.y - bp.y;
-                                        if (Math.abs(dy) > 1e-6) return dy;
-                                        return ap.x - bp.x;
-                                    }}
-
-                                    function buildLayerOrderMap() {{
-                                        var allNodes = toNodeArray(cy.nodes());
-                                        var byId = {{}};
-                                        var indegree = {{}};
-                                        var outgoing = {{}};
-
-                                        allNodes.forEach(function(node) {{
-                                            var id = node.id();
-                                            byId[id] = node;
-                                            indegree[id] = 0;
-                                            outgoing[id] = [];
-                                        }});
-
-                                        toNodeArray(cy.edges()).forEach(function(edge) {{
-                                            var src = edge.source().id();
-                                            var dst = edge.target().id();
-                                            if (src in byId && dst in byId) {{
-                                                outgoing[src].push(dst);
-                                                indegree[dst] += 1;
-                                            }}
-                                        }});
-
-                                        var queue = allNodes
-                                            .filter(function(node) {{ return indegree[node.id()] === 0; }})
-                                            .sort(sortByRenderedPosition);
-
-                                        var ordered = [];
-                                        while (queue.length > 0) {{
-                                            var node = queue.shift();
-                                            ordered.push(node);
-
-                                            outgoing[node.id()].forEach(function(dstId) {{
-                                                indegree[dstId] -= 1;
-                                                if (indegree[dstId] === 0) {{
-                                                    queue.push(byId[dstId]);
-                                                    queue.sort(sortByRenderedPosition);
-                                                }}
-                                            }});
-                                        }}
-
-                                        if (ordered.length !== allNodes.length) {{
-                                            var seen = {{}};
-                                            ordered.forEach(function(node) {{ seen[node.id()] = true; }});
-                                            var leftovers = allNodes
-                                                .filter(function(node) {{ return !seen[node.id()]; }})
-                                                .sort(sortByRenderedPosition);
-                                            ordered = ordered.concat(leftovers);
-                                        }}
-
-                                        var orderMap = {{}};
-                                        ordered.forEach(function(node, idx) {{
-                                            orderMap[node.id()] = idx;
-                                        }});
-                                        return orderMap;
-                                    }}
-
-                                    function getNodesAtRenderedPoint(x, y) {{
-                                        if (typeof cy.elementsAtPoint === "function") {{
-                                            return normalizeHoverNodes(toNodeArray(
-                                                cy.elementsAtPoint(x, y).filter(function(ele) {{
-                                                    return ele.isNode && ele.isNode() && nodeHasMetadata(ele);
-                                                }})
-                                            ));
-                                        }}
-                                        return normalizeHoverNodes(toNodeArray(
-                                            cy.nodes().filter(function(node) {{
-                                                if (!nodeHasMetadata(node)) return false;
-                                                var bb = node.renderedBoundingBox();
-                                                return x >= bb.x1 && x <= bb.x2 && y >= bb.y1 && y <= bb.y2;
-                                            }})
-                                        ));
-                                    }}
-
-                                    function renderHoverMetadata(evt) {{
-                                        if (showAllMetadata || rightDragActive) {{
-                                            hoverTooltip.style.display = "none";
-                                            return;
-                                        }}
-                                        var p = getPointerPosition(evt);
-                                        var nodes = getNodesAtRenderedPoint(p.x, p.y);
-                                        if (!nodes.length) {{
-                                            hoverTooltip.style.display = "none";
-                                            return;
-                                        }}
-
-                                        hoverTooltip.innerHTML = nodes.map(function(node, idx) {{
-                                            var divider = idx < nodes.length - 1
-                                                ? "<div style='margin:8px 0;border-top:1px solid #e2e8f0;'></div>"
-                                                : "";
-                                            return metadataHtml(node) + divider;
-                                        }}).join("");
-                                        var scale = getMetaScale() * 0.92;
-                                        applyCardScale(hoverTooltip, scale);
-                                        var cardW = hoverTooltip.offsetWidth * scale;
-                                        var cardH = hoverTooltip.offsetHeight * scale;
-                                        var bounds = nodes.reduce(function(acc, node) {{
-                                            var bb = node.renderedBoundingBox();
-                                            acc.x1 = Math.min(acc.x1, bb.x1);
-                                            acc.y1 = Math.min(acc.y1, bb.y1);
-                                            acc.x2 = Math.max(acc.x2, bb.x2);
-                                            return acc;
-                                        }}, {{ x1: Infinity, y1: Infinity, x2: -Infinity }});
-                                        var gap = 12;
-                                        var left = bounds.x2 + gap;
-                                        if (left + cardW > cy.width() - 6) {{
-                                            left = bounds.x1 - gap - cardW;
-                                        }}
-                                        var top = bounds.y1;
-                                        left = clamp(left, 6, cy.width() - cardW - 6);
-                                        top = clamp(top, 6, cy.height() - cardH - 6);
-                                        if (!isFinite(left) || !isFinite(top)) {{
-                                            left = clamp(p.x + 18, 6, cy.width() - cardW - 6);
-                                            top = clamp(p.y + 18, 6, cy.height() - cardH - 6);
-                                        }}
-                                        hoverTooltip.style.left = left + "px";
-                                        hoverTooltip.style.top = top + "px";
-                                        hoverTooltip.style.display = "block";
-                                    }}
-
-                                    function hideHoverMetadata() {{
-                                        hoverTooltip.style.display = "none";
-                                    }}
-
-                                    function removePinnedCard(nodeId) {{
-                                        if (!pinnedCards[nodeId]) return;
-                                        pinnedCards[nodeId].remove();
-                                        delete pinnedCards[nodeId];
-                                    }}
-
-                                    function positionPinnedCard(nodeId) {{
-                                        var card = pinnedCards[nodeId];
-                                        if (!card) return;
-                                        var node = cy.getElementById(nodeId);
-                                        if (!node || node.empty()) {{
-                                            removePinnedCard(nodeId);
-                                            return;
-                                        }}
-                                        if (!node.visible()) {{
-                                            card.style.display = "none";
-                                            return;
-                                        }}
-
-                                        card.style.display = "block";
-                                        var scale = getMetaScale();
-                                        applyCardScale(card, scale);
-                                        var cardW = card.offsetWidth * scale;
-                                        var cardH = card.offsetHeight * scale;
-                                        var bb = node.renderedBoundingBox();
-                                        var gap = 12;
-                                        var left = bb.x2 + gap;
-                                        if (left + cardW > cy.width() - 6) {{
-                                            left = bb.x1 - gap - cardW;
-                                        }}
-                                        var top = bb.y1;
-                                        left = clamp(left, 6, cy.width() - cardW - 6);
-                                        top = clamp(top, 6, cy.height() - cardH - 6);
-                                        card.style.left = left + "px";
-                                        card.style.top = top + "px";
-                                    }}
-
-                                    function updatePinnedCards() {{
-                                        Object.keys(pinnedCards).forEach(positionPinnedCard);
-                                    }}
-
-                                    function clearPinnedCards() {{
-                                        Object.keys(pinnedCards).forEach(removePinnedCard);
-                                    }}
-
-                                    function togglePinnedCard(node) {{
-                                        if (!nodeHasMetadata(node)) return;
-                                        var nodeId = node.id();
-                                        if (pinnedCards[nodeId]) {{
-                                            removePinnedCard(nodeId);
-                                            return;
-                                        }}
-
-                                        var card = document.createElement("div");
-                                        card.className = "meta-card pinned-meta";
-                                        card.innerHTML = "<button class='meta-close' title='Close'>×</button>" + metadataHtml(node);
-                                        card.querySelector(".meta-close").addEventListener("click", function(e) {{
-                                            e.stopPropagation();
-                                            removePinnedCard(nodeId);
-                                        }});
-                                        metaLayer.appendChild(card);
-                                        pinnedCards[nodeId] = card;
-                                        positionPinnedCard(nodeId);
-                                    }}
-
-                                    function renderAllMetadataPanel() {{
-                                        var layerOrder = buildLayerOrderMap();
-                                        var nodes = toNodeArray(
-                                            cy.nodes().filter(function(node) {{ return nodeHasMetadata(node); }})
-                                        );
-                                        nodes.sort(function(a, b) {{
-                                            var ai = (a.id() in layerOrder) ? layerOrder[a.id()] : Number.MAX_SAFE_INTEGER;
-                                            var bi = (b.id() in layerOrder) ? layerOrder[b.id()] : Number.MAX_SAFE_INTEGER;
-                                            if (ai !== bi) return ai - bi;
-                                            var av = a.data('var_name') || a.id();
-                                            var bv = b.data('var_name') || b.id();
-                                            return av.localeCompare(bv, undefined, {{ numeric: true, sensitivity: 'base' }});
-                                        }});
-                                        var rows = nodes.map(function(node, idx) {{
-                                            var divider = idx < nodes.length - 1
-                                                ? "<div style='margin:8px 0;border-top:1px solid #e2e8f0;'></div>"
-                                                : "";
-                                            return metadataHtml(node) + divider;
-                                        }}).join("");
-                                        allMetaPanel.innerHTML = "<h4>All Node Metadata (Layer Order, " + nodes.length + ")</h4>" + rows;
-                                    }}
-
-                                    function setShowAllMetadata(enabled) {{
-                                        showAllMetadata = enabled;
-                                        allMetaBtn.classList.toggle("active", enabled);
-                                        allMetaBtn.textContent = enabled ? "Hide All Metadata" : "Show All Metadata";
-                                        if (enabled) {{
-                                            hideHoverMetadata();
-                                            renderAllMetadataPanel();
-                                            allMetaPanel.style.display = "block";
-                                        }} else {{
-                                            allMetaPanel.style.display = "none";
-                                        }}
-                                    }}
-
-                                    function setBoxZoomEnabled(enabled) {{
-                                        boxZoomEnabled = enabled;
-                                        boxZoomBtn.classList.toggle("active", enabled);
-                                        boxZoomBtn.textContent = enabled ? "Right-Drag Zoom: On" : "Right-Drag Zoom: Off";
-                                    }}
-
-                                    function constrainPan() {{
-                                        refreshMinZoomToFitGraph();
-                                        var bb = cy.elements().boundingBox();
-                                        if (!isFinite(bb.x1) || !isFinite(bb.x2) || !isFinite(bb.y1) || !isFinite(bb.y2)) return;
-                                        var zoom = cy.zoom();
-                                        var pan = cy.pan();
-                                        var vw = cy.width();
-                                        var vh = cy.height();
-                                        var pad = 160;
-
-                                        var minX = vw - (bb.x2 * zoom) - pad;
-                                        var maxX = - (bb.x1 * zoom) + pad;
-                                        var minY = vh - (bb.y2 * zoom) - pad;
-                                        var maxY = - (bb.y1 * zoom) + pad;
-
-                                        var targetX = (minX > maxX) ? ((minX + maxX) / 2) : clamp(pan.x, minX, maxX);
-                                        var targetY = (minY > maxY) ? ((minY + maxY) / 2) : clamp(pan.y, minY, maxY);
-
-                                        if (targetX !== pan.x || targetY !== pan.y) {{
-                                            cy.pan({{ x: targetX, y: targetY }});
-                                        }}
-                                    }}
-
-                                    function resetView() {{
-                                        hideHoverMetadata();
-                                        setShowAllMetadata(false);
-                                        clearPinnedCards();
-                                        refreshMinZoomToFitGraph();
-                                        cy.fit(cy.elements(), FIT_PADDING);
-                                        cy.zoom(clamp(cy.zoom(), currentMinZoom, ZOOM_MAX));
-                                        constrainPan();
-                                        updatePinnedCards();
-                                    }}
-
-                                    function updateZoomRectangle(start, end) {{
-                                        var x = Math.min(start.x, end.x);
-                                        var y = Math.min(start.y, end.y);
-                                        var w = Math.abs(end.x - start.x);
-                                        var h = Math.abs(end.y - start.y);
-                                        zoomRect.style.left = x + "px";
-                                        zoomRect.style.top = y + "px";
-                                        zoomRect.style.width = w + "px";
-                                        zoomRect.style.height = h + "px";
-                                        zoomRect.style.display = "block";
-                                    }}
-
-                                    cyContainer.addEventListener("mousemove", renderHoverMetadata);
-                                    cyContainer.addEventListener("mouseleave", hideHoverMetadata);
-                                    cy.on("tap", "node", function(evt) {{
-                                        hideHoverMetadata();
-                                        togglePinnedCard(evt.target);
-                                    }});
-                                    cy.on("pan zoom resize render position", function() {{
-                                        constrainPan();
-                                        updatePinnedCards();
-                                    }});
-
-                                    allMetaBtn.addEventListener("click", function(e) {{
-                                        e.stopPropagation();
-                                        setShowAllMetadata(!showAllMetadata);
-                                    }});
-
-                                    boxZoomBtn.addEventListener("click", function(e) {{
-                                        e.stopPropagation();
-                                        setBoxZoomEnabled(!boxZoomEnabled);
-                                    }});
-
-                                    resetBtn.addEventListener("click", function(e) {{
-                                        e.stopPropagation();
-                                        resetView();
-                                    }});
-
-                                    cyContainer.addEventListener("contextmenu", function(e) {{
-                                        if (boxZoomEnabled || rightDragActive) {{
-                                            e.preventDefault();
-                                        }}
-                                    }});
-
-                                    cyContainer.addEventListener("mousedown", function(e) {{
-                                        if (!boxZoomEnabled || e.button !== 2) return;
-                                        e.preventDefault();
-                                        rightDragActive = true;
-                                        rightDragStart = getPointerPosition(e);
-                                        updateZoomRectangle(rightDragStart, rightDragStart);
-                                    }});
-
-                                    window.addEventListener("mousemove", function(e) {{
-                                        if (!rightDragActive || !rightDragStart) return;
-                                        var current = getPointerPosition(e);
-                                        updateZoomRectangle(rightDragStart, current);
-                                    }});
-
-                                    window.addEventListener("mouseup", function(e) {{
-                                        if (!rightDragActive || !rightDragStart) return;
-                                        var end = getPointerPosition(e);
-                                        var start = rightDragStart;
-                                        rightDragActive = false;
-                                        rightDragStart = null;
-                                        zoomRect.style.display = "none";
-
-                                        var w = Math.abs(end.x - start.x);
-                                        var h = Math.abs(end.y - start.y);
-                                        if (w < 12 || h < 12) return;
-
-                                        var pan = cy.pan();
-                                        var zoom = cy.zoom();
-                                        var x1 = (Math.min(start.x, end.x) - pan.x) / zoom;
-                                        var x2 = (Math.max(start.x, end.x) - pan.x) / zoom;
-                                        var y1 = (Math.min(start.y, end.y) - pan.y) / zoom;
-                                        var y2 = (Math.max(start.y, end.y) - pan.y) / zoom;
-
-                                        cy.animate({{
-                                            fit: {{ boundingBox: {{ x1: x1, y1: y1, x2: x2, y2: y2 }}, padding: 24 }},
-                                            duration: 220
-                                        }});
-                                        setTimeout(function() {{
-                                            constrainPan();
-                                            updatePinnedCards();
-                                        }}, 240);
-                                    }});
-
-                                    ['mousedown', 'mouseup', 'click', 'touchstart', 'touchend'].forEach(function(evt) {{
-                                        [fsBtn, resetBtn, allMetaBtn, boxZoomBtn].forEach(function(btn) {{
-                                            btn.addEventListener(evt, function(e) {{ e.stopPropagation(); }});
-                                        }});
-                                    }});
-
-                                    fsBtn.addEventListener('click', function(e) {{
-                                        e.stopPropagation();
-                                        var elem = document.getElementById('graph-shell');
-                                        if (elem.requestFullscreen) {{
-                                            elem.requestFullscreen();
-                                        }} else if (elem.webkitRequestFullscreen) {{
-                                            elem.webkitRequestFullscreen();
-                                        }} else if (elem.msRequestFullscreen) {{
-                                            elem.msRequestFullscreen();
-                                        }}
-                                    }});
-
-                                    // Smart auto-expansion: collapse compound nodes EXCEPT if it's the first appearance
-                                    cy.nodes('$node > node').sort((a, b) => b.neighborhood().length - a.neighborhood().length).forEach(function(node) {{
-                                        if (!node.data('is_first_appearance')) {{
-                                            api.collapse(node);
-                                        }}
-                                    }});
-
-                                    setBoxZoomEnabled(false);
-                                    setShowAllMetadata(false);
-                                    resetView();
-                                }});
-                            </script>
-                        </body>
-                        </html>
-                        """
-                        components.html(html_template, height=820)
-                        
-                        # Download button
-                        st.download_button(
-                            label="⬇️ Download Graph JSON",
-                            data=graph_json,
-                            file_name=f"{selected_model}_architecture.json",
-                            mime="application/json",
-                            key=f"dl_json_{i}"
-                        )
-                else:
-                    st.info(f"ℹ️ No architecture graph available for {selected_model}. "
-                            f"Run `python runspace/src/database/generate_model_graphs.py` to generate graphs.")
+            if graph_action_col.button("🏗️ Open Graph Viewer", key=f"open_graph_viewer_{i}", type="primary", use_container_width=True):
+                show_graph_viewer(i, available_models)
         else:
             st.info("No data to display. Apply filters above to see models.")
         
@@ -2185,6 +2520,629 @@ else:
 
     # Add Table Button
     st.button("➕ Add Table", on_click=add_table)
+
+# Close the Experiments tab context.
+tab_exp.__exit__(None, None, None)
+
+# ── Cache Simulation Tab ──────────────────────────────────────────────────────
+def _fmt_e(n):
+    """Format element count for display."""
+    try:
+        n = int(n)
+    except Exception:
+        return str(n)
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.3f}M"
+    if n >= 1_000:
+        return f"{n/1_000:.1f}K"
+    return str(n)
+
+
+def _build_bank_states(layers, num_banks, bank_size, rule_meta=None):
+    """
+    Pre-compute the cache bank state *during* each layer's execution.
+
+    rule_meta: optional dict of {rule_name: {'xin_from_cache': bool, 'permanents': str}}
+               built from the simulation's rules_json.  When provided, xin visibility
+               and weight-bank display are derived from rule properties instead of
+               hardcoded rule names, so the viz stays correct as rules change.
+    """
+    import math
+
+    # Build fast per-rule lookups.
+    # xin_full:   True  → xin fully resident in cache during execution
+    # wt_shows:   True  → weight banks are explicitly held during execution
+    _xin_full  = {}
+    _wt_shows  = {}
+    if rule_meta:
+        for name, meta in rule_meta.items():
+            _xin_full[name] = bool(meta.get('xin_from_cache', False))
+            _wt_shows[name] = 'weight' in meta.get('permanents', '').lower()
+    else:
+        # Legacy fallback: covers both old (r1_/r2_/r3_) and new short names.
+        for name in ('r1_global_fit', 'r2_residual', 'r2_pool',
+                     'global_fit', 'residual', 'pool'):
+            _xin_full[name] = True
+            _wt_shows[name] = False
+        for name in ('r2_conv_output_dominated', 'r2_conv_input_dominated',
+                     'conv_output_dominated', 'conv_input_dominated',
+                     'linear_stream_xout'):
+            _xin_full[name] = True
+            _wt_shows[name] = True
+        for name in ('r2_stream_xin_keep_xout', 'stream_xin_keep_xout',
+                     'r3_weights_plus_4banks', 'fallback'):
+            _xin_full[name] = False
+            _wt_shows[name] = True
+
+    states = []
+    for layer in layers:
+        rule = layer.get('rule', '')
+        stay = bool(layer.get('stay_on_chip', False))
+        oe   = int(layer.get('output_elems', 0) or 0)
+        we   = int(layer.get('weight_elems', 0) or 0)
+        ie   = int(layer.get('input_elems',  0) or 0)
+
+        ob = math.ceil(oe / bank_size) if oe > 0 else 0
+        wb = math.ceil(we / bank_size) if we > 0 else 0
+        ib = math.ceil(ie / bank_size) if ie > 0 else 0
+
+        ob = min(ob, num_banks)
+        wb = min(wb, num_banks)
+        ib = min(ib, num_banks)
+
+        xin_full = _xin_full.get(rule, False)
+        wt_shows = _wt_shows.get(rule, False)
+
+        if xin_full:
+            xin_b    = ib
+            stream_b = 0
+        else:
+            xin_b    = 0
+            stream_b = 2       # 2-bank streaming buffer for xin from external
+
+        xr_b = 0
+        layer_type = layer.get('type', '')
+        if stay:
+            if layer_type == 'Residual':
+                # xin (skip) fully resident; xout + x_r each use 2 streaming banks
+                xout_b, xr_b, wt_b = 2, 2, 0
+            else:
+                xout_b = ob
+                if wt_shows:
+                    wt_b = wb          # weights permanently resident (e.g. conv_output_dominated)
+                elif we > 0:
+                    wt_b = min(2, wb)  # 2 streaming banks for weight tiles (e.g. global_fit on Conv2d)
+                else:
+                    wt_b = 0           # no weights (pool)
+        else:
+            # off-chip: xout streamed out; weights may stay resident for streaming
+            xout_b   = 0
+            wt_b     = min(wb, num_banks - stream_b - 2) if wt_shows else 0
+            stream_b = min(stream_b + 2, num_banks - wt_b)  # xin-stream + xout-stream
+
+        used   = xin_b + xout_b + xr_b + wt_b + stream_b
+        free_b = max(0, num_banks - used)
+
+        # Build per-bank list
+        banks = []
+        for _ in range(xin_b):
+            banks.append({'type': 'xin', 'label': 'xin'})
+        for _ in range(xout_b):
+            banks.append({'type': 'xout', 'label': 'xout'})
+        for _ in range(xr_b):
+            banks.append({'type': 'xr', 'label': 'xr'})
+        for _ in range(wt_b):
+            banks.append({'type': 'weights', 'label': 'W'})
+        for _ in range(stream_b):
+            banks.append({'type': 'stream', 'label': '~'})
+        for _ in range(free_b):
+            banks.append({'type': 'free', 'label': ''})
+        while len(banks) < num_banks:
+            banks.append({'type': 'free', 'label': ''})
+        banks = banks[:num_banks]
+
+        states.append({
+            'name':     layer.get('name', ''),
+            'type':     layer.get('type', ''),
+            'rule':     rule,
+            'reason':   layer.get('reason', ''),
+            'stay':     stay,
+            'xin_b':    xin_b,
+            'xout_b':   xout_b,
+            'xr_b':     xr_b,
+            'wt_b':     wt_b,
+            'stream_b': stream_b,
+            'free_b':   free_b,
+            'output':   _fmt_e(oe),
+            'weights':  _fmt_e(we),
+            'input':    _fmt_e(ie),
+            'banks':    banks,
+        })
+    return states
+
+
+def _render_bank_viz_html(states, num_banks, bank_size, cache_elements):
+    """Return a self-contained HTML string for the interactive bank viewer."""
+    states_json = json.dumps(states)
+    bank_size_fmt = _fmt_e(bank_size)
+    cache_fmt = _fmt_e(cache_elements)
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          background: #f8fafc; color: #0f172a; padding: 14px; }}
+  h3 {{ font-size: 13px; font-weight: 700; color: #475569; letter-spacing:.06em;
+        text-transform: uppercase; margin-bottom: 10px; }}
+  #controls {{ display:flex; align-items:center; gap:12px; margin-bottom:14px; flex-wrap:wrap; }}
+  #layer-slider {{ flex:1; min-width:200px; accent-color:#0f766e; }}
+  #layer-counter {{ font-size:12px; color:#64748b; white-space:nowrap; }}
+  #nav-btns {{ display:flex; gap:6px; }}
+  .nav-btn {{ cursor:pointer; background:#fff; border:1px solid #cbd5e1; border-radius:7px;
+              color:#334155; padding:4px 10px; font-size:12px; font-weight:600;
+              transition:background .1s; }}
+  .nav-btn:hover {{ background:#f1f5f9; }}
+
+  #info-panel {{ background:#fff; border:1px solid #e2e8f0; border-radius:12px;
+                 padding:12px 14px; margin-bottom:14px; }}
+  .info-row {{ display:flex; gap:20px; flex-wrap:wrap; margin-bottom:6px; }}
+  .info-label {{ font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase;
+                 letter-spacing:.05em; }}
+  .info-val {{ font-size:13px; font-weight:600; color:#0f172a; }}
+  .rule-pill {{ display:inline-block; background:#eff6ff; border:1px solid #bfdbfe;
+                border-radius:999px; padding:2px 10px; font-size:11px; font-weight:700;
+                color:#1d4ed8; }}
+  .oncehip-pill {{ background:#f0fdf4; border-color:#86efac; color:#15803d; }}
+  .offchip-pill  {{ background:#fef2f2; border-color:#fca5a5; color:#dc2626; }}
+
+  #bank-container {{ display:flex; gap:4px; flex-wrap:nowrap; margin-bottom:8px; }}
+  .bank {{ flex:1; min-width:0; border-radius:6px; display:flex; flex-direction:column;
+           align-items:center; justify-content:center; padding:8px 2px; position:relative;
+           transition: background .25s, border-color .25s; border:1.5px solid transparent;
+           cursor:default; }}
+  .bank:hover {{ border-color: #94a3b8 !important; }}
+  .bank-num {{ font-size:9px; color:rgba(0,0,0,.35); font-weight:600; position:absolute;
+               bottom:3px; }}
+  .bank-lbl {{ font-size:10px; font-weight:700; color:rgba(0,0,0,.55); }}
+  .bank.xin     {{ background:#fed7aa; }}
+  .bank.xout    {{ background:#dcfce7; }}
+  .bank.xr      {{ background:#f3e8ff; }}
+  .bank.weights {{ background:#dbeafe; }}
+  .bank.stream  {{ background:#fef9c3; }}
+  .bank.free    {{ background:#f1f5f9; }}
+
+  #legend {{ display:flex; gap:14px; flex-wrap:wrap; margin-bottom:12px; }}
+  .leg-item {{ display:flex; align-items:center; gap:5px; font-size:11px; font-weight:600; color:#475569; }}
+  .leg-dot {{ width:12px; height:12px; border-radius:3px; }}
+  .leg-xin     {{ background:#fed7aa; border:1px solid #fb923c; }}
+  .leg-xout    {{ background:#dcfce7; border:1px solid #86efac; }}
+  .leg-xr      {{ background:#f3e8ff; border:1px solid #c084fc; }}
+  .leg-weights {{ background:#dbeafe; border:1px solid #93c5fd; }}
+  .leg-stream  {{ background:#fef9c3; border:1px solid #fde047; }}
+  .leg-free    {{ background:#f1f5f9; border:1px solid #cbd5e1; }}
+
+  #size-bar {{ display:flex; height:20px; border-radius:6px; overflow:hidden; margin-bottom:12px;
+               border:1px solid #e2e8f0; }}
+  .sz-seg {{ height:100%; display:flex; align-items:center; justify-content:center;
+             font-size:10px; font-weight:700; color:rgba(0,0,0,.5); transition:width .3s; }}
+  .sz-xin     {{ background:#fdba74; }}
+  .sz-xout    {{ background:#bbf7d0; }}
+  .sz-xr      {{ background:#e9d5ff; }}
+  .sz-weights {{ background:#bfdbfe; }}
+  .sz-stream  {{ background:#fef08a; }}
+  .sz-free    {{ background:#f1f5f9; }}
+
+  #stats {{ display:flex; gap:12px; flex-wrap:wrap; }}
+  .stat-box {{ background:#fff; border:1px solid #e2e8f0; border-radius:10px;
+               padding:8px 14px; min-width:80px; text-align:center; }}
+  .stat-val {{ font-size:18px; font-weight:700; color:#0f172a; }}
+  .stat-lbl {{ font-size:10px; color:#64748b; font-weight:600; text-transform:uppercase; }}
+  .stat-box.orange {{ border-color:#fb923c; background:#fff7ed; }}
+  .stat-box.green  {{ border-color:#86efac; background:#f0fdf4; }}
+  .stat-box.blue   {{ border-color:#93c5fd; background:#eff6ff; }}
+  .stat-box.yellow {{ border-color:#fde047; background:#fefce8; }}
+  .stat-box.gray   {{ border-color:#cbd5e1; background:#f8fafc; }}
+  .stat-box.red    {{ border-color:#fca5a5; background:#fef2f2; }}
+</style>
+</head>
+<body>
+<h3>Memory Banks — {num_banks} banks × {bank_size_fmt} elem = {cache_fmt} elem total</h3>
+
+<div id="controls">
+  <div id="nav-btns">
+    <button class="nav-btn" onclick="step(-1)">◀ Prev</button>
+    <button class="nav-btn" onclick="step(1)">Next ▶</button>
+  </div>
+  <input type="range" id="layer-slider" min="0" max="0" value="0" oninput="setLayer(+this.value)">
+  <span id="layer-counter"></span>
+</div>
+
+<div id="info-panel">
+  <div class="info-row">
+    <div><div class="info-label">Layer</div><div class="info-val" id="i-name">—</div></div>
+    <div><div class="info-label">Type</div><div class="info-val" id="i-type">—</div></div>
+    <div><div class="info-label">xin</div><div class="info-val" id="i-input">—</div></div>
+    <div><div class="info-label">xout</div><div class="info-val" id="i-output">—</div></div>
+    <div><div class="info-label">Weights</div><div class="info-val" id="i-weights">—</div></div>
+  </div>
+  <div class="info-row">
+    <div><div class="info-label">Rule</div><div class="info-val"><span class="rule-pill" id="i-rule">—</span></div></div>
+    <div><div class="info-label">Decision</div><div class="info-val"><span class="rule-pill" id="i-stay">—</span></div></div>
+    <div style="flex:1"><div class="info-label">Reason</div><div class="info-val" id="i-reason" style="font-size:12px;color:#475569">—</div></div>
+  </div>
+</div>
+
+<div id="legend">
+  <div class="leg-item"><div class="leg-dot leg-xin"></div> xin (in cache)</div>
+  <div class="leg-item"><div class="leg-dot leg-xout"></div> xout (on-chip output)</div>
+  <div class="leg-item"><div class="leg-dot leg-xr"></div> x_r (residual stream)</div>
+  <div class="leg-item"><div class="leg-dot leg-weights"></div> Weights</div>
+  <div class="leg-item"><div class="leg-dot leg-stream"></div> Streaming buffer (~)</div>
+  <div class="leg-item"><div class="leg-dot leg-free"></div> Free</div>
+</div>
+
+<div id="size-bar">
+  <div class="sz-seg sz-xin"     id="sz-xin"     style="width:0%"></div>
+  <div class="sz-seg sz-xout"    id="sz-xout"    style="width:0%"></div>
+  <div class="sz-seg sz-xr"      id="sz-xr"      style="width:0%"></div>
+  <div class="sz-seg sz-weights" id="sz-weights" style="width:0%"></div>
+  <div class="sz-seg sz-stream"  id="sz-stream"  style="width:0%"></div>
+  <div class="sz-seg sz-free"    id="sz-free"    style="width:100%">free</div>
+</div>
+
+<div id="bank-container"></div>
+
+<div id="stats">
+  <div class="stat-box orange"><div class="stat-val" id="st-xin">0</div><div class="stat-lbl">xin banks</div></div>
+  <div class="stat-box green" ><div class="stat-val" id="st-xout">0</div><div class="stat-lbl">xout banks</div></div>
+  <div class="stat-box" id="xr-box" style="border-color:#c084fc;background:#faf5ff;display:none">
+    <div class="stat-val" id="st-xr">0</div><div class="stat-lbl">x_r banks</div>
+  </div>
+  <div class="stat-box blue"  ><div class="stat-val" id="st-wt">0</div><div class="stat-lbl">weight banks</div></div>
+  <div class="stat-box yellow" id="stream-box" style="display:none">
+    <div class="stat-val" id="st-stream">0</div><div class="stat-lbl">stream buf</div>
+  </div>
+  <div class="stat-box gray"  ><div class="stat-val" id="st-free">0</div><div class="stat-lbl">free banks</div></div>
+  <div class="stat-box red"   id="offchip-box" style="display:none">
+    <div class="stat-val">OFF</div><div class="stat-lbl">xout → external</div>
+  </div>
+</div>
+
+<script>
+const STATES = {states_json};
+const NUM_BANKS = {num_banks};
+
+let current = 0;
+const slider   = document.getElementById('layer-slider');
+const counter  = document.getElementById('layer-counter');
+const bankCont = document.getElementById('bank-container');
+
+// Build bank DOM once
+for (let i = 0; i < NUM_BANKS; i++) {{
+  const b = document.createElement('div');
+  b.className = 'bank free';
+  b.id = 'bank-' + i;
+  b.innerHTML = '<span class="bank-lbl" id="bl-' + i + '"></span><span class="bank-num">' + i + '</span>';
+  bankCont.appendChild(b);
+}}
+
+slider.max = STATES.length - 1;
+
+function step(d) {{ setLayer(Math.max(0, Math.min(STATES.length - 1, current + d))); }}
+
+function setLayer(idx) {{
+  current = idx;
+  slider.value = idx;
+  const s = STATES[idx];
+  counter.textContent = (idx + 1) + ' / ' + STATES.length + ' — ' + s.name;
+
+  document.getElementById('i-name').textContent    = s.name;
+  document.getElementById('i-type').textContent    = s.type;
+  document.getElementById('i-input').textContent   = s.input;
+  document.getElementById('i-output').textContent  = s.output;
+  document.getElementById('i-weights').textContent = s.weights;
+  document.getElementById('i-rule').textContent    = s.rule || '—';
+  document.getElementById('i-reason').textContent  = s.reason || '—';
+
+  const stayEl = document.getElementById('i-stay');
+  if (s.stay) {{
+    stayEl.textContent = '✓ On-Chip';
+    stayEl.className   = 'rule-pill oncehip-pill';
+  }} else {{
+    stayEl.textContent = '✗ Off-Chip';
+    stayEl.className   = 'rule-pill offchip-pill';
+  }}
+
+  // Update banks
+  for (let i = 0; i < NUM_BANKS; i++) {{
+    const bank = s.banks[i] || {{type:'free', label:''}};
+    const el   = document.getElementById('bank-' + i);
+    const lbl  = document.getElementById('bl-' + i);
+    el.className = 'bank ' + bank.type;
+    lbl.textContent = bank.label;
+  }}
+
+  // Size bar
+  function szSeg(id, banks, label) {{
+    const pct = (banks / NUM_BANKS * 100).toFixed(1);
+    const el = document.getElementById(id);
+    el.style.width   = pct + '%';
+    el.textContent   = pct > 5 ? (banks + 'B' + (label ? ' ' + label : '')) : '';
+  }}
+  szSeg('sz-xin',     s.xin_b,    'xin');
+  szSeg('sz-xout',    s.xout_b,   'xout');
+  szSeg('sz-xr',      s.xr_b,     'xr');
+  szSeg('sz-weights', s.wt_b,     'W');
+  szSeg('sz-stream',  s.stream_b, '~');
+  szSeg('sz-free',    s.free_b,   'free');
+
+  // Stats
+  document.getElementById('st-xin').textContent  = s.xin_b;
+  document.getElementById('st-xout').textContent = s.xout_b;
+  document.getElementById('st-wt').textContent   = s.wt_b;
+  document.getElementById('st-free').textContent = s.free_b;
+  const stXr = document.getElementById('st-xr');
+  if (stXr) stXr.textContent = s.xr_b;
+  document.getElementById('xr-box').style.display     = (s.xr_b > 0) ? '' : 'none';
+  const stEl = document.getElementById('st-stream');
+  if (stEl) stEl.textContent = s.stream_b;
+  document.getElementById('stream-box').style.display  = s.stream_b > 0 ? '' : 'none';
+  document.getElementById('offchip-box').style.display = s.stay ? 'none' : '';
+}}
+
+setLayer(0);
+</script>
+</body>
+</html>"""
+
+
+with tab_cache:
+    st.markdown("""
+    <div class="dashboard-hero">
+        <div class="dashboard-hero__eyebrow">ASIC · On-Chip Memory</div>
+        <h1>Cache Simulation</h1>
+        <p>Layer-by-layer cache placement decisions — which outputs stay on chip and which must be quantized for external memory transfer.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    @st.cache_data(ttl=30)
+    def _load_cache_sims():
+        from runspace.src.database.handler import RunDatabase
+        db = RunDatabase(db_path=DB_PATH)
+        return db.get_cache_simulations()
+
+    cache_sim_df = _load_cache_sims()
+
+    if cache_sim_df.empty:
+        st.info(
+            "No cache simulations in the database yet. "
+            "Run `simulate_cache.py` to populate this tab."
+        )
+    else:
+        # ── Model selector ────────────────────────────────────────────────────
+        available_models = sorted(cache_sim_df['model_name'].dropna().unique())
+        col_sel, col_refresh = st.columns([4, 1])
+        selected_model = col_sel.selectbox(
+            "Model", available_models, key="cache_sim_model_select"
+        )
+        if col_refresh.button("🔄 Refresh", key="cache_sim_refresh", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+        # Latest simulation row for the selected model
+        model_rows = cache_sim_df[cache_sim_df['model_name'] == selected_model].sort_values('id', ascending=False)
+        latest = model_rows.iloc[0]
+
+        # Show all runs for this model (for historical comparison)
+        if len(model_rows) > 1:
+            run_options = [
+                f"Run {row['id']}  —  {row['timestamp'] or ''}  |  cache={row['cache_size_M']}M  banks={row['num_banks']}"
+                for _, row in model_rows.iterrows()
+            ]
+            chosen_idx = st.selectbox("Simulation run", range(len(run_options)),
+                                      format_func=lambda i: run_options[i],
+                                      key="cache_sim_run_select")
+            latest = model_rows.iloc[chosen_idx]
+
+        # ── Summary metrics ───────────────────────────────────────────────────
+        total    = int(latest.get('total_layers') or 0)
+        off_chip = int(latest.get('off_chip_count') or 0)
+        flagged  = int(latest.get('flagged_count') or 0)
+        on_chip  = total - off_chip - flagged
+        num_banks = int(latest.get('num_banks') or 16)
+        bank_size = int(latest.get('bank_size') or 1)
+        cache_elements = int(num_banks * bank_size)
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Total Layers",   total)
+        m2.metric("On Chip",        on_chip)
+        m3.metric("Off Chip (QUANT)", off_chip,
+                  delta=f"-{off_chip}" if off_chip else None, delta_color="inverse")
+        m4.metric("Flagged",        flagged,
+                  delta=f"-{flagged}" if flagged else None, delta_color="inverse")
+        m5.metric("Cache Size",     f"{latest.get('cache_size_M', '?')}M  ×{num_banks} banks")
+
+        st.markdown(
+            f"<p class='dashboard-filter-note'>metadata_bits={int(latest.get('metadata_bits') or 0)} &nbsp;·&nbsp; "
+            f"bank_size={bank_size:,} elem &nbsp;·&nbsp; "
+            f"timestamp={latest.get('timestamp', '—')}</p>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Parse layers (keep raw ints for viz, format copy for table) ───────
+        layers_raw = latest.get('layers_json') or '[]'
+        layers = json.loads(layers_raw) if isinstance(layers_raw, str) else layers_raw
+
+        if layers:
+            # ── Memory Bank Visualizer ────────────────────────────────────────
+            st.markdown("#### Memory Bank View")
+            st.caption(
+                "Step through layers to see which banks are occupied and by what. "
+                "Use the slider or Prev/Next buttons."
+            )
+            rules_raw  = latest.get('rules_json') or '[]'
+            rules_list = json.loads(rules_raw) if isinstance(rules_raw, str) else (rules_raw or [])
+            rule_meta  = {r['name']: r for r in rules_list} if rules_list else None
+            states = _build_bank_states(layers, num_banks, bank_size, rule_meta=rule_meta)
+            import streamlit.components.v1 as _comp
+            _comp.html(
+                _render_bank_viz_html(states, num_banks, bank_size, cache_elements),
+                height=420,
+                scrolling=False,
+            )
+
+            st.markdown("---")
+
+            # ── Layer table ───────────────────────────────────────────────────
+            st.markdown("#### Layer Details")
+            layers_df = pd.DataFrame(layers)
+            fmt_cols = ['input_elems', 'weight_elems', 'output_elems',
+                        'output_banked', 'next_xin_banked', 'perm_elems']
+            layers_fmt = layers_df.copy()
+            for col in fmt_cols:
+                if col in layers_fmt.columns:
+                    layers_fmt[col] = layers_fmt[col].apply(
+                        lambda n: _fmt_e(n) if pd.notna(n) else ""
+                    )
+
+            display_cols = [c for c in [
+                'name', 'type', 'stay_on_chip', 'rule', 'reason',
+                'input_elems', 'weight_elems', 'output_elems',
+                'output_banked', 'next_xin_banked', 'next_layer_name',
+            ] if c in layers_fmt.columns]
+
+            st.dataframe(
+                layers_fmt[display_cols],
+                use_container_width=True,
+                height=500,
+                column_config={
+                    'name':            st.column_config.TextColumn("Layer",        width="large"),
+                    'type':            st.column_config.TextColumn("Type",         width="small"),
+                    'stay_on_chip':    st.column_config.CheckboxColumn("On Chip",  width="small"),
+                    'rule':            st.column_config.TextColumn("Rule",         width="medium"),
+                    'reason':          st.column_config.TextColumn("Reason",       width="large"),
+                    'input_elems':     st.column_config.TextColumn("Input",        width="small"),
+                    'weight_elems':    st.column_config.TextColumn("Weights",      width="small"),
+                    'output_elems':    st.column_config.TextColumn("Output",       width="small"),
+                    'output_banked':   st.column_config.TextColumn("Banked",       width="small"),
+                    'next_xin_banked': st.column_config.TextColumn("Next Xin",    width="small"),
+                    'next_layer_name': st.column_config.TextColumn("Next Layer",   width="large"),
+                },
+            )
+
+            # Off-chip layers list
+            off_chip_raw = latest.get('off_chip_layers_json') or '[]'
+            off_chip_list = json.loads(off_chip_raw) if isinstance(off_chip_raw, str) else off_chip_raw
+            if off_chip_list:
+                with st.expander(f"Off-chip layers ({len(off_chip_list)}) — copy for runner config"):
+                    st.code(json.dumps(off_chip_list, indent=2), language="json")
+
+    st.markdown("---")
+
+    # ── Rules Reference — fetched from DB, reflects the rules used at run time ─
+    st.markdown("#### Rule Reference")
+    st.caption(
+        "Parsed from the simulation record in the DB — always reflects the rules that were "
+        "actually used. Re-run `simulate_cache.py` after changing rule definitions to update."
+    )
+
+    rules_raw  = latest.get('rules_json') if not cache_sim_df.empty else None
+    rules_list = json.loads(rules_raw) if isinstance(rules_raw, str) and rules_raw else []
+
+    if not rules_list:
+        st.info(
+            "No rule metadata in this simulation record. "
+            "Re-run `simulate_cache.py` to populate the rules table."
+        )
+    else:
+        rules_df = pd.DataFrame(rules_list).rename(columns={
+            'name':           'Rule',
+            'on_chip':        'xout On-Chip',
+            'xin_from_cache': 'xin Source',
+            'applies_to':     'Applies To',
+            'stay_condition': 'Stay Condition',
+            'permanents':     'Permanents',
+            'notes':          'Notes',
+        })
+        if 'xout On-Chip' in rules_df.columns:
+            rules_df['xout On-Chip'] = rules_df['xout On-Chip'].map(
+                {True: '✓ Yes', False: '✗ No', 'True': '✓ Yes', 'False': '✗ No'}
+            ).fillna(rules_df['xout On-Chip'].astype(str))
+        if 'xin Source' in rules_df.columns:
+            rules_df['xin Source'] = rules_df['xin Source'].map(
+                {True: 'Cache', False: 'External', 'True': 'Cache', 'False': 'External'}
+            ).fillna(rules_df['xin Source'].astype(str))
+
+        display_cols = [c for c in [
+            'Rule', 'xout On-Chip', 'xin Source',
+            'Applies To', 'Stay Condition', 'Permanents', 'Notes',
+        ] if c in rules_df.columns]
+
+        st.dataframe(
+            rules_df[display_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                'Rule':           st.column_config.TextColumn("Rule",            width="medium"),
+                'xout On-Chip':   st.column_config.TextColumn("xout On-Chip",   width="small"),
+                'xin Source':     st.column_config.TextColumn("xin Source",     width="small"),
+                'Applies To':     st.column_config.TextColumn("Applies To",     width="medium"),
+                'Stay Condition': st.column_config.TextColumn("Stay Condition", width="large"),
+                'Permanents':     st.column_config.TextColumn("Permanents",     width="medium"),
+                'Notes':          st.column_config.TextColumn("Notes",          width="large"),
+            },
+        )
+
+# ── Architecture Graph Tab ───────────────────────────────────────────────────
+with tab_graph:
+    st.markdown("""
+    <div class="dashboard-hero">
+        <div class="dashboard-hero__eyebrow">Architecture · Quantization Map</div>
+        <h1>Architecture Graph</h1>
+        <p>Interactive model architecture viewer with quantization annotations. Generated live from the current code.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if _graph_renderer_fn is None:
+        st.info("No experiment runs found in the database. The graph viewer requires at least one run to initialize.")
+    else:
+        all_models_for_graph = sorted(cache_sim_df['model_name'].dropna().unique().tolist()) \
+            if 'cache_sim_df' in dir() and not cache_sim_df.empty else []
+
+        col_gm, col_gg = st.columns([3, 1])
+        graph_model = col_gm.selectbox(
+            "Model", all_models_for_graph or ["resnet18"],
+            key="graph_tab_model_select",
+        )
+        generate_clicked = col_gg.button(
+            "Generate Graph", key="graph_tab_generate", type="primary", use_container_width=True
+        )
+
+        if generate_clicked:
+            with st.spinner(f"Generating architecture graph for {graph_model}..."):
+                try:
+                    graph_json, graph_meta = generate_live_model_graph_bundle(graph_model)
+                    st.session_state['_graph_tab_json'] = graph_json
+                    st.session_state['_graph_tab_meta'] = graph_meta
+                    st.session_state['_graph_tab_model'] = graph_model
+                except Exception as exc:
+                    st.error(f"Failed to generate graph for `{graph_model}`: {exc}")
+
+        cached_json  = st.session_state.get('_graph_tab_json')
+        cached_meta  = st.session_state.get('_graph_tab_meta')
+        cached_model = st.session_state.get('_graph_tab_model')
+
+        if cached_json and cached_model == graph_model:
+            _graph_renderer_fn(
+                selected_model=graph_model,
+                graph_json=cached_json,
+                graph_meta=cached_meta,
+                download_key="graph_tab_dl",
+            )
+        else:
+            st.info("Select a model above and click **Generate Graph** to render its architecture.")
 
 st.sidebar.markdown("---")
 st.sidebar.info("Managed via `src/database/handler.py`")

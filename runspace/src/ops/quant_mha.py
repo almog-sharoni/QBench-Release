@@ -7,6 +7,7 @@ import copy
 from ..registry.op_registry import OpRegistry
 from .quant_base import QuantizedLayerMixin
 
+
 class ScaledDotProduct(nn.Module):
     def __init__(self, head_dim):
         super().__init__()
@@ -24,6 +25,7 @@ class ScaledDotProduct(nn.Module):
 
         return scores
 
+
 class AttentionWeightedValues(nn.Module):
     def __init__(self, embed_dim):
         super().__init__()
@@ -34,7 +36,6 @@ class AttentionWeightedValues(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, tgt_len, self.embed_dim)
         return attn_output
 
-# not supported yet
 @OpRegistry.register("DecomposedMultiheadAttention", original_cls=nn.MultiheadAttention) 
 class DecomposedMultiheadAttention(nn.Module, QuantizedLayerMixin):
     """
@@ -220,8 +221,9 @@ class DecomposedQkvAttention(nn.Module, QuantizedLayerMixin):
         decomposed.head_dim = decomposed.attn_dim // decomposed.num_heads
         if hasattr(native_attn, "scale"):
             decomposed.scale = float(native_attn.scale)
-        if hasattr(native_attn, "fused_attn"):
-            decomposed.fused_attn = bool(native_attn.fused_attn)
+        # Force the explicit attention math path for decomposed timm attention so
+        # downstream FX replacement can quantize q*scale and the attention matmuls.
+        decomposed.fused_attn = False
 
         # Rebuild proj to match native attention dims exactly.
         decomposed.proj = nn.Linear(

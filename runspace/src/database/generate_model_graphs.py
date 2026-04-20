@@ -39,6 +39,7 @@ except ImportError:
 
 try:
     from runspace.src.utils.architecture_viz import generate_hierarchical_json
+    from runspace.src.utils.model_input_utils import resolve_model_input_size
     GRAPH_VIZ_AVAILABLE = True
 except Exception as e:
     GRAPH_VIZ_AVAILABLE = False
@@ -90,6 +91,7 @@ def get_model_from_name(model_name, quantized=True):
                 model_name=model_name,
                 quantized_ops=["all"],
                 input_quantization=False,
+                enable_fx_quantization=False,
             )
             model = adapter.build_model(quantized=True)
             return model
@@ -148,9 +150,10 @@ def generate_graph_for_model(model_name, db, force=False, quantized=True, graph_
         
         # Generate JSON graph representation
         print("  Tracing and generating hierarchical JSON...")
+        input_size = resolve_model_input_size(model)
         graph_json = generate_hierarchical_json(
             model,
-            input_size=(1, 3, 224, 224),
+            input_size=input_size,
             model_name=model_name,
             depth=graph_depth
         )

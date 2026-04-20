@@ -5,6 +5,8 @@ import os
 from .base_adapter import BaseAdapter
 from ..registry.op_registry import OpRegistry
 from ..quantization.constants import DEFAULT_QUANTIZATION_TYPE
+from ..utils.fx_trace_utils import find_non_tensor_nodes, trace_quant_aware
+from ..utils.model_input_utils import resolve_model_input_size
 try:
     import src.ops # Ensure all ops are registered
 except ImportError:
@@ -49,11 +51,13 @@ class GenericAdapter(BaseAdapter):
         build_quantized: bool = True,
         target_module_prefixes: list = None,
         strict_format_check: bool = False,
+        enable_fx_quantization: bool = True,
     ):
         super().__init__()
         self.target_module_prefixes = target_module_prefixes or []
         self.skip_calibration = skip_calibration
         self.build_quantized = bool(build_quantized)
+        self.enable_fx_quantization = bool(enable_fx_quantization)
         self.model_name = model_name
         self.base_model_instance = model
         self.model_source = model_source
@@ -61,7 +65,7 @@ class GenericAdapter(BaseAdapter):
         self.input_quantization = input_quantization
         self.weight_quantization = weight_quantization
         self.quantize_first_layer = quantize_first_layer
-        self.quantized_ops = quantized_ops if quantized_ops is not None else ["Conv2d"]
+        self.quantized_ops = quantized_ops if quantized_ops is not None else ["all"]
         self.excluded_ops = excluded_ops if excluded_ops is not None else []
         self.quantization_type = quantization_type
         self.quantization_bias = quantization_bias
@@ -793,17 +797,18 @@ class GenericAdapter(BaseAdapter):
             
             # FX-based Functional Quantization
             # This handles functional calls like F.relu that are not modules
-            try:
-                # _fx_quantize returns the modified model (GraphModule) if changes were made
-                # FX tracing relies on symbolic execution. GPU vs CPU shouldn't matter for correctness,
-                # but we should ensure consistency.
-                fx_model = self._fx_quantize(model)
-                if fx_model is not None:
-                    model = fx_model
-            except Exception as e:
-                # Control-flow models (e.g. timm MobileViT) can't be FX-traced — that's fine,
-                # recursive replacement already handled all registered ops.
-                print(f"Note: FX quantization skipped ({type(e).__name__}: {e})")
+            if self.enable_fx_quantization:
+                try:
+                    # _fx_quantize returns the modified model (GraphModule) if changes were made
+                    # FX tracing relies on symbolic execution. GPU vs CPU shouldn't matter for correctness,
+                    # but we should ensure consistency.
+                    fx_model = self._fx_quantize(model)
+                    if fx_model is not None:
+                        model = fx_model
+                except Exception as e:
+                    # Control-flow models (e.g. timm MobileViT) can't be FX-traced — that's fine,
+                    # recursive replacement already handled all registered ops.
+                    print(f"Note: FX quantization skipped ({type(e).__name__}: {e})")
         
         return model
 
@@ -811,7 +816,6 @@ class GenericAdapter(BaseAdapter):
         """
         Uses torch.fx to replace functional operations with quantized modules.
         """
-        import torch.fx
         import torch.nn.functional as F
         
         # We only want to trace if we have functional ops to replace.
@@ -861,26 +865,35 @@ class GenericAdapter(BaseAdapter):
         if not target_funcs:
             return
 
-        # Trace the model
-        # We use a custom tracer to ensure we don't trace into existing quantized modules
-        class QuantTracer(torch.fx.Tracer):
-            def is_leaf_module(self, m: torch.nn.Module, module_qualified_name: str) -> bool:
-                # Treat all registered quantized ops as leaves
-                if type(m) in OpRegistry.get_supported_ops().values():
-                    return True
-                return super().is_leaf_module(m, module_qualified_name)
-        
-        tracer = QuantTracer()
-        try:
-            graph = tracer.trace(model)
-        except Exception as e:
-            print(f"FX Trace failed: {e}")
-            return
+        fx_model, modified = self._fx_quantize_module_graph(model, target_funcs)
+        if modified and fx_model is not None:
+            valid, error = self._validate_fx_model(fx_model, model)
+            if valid:
+                return fx_model
+            print(
+                "Note: FX whole-model quantization produced an invalid runtime graph "
+                f"({type(error).__name__}: {error}). Falling back to submodule FX."
+            )
 
-        gm = torch.fx.GraphModule(model, graph)
+        submodule_modified = self._fx_quantize_submodules(model, target_funcs)
+        if submodule_modified:
+            return model
+
+        if modified and fx_model is not None:
+            print("Note: submodule FX fallback did not find any safe traceable children.")
+        return model
+
+    def _fx_quantize_module_graph(self, module: nn.Module, target_funcs: dict):
+        try:
+            _, graph, gm = trace_quant_aware(module)
+        except Exception as e:
+            return None, False
+        non_tensor_nodes = find_non_tensor_nodes(graph)
         modified = False
         
         for node in list(graph.nodes):
+            if node.name in non_tensor_nodes:
+                continue
             if node.op == 'call_function' and node.target in target_funcs:
                 op_name = target_funcs[node.target]
                 QuantClass = OpRegistry.get(op_name)
@@ -915,20 +928,74 @@ class GenericAdapter(BaseAdapter):
                 modified = True
         
         if modified:
+            for attr in ("default_cfg", "pretrained_cfg"):
+                if hasattr(module, attr):
+                    setattr(gm, attr, getattr(module, attr))
             gm.recompile()
-            # We need to update the model reference in the adapter
-            # But self.model is set in __init__. build_model returns the model.
-            # We are modifying 'model' in-place? No, GraphModule is a new module.
-            # We need to return the new GraphModule or update the passed model variable.
-            # Since we can't update the local variable 'model' in the caller easily if we just return it,
-            # we should copy the state or just return gm.
-            
-            # However, build_model returns 'model'. We should update 'model' to be 'gm'.
-            # But we can't reassign the argument.
-            # We will handle this by returning gm from this function and updating in build_model.
-            return gm
-        
-        return model
+        return gm, modified
+
+    def _validate_fx_model(self, fx_model: nn.Module, reference_model: nn.Module):
+        try:
+            dummy = self._get_dummy_input(reference_model)
+            with torch.no_grad():
+                fx_model.eval()(dummy)
+            return True, None
+        except Exception as e:
+            return False, e
+
+    def _get_dummy_input(self, model: nn.Module) -> torch.Tensor:
+        try:
+            device = next(model.parameters()).device
+        except StopIteration:
+            device = torch.device("cpu")
+
+        _, c, h, w = resolve_model_input_size(model)
+        return torch.zeros(1, c, h, w, device=device)
+
+    def _is_safe_fx_submodule(self, module: nn.Module) -> bool:
+        if isinstance(module, nn.Sequential):
+            return True
+
+        cls_name = type(module).__name__
+        module_name = type(module).__module__
+        safe_names = {
+            "Block",
+            "ResPostBlock",
+            "ParallelScalingBlock",
+            "Attention",
+            "AttentionRope",
+            "Mlp",
+            "SwiGLU",
+            "SwiGLUPacked",
+            "DecomposedMultiheadAttention",
+            "DecomposedQkvAttention",
+            "DecomposedMlpBlock",
+        }
+        if cls_name in safe_names:
+            return True
+
+        safe_prefixes = (
+            "timm.models.vision_transformer",
+            "timm.layers.attention",
+            "timm.layers.mlp",
+        )
+        return module_name.startswith(safe_prefixes)
+
+    def _fx_quantize_submodules(self, module: nn.Module, target_funcs: dict) -> bool:
+        modified_any = False
+
+        for child_name, child in list(module.named_children()):
+            if self._is_safe_fx_submodule(child):
+                quantized_child, modified = self._fx_quantize_module_graph(child, target_funcs)
+                if modified and quantized_child is not None:
+                    setattr(module, child_name, quantized_child)
+                    modified_any = True
+                    continue
+
+            if self._fx_quantize_submodules(child, target_funcs):
+                modified_any = True
+
+        return modified_any
 
     def prepare_batch(self, batch):
         """Prepare a batch for model input."""

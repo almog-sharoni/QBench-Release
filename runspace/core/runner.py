@@ -66,7 +66,7 @@ class Runner:
         adapter_cfg = config.get('adapter', {}) or {}
         quant_cfg = config.get('quantization', {}) or {}
 
-        quantized_ops = adapter_cfg.get('quantized_ops', [])
+        quantized_ops = adapter_cfg.get('quantized_ops', ['all'])
         if quantized_ops is None:
             quantized_ops = []
         if not isinstance(quantized_ops, list):
@@ -127,7 +127,7 @@ class Runner:
         adapter_cfg = config.get('adapter', {}) or {}
         quant_cfg = config.get('quantization', {}) or {}
 
-        quantized_ops = adapter_cfg.get('quantized_ops', ['Conv2d'])
+        quantized_ops = adapter_cfg.get('quantized_ops', ['all'])
         if quantized_ops is None:
             quantized_ops = []
         if not isinstance(quantized_ops, list):

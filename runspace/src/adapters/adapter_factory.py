@@ -79,7 +79,7 @@ def create_adapter(config: dict) -> BaseAdapter:
     weights = model_config.get('weights', None)
     
     quantize_first_layer = adapter_config.get('quantize_first_layer', False)
-    quantized_ops = adapter_config.get('quantized_ops', ['Conv2d'])
+    quantized_ops = adapter_config.get('quantized_ops', ['all'])
     excluded_ops = adapter_config.get('excluded_ops', [])
     fold_layers = adapter_config.get('fold_layers', False)
     weight_quantization = adapter_config.get('weight_quantization', True)
@@ -118,6 +118,38 @@ def create_adapter(config: dict) -> BaseAdapter:
     # Extract layer-specific config
     # Can be in quantization.layers or adapter.layers (prefer quantization.layers)
     layer_config = quantization_config.get('layers', adapter_config.get('layers', None))
+
+    # Merge forced-FP8 overrides from a cache simulation result file.
+    # quantization.cache_simulation_path points to a simulation_results.json produced by
+    # simulate_cache.py.  The forced_fp8_layers block in that file is merged on top of any
+    # existing layer_config entries so those layers are always pinned to FP8 regardless of
+    # the global quantization format chosen for the run.
+    cache_sim_path = quantization_config.get('cache_simulation_path', None)
+    if cache_sim_path:
+        abs_path = os.path.abspath(cache_sim_path)
+        if not os.path.isfile(abs_path):
+            import warnings
+            warnings.warn(f"cache_simulation_path '{abs_path}' not found — skipping FP8 overrides.")
+        else:
+            with open(abs_path, 'r') as _f:
+                _sim = json.load(_f)
+            _off_chip = _sim.get('off_chip_layers', [])
+            if _off_chip:
+                # Build a layer config entry for each off-chip layer using this run's
+                # global format and modes so the format decision stays with the runner.
+                _sim_overrides = {
+                    name: {
+                        'format':      quantization_type,
+                        'input_format': input_quantization_type or quantization_type,
+                        'mode':        quant_mode,
+                        'weight_mode': weight_mode,
+                    }
+                    for name in _off_chip
+                }
+                # Explicit layer_config entries take priority over simulation overrides.
+                layer_config = dict(_sim_overrides, **(layer_config or {}))
+                print(f"[CacheSim] Applied {len(_off_chip)} off-chip layer overrides "
+                      f"(format={quantization_type}, mode={quant_mode}) from {abs_path}")
     
     # Check if per-chunk format mode is enabled
     per_chunk_format = quantization_config.get('per_chunk_format', False)
@@ -323,7 +355,7 @@ def validate_config(config: dict):
     schema = {
         'model': ['name', 'pipeline', 'source', 'weights', 'repo_path', 'sg_weights', 'sp_config', 'sg_config'],
         'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'weight_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size', 'skip_calibration', 'build_quantized', 'quantize_components'],
-        'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format', 'strict_format_check'],
+        'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format', 'strict_format_check', 'cache_simulation_path'],
         'dataset': ['name', 'path', 'batch_size', 'num_workers', 'image_size', 'grayscale', 'pairs_file', 'max_pairs', 'resize_size', 'multiprocessing_context', 'persistent_workers', 'prefetch_factor'],
         'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms', 'max_batches', 'graph_only', 'dynamic_input_quant', 'input_quant', 'save_visualizations', 'num_viz_samples']
     }

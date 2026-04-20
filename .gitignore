@@ -7,6 +7,8 @@ outputs/
 tests/
 .cache/
 runspace/inputs/scannet/
+./claude
+
 # Apptainer
 Apptainer.def
 qbench_sandbox/
