@@ -2,13 +2,17 @@ target_pipeline: superpoint_superglue
 
 adapter:
   type: feature_matching
+  quantize_components: ["superglue"]
   quantized_ops: ["all"]
   weight_quantization: true
   input_quantization: true
 
 quantization:
   format: fp8_e4m3
-  weight_mode: channel
+  mode: chunk
+  chunk_size: 128
+  weight_chunk_size: 128
+  weight_mode: chunk
   calib_method: max
   strict_format_check: true
 

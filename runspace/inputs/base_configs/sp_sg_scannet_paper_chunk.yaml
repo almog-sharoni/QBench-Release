@@ -8,7 +8,10 @@ adapter:
 
 quantization:
   format: fp8_e4m3
-  weight_mode: channel
+  mode: chunk
+  chunk_size: 128
+  weight_chunk_size: 128
+  weight_mode: chunk
   calib_method: max
   strict_format_check: true
 

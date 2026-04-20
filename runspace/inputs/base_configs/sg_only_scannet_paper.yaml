@@ -2,6 +2,7 @@ target_pipeline: superpoint_superglue
 
 adapter:
   type: feature_matching
+  quantize_components: ["superglue"]
   quantized_ops: ["all"]
   weight_quantization: true
   input_quantization: true
