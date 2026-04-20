@@ -117,7 +117,7 @@ class LUTActivation:
         return output, q_output
 
 
-@OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True, compliance_status="FP32 activation")
+@OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True, passthrough=True)
 class QuantReLU(nn.ReLU):
     """
     Quantized ReLU using LUT.

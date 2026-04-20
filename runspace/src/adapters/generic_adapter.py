@@ -48,6 +48,7 @@ class GenericAdapter(BaseAdapter):
         skip_calibration: bool = False,
         build_quantized: bool = True,
         target_module_prefixes: list = None,
+        strict_format_check: bool = False,
     ):
         super().__init__()
         self.target_module_prefixes = target_module_prefixes or []
@@ -83,6 +84,7 @@ class GenericAdapter(BaseAdapter):
         self.simulate_tf32_accum = simulate_tf32_accum
         self.rounding = rounding
         self.input_chunk_size = input_chunk_size
+        self.strict_format_check = bool(strict_format_check)
         if not self.build_quantized:
             print(
                 f"GenericAdapter: build_quantized=False for {self.model_name} "
@@ -441,6 +443,64 @@ class GenericAdapter(BaseAdapter):
         """Replace standard layers with quantized versions."""
         self._first_layer_found = False
         self._recursive_replace(model)
+        self._configure_remaining_mixin_ops(model)
+
+    def _configure_remaining_mixin_ops(self, model: nn.Module):
+        """Propagate adapter config + per-layer overrides to QuantizedLayerMixin ops
+        that weren't touched by _recursive_replace. Covers Observed* ops registered
+        without original_cls (ObservedAttentionScores / Apply / Concat / Add /
+        DescMatmul) whose q_type would otherwise stay at the ctor default regardless
+        of what config.yaml says."""
+        # Match the absolute prefix SuperGlue uses ([superglue.py:51]) so the
+        # QuantizedLayerMixin class identity is the same as the one Observed* ops
+        # inherit from. A relative import would bind to src.ops.quant_base (a
+        # separate module when both runspace/ and the repo root are on sys.path).
+        from runspace.src.ops.quant_base import QuantizedLayerMixin
+
+        supported_ops_values = tuple(OpRegistry.get_supported_ops().values())
+
+        for full_name, module in model.named_modules():
+            if not isinstance(module, QuantizedLayerMixin):
+                continue
+            # Already configured by Case 1/2 (class is a registered quantized op).
+            if type(module) in supported_ops_values:
+                continue
+
+            # Resolve settings: global config + per-layer override
+            # (mirrors _create_quantized_module's resolution block).
+            q_type = self.quantization_type
+            bias = self.quantization_bias
+            input_q_type = self.input_quantization_type
+            input_mode = self.quant_mode
+            input_chunk_size = self.input_chunk_size if self.input_chunk_size is not None else self.chunk_size
+            rounding = self.rounding
+
+            layer_conf = self.layer_config.get(full_name, {}) if isinstance(self.layer_config, dict) else {}
+            if 'type' in layer_conf:
+                q_type = layer_conf['type']
+            elif 'format' in layer_conf:
+                q_type = layer_conf['format']
+            if 'bias' in layer_conf:
+                bias = layer_conf['bias']
+            if 'input_format' in layer_conf:
+                input_q_type = layer_conf['input_format']
+            if 'mode' in layer_conf:
+                input_mode = layer_conf['mode']
+            if 'chunk_size' in layer_conf:
+                input_chunk_size = layer_conf['chunk_size']
+            if 'rounding' in layer_conf:
+                rounding = layer_conf['rounding']
+
+            module.q_type = q_type
+            module.quantization_bias = bias
+            module.input_q_type = input_q_type if input_q_type else q_type
+            module.input_quantization = self.input_quantization
+            module.weight_quantization = self.weight_quantization
+            module.input_mode = input_mode
+            module.input_chunk_size = input_chunk_size
+            module.rounding = rounding
+            module.layer_name = full_name
+            module.run_id = getattr(self, 'run_id', 'default')
 
     def _create_quantized_module(self, module: nn.Module, QuantClass: type, name: str = "") -> nn.Module:
         """Creates a quantized module from the original module."""

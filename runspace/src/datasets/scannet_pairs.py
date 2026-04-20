@@ -1,8 +1,8 @@
 import os
+import cv2
+import numpy as np
 import torch
-from PIL import Image
 from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms as T
 
 from src.datasets.dataset_registry import register_dataset
 
@@ -13,18 +13,15 @@ def _resolve_path(path: str, root: str) -> str:
     return os.path.join(root, path)
 
 
-def _build_resize(size) -> T.Resize:
-    if isinstance(size, (list, tuple)):
-        return T.Resize(list(size))
-    return T.Resize(size)
-
-
-def _load_image(path: str, grayscale: bool, resize: T.Resize) -> torch.Tensor:
-    img = Image.open(path).convert('RGB')
-    img = resize(img)
-    if grayscale:
-        img = T.Grayscale(num_output_channels=1)(img)
-    return T.ToTensor()(img)
+def _read_gray(path: str, new_w: int, new_h: int) -> tuple[torch.Tensor, int, int]:
+    """Mirror SuperGlue match_pairs.py read_image: decode as luma JPEG, cv2-resize."""
+    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise FileNotFoundError(f"could not read image: {path}")
+    orig_h, orig_w = img.shape[:2]
+    img = cv2.resize(img, (new_w, new_h))
+    tensor = torch.from_numpy(img.astype(np.float32) / 255.0)[None]
+    return tensor, orig_w, orig_h
 
 
 def _scale_K(K: torch.Tensor, orig_w: int, orig_h: int,
@@ -79,7 +76,6 @@ class ScanNetPairsDataset(Dataset):
                  max_pairs: int = -1):
         self.root = root
         self.image_size = image_size
-        self.resize = _build_resize(image_size)
         self.pairs = _parse_pairs_file(pairs_file)
         if max_pairs > 0:
             self.pairs = self.pairs[:max_pairs]
@@ -92,18 +88,9 @@ class ScanNetPairsDataset(Dataset):
         path0 = _resolve_path(p['img0'], self.root)
         path1 = _resolve_path(p['img1'], self.root)
 
-        orig0 = Image.open(path0)
-        orig_w0, orig_h0 = orig0.size
-        orig1 = Image.open(path1)
-        orig_w1, orig_h1 = orig1.size
-
         new_h, new_w = self.image_size
-        img0 = self.resize(orig0.convert('RGB'))
-        img0 = T.Grayscale(num_output_channels=1)(img0)
-        img0 = T.ToTensor()(img0)
-        img1 = self.resize(orig1.convert('RGB'))
-        img1 = T.Grayscale(num_output_channels=1)(img1)
-        img1 = T.ToTensor()(img1)
+        img0, orig_w0, orig_h0 = _read_gray(path0, new_w, new_h)
+        img1, orig_w1, orig_h1 = _read_gray(path1, new_w, new_h)
 
         K0 = _scale_K(p['K0'], orig_w0, orig_h0, new_w, new_h)
         K1 = _scale_K(p['K1'], orig_w1, orig_h1, new_w, new_h)

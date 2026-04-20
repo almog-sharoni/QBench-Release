@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ..registry.op_registry import OpRegistry
+from .quant_base import QuantizedLayerMixin
 
 
 def _simple_nms(scores, nms_radius: int):
@@ -40,14 +41,14 @@ def _top_k_keypoints(keypoints, scores, k: int):
 # Passthrough / linear ops — like ReLU, value representation unchanged
 # ---------------------------------------------------------------------------
 
-@OpRegistry.register("ObservedDiscardTrash", compliance_status="FP32 activation")
+@OpRegistry.register("ObservedDiscardTrash", passthrough=True)
 class ObservedDiscardTrash(nn.Module):
     """Drop the dustbin (last) score channel (stageB3)."""
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x[:, :-1]
 
 
-@OpRegistry.register("ObservedReorderReshape", compliance_status="FP32 activation")
+@OpRegistry.register("ObservedReorderReshape", passthrough=True)
 class ObservedReorderReshape(nn.Module):
     """Pixel-shuffle reorder/reshape (stageB4-B7): (B,64,H/8,W/8) -> (B,H,W)."""
     def forward(self, scores: torch.Tensor) -> torch.Tensor:
@@ -69,7 +70,7 @@ class ObservedThreshold(nn.Module):
         return keypoints, score_list
 
 
-@OpRegistry.register("ObservedRemoveBorders", compliance_status="FP32 activation")
+@OpRegistry.register("ObservedRemoveBorders", passthrough=True)
 class ObservedRemoveBorders(nn.Module):
     """Remove keypoints too close to image borders (stageB9)."""
     def __init__(self, border: int = 4):
@@ -82,7 +83,7 @@ class ObservedRemoveBorders(nn.Module):
         return list(zip(*result))
 
 
-@OpRegistry.register("ObservedTopKKeypoints", compliance_status="FP32 activation")
+@OpRegistry.register("ObservedTopKKeypoints", passthrough=True)
 class ObservedTopKKeypoints(nn.Module):
     """Keep only the top-k highest-scoring keypoints (stageB13)."""
     def __init__(self, max_keypoints: int = -1):
@@ -97,7 +98,7 @@ class ObservedTopKKeypoints(nn.Module):
         return list(zip(*result))
 
 
-@OpRegistry.register("ObservedKeypointFlip", compliance_status="FP32 activation")
+@OpRegistry.register("ObservedKeypointFlip", passthrough=True)
 class ObservedKeypointFlip(nn.Module):
     """Convert keypoint coords from (row, col) to (x, y) order (stageB14)."""
     def forward(self, keypoints):
@@ -115,7 +116,7 @@ class ObservedL2Norm(nn.Module):
 # NMS — max-selection like MaxPool, no arithmetic (UNDER CONSTRUCTION)
 # ---------------------------------------------------------------------------
 
-@OpRegistry.register("ObservedSimpleNMS", under_construction=True)
+@OpRegistry.register("ObservedSimpleNMS", passthrough=True)
 class ObservedSimpleNMS(nn.Module):
     """NMS via repeated max_pool2d (stageB8). Pure max-selection — no arithmetic."""
     def __init__(self, radius: int = 4):
@@ -189,52 +190,104 @@ class ObservedKeypointNormalize(nn.Module):
         return (kpts - center[:, None, :]) / scaling[:, None, :]
 
 
-@OpRegistry.register("ObservedConcat", compliance_status="FP32 activation")
-class ObservedConcat(nn.Module):
-    """torch.cat wrapped as a module."""
-    def __init__(self, dim: int = 1):
+@OpRegistry.register("ObservedConcat", is_activation=False)
+class ObservedConcat(nn.Module, QuantizedLayerMixin):
+    """torch.cat wrapped as a module; quantizes each operand (mirrors QuantCat)."""
+    def __init__(self, dim: int = 1, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
         super().__init__()
         self.dim = dim
+        self.q_type = q_type
+        self.quantization_bias = quantization_bias
+        self.quant_mode = quant_mode
+        self.chunk_size = chunk_size
+        self.input_quantization = False
 
     def forward(self, *tensors):
         if len(tensors) == 1 and isinstance(tensors[0], (list, tuple)):
-            return torch.cat(tensors[0], dim=self.dim)
-        return torch.cat(tensors, dim=self.dim)
+            tensors = tensors[0]
+        quantized = [self.quantize_input(t) for t in tensors]
+        return torch.cat(quantized, dim=self.dim)
 
 
-@OpRegistry.register("ObservedAdd", compliance_status="FP32 activation")
-class ObservedAdd(nn.Module):
-    """Element-wise add (residual connections)."""
+@OpRegistry.register("ObservedAdd", is_activation=False)
+class ObservedAdd(nn.Module, QuantizedLayerMixin):
+    """Element-wise add (residual connections); quantizes each operand (mirrors QuantAdd)."""
+    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+        super().__init__()
+        self.q_type = q_type
+        self.quantization_bias = quantization_bias
+        self.quant_mode = quant_mode
+        self.chunk_size = chunk_size
+        self.input_quantization = False
+
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        return x + y
+        q1 = self.quantize_input(x)
+        q2 = self.quantize_input(y)
+        return torch.add(q1, q2)
 
 
 # --- Attention matmul / similarity ops --------------------------------------
 
-@OpRegistry.register("ObservedAttentionScores", under_construction=True)
-class ObservedAttentionScores(nn.Module):
-    """Q·K^T scaled-dot-product (multi-head einsum + scale)."""
+@OpRegistry.register("ObservedAttentionScores", is_activation=False)
+class ObservedAttentionScores(nn.Module, QuantizedLayerMixin):
+    """Q·K^T scaled-dot-product (multi-head einsum + √d post-scale).
+
+    Quantizes both operands to FP8 before the einsum, mirroring QuantMatMul.
+    """
+    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+        super().__init__()
+        self.q_type = q_type
+        self.quantization_bias = quantization_bias
+        self.quant_mode = quant_mode
+        self.chunk_size = chunk_size
+        self.input_quantization = False
+
     def forward(self, query: torch.Tensor, key: torch.Tensor) -> torch.Tensor:
-        dim = query.shape[1]
-        return torch.einsum('bdhn,bdhm->bhnm', query, key) / dim**0.5
+        q = self.quantize_input(query)
+        k = self.quantize_input(key)
+        dim = q.shape[1]
+        return torch.einsum('bdhn,bdhm->bhnm', q, k) / dim**0.5
 
 
-@OpRegistry.register("ObservedAttentionApply", under_construction=True)
-class ObservedAttentionApply(nn.Module):
-    """Score·V einsum (multi-head)."""
+@OpRegistry.register("ObservedAttentionApply", is_activation=False)
+class ObservedAttentionApply(nn.Module, QuantizedLayerMixin):
+    """Score·V einsum (multi-head).
+
+    Quantizes both operands to FP8 before the einsum, mirroring QuantMatMul.
+    """
+    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+        super().__init__()
+        self.q_type = q_type
+        self.quantization_bias = quantization_bias
+        self.quant_mode = quant_mode
+        self.chunk_size = chunk_size
+        self.input_quantization = False
+
     def forward(self, prob: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
-        return torch.einsum('bhnm,bdhm->bdhn', prob, value)
+        p = self.quantize_input(prob)
+        v = self.quantize_input(value)
+        return torch.einsum('bhnm,bdhm->bdhn', p, v)
 
 
-@OpRegistry.register("ObservedDescMatmul", under_construction=True)
-class ObservedDescMatmul(nn.Module):
-    """Descriptor similarity matmul: einsum + scale by sqrt(dim)."""
-    def __init__(self, descriptor_dim: int):
+@OpRegistry.register("ObservedDescMatmul", is_activation=False)
+class ObservedDescMatmul(nn.Module, QuantizedLayerMixin):
+    """Descriptor similarity einsum (desc0 · desc1ᵀ / √d).
+
+    Quantizes both operands to FP8 before the einsum, mirroring QuantMatMul.
+    """
+    def __init__(self, descriptor_dim: int, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
         super().__init__()
         self.scale = descriptor_dim ** 0.5
+        self.q_type = q_type
+        self.quantization_bias = quantization_bias
+        self.quant_mode = quant_mode
+        self.chunk_size = chunk_size
+        self.input_quantization = False
 
     def forward(self, mdesc0: torch.Tensor, mdesc1: torch.Tensor) -> torch.Tensor:
-        return torch.einsum('bdn,bdm->bnm', mdesc0, mdesc1) / self.scale
+        q0 = self.quantize_input(mdesc0)
+        q1 = self.quantize_input(mdesc1)
+        return torch.einsum('bdn,bdm->bnm', q0, q1) / self.scale
 
 
 # --- FP32-required op --------------------------------------------------------

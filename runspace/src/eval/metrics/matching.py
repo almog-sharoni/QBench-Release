@@ -64,7 +64,7 @@ def _pose_auc(errors: list[float], thresholds: list[int]) -> list[float]:
     _trapz = getattr(np, 'trapezoid', None) or np.trapz
     aucs = []
     for thr in thresholds:
-        last = np.searchsorted(errors_ext, thr, side='right')
+        last = np.searchsorted(errors_ext, thr)
         e = np.concatenate([errors_ext[:last], [float(thr)]])
         r = np.concatenate([recall_ext[:last], [recall_ext[last - 1]]])
         aucs.append(float(_trapz(r, e) / thr))
@@ -80,7 +80,7 @@ def _estimate_pose(kpts0: np.ndarray, kpts1: np.ndarray,
         return None
     if len(kpts0) < 5:
         return None
-    f_mean = np.mean([K0[0, 0], K1[1, 1], K0[1, 1], K1[0, 0]])
+    f_mean = np.mean([K0[0, 0], K1[1, 1], K0[0, 0], K1[1, 1]])
     norm_thresh = thresh / f_mean
     kpts0n = (kpts0 - K0[[0, 1], [2, 2]][None]) / K0[[0, 1], [0, 1]][None]
     kpts1n = (kpts1 - K1[[0, 1], [2, 2]][None]) / K1[[0, 1], [0, 1]][None]
@@ -197,7 +197,7 @@ class MatchingMetrics:
                 self._sum_match_certainty += float(sc0[valid].mean())
                 self._pairs_with_matches += 1
 
-            if len(kp0) > 0:
+            if not has_gt and len(kp0) > 0:
                 self._sum_matching_score += num_matches / len(kp0)
 
             if has_gt and num_matches > 0:
@@ -210,6 +210,8 @@ class MatchingMetrics:
                 precision = float(correct.mean()) if len(correct) > 0 else 0.0
                 num_correct = int(correct.sum())
                 self._sum_precision += precision
+                if len(kp0) > 0:
+                    self._sum_matching_score += num_correct / len(kp0)
 
                 # Repeatability: fraction of kp0 whose nearest kp1 under the GT
                 # epipolar geometry is within EPIPOLAR_THRESH Sampson distance.

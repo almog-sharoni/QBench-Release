@@ -10,9 +10,10 @@ class OpRegistry:
     _compliance_status = {} # Mapping from op_name -> status message (if custom)
     _supported_functions = set() # Set of supported functional operations (e.g. F.conv2d)
     _under_construction_ops = set() # Set of ops marked as under construction
+    _passthrough_ops = set() # Ops that forward to the next quantized layer without W/A quant of their own
 
     @classmethod
-    def register(cls, op_name: str, original_cls=None, is_activation=False, compliance_status=None, under_construction=False):
+    def register(cls, op_name: str, original_cls=None, is_activation=False, compliance_status=None, under_construction=False, passthrough=False):
         def decorator(cls_impl):
             # print(f"DEBUG: Registering {op_name} (original={original_cls}) in OpRegistry {id(cls)}")
             cls._registry[op_name] = cls_impl
@@ -24,6 +25,8 @@ class OpRegistry:
                 cls._compliance_status[op_name] = compliance_status
             if under_construction:
                 cls._under_construction_ops.add(op_name)
+            if passthrough:
+                cls._passthrough_ops.add(op_name)
             return cls_impl
         return decorator
 
@@ -72,6 +75,11 @@ class OpRegistry:
     def is_under_construction(cls, op_name: str):
         """Checks if the given op is marked as under construction."""
         return op_name in cls._under_construction_ops
+
+    @classmethod
+    def is_passthrough(cls, op_name: str):
+        """Checks if the given op is a pass-through (no W/A quant of its own)."""
+        return op_name in cls._passthrough_ops
 
 # Populate standard supported functions
 import torch

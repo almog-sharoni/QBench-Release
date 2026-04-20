@@ -963,82 +963,32 @@ def check_fp8_compliance(tensor: torch.Tensor, valid_table: torch.Tensor = None,
              return False, count, examples
         return True, 0, []
 
-    # For FP8/FP4/FP*, we need the table
-    if valid_table is None:
-        if q_type == "fp8_e4m3":
-            valid_table = _generate_fp8_e4m3_table(tensor.device, bias=bias if bias is not None else 7)
-        elif q_type == "fp8_e5m2":
-            valid_table = _generate_fp8_e5m2_table(tensor.device, bias=bias if bias is not None else 15)
-        elif (q_type.startswith("fp") or q_type.startswith("ufp") or q_type.startswith("efp") or q_type.startswith("uefp")) and "_e" in q_type and "m" in q_type:
-             # Generic FP generation
-             try:
-                 is_efp = "efp" in q_type
-                 if is_efp:
-                     is_signed = q_type.startswith("efp")
-                 else:
-                     is_signed = q_type.startswith("fp")
-                 
-                 fpx_part = q_type.split('_')[0]
-                 e_part = q_type.split('_e')[1]
-                 exp_bits = int(e_part.split('m')[0])
-                 mant_bits = int(e_part.split('m')[1])
-                 
-                 # Calculate stored bits
-                 total_iter_bits = exp_bits + mant_bits
-                 if is_signed:
-                     total_iter_bits += 1
-                     
-                 # Calculate default bias if not provided
-                 if bias is None:
-                     bias = (1 << (exp_bits - 1)) - 1 if exp_bits > 0 else 0
-                 
-                 if is_efp:
-                     valid_table = _generate_efp_generic_table(tensor.device, total_iter_bits, exp_bits, mant_bits, bias, signed=is_signed)
-                 else:
-                     valid_table = _generate_fp_generic_table(tensor.device, total_iter_bits, exp_bits, mant_bits, bias, signed=is_signed)
-             except:
-                  raise ValueError(f"Could not parse or generate table for format {q_type}")
-        else:
-             raise ValueError(f"Unknown q_type: {q_type}")
-
-    valid_non_nan = valid_table[~torch.isnan(valid_table)]
+    # For FP formats: a value is valid iff it is a fixed point of the kernel —
+    # i.e., running quantize() on it yields itself. This ties the checker to the
+    # same simulator that produces activations/weights at runtime, so the valid
+    # set is exactly what the kernel can emit (not the mathematically-complete
+    # FP grid, which includes subnormal/exponent states the kernel doesn't
+    # synthesize).
     tensor_flat = tensor.contiguous().view(-1)
-    non_nan_vals = tensor_flat[~torch.isnan(tensor_flat)]
-    
-    if len(non_nan_vals) == 0:
+    finite_mask = torch.isfinite(tensor_flat)
+    finite_vals = tensor_flat[finite_mask]
+    if finite_vals.numel() == 0:
         return True, 0, []
-        
-    # Chunking to avoid OOM
-    # With N=1M and M=256 (FP8), matrix is 1M * 256 * 4 bytes = 1GB.
-    # This is fine for 1 config, but in parallel setup, multiple processes/threads might stress it?
-    # No, this runs sequentially in main process usually.
-    # However, for broader compatibility and speed, let's reduce chunk size purely for safety.
-    chunk_size = 10000 
-    num_chunks = (len(non_nan_vals) + chunk_size - 1) // chunk_size
-    
-    total_invalid = 0
-    examples = []
-    
-    for i in range(num_chunks):
-        chunk = non_nan_vals[i*chunk_size : (i+1)*chunk_size]
-        
-        # Broadcasting [Chunk, 1] - [1, Table] -> [Chunk, Table]
-        # Memory: Chunk * TableSize * 4 bytes
-        # 10k * 256 * 4 = 10MB. Very safe.
-        diffs = torch.abs(chunk.unsqueeze(1) - valid_non_nan.unsqueeze(0))
-        min_diffs = diffs.min(dim=1).values
-        
-        invalid_mask = min_diffs > rtol * torch.abs(chunk).clamp(min=1e-10)
-        
-        if invalid_mask.any():
-            count = invalid_mask.sum().item()
-            total_invalid += count
-            if len(examples) < 5:
-                examples.extend(chunk[invalid_mask][:5 - len(examples)].tolist())
+
+    # `quantize` dispatches on q_type and ends up in quantize_fp_generic for
+    # FP formats. We compute what the kernel would produce for each value and
+    # compare.
+    expected = quantize(finite_vals, q_type=q_type, rounding="nearest")
+    diff = (finite_vals - expected).abs()
+    tol = rtol * finite_vals.abs().clamp(min=1e-10)
+    invalid_mask = diff > tol
+
+    total_invalid = int(invalid_mask.sum().item())
+    examples = finite_vals[invalid_mask][:5].tolist() if total_invalid > 0 else []
 
     if total_invalid > 0:
         return False, total_invalid, examples
-        
+
     return True, 0, []
 
 def assert_fp8_valid(tensor: torch.Tensor, rtol: float = 1e-5, q_type: str = "fp8_e4m3", bias: int = None) -> None:

@@ -4,7 +4,7 @@ from ..registry.op_registry import OpRegistry
 from .quant_base import QuantizedLayerMixin
 
 
-@OpRegistry.register("QuantMaxPool2d", original_cls=nn.MaxPool2d , under_construction=True)
+@OpRegistry.register("QuantMaxPool2d", original_cls=nn.MaxPool2d, passthrough=True)
 class QuantMaxPool2d(nn.MaxPool2d, QuantizedLayerMixin):
     """
     Quantized MaxPool2d layer.
