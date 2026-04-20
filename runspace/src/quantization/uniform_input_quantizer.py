@@ -10,6 +10,16 @@ class UniformInputQuantizer:
     Applies one fixed quantization format to layer inputs through pre-hooks.
     Captures quantization error statistics for reporting/logging.
     """
+    _FUNCTIONAL_OP_NAMES = (
+        "QuantMatMul",
+        "QuantBMM",
+        "QuantAdd",
+        "QuantSub",
+        "QuantMul",
+        "QuantDiv",
+        "QuantCat",
+    )
+
     def __init__(self, model, fmt, chunk_size=128):
         self.model = model
         self.fmt = fmt
@@ -17,6 +27,14 @@ class UniformInputQuantizer:
         self.hooks = []
         self.layer_stats = {}
         self.supported_ops = tuple(OpRegistry.get_supported_ops().values())
+        functional_ops = []
+        for op_name in self._FUNCTIONAL_OP_NAMES:
+            try:
+                functional_ops.append(OpRegistry.get(op_name))
+            except Exception:
+                continue
+        self.functional_ops = tuple(functional_ops)
+        self.hookable_ops = tuple(dict.fromkeys(self.supported_ops + self.functional_ops))
         self.stats = {
             'sum_l1_err': 0.0,
             'sum_mse_err': 0.0,
@@ -84,7 +102,7 @@ class UniformInputQuantizer:
 
     def register_hooks(self):
         for name, module in self.model.named_modules():
-            if isinstance(module, self.supported_ops) or isinstance(module, (nn.Conv2d, nn.Linear)):
+            if isinstance(module, self.hookable_ops) or isinstance(module, (nn.Conv2d, nn.Linear)):
                 self.hooks.append(module.register_forward_pre_hook(self._make_hook(name)))
 
     def cleanup(self):

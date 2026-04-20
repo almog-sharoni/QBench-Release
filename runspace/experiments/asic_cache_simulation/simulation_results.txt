@@ -1,0 +1,29 @@
+ASIC Cache Simulation Results (Detailed)
+Cache: 2.0 MB, Banks: 16, MetaBits: 16
+
+Layer Name                                    | Type       | Input    | Weights  | Output   | Banked   | Next Perm  | Status
+----------------------------------------------------------------------------------------------------------------------------
+conv1                                         | Conv2d     |   0.161MB |   0.010MB |   0.861MB |   0.875MB |     0.125MB | OK
+layer1.0.conv1                                | Conv2d     |   0.215MB |   0.040MB |   0.215MB |   0.250MB |     0.125MB | OK
+layer1.0.conv2                                | Conv2d     |   0.215MB |   0.040MB |   0.215MB |   0.250MB |     0.125MB | OK
+layer1.1.conv1                                | Conv2d     |   0.215MB |   0.040MB |   0.215MB |   0.250MB |     0.125MB | OK
+layer1.1.conv2                                | Conv2d     |   0.215MB |   0.040MB |   0.215MB |   0.250MB |     0.125MB | OK
+layer2.0.conv1                                | Conv2d     |   0.215MB |   0.079MB |   0.108MB |   0.125MB |     0.250MB | OK
+layer2.0.conv2                                | Conv2d     |   0.108MB |   0.158MB |   0.108MB |   0.125MB |     0.125MB | OK
+layer2.0.downsample.0                         | Conv2d     |   0.215MB |   0.009MB |   0.108MB |   0.125MB |     0.250MB | OK
+layer2.1.conv1                                | Conv2d     |   0.108MB |   0.158MB |   0.108MB |   0.125MB |     0.250MB | OK
+layer2.1.conv2                                | Conv2d     |   0.108MB |   0.158MB |   0.108MB |   0.125MB |     0.375MB | OK
+layer3.0.conv1                                | Conv2d     |   0.108MB |   0.316MB |   0.054MB |   0.125MB |     0.750MB | OK
+layer3.0.conv2                                | Conv2d     |   0.054MB |   0.633MB |   0.054MB |   0.125MB |     0.125MB | OK
+layer3.0.downsample.0                         | Conv2d     |   0.108MB |   0.035MB |   0.054MB |   0.125MB |     0.750MB | OK
+layer3.1.conv1                                | Conv2d     |   0.054MB |   0.633MB |   0.054MB |   0.125MB |     0.750MB | OK
+layer3.1.conv2                                | Conv2d     |   0.054MB |   0.633MB |   0.054MB |   0.125MB |     1.375MB | OK
+layer4.0.conv1                                | Conv2d     |   0.054MB |   1.266MB |   0.027MB |   0.125MB |     2.625MB | QUANTIZE
+  [Reason] BankedOutput(0.125) + BankedNextPerm(2.625) > Cache(2.00) (Next: layer4.0.conv2)
+layer4.0.conv2                                | Conv2d     |   0.027MB |   2.531MB |   0.027MB |   0.125MB |     0.250MB | OK
+layer4.0.downsample.0                         | Conv2d     |   0.054MB |   0.141MB |   0.027MB |   0.125MB |     2.625MB | QUANTIZE
+  [Reason] BankedOutput(0.125) + BankedNextPerm(2.625) > Cache(2.00) (Next: layer4.1.conv1)
+layer4.1.conv1                                | Conv2d     |   0.027MB |   2.531MB |   0.027MB |   0.125MB |     2.625MB | QUANTIZE
+  [Reason] BankedOutput(0.125) + BankedNextPerm(2.625) > Cache(2.00) (Next: layer4.1.conv2)
+layer4.1.conv2                                | Conv2d     |   0.027MB |   2.531MB |   0.027MB |   0.125MB |     0.125MB | OK
+fc                                            | Linear     |   0.001MB |   0.549MB |   0.001MB |   0.125MB |     0.000MB | OK

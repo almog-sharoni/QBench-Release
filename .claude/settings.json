@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(./apptainer.sh python:*)",
-      "Bash(python3 -c \":*)"
+      "Bash(python3 -c \":*)",
+      "Bash(python3 -c \"import json; f=open\\('/data/almog/Projects/QBench-Release/runspace/experiments/asic_cache_simulation/simulation_results.json'\\); data=json.load\\(f\\); print\\('Top-level keys:', list\\(data.keys\\(\\)\\)\\); print\\('Metadata:', data['metadata']\\); print\\('Summary:', data['summary']\\); print\\('Number of layers:', len\\(data['layers']\\)\\); print\\('Layer 0 keys:', list\\(data['layers'][0].keys\\(\\)\\) if data['layers'] else 'N/A'\\)\")",
+      "Bash(sqlite3 runspace/database/runs.db \".schema\")"
     ]
   }
 }

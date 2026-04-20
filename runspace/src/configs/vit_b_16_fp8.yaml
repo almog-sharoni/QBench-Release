@@ -8,7 +8,7 @@ model:
 adapter:
   type: generic
   quantize_first_layer: false
-  quantized_ops: ["Conv2d", "Linear"]
+  quantized_ops: ["all"]
   input_quantization: false
   quantization_type: fp8_e4m3
 

@@ -11,57 +11,8 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.registry.op_registry import OpRegistry
-from src.ops.quant_base import QuantizedLayerMixin
-from src.ops.quant_mha import DecomposedMultiheadAttention, DecomposedQkvAttention, DecomposedMlpBlock
-
-import operator as _operator
-
-# Arithmetic operators that produce integers when their inputs are integers.
-_INT_ARITH_OPS = {
-    _operator.add, _operator.sub, _operator.mul,
-    _operator.truediv, _operator.floordiv, _operator.mod, _operator.pow,
-    _operator.rshift, _operator.lshift,
-    _operator.neg, _operator.abs,
-    _operator.getitem,          # e.g. shape[0]
-    _operator.and_, _operator.or_, _operator.xor,
-}
-
-
-def _find_non_tensor_nodes(graph: torch.fx.Graph) -> set:
-    """
-    Forward-propagate an 'integer / non-tensor' label through an FX graph.
-
-    Seeds (nodes known to produce integers):
-      • getattr(x, 'shape')  → torch.Size
-      • call_method 'size'   → int
-      • call_method 'dim' / 'numel' / 'stride' / 'item'  → int
-
-    Propagation rule: an arithmetic call_function node is non-tensor if
-    *all* of its Node-valued args are already non-tensor.
-    """
-    non_tensor: set = set()
-
-    for node in graph.nodes:          # graph is topologically sorted
-        if node.op == 'call_function':
-            target = node.target
-
-            # getattr(x, 'shape') → torch.Size object
-            if target is getattr and len(node.args) >= 2 and node.args[1] == 'shape':
-                non_tensor.add(node.name)
-                continue
-
-            if target in _INT_ARITH_OPS:
-                # Non-tensor only when every Node input is already non-tensor.
-                # Constant (non-Node) args are always fine (they're Python ints/floats).
-                node_inputs = [a for a in node.args if isinstance(a, torch.fx.Node)]
-                if node_inputs and all(a.name in non_tensor for a in node_inputs):
-                    non_tensor.add(node.name)
-
-        elif node.op == 'call_method':
-            if node.target in {'size', 'dim', 'numel', 'stride', 'item', 'tolist'}:
-                non_tensor.add(node.name)
-
-    return non_tensor
+from src.utils.fx_trace_utils import find_non_tensor_nodes, trace_quant_aware
+from src.utils.model_input_utils import resolve_model_input_size
 
 
 def _get_model_dummy_input(model: torch.nn.Module) -> torch.Tensor:
@@ -71,14 +22,8 @@ def _get_model_dummy_input(model: torch.nn.Module) -> torch.Tensor:
     except StopIteration:
         device = torch.device('cpu')
 
-    # timm models expose their expected input size via default_cfg
-    if hasattr(model, 'default_cfg'):
-        cfg = model.default_cfg
-        input_size = getattr(cfg, 'input_size', None)
-        if input_size and len(input_size) == 3:
-            c, h, w = input_size
-            return torch.zeros(1, c, h, w, device=device)
-    return torch.zeros(1, 3, 224, 224, device=device)
+    _, c, h, w = resolve_model_input_size(model)
+    return torch.zeros(1, c, h, w, device=device)
 
 
 def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_name: str = "model"):
@@ -91,45 +36,14 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
         model_name: Name of the model for the graph title.
     """
     try:
-        # 1. Trace the model
-        # We need a custom tracer to treat quantized layers as leaves
-        class _FalseProxy(torch.fx.Proxy):
-            """Proxy that evaluates to False on any boolean check.
-
-            Models like timm MobileViT guard reshape ops with checks such as
-            'if H % patch_h != 0' to handle arbitrary input sizes. For standard
-            ImageNet-sized inputs these checks are always False (dimensions are
-            divisible by the patch size), so returning False keeps the trace on
-            the correct path without needing a real input tensor.
-            """
-            def __bool__(self):
-                return False
-
-        class CoverageTracer(torch.fx.Tracer):
-            def proxy(self, node):
-                return _FalseProxy(node, self)
-
-            def is_leaf_module(self, m: torch.nn.Module, module_qualified_name: str) -> bool:
-                # Always trace into decomposed attention/MLP blocks to expose internal ops.
-                if isinstance(m, (DecomposedMultiheadAttention, DecomposedQkvAttention, DecomposedMlpBlock)):
-                    return False
-
-                # Quantized ops are leaves
-                quantized_ops = tuple(OpRegistry.get_supported_ops().values())
-                if isinstance(m, quantized_ops):
-                    return True
-
-                return super().is_leaf_module(m, module_qualified_name)
-
-        tracer = CoverageTracer()
-        graph = tracer.trace(model)
-        traced = torch.fx.GraphModule(model, graph)
+        # 1. Trace the model with the shared quant-aware tracer.
+        _, _, traced = trace_quant_aware(model)
 
         # Static analysis: identify nodes that produce integers rather than
         # tensors (shape arithmetic like B*C*num_patch_h, rshift, lshift …).
         # We forward-propagate a "non-tensor" label through the graph starting
         # from known seeds, so we never need to run the model.
-        _non_tensor_nodes = _find_non_tensor_nodes(traced.graph)
+        _non_tensor_nodes = find_non_tensor_nodes(traced.graph)
         
         # 2. Draw the graph
         drawer = FxGraphDrawer(traced, model_name)

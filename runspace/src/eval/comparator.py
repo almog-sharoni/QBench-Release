@@ -7,6 +7,7 @@ from src.ops.quant_conv import QuantConv2d
 from src.registry.op_registry import OpRegistry
 from src.quantization.quantizer import quantize
 from src.ops.quant_base import calculate_scale
+from src.utils.fx_trace_utils import trace_quant_aware
 
 class LayerComparator:
     def __init__(self, ref_model, quant_model, model_name="model", quant_type="quant", adapter=None, device=None, output_dir=None, save_histograms=False):
@@ -234,28 +235,10 @@ class LayerComparator:
         report_lines.append("--- Quantization Coverage Verification ---")
         
         try:
-            import torch.fx
-            
-            # Custom Tracer to treat Quantized Layers as leaves
-            class CoverageTracer(torch.fx.Tracer):
-                def is_leaf_module(self, m: torch.nn.Module, module_qualified_name: str) -> bool:
-                    # Treat DecomposedMHA as non-leaf to see internal Softmax/Linear
-                    if isinstance(m, DecomposedMultiheadAttention):
-                        return False
-                    
-                    # Treat other Quantized Layers and Activations as leaves
-                    quantized_ops = tuple(OpRegistry.get_supported_ops().values())
-                    if isinstance(m, quantized_ops):
-                        return True
-                        
-                    return super().is_leaf_module(m, module_qualified_name)
-
             # We don't need to disable capture here because the subsequent comparison loop
             # will overwrite any Proxies captured during this trace.
-            
-            tracer = CoverageTracer()
-            graph = tracer.trace(self.quant_model)
-            traced = torch.fx.GraphModule(self.quant_model, graph)
+
+            _, _, traced = trace_quant_aware(self.quant_model)
             
             quantized_nodes = []
             unquantized_supported_nodes = []

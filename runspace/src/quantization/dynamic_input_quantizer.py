@@ -1,8 +1,12 @@
 import torch
 import torch.nn as nn
 
-from src.registry.op_registry import OpRegistry
-from src.ops.quant_base import quantize_tensor
+try:
+    from ..registry.op_registry import OpRegistry
+    from ..ops.quant_base import quantize_tensor
+except ImportError:
+    from src.registry.op_registry import OpRegistry
+    from src.ops.quant_base import quantize_tensor
 
 
 DEFAULT_DYNAMIC_INPUT_CANDIDATES = [
@@ -20,6 +24,15 @@ class DynamicInputQuantizer:
     """
     _RELU_TYPES = (nn.ReLU, nn.ReLU6)
     _COMPUTE_TYPES = (nn.Conv2d, nn.Linear)
+    _FUNCTIONAL_OP_NAMES = (
+        "QuantMatMul",
+        "QuantBMM",
+        "QuantAdd",
+        "QuantSub",
+        "QuantMul",
+        "QuantDiv",
+        "QuantCat",
+    )
 
     def __init__(self, model, metric='mse', chunk_size=128, candidate_formats=None):
         self.model = model
@@ -43,6 +56,14 @@ class DynamicInputQuantizer:
         self.candidate_formats = list(candidate_formats)
 
         self.supported_ops = tuple(OpRegistry.get_supported_ops().values())
+        functional_ops = []
+        for op_name in self._FUNCTIONAL_OP_NAMES:
+            try:
+                functional_ops.append(OpRegistry.get(op_name))
+            except Exception:
+                continue
+        self.functional_ops = tuple(functional_ops)
+        self.hookable_ops = tuple(dict.fromkeys(self.supported_ops + self.functional_ops))
         self.post_relu_layers = self._find_post_relu_layers()
 
         self.ufp_candidates = [f for f in self.candidate_formats if f.startswith('ufp')]
@@ -53,7 +74,7 @@ class DynamicInputQuantizer:
         prev_was_relu = False
 
         for name, module in self.model.named_modules():
-            is_compute = isinstance(module, self._COMPUTE_TYPES) or isinstance(module, self.supported_ops)
+            is_compute = isinstance(module, self._COMPUTE_TYPES) or isinstance(module, self.hookable_ops)
             is_relu = isinstance(module, self._RELU_TYPES)
 
             if is_compute:
@@ -86,7 +107,7 @@ class DynamicInputQuantizer:
         count_ufp = 0
 
         for name, module in self.model.named_modules():
-            if isinstance(module, self.supported_ops):
+            if isinstance(module, self.hookable_ops):
                 hook = self._get_hook(name)
                 self.hooks.append(module.register_forward_pre_hook(hook))
                 self.hooked_modules.append(module)

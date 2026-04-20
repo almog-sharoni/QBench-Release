@@ -9,7 +9,7 @@ model:
 adapter:
   type: generic
   quantize_first_layer: true
-  quantized_ops: ["Conv2d", "Linear", "BatchNorm2d", "ReLU"]
+  quantized_ops: ["all"]
   input_quantization: false
 
 quantization:

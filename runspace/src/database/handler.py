@@ -113,7 +113,9 @@ class RunDatabase:
             except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE model_graphs ADD COLUMN status TEXT")
             except sqlite3.OperationalError: pass
-                
+
+            self._init_cache_sim_table(cursor)
+
             conn.commit()
 
     def log_run(self, model_name, weight_dt, activation_dt, acc1, acc5, status="SUCCESS",
@@ -437,3 +439,98 @@ class RunDatabase:
             cursor = conn.cursor()
             cursor.execute('SELECT COUNT(*) FROM model_graphs WHERE model_name = ?', (model_name,))
             return cursor.fetchone()[0] > 0
+
+    # ============= CACHE SIMULATION METHODS =============
+
+    def _init_cache_sim_table(self, cursor):
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS cache_simulations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_name TEXT NOT NULL,
+                cache_size_M REAL,
+                num_banks INTEGER,
+                bank_size INTEGER,
+                metadata_bits INTEGER,
+                batch_size INTEGER,
+                total_layers INTEGER,
+                off_chip_count INTEGER,
+                flagged_count INTEGER,
+                timestamp TEXT,
+                layers_json TEXT,
+                off_chip_layers_json TEXT,
+                rules_json TEXT
+            )
+        ''')
+        try:
+            cursor.execute("ALTER TABLE cache_simulations ADD COLUMN rules_json TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+    def store_cache_simulation(self, sim_data: dict):
+        """
+        Store a cache simulation result.
+
+        Args:
+            sim_data: The full dict produced by run_simulation (keys: metadata, summary, layers, off_chip_layers).
+        """
+        meta    = sim_data.get('metadata', {})
+        summary = sim_data.get('summary', {})
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            self._init_cache_sim_table(cursor)
+            cursor.execute('''
+                INSERT INTO cache_simulations (
+                    model_name, cache_size_M, num_banks, bank_size, metadata_bits, batch_size,
+                    total_layers, off_chip_count, flagged_count, timestamp,
+                    layers_json, off_chip_layers_json, rules_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                meta.get('model'),
+                meta.get('cache_size_M'),
+                meta.get('num_banks'),
+                meta.get('bank_size'),
+                meta.get('metadata_bits'),
+                meta.get('batch_size'),
+                summary.get('total_layers'),
+                summary.get('quantize_count'),
+                summary.get('flagged_count'),
+                meta.get('timestamp'),
+                json.dumps(sim_data.get('layers', [])),
+                json.dumps(sim_data.get('off_chip_layers', [])),
+                json.dumps(sim_data.get('rules', [])),
+            ))
+            conn.commit()
+            print(f"[CacheSim] Stored simulation for {meta.get('model')} to DB.")
+
+    def get_cache_simulations(self) -> pd.DataFrame:
+        """Return all cache simulation runs as a DataFrame (latest first)."""
+        with sqlite3.connect(self.db_path) as conn:
+            try:
+                df = pd.read_sql_query(
+                    'SELECT * FROM cache_simulations ORDER BY id DESC', conn
+                )
+            except Exception:
+                df = pd.DataFrame()
+        return df
+
+    def get_latest_cache_simulation(self, model_name: str) -> dict | None:
+        """Return the most recent simulation result for a model as a dict, or None."""
+        with sqlite3.connect(self.db_path) as conn:
+            try:
+                self._init_cache_sim_table(conn.cursor())
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute(
+                    'SELECT * FROM cache_simulations WHERE model_name = ? ORDER BY id DESC LIMIT 1',
+                    (model_name,)
+                )
+                row = cursor.fetchone()
+            except Exception:
+                row = None
+        if row is None:
+            return None
+        d = dict(row)
+        d['layers']          = json.loads(d.get('layers_json') or '[]')
+        d['off_chip_layers'] = json.loads(d.get('off_chip_layers_json') or '[]')
+        return d
