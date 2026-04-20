@@ -1,11 +1,194 @@
 import torch
+import torch.nn as nn
 import json
 import itertools
 import re
 from torchview import draw_graph
 import pydot
 
+from ..ops.quant_arithmetic import QuantAdd, QuantMul
+from ..ops.quant_matmul import QuantMatMul
+from ..ops.quant_mha import (
+    AttentionWeightedValues as RuntimeAttentionWeightedValues,
+    DecomposedQkvAttention as RuntimeDecomposedQkvAttention,
+    ScaledDotProduct as RuntimeScaledDotProduct,
+)
+
 metadata_registry = {}
+
+
+class TransposeLastTwo(nn.Module):
+    def forward(self, x):
+        return x.transpose(-2, -1)
+
+
+class TransposeDims(nn.Module):
+    def __init__(self, dim0, dim1):
+        super().__init__()
+        self.dim0 = dim0
+        self.dim1 = dim1
+
+    def forward(self, x):
+        return x.transpose(self.dim0, self.dim1)
+
+
+class ExpandKeyPaddingMask(nn.Module):
+    def forward(self, key_padding_mask):
+        return key_padding_mask.unsqueeze(1).unsqueeze(2)
+
+
+class MaskedFillValue(nn.Module):
+    def __init__(self, value):
+        super().__init__()
+        self.value = value
+
+    def forward(self, x, mask):
+        return x.masked_fill(mask, self.value)
+
+
+class MakeContiguous(nn.Module):
+    def forward(self, x):
+        return x.contiguous()
+
+
+class ViewAttentionOutput(nn.Module):
+    def __init__(self, embed_dim):
+        super().__init__()
+        self.embed_dim = embed_dim
+
+    def forward(self, x, batch_size, tgt_len):
+        return x.view(batch_size, tgt_len, self.embed_dim)
+
+
+class ScaledDotProduct(nn.Module):
+    def __init__(self, head_dim, q_type="fp8_e4m3", quantization_bias=None):
+        super().__init__()
+        self.head_dim = head_dim
+        self.transpose_k = TransposeLastTwo()
+        self.matmul = QuantMatMul(q_type=q_type, quantization_bias=quantization_bias)
+        self.scale = QuantMul(q_type=q_type, quantization_bias=quantization_bias)
+        self.add_mask = QuantAdd(q_type=q_type, quantization_bias=quantization_bias)
+        self.expand_padding_mask = ExpandKeyPaddingMask()
+        self.apply_padding_mask = MaskedFillValue(float('-inf'))
+        self.register_buffer("scale_factor", torch.tensor(head_dim ** -0.5, dtype=torch.float32))
+
+    def forward(self, q, k, attn_mask, key_padding_mask):
+        k_t = self.transpose_k(k)
+        scores = self.matmul(q, k_t)
+        scores = self.scale(scores, self.scale_factor)
+
+        if attn_mask is not None:
+            scores = self.add_mask(scores, attn_mask)
+
+        if key_padding_mask is not None:
+            mask = self.expand_padding_mask(key_padding_mask)
+            scores = self.apply_padding_mask(scores, mask)
+
+        return scores
+
+
+class AttentionWeightedValues(nn.Module):
+    def __init__(self, embed_dim, q_type="fp8_e4m3", quantization_bias=None):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.matmul = QuantMatMul(q_type=q_type, quantization_bias=quantization_bias)
+        self.transpose = TransposeDims(1, 2)
+        self.make_contiguous = MakeContiguous()
+        self.view_output = ViewAttentionOutput(embed_dim)
+
+    def forward(self, attn_weights, v, batch_size, tgt_len):
+        attn_output = self.matmul(attn_weights, v)
+        attn_output = self.transpose(attn_output)
+        attn_output = self.make_contiguous(attn_output)
+        attn_output = self.view_output(attn_output, batch_size, tgt_len)
+        return attn_output
+
+
+class DecomposedQkvAttention(nn.Module):
+    def __init__(self, runtime_attn, q_type="fp8_e4m3", quantization_bias=None):
+        super().__init__()
+        self.embed_dim = runtime_attn.embed_dim
+        self.num_heads = runtime_attn.num_heads
+        self.head_dim = runtime_attn.head_dim
+        self.attn_dim = runtime_attn.attn_dim
+
+        self.qkv = runtime_attn.qkv
+        self.q_norm = runtime_attn.q_norm
+        self.k_norm = runtime_attn.k_norm
+        self.scaled_dot_product = ScaledDotProduct(
+            self.head_dim,
+            q_type=q_type,
+            quantization_bias=quantization_bias,
+        )
+        self.softmax = runtime_attn.softmax
+        self.attn_drop = runtime_attn.attn_drop
+        self.attention_weighted_values = AttentionWeightedValues(
+            self.attn_dim,
+            q_type=q_type,
+            quantization_bias=quantization_bias,
+        )
+        self.norm = runtime_attn.norm
+        self.proj = runtime_attn.proj
+        self.proj_drop = runtime_attn.proj_drop
+
+    def forward(self, x, attn_mask=None, is_causal=False, **kwargs):
+        del is_causal  # Graph-only wrapper follows the explicit unfused attention path.
+
+        bsz, seq_len, _ = x.shape
+        qkv = self.qkv(x).reshape(bsz, seq_len, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+
+        attn = self.scaled_dot_product(q, k, attn_mask, None)
+        attn = self.softmax(attn)
+        attn = self.attn_drop(attn)
+
+        out = self.attention_weighted_values(attn, v, bsz, seq_len)
+        out = self.norm(out)
+        out = self.proj(out)
+        out = self.proj_drop(out)
+        return out
+
+
+def _replace_attention_helpers_for_graph(model):
+    restorations = []
+
+    def visit(module):
+        parent_q_type = getattr(module, 'q_type', 'fp8_e4m3')
+        parent_quant_bias = getattr(module, 'quantization_bias', None)
+
+        for name, child in list(module.named_children()):
+            replacement = None
+
+            if isinstance(child, RuntimeScaledDotProduct):
+                replacement = ScaledDotProduct(
+                    child.head_dim,
+                    q_type=parent_q_type,
+                    quantization_bias=parent_quant_bias,
+                )
+            elif isinstance(child, RuntimeAttentionWeightedValues):
+                replacement = AttentionWeightedValues(
+                    child.embed_dim,
+                    q_type=parent_q_type,
+                    quantization_bias=parent_quant_bias,
+                )
+            elif isinstance(child, RuntimeDecomposedQkvAttention):
+                replacement = DecomposedQkvAttention(
+                    child,
+                    q_type=parent_q_type,
+                    quantization_bias=parent_quant_bias,
+                )
+
+            if replacement is not None:
+                setattr(module, name, replacement)
+                restorations.append((module, name, child))
+                child = replacement
+
+            visit(child)
+
+    visit(model)
+    return restorations
 
 def clean_label(label_str):
     name, input_shape, output_shape, var_name, module_args = "Unknown", None, None, None, None
@@ -60,6 +243,7 @@ def generate_hierarchical_json(model, input_size, model_name="Root", depth=3):
     
     # --- Hack to expose variable names to TorchView ---
     restoration_list = []
+    graph_module_restorations = _replace_attention_helpers_for_graph(model)
     global metadata_registry
     metadata_registry.clear()
     
@@ -109,6 +293,8 @@ def generate_hierarchical_json(model, input_size, model_name="Root", depth=3):
         # Restore old class names
         for module, old_cls in restoration_list:
             module.__class__ = old_cls
+        for parent, name, original_module in reversed(graph_module_restorations):
+            setattr(parent, name, original_module)
     
     # Parse dot string with pydot
     graphs = pydot.graph_from_dot_data(dot_str)
