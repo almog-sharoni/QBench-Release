@@ -1,0 +1,40 @@
+
+adapter:
+  quantize_first_layer: false
+  type: feature_matching
+  quantized_ops: ["all"]
+  excluded_ops: [""]  
+  weight_quantization: true
+  input_quantization: true
+
+quantization:
+  format: fp8_e4m3
+  mode: chunk
+  chunk_size: 128
+  weight_chunk_size: 128
+  weight_mode: chunk
+  calib_method: max
+  strict_format_check: true
+
+# Paper-aligned ScanNet benchmark: SuperGlue's own test pairs
+# (assets/scannet_test_pairs_with_gt.txt) covering all 100 test scenes.
+# Yields the full 1500 paper pairs.
+dataset:
+  name: scannet_pairs
+  path: /data/scannet/ref
+  pairs_file: /app/runspace/inputs/scannet/pairs_test_paper_100scenes.txt
+  image_size: [480, 640]
+  batch_size: 1
+  num_workers: 20
+  max_pairs: 1500
+
+model:
+  sp_config:
+    max_keypoints: 1024
+
+evaluation:
+  mode: compare
+  save_visualizations: true
+  num_viz_samples: 15
+  compare_batches: -1
+  max_batches: -1

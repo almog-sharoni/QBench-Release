@@ -37,7 +37,8 @@ def _load_superpoint(model_cfg: dict) -> torch.nn.Module:
     _inject_repo(repo_path, 'superpoint')
 
     from models.superpoint import SuperPoint
-    model = SuperPoint({})
+    sp_cfg = dict(model_cfg.get('sp_config') or {})
+    model = SuperPoint(sp_cfg)
     state = torch.load(weights_path, map_location='cpu')
     model.load_state_dict(state)
     return model

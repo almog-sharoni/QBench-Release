@@ -1,8 +1,9 @@
-target_pipeline: superpoint_superglue
 
 adapter:
+  quantize_first_layer: false
   type: feature_matching
   quantized_ops: ["all"]
+  excluded_ops: ["softmax"]  
   weight_quantization: true
   input_quantization: true
 
@@ -24,7 +25,7 @@ dataset:
   pairs_file: /app/runspace/inputs/scannet/pairs_test_paper_100scenes.txt
   image_size: [480, 640]
   batch_size: 1
-  num_workers: 8
+  num_workers: 20
   max_pairs: 1500
 
 model:

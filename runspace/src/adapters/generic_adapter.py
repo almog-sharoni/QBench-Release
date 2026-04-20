@@ -634,14 +634,16 @@ class GenericAdapter(BaseAdapter):
 
     def _recursive_replace(self, model: nn.Module, prefix: str = ""):
         """Recursively traverse and replace layers using the registry."""
-        # Check for "quantize all" mode
-        quantize_all = "-1" in self.quantized_ops or "all" in self.quantized_ops
-        
+        quantized_ops_lc = {o.lower() for o in self.quantized_ops}
+        excluded_ops_lc = {o.lower() for o in self.excluded_ops}
+        quantize_all = "-1" in quantized_ops_lc or "all" in quantized_ops_lc
+
         # Get supported ops from registry
         supported_ops = OpRegistry.get_supported_ops()
-        
+
         def _contains_any(names, candidates):
-            return any(n in names for n in candidates)
+            lowered = {n.lower() for n in names}
+            return any(c.lower() in lowered for c in candidates)
 
         def _is_timm_attention_like(m: nn.Module) -> bool:
             return (
@@ -690,14 +692,14 @@ class GenericAdapter(BaseAdapter):
                 if matched_original_name is not None:
                     requested_names.add(matched_original_name)
 
-                if quantize_all or _contains_any(self.quantized_ops, requested_names):
+                if quantize_all or _contains_any(quantized_ops_lc, requested_names):
                     should_quantize = True
 
                 # If Linear is requested, decompose MHA as well to expose q/k/v internals.
-                if isinstance(module, nn.MultiheadAttention) and "Linear" in self.quantized_ops and "Linear" not in self.excluded_ops:
+                if isinstance(module, nn.MultiheadAttention) and "linear" in quantized_ops_lc and "linear" not in excluded_ops_lc:
                     should_quantize = True
 
-                if _contains_any(self.excluded_ops, requested_names):
+                if _contains_any(excluded_ops_lc, requested_names):
                     should_quantize = False
 
                 # timm uses BatchNormAct2d (subclass of nn.BatchNorm2d) in many
@@ -717,10 +719,10 @@ class GenericAdapter(BaseAdapter):
             # timm-specific Attention / MLP decomposition
             if not should_quantize and _is_timm_attention_like(module):
                 wants_attention = quantize_all or _contains_any(
-                    self.quantized_ops,
+                    quantized_ops_lc,
                     {"Attention", "MultiheadAttention", "MHA", "QkvAttention"}
                 )
-                wants_internal_linear = "Linear" in self.quantized_ops and "Linear" not in self.excluded_ops
+                wants_internal_linear = "linear" in quantized_ops_lc and "linear" not in excluded_ops_lc
                 if wants_attention or wants_internal_linear:
                     from ..ops.quant_mha import DecomposedQkvAttention
                     quant_class = DecomposedQkvAttention
@@ -728,10 +730,10 @@ class GenericAdapter(BaseAdapter):
 
             if not should_quantize and _is_timm_mlp_like(module):
                 wants_mlp = quantize_all or _contains_any(
-                    self.quantized_ops,
+                    quantized_ops_lc,
                     {"Mlp", "MLP", "FeedForward", "FFN", "MlpBlock"}
                 )
-                wants_internal_linear = "Linear" in self.quantized_ops and "Linear" not in self.excluded_ops
+                wants_internal_linear = "linear" in quantized_ops_lc and "linear" not in excluded_ops_lc
                 if wants_mlp or wants_internal_linear:
                     from ..ops.quant_mha import DecomposedMlpBlock
                     quant_class = DecomposedMlpBlock
@@ -846,11 +848,14 @@ class GenericAdapter(BaseAdapter):
         }
         
         # Filter by requested quantized ops
+        quantized_ops_lc = {o.lower() for o in self.quantized_ops}
+        excluded_ops_lc = {o.lower() for o in self.excluded_ops}
         target_funcs = {}
         for func, op_name in func_map.items():
-            if "-1" in self.quantized_ops or "all" in self.quantized_ops or op_name in self.quantized_ops:
-                # Check exclusions
-                if op_name not in self.excluded_ops:
+            op_name_lc = op_name.lower()
+            bare_lc = op_name_lc[len("quant"):] if op_name_lc.startswith("quant") else op_name_lc
+            if "-1" in quantized_ops_lc or "all" in quantized_ops_lc or op_name_lc in quantized_ops_lc or bare_lc in quantized_ops_lc:
+                if op_name_lc not in excluded_ops_lc and bare_lc not in excluded_ops_lc:
                     target_funcs[func] = op_name
 
         if not target_funcs:
