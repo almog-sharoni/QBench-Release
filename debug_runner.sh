@@ -10,9 +10,10 @@ fi
 SCRIPT=$1
 shift
 
-echo "Starting $SCRIPT in container 'qbench' with debugger waiting on port 5678..."
-echo "Please start the 'Python: Attach to Container (QBench)' debug session in VS Code now."
+echo "Starting $SCRIPT in Apptainer sandbox with debugger waiting on port 5678..."
+echo "Please start the 'Python: Remote Attach' debug session in VS Code now."
 
-# Run the script inside the container using debugpy
+# Run the script inside the Apptainer container using debugpy via the apptainer.sh wrapper
 # We use 0.0.0.0 to allow external connections
-docker exec -it qbench python -m debugpy --listen 0.0.0.0:5678 --wait-for-client "$SCRIPT" "$@"
+./apptainer.sh -m debugpy --listen 0.0.0.0:5678 --wait-for-client "$SCRIPT" "$@"
+
