@@ -12,10 +12,11 @@ adapter:
   excluded_ops: [""]
   # Whether to fold layers (e.g. Conv+BN) before quantization
   # fold_layers: true
+  weight_quantization: True
 
 quantization:
   # Target format: fp8_e4m3, fp8_e5m2, int8, fp4_e2m1, fp4_e3m0
-  format: fp8_e1m6
+  format: fp8_e4m3
   # Optional bias override (default depends on format, e.g., 7 for fp8_e4m3)
   # bias: 7
   # Calibration method (placeholder for future use)
@@ -29,11 +30,11 @@ quantization:
   # Chunk size for 'chunk' mode
   chunk_size: 128
   # Optional input format override (e.g., quantize inputs to int8 while weights are fp8)
-  input_format: null
+  input_format: fp8_e4m3
 
   # --- Weight Quantization ---
   # Mode: tensor, channel, chunk
-  weight_mode: chunk
+  weight_mode: tensor
   # Chunk size for 'chunk' mode
   weight_chunk_size: 128
 
@@ -56,12 +57,12 @@ quantization:
 dataset:
   name: imagenet
   path: /data/imagenet/val
-  batch_size: 64
+  batch_size: 128
   num_workers: 32
 
 evaluation:
   # Mode: evaluate (quantized only), compare (reference vs quantized)
-  mode: evaluate
+  mode: compare
   # Number of batches to compare (false or -1 for all)
   compare_batches: -1
   generate_graph_svg: false

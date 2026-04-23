@@ -2,17 +2,17 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: Attach to Container (QBench)",
+            "name": "Python: Remote Attach (Apptainer)",
             "type": "debugpy",
             "request": "attach",
             "connect": {
-                "host": "172.17.0.2",
+                "host": "localhost",
                 "port": 5678
             },
             "pathMappings": [
                 {
                     "localRoot": "${workspaceFolder}",
-                    "remoteRoot": "/app"
+                    "remoteRoot": "${workspaceFolder}"
                 }
             ],
             "justMyCode": true
