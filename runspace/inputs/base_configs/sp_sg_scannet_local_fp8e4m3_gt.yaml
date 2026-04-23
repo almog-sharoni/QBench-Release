@@ -24,5 +24,5 @@ dataset:
 evaluation:
   mode: compare
   save_visualizations: true
-  num_viz_samples: 1500
+  num_viz_samples: 5
   compare_batches: -1

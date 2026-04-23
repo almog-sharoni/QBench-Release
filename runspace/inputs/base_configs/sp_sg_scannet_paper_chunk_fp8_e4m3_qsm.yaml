@@ -35,6 +35,6 @@ model:
 evaluation:
   mode: compare
   save_visualizations: true
-  num_viz_samples: 15
+  num_viz_samples: 5
   compare_batches: -1
   max_batches: -1

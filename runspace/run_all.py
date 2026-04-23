@@ -3,8 +3,6 @@ import os
 import sys
 import yaml
 import json
-import logging
-from datetime import datetime
 
 # Add project root to sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
@@ -27,50 +25,6 @@ def load_models_list(path: str) -> list:
         else:
             raise ValueError("Models list must be JSON or YAML")
 
-def setup_logging(output_dir: str) -> str:
-    """Set up logging to both stdout and a timestamped log file."""
-    logs_dir = os.path.join(output_dir, 'logs')
-    os.makedirs(logs_dir, exist_ok=True)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_path = os.path.join(logs_dir, f'run_all_{timestamp}.log')
-
-    root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
-
-    fmt = logging.Formatter('%(message)s')
-
-    fh = logging.FileHandler(log_path, encoding='utf-8')
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(fmt)
-    root.addHandler(fh)
-
-    sh = logging.StreamHandler(sys.stdout)
-    sh.setLevel(logging.DEBUG)
-    sh.setFormatter(fmt)
-    root.addHandler(sh)
-
-    # Redirect print() to the logger so all existing prints land in the file too.
-    class _PrintToLogger:
-        def __init__(self, level):
-            self._level = level
-            self._buf = ''
-        def write(self, msg):
-            self._buf += msg
-            while '\n' in self._buf:
-                line, self._buf = self._buf.split('\n', 1)
-                logging.log(self._level, line)
-        def flush(self):
-            if self._buf:
-                logging.log(self._level, self._buf)
-                self._buf = ''
-        def fileno(self):
-            raise io.UnsupportedOperation('fileno')
-
-    import io
-    sys.stdout = _PrintToLogger(logging.INFO)
-    sys.stderr = _PrintToLogger(logging.WARNING)
-
-    return log_path
 
 def main():
     parser = argparse.ArgumentParser(description='Run QBench Batch Evaluation')
@@ -78,15 +32,15 @@ def main():
     parser.add_argument('--models-list', type=str, help='Path to models list (JSON/YAML)')
     parser.add_argument('--output-dir', type=str, default='runspace/outputs', help='Directory to save reports and configs')
     parser.add_argument('--summary-file', type=str, default='summary_report.csv', help='Filename for summary report')
-    parser.add_argument('--batches', type=int, default=None, help='Max evaluation batches per run (-1 for all)')
+    parser.add_argument('--epochs', type=int, default=None, help='Number of evaluation iterations (batches) per run (-1 for all)')
+    parser.add_argument('--batch-size', type=int, default=None, help='Images per batch (overrides dataset.batch_size for all configs)')
     parser.add_argument('--stop-on-error', action='store_true', help='Abort after the first failed run')
     parser.add_argument('--workers', type=int, default=None, help='Override dataset.num_workers for all configs')
+    parser.add_argument('--task', choices=['classification', 'feature_matching'], default=None,
+                        help='Run only base configs whose adapter.type matches this task '
+                             '(classification -> generic; feature_matching -> feature_matching)')
 
     args = parser.parse_args()
-
-    log_path = setup_logging(args.output_dir)
-    # Print after logging is wired so it goes to the file too.
-    print(f"Logging to {log_path}")
 
     # Auto-discovery logic
     import glob
@@ -117,6 +71,27 @@ def main():
             print(f"Error: Base configs not provided and directory {default_base_configs_dir} not found")
             sys.exit(1)
 
+    # Task filter: keep only base configs whose adapter.type matches.
+    if args.task is not None:
+        target_type = 'feature_matching' if args.task == 'feature_matching' else 'generic'
+        filtered = []
+        for path in base_configs_paths:
+            try:
+                with open(path, 'r') as f:
+                    cfg = yaml.safe_load(f) or {}
+                adapter_type = (cfg.get('adapter') or {}).get('type', 'generic')
+            except Exception as e:
+                print(f"Warning: skipping {path} during task filter ({e})")
+                continue
+            if adapter_type == target_type:
+                filtered.append(path)
+        dropped = len(base_configs_paths) - len(filtered)
+        print(f"Task filter '{args.task}' -> {len(filtered)} configs (dropped {dropped}).")
+        base_configs_paths = filtered
+        if not base_configs_paths:
+            print(f"Error: no base configs match task '{args.task}'.")
+            sys.exit(1)
+
     factory = ConfigFactory()
     models = load_models_list(models_list_path)
 
@@ -130,12 +105,18 @@ def main():
         print(f"Processing {os.path.basename(base_config_path)}...")
         configs = factory.create_configs(base_config_path, models, base_config_path=base_config_path)
 
-        # Apply --batches override
-        if args.batches is not None:
+        # Apply --epochs override (caps evaluation batches per run)
+        if args.epochs is not None:
             for cfg in configs:
                 cfg.setdefault('evaluation', {})
-                cfg['evaluation']['compare_batches'] = args.batches
-                cfg['evaluation']['max_batches'] = args.batches
+                cfg['evaluation']['compare_batches'] = args.epochs
+                cfg['evaluation']['max_batches'] = args.epochs
+
+        # Apply --batch-size override
+        if args.batch_size is not None:
+            for cfg in configs:
+                cfg.setdefault('dataset', {})
+                cfg['dataset']['batch_size'] = args.batch_size
 
         # Apply --workers override
         if args.workers is not None:
@@ -172,7 +153,7 @@ def main():
     summary_md_path = os.path.splitext(summary_path)[0] + '.md'
     aggregator.aggregate(results, summary_md_path)
 
-    print(f"Run completed. Log saved to {log_path}")
+    print("Run completed.")
 
 if __name__ == "__main__":
     main()

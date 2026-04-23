@@ -12,7 +12,7 @@ LOG_CONTAINER="runspace/outputs/logs/run_all_${TIMESTAMP}.log"
 
 mkdir -p "$LOG_DIR"
 
-docker exec -d qbench bash -c "python runspace/run_all.py --batches 5 --stop-on-error > ${LOG_CONTAINER} 2>&1"
+docker exec -d qbench bash -c "python runspace/run_all.py --epochs 5  --batch-size 32 --stop-on-error > ${LOG_CONTAINER} 2>&1"
 echo "Started run_all.py detached in container qbench."
 echo "Log: ${LOG_HOST}"
 echo "Follow with: tail -f ${LOG_HOST}"

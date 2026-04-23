@@ -37,7 +37,12 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
     """
     try:
         # 1. Trace the model with the shared quant-aware tracer.
-        _, _, traced = trace_quant_aware(model)
+        try:
+            _, _, traced = trace_quant_aware(model)
+        except Exception as trace_err:
+            print(f"FX trace failed ({trace_err}); falling back to module-hierarchy graph.")
+            _generate_hierarchy_graph(model, output_path, model_name)
+            return
 
         # Static analysis: identify nodes that produce integers rather than
         # tensors (shape arithmetic like B*C*num_patch_h, rshift, lshift …).
@@ -355,5 +360,138 @@ def _guess_signature(name: str):
             for p in SIG_MAPPING[clean_name]
         ]
         return inspect.Signature(params)
-        
+
     return None
+
+
+def _generate_hierarchy_graph(model: torch.nn.Module, output_path: str, model_name: str):
+    """
+    Fallback renderer for models that cannot be traced by torch.fx (e.g. SuperPoint,
+    SuperGlue with dynamic shape-based control flow). Walks named_modules() and
+    renders a containment tree of leaf modules grouped by their dotted-path prefix.
+    """
+    import pydot
+    try:
+        from src.ops.quant_base import QuantizedLayerMixin
+    except Exception:
+        QuantizedLayerMixin = ()
+    try:
+        from src.ops.quant_mha import DecomposedMultiheadAttention
+    except Exception:
+        DecomposedMultiheadAttention = ()
+
+    supported_modules = tuple(OpRegistry.get_supported_ops().keys())
+    quantized_ops = tuple(OpRegistry.get_supported_ops().values())
+
+    legend_items = {}  # Label -> Color
+
+    def classify(module: torch.nn.Module):
+        cls_name = type(module).__name__
+        if isinstance(module, quantized_ops) or (
+            QuantizedLayerMixin and isinstance(module, QuantizedLayerMixin)
+        ):
+            return cls_name, "#90EE90"  # Green: Quantized
+        if isinstance(module, supported_modules):
+            return cls_name, "#FFD700"  # Gold: Supported
+        if OpRegistry.is_passthrough(cls_name):
+            return cls_name, "#D3D3D3"  # Gray: Pass-through
+        compliance = OpRegistry.get_compliance_status(cls_name)
+        if compliance == "FP32 required":
+            return cls_name, "#FFD580"  # Amber
+        return cls_name, "#FFB6C1"      # Pink: Unsupported
+
+    leaves = []  # list of (dotted_name, module)
+    for name, module in model.named_modules():
+        if not name:
+            continue  # skip root
+        is_leaf = len(list(module.children())) == 0 or (
+            DecomposedMultiheadAttention and isinstance(module, DecomposedMultiheadAttention)
+        )
+        if not is_leaf:
+            continue
+        leaves.append((name, module))
+
+    dot = pydot.Dot(graph_name=model_name, graph_type='digraph', rankdir='TB', compound='true')
+
+    # Build a nested cluster structure from dotted paths.
+    # Each intermediate path segment becomes a cluster; the final leaf is a node.
+    clusters = {}  # path_prefix -> pydot.Subgraph
+
+    def get_or_create_cluster(prefix_parts):
+        if not prefix_parts:
+            return dot
+        key = '.'.join(prefix_parts)
+        if key in clusters:
+            return clusters[key]
+        parent = get_or_create_cluster(prefix_parts[:-1])
+        sub = pydot.Subgraph(
+            graph_name=f'cluster_{key.replace(".", "_")}',
+            label=prefix_parts[-1],
+            style='dashed', color='#888888', fontsize='14',
+        )
+        clusters[key] = sub
+        parent.add_subgraph(sub)
+        return sub
+
+    for name, module in leaves:
+        parts = name.split('.')
+        parent_cluster = get_or_create_cluster(parts[:-1])
+        label_text, color = classify(module)
+        legend_items[label_text] = color
+        node_id = f'"{name}"'
+        parent_cluster.add_node(pydot.Node(
+            node_id,
+            label=f'{parts[-1]}\\n({label_text})',
+            shape='box', style='filled', fillcolor=color, fontsize='11',
+        ))
+
+    # Add Legend (same layout/priority as the FX path above).
+    legend = pydot.Subgraph(
+        graph_name="cluster_legend", label="Legend", rank="source",
+        style="solid", color="black", fontsize="50", ranksep="0.1",
+    )
+
+    def get_sort_key(item):
+        _, col = item
+        priority = {
+            "#90EE90": 0,
+            "#FFD700": 1,
+            "#FFD580": 2,
+            "#FFB6C1": 3,
+            "#D3D3D3": 4,
+        }
+        return (priority.get(col, 4), item[0])
+
+    section_titles = {
+        "#90EE90": "Quantized Layers",
+        "#FFD700": "Supported Layers (Unquantized)",
+        "#FFD580": "FP32 Required (coord/interp)",
+        "#FFB6C1": "Unsupported Layers",
+        "#D3D3D3": "Structural / Other",
+    }
+
+    previous_node = None
+    current_color_group = None
+    for i, (lbl, col) in enumerate(sorted(legend_items.items(), key=get_sort_key)):
+        if col != current_color_group:
+            current_color_group = col
+            header = pydot.Node(
+                f"legend_header_{i}", label=section_titles.get(col, "Other"),
+                shape="plaintext", fontsize="40",
+            )
+            legend.add_node(header)
+            if previous_node:
+                legend.add_edge(pydot.Edge(previous_node, header, style="invis"))
+            previous_node = header
+        leg_node = pydot.Node(
+            f"legend_node_{i}", label=lbl,
+            shape="box", style="filled", fillcolor=col, fontsize="35",
+        )
+        legend.add_node(leg_node)
+        if previous_node:
+            legend.add_edge(pydot.Edge(previous_node, leg_node, style="invis", minlen="0.2"))
+        previous_node = leg_node
+
+    dot.add_subgraph(legend)
+    dot.write_svg(output_path)
+    print(f"Quantization graph saved to {output_path}")

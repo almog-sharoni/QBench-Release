@@ -62,8 +62,16 @@ def build_feature_matching_data_loader(dataset_cfg: dict) -> DataLoader:
     num_workers = int(dataset_cfg.get('num_workers', 0))
 
     dataset = ImageDirectoryDataset(root=root, image_size=image_size, grayscale=grayscale)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=False,
-                      num_workers=num_workers, collate_fn=_collate_fn)
+    persistent_workers = bool(dataset_cfg.get('persistent_workers', num_workers > 0)) and num_workers > 0
+    pin_memory = torch.cuda.is_available()
+    prefetch_factor = int(dataset_cfg.get('prefetch_factor', 4)) if num_workers > 0 else None
+    loader_kwargs = dict(batch_size=batch_size, shuffle=False,
+                         num_workers=num_workers, collate_fn=_collate_fn,
+                         pin_memory=pin_memory,
+                         persistent_workers=persistent_workers)
+    if prefetch_factor is not None:
+        loader_kwargs['prefetch_factor'] = prefetch_factor
+    return DataLoader(dataset, **loader_kwargs)
 
 
 class ImageDirectoryPairsDataset(Dataset):
@@ -126,5 +134,13 @@ def build_image_directory_pairs_data_loader(dataset_cfg: dict) -> DataLoader:
     num_workers = int(dataset_cfg.get('num_workers', 0))
 
     dataset = ImageDirectoryPairsDataset(root=root, image_size=image_size, grayscale=grayscale)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=False,
-                      num_workers=num_workers, collate_fn=_collate_pairs_fn)
+    persistent_workers = bool(dataset_cfg.get('persistent_workers', num_workers > 0)) and num_workers > 0
+    pin_memory = torch.cuda.is_available()
+    prefetch_factor = int(dataset_cfg.get('prefetch_factor', 4)) if num_workers > 0 else None
+    loader_kwargs = dict(batch_size=batch_size, shuffle=False,
+                         num_workers=num_workers, collate_fn=_collate_pairs_fn,
+                         pin_memory=pin_memory,
+                         persistent_workers=persistent_workers)
+    if prefetch_factor is not None:
+        loader_kwargs['prefetch_factor'] = prefetch_factor
+    return DataLoader(dataset, **loader_kwargs)

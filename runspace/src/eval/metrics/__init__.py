@@ -82,17 +82,12 @@ def compute_min_max(tensor):
     return tensor.min().item(), tensor.max().item()
 
 
-def get_fp8_e4m3_values():
-    if hasattr(torch, 'float8_e4m3fn'):
-        all_bytes = torch.arange(256, dtype=torch.uint8)
-        return all_bytes.view(torch.float8_e4m3fn).float()
-    else:
-        return torch.tensor([])
-
-
-def check_fp8_compliance(tensor, valid_values=None):
+def check_fp8_compliance(tensor, valid_values):
     if valid_values is None:
-        valid_values = get_fp8_e4m3_values().to(tensor.device)
+        raise ValueError(
+            "check_fp8_compliance requires an explicit valid_values table. "
+            "For simulated fp formats, use _check_mantissa_precision instead."
+        )
     unique_vals = tensor.unique()
     mask = torch.isin(unique_vals, valid_values)
     invalid_vals = unique_vals[~mask]

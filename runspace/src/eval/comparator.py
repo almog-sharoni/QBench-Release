@@ -3,6 +3,7 @@ import torch.nn as nn
 from tqdm import tqdm
 import yaml
 import os
+import sys
 from src.ops.quant_conv import QuantConv2d
 from src.registry.op_registry import OpRegistry
 from src.quantization.quantizer import quantize
@@ -527,7 +528,6 @@ class LayerComparator:
     def _generate_report(self):
         print("Generating evaluation report... (this might take a moment)")
         from src.eval.metrics import compute_mse, compute_cosine_similarity, compute_min_max, check_fp8_compliance
-        from src.quantization.quantizer import get_fp8_e4m3_table, get_fp8_e5m2_table
         from runspace.src.ops.quant_base import QuantizedLayerMixin
         from src.ops.quant_mha import DecomposedMultiheadAttention
         import os
@@ -589,11 +589,15 @@ class LayerComparator:
         report_lines.append("\n")
         
         # 2. FP8 Compliance Check
-        GREEN = "\033[92m"
-        RED = "\033[91m"
-        ORANGE = "\033[33m"
-        BLUE = "\033[94m"
-        RESET = "\033[0m"
+        # Emit ANSI color codes only when stdout is a TTY. Otherwise the report
+        # (which is also written to a .txt file) ends up with gibberish escapes
+        # when viewed in a non-terminal editor.
+        _use_color = sys.stdout.isatty() if hasattr(sys.stdout, 'isatty') else False
+        GREEN = "\033[92m" if _use_color else ""
+        RED = "\033[91m" if _use_color else ""
+        ORANGE = "\033[33m" if _use_color else ""
+        BLUE = "\033[94m" if _use_color else ""
+        RESET = "\033[0m" if _use_color else ""
 
         def _wpad(s, width):
             # Emojis render as 2 display cells but count as 1 char in len().
@@ -638,7 +642,7 @@ class LayerComparator:
 
         # Native formats use exact value-set compliance; simulated custom formats use
         # mantissa-precision compliance (the quantizer preserves only mant_bits in FP32 space).
-        _NATIVE_FORMATS = {'fp4_e2m1', 'fp4_e3m0', 'fp4_e1m2', 'fp4_e0m3', 'int8', 'int4', 'fp32'}
+        _NATIVE_FORMATS = {'int8', 'int4', 'fp32'}
 
         def _parse_mant_bits(q_type: str):
             """Return mantissa bit count for a simulated FP format, or None if not parseable."""

@@ -8,7 +8,7 @@ This ensures the entire dataflow through the network stays in FP8 and is optimiz
 import torch
 import torch.nn as nn
 from ..registry.op_registry import OpRegistry
-from ..quantization.quantizer import quantize, get_fp8_e4m3_table
+from ..quantization.quantizer import quantize
 from .quant_base import quantize_tensor
 
 
