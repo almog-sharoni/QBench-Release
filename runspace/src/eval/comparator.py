@@ -163,7 +163,7 @@ class LayerComparator:
 
         print(f"Comparing models on {total_batches if total_batches is not None else 'unknown'} batches...")
 
-        with torch.no_grad():
+        with torch.inference_mode():
             pbar = tqdm(
                 total=total_batches,
                 desc="Comparing",

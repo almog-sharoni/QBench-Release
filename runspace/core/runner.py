@@ -25,7 +25,16 @@ class Runner:
         self._db = None
         self._fm_db = None
         print(f"Runner initialized on device: {self.device}")
-        
+
+        # Inference throughput knobs: enable cuDNN autotune for fixed-shape convs,
+        # and let matmul use TF32 where it's available (SuperGlue attention is
+        # matmul-heavy). These only affect FP32 reference passes; quantized paths
+        # already control their own precision.
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+        if hasattr(torch, 'set_float32_matmul_precision'):
+            torch.set_float32_matmul_precision('high')
+
         # Aggressive cleanup on init
         gc.collect()
         if torch.cuda.is_available():
@@ -1235,7 +1244,7 @@ class Runner:
                 input_quant_cfg=normalized_input_quant_cfg
             )
 
-            with torch.no_grad():
+            with torch.inference_mode():
                 pbar = tqdm(
                     total=total_batches,
                     desc=desc,
@@ -1956,7 +1965,7 @@ class Runner:
         # 3. Execution Loop
         max_batches = configs[0].get('evaluation', {}).get('max_batches', -1)
         try:
-            with torch.no_grad():
+            with torch.inference_mode():
                 pbar = tqdm(loader, desc=f"Parallel Eval ({len(active_contexts)} models)", unit="batch")
                 for batch_idx, batch in enumerate(pbar):
                     if max_batches > 0 and batch_idx >= max_batches:
