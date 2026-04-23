@@ -1,9 +1,9 @@
 # - name: alexnet
 #   source: torchvision
 #   weights: DEFAULT
-# # - name: convnext_large
-# #   source: torchvision
-# #   weights: DEFAULT
+- name: convnext_large
+  source: torchvision
+  weights: DEFAULT
 # - name: densenet161
 #   source: torchvision
 #   weights: DEFAULT
