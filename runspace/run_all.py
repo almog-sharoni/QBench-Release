@@ -25,18 +25,26 @@ def load_models_list(path: str) -> list:
         else:
             raise ValueError("Models list must be JSON or YAML")
 
+
 def main():
     parser = argparse.ArgumentParser(description='Run QBench Batch Evaluation')
     parser.add_argument('--base-configs', type=str, nargs='+', help='List of paths to base configuration YAMLs')
     parser.add_argument('--models-list', type=str, help='Path to models list (JSON/YAML)')
     parser.add_argument('--output-dir', type=str, default='runspace/outputs', help='Directory to save reports and configs')
     parser.add_argument('--summary-file', type=str, default='summary_report.csv', help='Filename for summary report')
-    
+    parser.add_argument('--epochs', type=int, default=None, help='Number of evaluation iterations (batches) per run (-1 for all)')
+    parser.add_argument('--batch-size', type=int, default=None, help='Images per batch (overrides dataset.batch_size for all configs)')
+    parser.add_argument('--stop-on-error', action='store_true', help='Abort after the first failed run')
+    parser.add_argument('--workers', type=int, default=None, help='Override dataset.num_workers for all configs')
+    parser.add_argument('--task', choices=['classification', 'feature_matching'], default=None,
+                        help='Run only base configs whose adapter.type matches this task '
+                             '(classification -> generic; feature_matching -> feature_matching)')
+
     args = parser.parse_args()
-    
+
     # Auto-discovery logic
     import glob
-    
+
     # Resolve models list
     models_list_path = args.models_list
     if not models_list_path:
@@ -47,7 +55,7 @@ def main():
         else:
             print(f"Error: Models list not provided and not found at {default_models_path}")
             sys.exit(1)
-            
+
     # Resolve base configs
     base_configs_paths = args.base_configs
     if not base_configs_paths:
@@ -60,30 +68,70 @@ def main():
                 print(f"Error: No YAML files found in {default_base_configs_dir}")
                 sys.exit(1)
         else:
-             print(f"Error: Base configs not provided and directory {default_base_configs_dir} not found")
-             sys.exit(1)
+            print(f"Error: Base configs not provided and directory {default_base_configs_dir} not found")
+            sys.exit(1)
+
+    # Task filter: keep only base configs whose adapter.type matches.
+    if args.task is not None:
+        target_type = 'feature_matching' if args.task == 'feature_matching' else 'generic'
+        filtered = []
+        for path in base_configs_paths:
+            try:
+                with open(path, 'r') as f:
+                    cfg = yaml.safe_load(f) or {}
+                adapter_type = (cfg.get('adapter') or {}).get('type', 'generic')
+            except Exception as e:
+                print(f"Warning: skipping {path} during task filter ({e})")
+                continue
+            if adapter_type == target_type:
+                filtered.append(path)
+        dropped = len(base_configs_paths) - len(filtered)
+        print(f"Task filter '{args.task}' -> {len(filtered)} configs (dropped {dropped}).")
+        base_configs_paths = filtered
+        if not base_configs_paths:
+            print(f"Error: no base configs match task '{args.task}'.")
+            sys.exit(1)
 
     factory = ConfigFactory()
     models = load_models_list(models_list_path)
-    
+
     all_configs = []
-    
+
     # 1. Generate Configs for each base config
     print("Generating configurations...")
     config_output_dir = os.path.join(args.output_dir, 'configs')
-    
+
     for base_config_path in base_configs_paths:
-        print(f"Processing base config: {base_config_path}")
+        print(f"Processing {os.path.basename(base_config_path)}...")
         configs = factory.create_configs(base_config_path, models, base_config_path=base_config_path)
-        
+
+        # Apply --epochs override (caps evaluation batches per run)
+        if args.epochs is not None:
+            for cfg in configs:
+                cfg.setdefault('evaluation', {})
+                cfg['evaluation']['compare_batches'] = args.epochs
+                cfg['evaluation']['max_batches'] = args.epochs
+
+        # Apply --batch-size override
+        if args.batch_size is not None:
+            for cfg in configs:
+                cfg.setdefault('dataset', {})
+                cfg['dataset']['batch_size'] = args.batch_size
+
+        # Apply --workers override
+        if args.workers is not None:
+            for cfg in configs:
+                cfg.setdefault('dataset', {})
+                cfg['dataset']['num_workers'] = args.workers
+
         # Save generated configs
         factory.save_configs(configs, config_output_dir)
         all_configs.extend(configs)
-        
+
     print(f"Generated {len(all_configs)} total configurations in {config_output_dir}")
-    
+
     # 2. Run Configs Sequentially (explicit loop; runner handles single-run only)
-    print("Starting sequential execution...")
+    print(f"\nStarting execution of {len(all_configs)} configurations...")
     runner = Runner()
     results = []
     total = len(all_configs)
@@ -92,17 +140,19 @@ def main():
         print(f"Running config {idx}/{total}: {out_name}")
         res = runner.run_single_logged(cfg, output_root=args.output_dir)
         results.append(res)
-    
+        if args.stop_on_error and res.get('status') == 'FAILED':
+            print(f"Stopping after first error (--stop-on-error): {res.get('exec_error', 'unknown error')}")
+            break
+
     # 3. Aggregate Reports
     print("Aggregating results...")
     aggregator = ReportAggregator()
     summary_path = os.path.join(args.output_dir, args.summary_file)
     aggregator.aggregate(results, summary_path)
-    
-    # Generate Markdown version as well
+
     summary_md_path = os.path.splitext(summary_path)[0] + '.md'
     aggregator.aggregate(results, summary_md_path)
-    
+
     print("Run completed.")
 
 if __name__ == "__main__":

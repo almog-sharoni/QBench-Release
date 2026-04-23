@@ -1,0 +1,36 @@
+- name: superpoint5
+  pipeline: superpoint
+  source: custom
+  weights: ../custom/SuperGluePretrainedNetwork/models/weights/superpoint_v1.pth
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.005
+
+- name: superpoint_superglue5
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.005
+  sg_config:
+    match_threshold: 0.2
+
+
+- name: superpoint25
+  pipeline: superpoint
+  source: custom
+  weights: ../custom/SuperGluePretrainedNetwork/models/weights/superpoint_v1.pth
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.0025
+
+- name: superpoint_superglue25
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.0025
+  sg_config:
+    match_threshold: 0.2

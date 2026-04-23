@@ -3,6 +3,7 @@ import torch.nn as nn
 from tqdm import tqdm
 import yaml
 import os
+import sys
 from src.ops.quant_conv import QuantConv2d
 from src.registry.op_registry import OpRegistry
 from src.quantization.quantizer import quantize
@@ -10,7 +11,7 @@ from src.ops.quant_base import calculate_scale
 from src.utils.fx_trace_utils import trace_quant_aware
 
 class LayerComparator:
-    def __init__(self, ref_model, quant_model, model_name="model", quant_type="quant", adapter=None, device=None, output_dir=None, save_histograms=False):
+    def __init__(self, ref_model, quant_model, model_name="model", quant_type="quant", adapter=None, device=None, output_dir=None, save_histograms=False, save_visualizations=False, num_viz_samples=5):
         self.ref_model = ref_model
         self.quant_model = quant_model
         self.model_name = model_name
@@ -19,18 +20,31 @@ class LayerComparator:
         self.device = device if device else torch.device("cpu")
         self.output_dir = output_dir
         self.save_histograms = save_histograms
+        self.save_visualizations = save_visualizations
+        self.num_viz_samples = num_viz_samples
+        self._viz_count = 0
         self.ref_activations = {}
         self.ref_weights = {}
         self.hooks = []
         
-        # Metrics Engines
-        from src.eval.metrics import MetricsEngine
-        self.ref_metrics = MetricsEngine()
-        self.quant_metrics = MetricsEngine()
+        # Metrics Engines — use adapter's task-appropriate metrics if available
+        if adapter is not None and hasattr(adapter, 'create_metrics'):
+            self.ref_metrics = adapter.create_metrics()
+            self.quant_metrics = adapter.create_metrics()
+        else:
+            from src.eval.metrics import MetricsEngine
+            self.ref_metrics = MetricsEngine()
+            self.quant_metrics = MetricsEngine()
         self.ref_certainty_sum = 0.0
         self.quant_certainty_sum = 0.0
         self.total_batches = 0
         self.layer_metrics = {}
+        # Opt-in: when True, the FP8 compliance table validates each tensor
+        # against its own declared format (weight_fp8 vs. module.q_type,
+        # last_quant_input_unscaled vs. module.input_q_type, activation output
+        # vs. module.q_type). When False, the existing single-format-per-module
+        # behavior is preserved.
+        self.strict_format_check = bool(getattr(adapter, 'strict_format_check', False))
         
         # Compression Stats
         from src.eval.compression import CompressionTracker
@@ -39,6 +53,14 @@ class LayerComparator:
         self._register_hooks()
         self._enable_quant_capture()
         self._load_compliance_config()
+
+    def _to_device(self, x):
+        if isinstance(x, torch.Tensor):
+            return x.to(self.device)
+        if isinstance(x, dict):
+            return {k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                    for k, v in x.items()}
+        return x
 
     def _load_compliance_config(self):
         """Loads compliance configuration from src/eval/compliance_config.yaml"""
@@ -98,7 +120,7 @@ class LayerComparator:
                     self.quant_activations[name] = inp
             return hook
 
-        from src.ops.quant_base import QuantizedLayerMixin
+        from runspace.src.ops.quant_base import QuantizedLayerMixin
         from src.ops.quant_mha import DecomposedMultiheadAttention
 
         quantized_ops = tuple(OpRegistry.get_supported_ops().values())
@@ -109,8 +131,9 @@ class LayerComparator:
             if len(list(module.children())) == 0 or isinstance(module, DecomposedMultiheadAttention):
                 module.register_forward_hook(get_hook(name))
                 
-                # Enable internal capture for Quant layers
-                if isinstance(module, quantized_ops):
+                # Enable internal capture for Quant layers (including QuantizedLayerMixin-only
+                # ops like Observed* modules that aren't registered with original_cls).
+                if isinstance(module, quantized_ops) or isinstance(module, QuantizedLayerMixin):
                     module.capture_activations = True
 
     def compare(self, data_loader, num_batches=1, global_metrics=None):
@@ -140,7 +163,7 @@ class LayerComparator:
 
         print(f"Comparing models on {total_batches if total_batches is not None else 'unknown'} batches...")
 
-        with torch.no_grad():
+        with torch.inference_mode():
             pbar = tqdm(
                 total=total_batches,
                 desc="Comparing",
@@ -173,40 +196,51 @@ class LayerComparator:
                 else:
                     quant_inputs, quant_targets = batch
                 
-                ref_inputs = ref_inputs.to(self.device)
-                # ref_targets = ref_targets.to(self.device) # Targets are same
-                quant_inputs = quant_inputs.to(self.device)
+                ref_inputs = self._to_device(ref_inputs)
+                quant_inputs = self._to_device(quant_inputs)
                 if quant_targets is not None:
-                    quant_targets = quant_targets.to(self.device)
-                targets = quant_targets # Use quant targets (should be same)
-                
+                    quant_targets = self._to_device(quant_targets)
+                targets = quant_targets
+
                 # Run Ref Model
-                self.ref_activations.clear() # Clear previous batch
-                ref_outputs = self.ref_model(ref_inputs)
-                
+                self.ref_activations.clear()
+                if self.adapter is not None:
+                    ref_outputs = self.adapter.forward(self.ref_model, (ref_inputs, targets))
+                else:
+                    ref_outputs = self.ref_model(ref_inputs)
+
                 # Run Quant Model
-                quant_outputs = self.quant_model(quant_inputs)
-                
+                if self.adapter is not None:
+                    quant_outputs = self.adapter.forward(self.quant_model, (quant_inputs, targets))
+                else:
+                    quant_outputs = self.quant_model(quant_inputs)
+
                 # Extract logits if necessary (for SLMs)
                 if hasattr(ref_outputs, 'logits'):
                     ref_outputs = ref_outputs.logits
                 if hasattr(quant_outputs, 'logits'):
                     quant_outputs = quant_outputs.logits
-                
+
+                # Feature matching visualizations (first N batches)
+                if self.save_visualizations and self._viz_count < self.num_viz_samples:
+                    self._save_batch_viz(batch, ref_outputs, quant_outputs, self._viz_count)
+                    self._viz_count += 1
+
                 # Update Metrics
                 self.ref_metrics.update(ref_outputs, targets)
                 self.quant_metrics.update(quant_outputs, targets)
-                
-                self.ref_certainty_sum += compute_certainty(ref_outputs)
-                self.quant_certainty_sum += compute_certainty(quant_outputs)
+
+                if not isinstance(ref_outputs, dict):
+                    self.ref_certainty_sum += compute_certainty(ref_outputs)
+                    self.quant_certainty_sum += compute_certainty(quant_outputs)
                 self.total_batches += 1
-                
+
                 # Compare Layers
                 self._compute_layer_metrics()
 
                 pbar.update(1)
-                ref_acc1 = (100.0 * self.ref_metrics.correct_1 / self.ref_metrics.total) if self.ref_metrics.total else 0.0
-                quant_acc1 = (100.0 * self.quant_metrics.correct_1 / self.quant_metrics.total) if self.quant_metrics.total else 0.0
+                ref_acc1 = (100.0 * getattr(self.ref_metrics, 'correct_1', 0) / self.ref_metrics.total) if getattr(self.ref_metrics, 'total', 0) else 0.0
+                quant_acc1 = (100.0 * getattr(self.quant_metrics, 'correct_1', 0) / self.quant_metrics.total) if getattr(self.quant_metrics, 'total', 0) else 0.0
                 remaining_batches = (
                     max((total_batches or 0) - (i + 1), 0)
                     if total_batches is not None else "?"
@@ -228,7 +262,7 @@ class LayerComparator:
         """
         import torch.nn as nn
         import torch.nn.functional as F
-        from src.ops.quant_base import QuantizedLayerMixin
+        from runspace.src.ops.quant_base import QuantizedLayerMixin
         from src.ops.quant_mha import DecomposedMultiheadAttention
         
         report_lines = []
@@ -255,6 +289,9 @@ class LayerComparator:
                     module = self.quant_model.get_submodule(node.target)
                     if isinstance(module, quantized_ops):
                         quantized_nodes.append(f"{node.name} ({module.__class__.__name__})")
+                    elif OpRegistry.is_passthrough(module.__class__.__name__):
+                        # Non-quantized pass-through op (e.g. ObservedSimpleNMS); out of scope for coverage.
+                        continue
                     elif isinstance(module, supported_modules):
                         unquantized_supported_nodes.append(f"{node.name} ({module.__class__.__name__})")
                     else:
@@ -306,9 +343,11 @@ class LayerComparator:
             for name, module in self.quant_model.named_modules():
                 # Check if leaf (no children) OR DecomposedMHA
                 if len(list(module.children())) == 0 or isinstance(module, DecomposedMultiheadAttention):
-                    
                     if isinstance(module, QuantizedLayerMixin) or isinstance(module, quantized_ops):
                         quantized_count += 1
+                    elif OpRegistry.is_passthrough(module.__class__.__name__):
+                        # Non-quantized pass-through op (e.g. ObservedSimpleNMS); out of scope for coverage.
+                        continue
                     elif isinstance(module, tuple(supported_layers.keys())):
                         unquantized_supported.append(f"{name} ({module.__class__.__name__})")
                     else:
@@ -343,7 +382,7 @@ class LayerComparator:
 
     def _compute_layer_metrics(self):
         from src.eval.metrics import compute_mse, compute_cosine_similarity
-        from src.ops.quant_base import QuantizedLayerMixin
+        from runspace.src.ops.quant_base import QuantizedLayerMixin
         from src.eval.compression import calculate_compression_stats
         
         # Track previous module type for fusion heuristic
@@ -424,7 +463,7 @@ class LayerComparator:
             
             if quant_input is not None and isinstance(quant_input, torch.Tensor):
                 if ref_input is not None and isinstance(ref_input, torch.Tensor):
-                    if ref_input.is_floating_point():
+                    if ref_input.is_floating_point() and ref_input.shape == quant_input.shape:
                         metrics['input_mse_sum'] += compute_mse(ref_input, quant_input)
                         metrics['input_cossim_sum'] += compute_cosine_similarity(ref_input, quant_input)
                 
@@ -458,10 +497,10 @@ class LayerComparator:
                  # Avoid div by zero
                  eps = 1e-9
                  error = torch.abs(orig_max - dequant_max) / (orig_max + eps)
-                 mean_error_pct = error.item() * 100.0
-                 
-                 metrics['xmax_orig_sum'] += orig_max.item()
-                 metrics['xmax_deq_sum'] += dequant_max.item()
+                 mean_error_pct = error.mean().item() * 100.0
+
+                 metrics['xmax_orig_sum'] += orig_max.max().item()
+                 metrics['xmax_deq_sum'] += dequant_max.max().item()
                  metrics['xmax_err_sum'] += mean_error_pct
                  metrics['xmax_count'] += 1
 
@@ -489,8 +528,7 @@ class LayerComparator:
     def _generate_report(self):
         print("Generating evaluation report... (this might take a moment)")
         from src.eval.metrics import compute_mse, compute_cosine_similarity, compute_min_max, check_fp8_compliance
-        from src.quantization.quantizer import get_fp8_e4m3_table, get_fp8_e5m2_table
-        from src.ops.quant_base import QuantizedLayerMixin
+        from runspace.src.ops.quant_base import QuantizedLayerMixin
         from src.ops.quant_mha import DecomposedMultiheadAttention
         import os
         import torch.nn as nn
@@ -517,12 +555,31 @@ class LayerComparator:
         report_lines.append("-" * 66)
         ref_metrics = self.ref_metrics.compute()
         quant_metrics = self.quant_metrics.compute()
-        
-        report_lines.append(f"{'Top-1 Accuracy':<20} | {ref_metrics['acc1']:.2f}%{'':<12} | {quant_metrics['acc1']:.2f}%")
-        report_lines.append(f"{'Top-5 Accuracy':<20} | {ref_metrics['acc5']:.2f}%{'':<12} | {quant_metrics['acc5']:.2f}%")
+
+        if 'acc1' in ref_metrics:
+            ref_acc1 = f"{ref_metrics['acc1']:.2f}%"
+            ref_acc5 = f"{ref_metrics['acc5']:.2f}%"
+            report_lines.append(f"{'Top-1 Accuracy':<20} | {ref_acc1:<20} | {quant_metrics['acc1']:.2f}%")
+            report_lines.append(f"{'Top-5 Accuracy':<20} | {ref_acc5:<20} | {quant_metrics['acc5']:.2f}%")
         if 'ppl' in ref_metrics and ref_metrics['ppl'] is not None:
-            report_lines.append(f"{'Perplexity':<20} | {ref_metrics['ppl']:.2f}{'':<13} | {quant_metrics['ppl']:.2f}")
-        report_lines.append(f"{'Avg Certainty':<20} | {ref_certainty:.4f}{'':<14} | {quant_certainty:.4f}")
+            report_lines.append(f"{'Perplexity':<20} | {ref_metrics['ppl']:<20.2f} | {quant_metrics['ppl']:.2f}")
+        if 'fm_num_keypoints' in ref_metrics:
+            report_lines.append(f"{'Keypoints (avg)':<20} | {ref_metrics['fm_num_keypoints']:<20.1f} | {quant_metrics['fm_num_keypoints']:.1f}")
+            report_lines.append(f"{'Mean Score':<20} | {ref_metrics['fm_mean_score']:<20.4f} | {quant_metrics['fm_mean_score']:.4f}")
+            report_lines.append(f"{'Desc Norm (avg)':<20} | {ref_metrics['fm_desc_norm']:<20.4f} | {quant_metrics['fm_desc_norm']:.4f}")
+            report_lines.append(f"{'Repeatability':<20} | {ref_metrics['fm_repeatability']:<20.4f} | {quant_metrics['fm_repeatability']:.4f}")
+        if 'matching_precision' in ref_metrics:
+            report_lines.append(f"{'Match Precision':<20} | {ref_metrics['matching_precision']:<20.4f} | {quant_metrics['matching_precision']:.4f}")
+            report_lines.append(f"{'Matching Score':<20} | {ref_metrics['matching_score']:<20.4f} | {quant_metrics['matching_score']:.4f}")
+            report_lines.append(f"{'Num Matches (avg)':<20} | {ref_metrics['mean_num_matches']:<20.1f} | {quant_metrics['mean_num_matches']:.1f}")
+            if 'match_certainty' in ref_metrics:
+                ref_certainty = ref_metrics['match_certainty']
+                quant_certainty = quant_metrics['match_certainty']
+            if ref_metrics.get('pose_auc_5', 0) > 0 or quant_metrics.get('pose_auc_5', 0) > 0:
+                report_lines.append(f"{'Pose AUC@5':<20} | {ref_metrics['pose_auc_5']:<20.4f} | {quant_metrics['pose_auc_5']:.4f}")
+                report_lines.append(f"{'Pose AUC@10':<20} | {ref_metrics['pose_auc_10']:<20.4f} | {quant_metrics['pose_auc_10']:.4f}")
+                report_lines.append(f"{'Pose AUC@20':<20} | {ref_metrics['pose_auc_20']:<20.4f} | {quant_metrics['pose_auc_20']:.4f}")
+        report_lines.append(f"{'Avg Certainty':<20} | {ref_certainty:<20.4f} | {quant_certainty:.4f}")
         
         # Compression Stats
         # Compression Stats
@@ -532,27 +589,50 @@ class LayerComparator:
         report_lines.append("\n")
         
         # 2. FP8 Compliance Check
-        GREEN = "\033[92m"
-        RED = "\033[91m"
-        ORANGE = "\033[33m"
-        RESET = "\033[0m"
+        # Emit ANSI color codes only when stdout is a TTY. Otherwise the report
+        # (which is also written to a .txt file) ends up with gibberish escapes
+        # when viewed in a non-terminal editor.
+        _use_color = sys.stdout.isatty() if hasattr(sys.stdout, 'isatty') else False
+        GREEN = "\033[92m" if _use_color else ""
+        RED = "\033[91m" if _use_color else ""
+        ORANGE = "\033[33m" if _use_color else ""
+        BLUE = "\033[94m" if _use_color else ""
+        RESET = "\033[0m" if _use_color else ""
+
+        def _wpad(s, width):
+            # Emojis render as 2 display cells but count as 1 char in len().
+            # east_asian_width catches ✅/❌ but misses 🚧 (classified 'N'),
+            # so also treat the SMP emoji blocks as wide.
+            import unicodedata
+            def _is_wide(ch):
+                if unicodedata.east_asian_width(ch) in ('W', 'F'):
+                    return True
+                cp = ord(ch)
+                return 0x1F000 <= cp <= 0x1FFFF
+            extra = sum(1 for ch in s if _is_wide(ch))
+            pad = max(0, width - extra)
+            return f"{s:<{pad}}"
 
         def format_status(passed, count, width, examples=None):
             if passed:
                 status = "✅ PASS"
-                padded = f"{status:<{width}}"
-                return f"{GREEN}{padded}{RESET}"
+                return f"{GREEN}{_wpad(status, width)}{RESET}"
             else:
                 status = f"❌ FAIL ({count})"
                 if examples:
                     status += f" {examples}"
-                padded = f"{status:<{width}}"
-                return f"{RED}{padded}{RESET}"
+                return f"{RED}{_wpad(status, width)}{RESET}"
 
         report_lines.append("--- FP8 Compliance Check (Value-Based) ---")
-        # Header: Layer(40) | Type(20) | Shape(15) | Weight Check(20) | Input Check(20)
-        report_lines.append(f"{'Layer':<40} | {'Type':<20} | {'Shape':<15} | {'Weight Check':<20} | {'Input Check':<20}")
-        report_lines.append("-" * 125)
+        _NAME_W, _TYPE_W, _SHAPE_W, _CHECK_W, _FMT_W, _IQ_W = 52, 28, 18, 22, 12, 10
+        _SEP_W = _NAME_W + _TYPE_W + _SHAPE_W + 3 * _FMT_W + _IQ_W + _FMT_W + 2 * _CHECK_W + 9 * 3
+        report_lines.append(
+            f"{'Layer':<{_NAME_W}} | {'Type':<{_TYPE_W}} | {'Shape':<{_SHAPE_W}} | "
+            f"{'Weight Fmt':<{_FMT_W}} | {'Input Q?':<{_IQ_W}} | {'Pre-Quant':<{_FMT_W}} | "
+            f"{'Input Fmt':<{_FMT_W}} | {'Output Fmt':<{_FMT_W}} | "
+            f"{'Weight Check':<{_CHECK_W}} | {'Input Check':<{_CHECK_W}}"
+        )
+        report_lines.append("-" * _SEP_W)
         
         # Import FP8/FP4/INT8 table getters and compliance checker
         from ..quantization.quantizer import (
@@ -562,7 +642,7 @@ class LayerComparator:
 
         # Native formats use exact value-set compliance; simulated custom formats use
         # mantissa-precision compliance (the quantizer preserves only mant_bits in FP32 space).
-        _NATIVE_FORMATS = {'fp8_e4m3', 'fp8_e5m2', 'fp4_e2m1', 'fp4_e3m0', 'fp4_e1m2', 'fp4_e0m3', 'int8', 'int4', 'fp32'}
+        _NATIVE_FORMATS = {'int8', 'int4', 'fp32'}
 
         def _parse_mant_bits(q_type: str):
             """Return mantissa bit count for a simulated FP format, or None if not parseable."""
@@ -586,6 +666,63 @@ class LayerComparator:
         # Pre-fetch tables (cached per-format, keyed by q_type string)
         device = next(self.quant_model.parameters()).device
         _table_cache = {}
+        strict = self.strict_format_check
+
+        def _fmt_strings(module):
+            """Return (weight_fmt, input_quantized, pre_quant_fmt, input_fmt, output_fmt)
+            strings for a module. Uses duck-typing on module attributes so the result
+            is independent of which QuantizedLayerMixin module a given class was loaded
+            from (the project has both `src.ops.quant_base` and
+            `runspace.src.ops.quant_base` live at the same time)."""
+            cls_name = module.__class__.__name__
+            is_activation = OpRegistry.is_activation(cls_name)
+            # Weight fmt: only ops that carry trainable weights.
+            if hasattr(module, 'weight') and module.weight is not None:
+                w = getattr(module, 'q_type', None) or 'N/A'
+            else:
+                w = 'N/A'
+            # Input fmt + "input quantized?" flag.
+            # Every layer receives an FP32 tensor on the wire (the previous op emits
+            # an FP32 accumulator regardless of target format), so pre-quant is FP32
+            # whenever the layer actually rounds its input.
+            if getattr(module, 'input_quantization', False):
+                iq = 'Yes'
+                pq = 'FP32'
+                i = getattr(module, 'input_q_type', None) or getattr(module, 'q_type', None) or 'N/A'
+            elif is_activation and hasattr(module, 'q_type') and module.q_type is not None:
+                iq = 'Yes'
+                pq = 'FP32'
+                i = module.q_type
+            else:
+                iq = 'No'
+                pq = 'N/A'
+                i = 'N/A'
+            # Output fmt: activation ops quantize output via q_type; other quantized
+            # ops (conv/matmul) emit FP32 accumulators; everything else is N/A.
+            if is_activation:
+                o = getattr(module, 'q_type', None) or 'N/A'
+            elif hasattr(module, 'q_type') and module.q_type is not None:
+                o = 'FP32'
+            else:
+                o = 'N/A'
+            return w, iq, pq, i, o
+
+        def _check_for_fmt(tensor, fmt):
+            """Validate tensor against the grid of the given format string.
+            Used only when strict_format_check is enabled. Returns the same
+            (passed, inv_count, examples) tuple shape as _compliance_check,
+            or None if the format is unrecognised."""
+            if fmt in (None, 'N/A', 'FP32'):
+                return None
+            if fmt not in _table_cache:
+                _table_cache[fmt] = get_format_table(fmt, device)
+            table = _table_cache[fmt]
+            mb = _parse_mant_bits(fmt) if fmt not in _NATIVE_FORMATS else None
+            if table is None and mb is None:
+                return None
+            if table is None:
+                return _check_mantissa_precision(tensor, mb)
+            return check_fp8_compliance(tensor, table)
         
         # Determine global q_type from the model (check first quantized layer)
         global_q_type = 'fp8_e4m3'
@@ -601,15 +738,33 @@ class LayerComparator:
         # If it's a GraphModule, use graph nodes to get topological order
         import torch.fx
         modules_to_process = []
-        
+
         if isinstance(self.quant_model, torch.fx.GraphModule):
             for node in self.quant_model.graph.nodes:
                 if node.op == 'call_module':
                     module = self.quant_model.get_submodule(node.target)
                     modules_to_process.append((node.target, module))
         else:
-            # Fallback to named_modules()
-            modules_to_process = list(self.quant_model.named_modules())
+            # Forward hooks populate self.quant_activations in execution order,
+            # so its keys give the true forward-call order for every leaf that ran.
+            # Fall back to named_modules() for any leaf that never fired so the
+            # table still lists them.
+            seen = set()
+            for name in self.quant_activations.keys():
+                try:
+                    module = self.quant_model.get_submodule(name)
+                except AttributeError:
+                    continue
+                modules_to_process.append((name, module))
+                seen.add(name)
+            for name, module in self.quant_model.named_modules():
+                if name not in seen:
+                    modules_to_process.append((name, module))
+
+        # Track the last non-passthrough layer's Output Fmt so pass-through rows
+        # can inherit it (a pass-through op receives and emits the same tensor,
+        # so its "flowing format" is whatever the upstream op produced).
+        prev_output_fmt = 'N/A'
 
         for name, module in modules_to_process:
             # Check leaf modules or DecomposedMHA
@@ -626,7 +781,46 @@ class LayerComparator:
                 
                 # Check for Under Construction Status
                 is_under_construction = OpRegistry.is_under_construction(layer_type)
-                under_construction_str = f"{RED}{'🚧 UNDER CONSTRUCTION':<20}{RESET}"
+                under_construction_str = f"{RED}{_wpad('🚧 UNDER CONSTRUCTION', _CHECK_W)}{RESET}"
+
+                # Pass-through ops forward to the next quantized layer and own
+                # neither weight nor activation quantization. Short-circuit the
+                # row with a distinct tag; skip all compliance checks.
+                if OpRegistry.is_passthrough(layer_type):
+                    passthrough_str = f"{BLUE}{_wpad('↪ PASS-THROUGH', _CHECK_W)}{RESET}"
+                    shape_str = "N/A"
+                    if name in self.ref_activations:
+                        shape_str = str(tuple(self.ref_activations[name].shape[1:]))
+
+                    # Pass-through ops receive and emit the same tensor, so the
+                    # "flowing format" is whatever the previous non-passthrough
+                    # layer produced. Default to FP32 when there's no predecessor
+                    # or the predecessor emitted a raw accumulator.
+                    flow_fmt = prev_output_fmt if prev_output_fmt not in ('N/A', None) else 'FP32'
+
+                    # Under strict_format_check only: if the predecessor claimed a
+                    # specific (non-FP32) format, run a compliance check on the
+                    # captured incoming tensor to verify the claim matches reality.
+                    # Non-strict mode leaves the Input Check as ↪ PASS-THROUGH.
+                    input_check_str = passthrough_str
+                    if strict and flow_fmt != 'FP32' and name in self.quant_activations:
+                        captured = self.quant_activations[name]
+                        if isinstance(captured, torch.Tensor):
+                            res = _check_for_fmt(captured, flow_fmt)
+                            if res is not None:
+                                passed, cnt, examples = res
+                                input_check_str = format_status(passed, cnt, _CHECK_W, examples)
+
+                    na_fmt = f"{'N/A':<{_FMT_W}}"
+                    no_iq = f"{'No':<{_IQ_W}}"
+                    flow_cell = f"{flow_fmt:<{_FMT_W}}"
+                    report_lines.append(
+                        f"{name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {shape_str:<{_SHAPE_W}} | "
+                        f"{na_fmt} | {no_iq} | {flow_cell} | {flow_cell} | {flow_cell} | "
+                        f"{passthrough_str} | {input_check_str}"
+                    )
+                    # Pass-through preserves the upstream fmt for subsequent passthroughs.
+                    continue
 
                 # Determine whether to use table-based or mantissa-precision compliance
                 use_mant_check = q_type not in _NATIVE_FORMATS
@@ -634,8 +828,11 @@ class LayerComparator:
 
                 # Check Parameters (Weights + Stats)
                 unknown_fmt = valid_values is None and mant_bits is None
-                unknown_fmt_str = f"{'N/A (Unknown fmt)':<20}"
-                weight_str = f"{'N/A':<20}"
+                unknown_fmt_str = f"{'N/A (Unknown fmt)':<{_CHECK_W}}"
+                weight_str = f"{'N/A':<{_CHECK_W}}"
+
+                # Per-tensor fmt strings for the display columns and strict checks.
+                weight_fmt, input_quantized, pre_quant_fmt, input_fmt, output_fmt = _fmt_strings(module)
 
                 def _compliance_check(tensor):
                     """Run the appropriate compliance check and return (passed, inv_count, examples)."""
@@ -643,19 +840,34 @@ class LayerComparator:
                         return _check_mantissa_precision(tensor, mant_bits)
                     return check_fp8_compliance(tensor, valid_values)
 
+                def _check_input(tensor):
+                    if strict:
+                        res = _check_for_fmt(tensor, input_fmt)
+                        if res is not None:
+                            return res
+                    return _compliance_check(tensor)
+
+                def _check_output(tensor):
+                    if strict:
+                        res = _check_for_fmt(tensor, output_fmt)
+                        if res is not None:
+                            return res
+                    return _compliance_check(tensor)
+
                 if unknown_fmt:
                     weight_str = unknown_fmt_str
                 elif is_under_construction:
                      weight_str = under_construction_str
-                # 1. Weights (Main Table)
+                # 1. Weights (Main Table) — always use _compliance_check since
+                # weight_fmt == module.q_type by definition.
                 elif hasattr(module, 'weight_fp8') and module.weight_fp8 is not None:
                     passed, inv_count, examples = _compliance_check(module.weight_fp8.float())
-                    weight_str = format_status(passed, inv_count, 20, examples)
+                    weight_str = format_status(passed, inv_count, _CHECK_W, examples)
                     if not passed:
                         detailed_failures.append((name, layer_type, 'weight_fp8', inv_count, examples))
-                elif hasattr(module, 'weight') and module.weight is not None:
+                elif hasattr(module, 'q_type') and hasattr(module, 'weight') and module.weight is not None:
                     passed, inv_count, examples = _compliance_check(module.weight)
-                    weight_str = format_status(passed, inv_count, 20, examples)
+                    weight_str = format_status(passed, inv_count, _CHECK_W, examples)
                     if not passed:
                         detailed_failures.append((name, layer_type, 'weight', inv_count, examples))
                     
@@ -679,7 +891,7 @@ class LayerComparator:
                                 detailed_failures.append((name, layer_type, stat_name, inv_count, examples))
 
                 # Check Inputs
-                input_str = f"{'N/A (No Capture)':<20}"
+                input_str = f"{'N/A (No Capture)':<{_CHECK_W}}"
 
                 # Check for custom compliance status in registry
                 custom_status = OpRegistry.get_compliance_status(module.__class__.__name__)
@@ -694,22 +906,22 @@ class LayerComparator:
                         input_str = under_construction_str
                 elif custom_status:
                      # Just custom status (Orange)
-                     input_str = f"{ORANGE}{custom_status:<20}{RESET}"
+                     input_str = f"{ORANGE}{_wpad(custom_status, _CHECK_W)}{RESET}"
                 # Prefer internal unscaled capture for Quant layers
                 elif hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
-                    input_passed, i_inv_count, i_examples = _compliance_check(module.last_quant_input_unscaled)
-                    input_str = format_status(input_passed, i_inv_count, 20, i_examples)
+                    input_passed, i_inv_count, i_examples = _check_input(module.last_quant_input_unscaled)
+                    input_str = format_status(input_passed, i_inv_count, _CHECK_W, i_examples)
                 # Check output for activation layers (they quantize output, not input)
                 elif hasattr(module, 'last_quant_output_unscaled') and module.last_quant_output_unscaled is not None:
-                    input_passed, i_inv_count, i_examples = _compliance_check(module.last_quant_output_unscaled)
-                    input_str = format_status(input_passed, i_inv_count, 20, i_examples)
+                    input_passed, i_inv_count, i_examples = _check_output(module.last_quant_output_unscaled)
+                    input_str = format_status(input_passed, i_inv_count, _CHECK_W, i_examples)
                 # Fallback to hook capture
                 elif name in self.quant_activations:
                     # We captured the raw input, which is likely FP32 in a simulated quantization setup.
                     # Checking it against FP8 will fail and is technically incorrect unless we expect
                     # the previous layer to output quantized values (which QuantConv2d does not, it outputs FP32).
                     # So we mark it as N/A (FP32).
-                    input_str = f"{'N/A (FP32 Input)':<20}"
+                    input_str = f"{'N/A (FP32 Input)':<{_CHECK_W}}"
                 
                 # Get Shape
                 shape_str = "N/A"
@@ -724,19 +936,27 @@ class LayerComparator:
                     elif hasattr(module, 'last_quant_output_unscaled') and module.last_quant_output_unscaled is not None:
                          shape_str = str(tuple(module.last_quant_output_unscaled.shape[1:]))
 
-                report_lines.append(f"{name:<40} | {layer_type:<20} | {shape_str:<15} | {weight_str} | {input_str}")
-        report_lines.append("-" * 125)
-        report_lines.append("-" * 125)
+                report_lines.append(
+                    f"{name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {shape_str:<{_SHAPE_W}} | "
+                    f"{weight_fmt:<{_FMT_W}} | {input_quantized:<{_IQ_W}} | {pre_quant_fmt:<{_FMT_W}} | "
+                    f"{input_fmt:<{_FMT_W}} | {output_fmt:<{_FMT_W}} | "
+                    f"{weight_str} | {input_str}"
+                )
+                # Remember this layer's output fmt so the next pass-through row
+                # can inherit it.
+                prev_output_fmt = output_fmt
+        report_lines.append("-" * _SEP_W)
+        report_lines.append("-" * _SEP_W)
         report_lines.append("\n")
         
         # Detailed Parameter Compliance Table
         if detailed_failures:
             report_lines.append("--- Detailed Parameter Compliance Failures ---")
-            report_lines.append(f"{'Layer':<40} | {'Param Name':<20} | {'Invalid Count':<15} | {'Examples'}")
-            report_lines.append("-" * 110)
+            report_lines.append(f"{'Layer':<{_NAME_W}} | {'Param Name':<20} | {'Invalid Count':<15} | {'Examples'}")
+            report_lines.append("-" * (_NAME_W + 3 + 20 + 3 + 15 + 3 + 8))
             for name, layer_type, param_name, count, examples in detailed_failures:
-                 report_lines.append(f"{name:<40} | {param_name:<20} | {str(count):<15} | {examples}")
-            report_lines.append("-" * 110)
+                 report_lines.append(f"{name:<{_NAME_W}} | {param_name:<20} | {str(count):<15} | {examples}")
+            report_lines.append("-" * (_NAME_W + 3 + 20 + 3 + 15 + 3 + 8))
             report_lines.append("\n")
 
         # 3. Quantization Coverage Verification
@@ -766,8 +986,9 @@ class LayerComparator:
 
         # 4. Layer-Level Comparison (Average)
         report_lines.append(f"--- Layer Comparison (Average over {self.total_batches} Batches) ---")
-        report_lines.append(f"{'Layer':<30} | {'Type':<20} | {'Input MSE':<10} | {'Input CosSim':<12} | {'Weight MSE':<10} | {'Weight CosSim':<12} | {'XMax Orig':<10} | {'XMax Deq':<10} | {'XMax Err %':<10} | {'Zeros % (I)':<12} | {'Zeros % (W)':<12}")
-        report_lines.append("-" * 185)
+        report_lines.append(f"{'Layer':<{_NAME_W}} | {'Type':<{_TYPE_W}} | {'Input MSE':<10} | {'Input CosSim':<12} | {'Weight MSE':<10} | {'Weight CosSim':<12} | {'XMax Orig':<10} | {'XMax Deq':<10} | {'XMax Err %':<10} | {'Zeros % (I)':<12} | {'Zeros % (W)':<12}")
+        _LAYER_CMP_W = _NAME_W + 3 + _TYPE_W + 3 + 10 + 3 + 12 + 3 + 10 + 3 + 12 + 3 + 10 + 3 + 10 + 3 + 10 + 3 + 12 + 3 + 12
+        report_lines.append("-" * _LAYER_CMP_W)
         
         for name, metrics in self.layer_metrics.items():
             count = max(1, metrics['count'])
@@ -832,16 +1053,17 @@ class LayerComparator:
                  xmax_err_str = f"{mean_error_pct:.2f}%"
 
             layer_type = metrics['type']
-            line = f"{name:<30} | {layer_type:<20} | {input_mse_str:<10}   | {input_cossim_str:<12}       | {weight_mse_str:<10}   | {weight_cossim_str:<12} | {xmax_orig_str:<10} | {xmax_deq_str:<10} | {xmax_err_str:<10} | {f'{zeros_pct_input:.2f}%':<12} | {zeros_pct_weight_str:<12}"
+            line = f"{name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {input_mse_str:<10} | {input_cossim_str:<12} | {weight_mse_str:<10} | {weight_cossim_str:<12} | {xmax_orig_str:<10} | {xmax_deq_str:<10} | {xmax_err_str:<10} | {f'{zeros_pct_input:.2f}%':<12} | {zeros_pct_weight_str:<12}"
             report_lines.append(line)
-        
-        report_lines.append("-" * 185)
+
+        report_lines.append("-" * _LAYER_CMP_W)
         report_lines.append("\n")
 
         # 5. Chunk-wise Scale Factors (Exponents)
         report_lines.append("--- Chunk-wise Scale Factors (Log2 Exponents) ---")
-        report_lines.append(f"{'Layer':<30} | {'Type':<15} | {'Source':<10} | {'Num Chunks':<10} | {'Min Exp':<12} | {'Max Exp':<12} | {'Mean Exp':<12} | {'Detailed Exponents (if few)'}")
-        report_lines.append("-" * 140)
+        report_lines.append(f"{'Layer':<{_NAME_W}} | {'Type':<{_TYPE_W}} | {'Source':<10} | {'Num Chunks':<10} | {'Min Exp':<12} | {'Max Exp':<12} | {'Mean Exp':<12} | {'Detailed Exponents (if few)'}")
+        _CHUNK_W = _NAME_W + 3 + _TYPE_W + 3 + 10 + 3 + 10 + 3 + 12 + 3 + 12 + 3 + 12 + 3 + 27
+        report_lines.append("-" * _CHUNK_W)
 
         for name, metrics in self.layer_metrics.items():
             for source, scales_list in [('Input', metrics['input_scales']), ('Weight', metrics['weight_scales'])]:
@@ -864,14 +1086,19 @@ class LayerComparator:
                         flat_exps = torch.round(log_scales.flatten()).int()
                         detailed = ", ".join([f"{e.item():d}" for e in flat_exps])
                     
-                    report_lines.append(f"{name:<30} | {metrics['type']:<15} | {source:<10} | {num_chunks:<10} | {min_e:<12d} | {max_e:<12d} | {mean_e:<12.2f} | {detailed}")
+                    report_lines.append(f"{name:<{_NAME_W}} | {metrics['type']:<{_TYPE_W}} | {source:<10} | {num_chunks:<10} | {min_e:<12d} | {max_e:<12d} | {mean_e:<12.2f} | {detailed}")
 
-        report_lines.append("-" * 140)
+        report_lines.append("-" * _CHUNK_W)
         report_lines.append("\n")
         
         # Print Report (with colors)
         report_str = "\n".join(report_lines)
-        print(report_str)
+        try:
+            print(report_str)
+        except UnicodeEncodeError:
+            import re
+            _clean = re.compile(r'\x1b\[[0-9;]*m')
+            print(_clean.sub('', report_str).encode('ascii', errors='replace').decode('ascii'))
         
         # Save Report (without colors)
         import re
@@ -888,7 +1115,7 @@ class LayerComparator:
         os.makedirs(report_dir, exist_ok=True)
         report_path = os.path.join(report_dir, "comparison_report.txt")
         
-        with open(report_path, "w") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             f.write(strip_ansi(report_str))
         print(f"Report saved to {report_path}")
 
@@ -1070,6 +1297,124 @@ class LayerComparator:
             except Exception as e:
                 print(f"Failed to save histogram for {name}: {e}")
                 plt.close('all')
+
+    def _superpoint_is_quantized(self):
+        """Return True if any quantized op lives under backbone.superpoint.*"""
+        quantized_ops = tuple(OpRegistry.get_supported_ops().values())
+        for name, module in self.quant_model.named_modules():
+            if 'superpoint' in name and isinstance(module, quantized_ops):
+                return True
+        return False
+
+    def _superglue_is_quantized(self):
+        """Return True if any quantized op lives under backbone.superglue.*"""
+        quantized_ops = tuple(OpRegistry.get_supported_ops().values())
+        for name, module in self.quant_model.named_modules():
+            if 'superglue' in name and isinstance(module, quantized_ops):
+                return True
+        return False
+
+    def _get_quant_info(self):
+        """Return dict with quant_type and human-readable quantized_components label."""
+        sp = self._superpoint_is_quantized()
+        sg = self._superglue_is_quantized()
+        if sp and sg:
+            components = 'SuperPoint + SuperGlue'
+        elif sp:
+            components = 'SuperPoint only'
+        elif sg:
+            components = 'SuperGlue only'
+        else:
+            components = 'Unknown'
+        return {'quant_type': self.quant_type, 'components': components}
+
+    def _compute_pair_metrics(self, batch, ref_outputs, quant_outputs):
+        """Compute per-batch accuracy metrics for visualization annotations."""
+        from src.eval.metrics.matching import _compute_epipolar_error
+        metrics = {}
+
+        if isinstance(ref_outputs, dict) and 'matches0' in ref_outputs:
+            ref_m0 = ref_outputs['matches0'][0].cpu().numpy()
+            q_m0 = quant_outputs['matches0'][0].cpu().numpy()
+            ref_valid = ref_m0 > -1
+            q_valid = q_m0 > -1
+
+            metrics['ref_matches'] = int(ref_valid.sum())
+            metrics['quant_matches'] = int(q_valid.sum())
+            metrics['ref_kpts0'] = len(ref_outputs['keypoints0'][0])
+            metrics['quant_kpts0'] = len(quant_outputs['keypoints0'][0])
+            metrics['ref_kpts1'] = len(ref_outputs['keypoints1'][0])
+            metrics['quant_kpts1'] = len(quant_outputs['keypoints1'][0])
+
+            has_gt = isinstance(batch, dict) and 'T_0to1' in batch
+            if has_gt:
+                T = batch['T_0to1'][0].cpu().numpy()
+                K0 = batch['K0'][0].cpu().numpy()
+                K1 = batch['K1'][0].cpu().numpy()
+
+                if metrics['ref_matches'] > 0:
+                    ref_kp0 = ref_outputs['keypoints0'][0].cpu().numpy()
+                    ref_kp1 = ref_outputs['keypoints1'][0].cpu().numpy()
+                    ref_mkpts0 = ref_kp0[ref_valid]
+                    ref_mkpts1 = ref_kp1[ref_m0[ref_valid]]
+                    epi = _compute_epipolar_error(ref_mkpts0, ref_mkpts1, T, K0, K1)
+                    metrics['ref_precision'] = float((epi < 5e-4).mean())
+
+                if metrics['quant_matches'] > 0:
+                    q_kp0 = quant_outputs['keypoints0'][0].cpu().numpy()
+                    q_kp1 = quant_outputs['keypoints1'][0].cpu().numpy()
+                    q_mkpts0 = q_kp0[q_valid]
+                    q_mkpts1 = q_kp1[q_m0[q_valid]]
+                    epi = _compute_epipolar_error(q_mkpts0, q_mkpts1, T, K0, K1)
+                    metrics['quant_precision'] = float((epi < 5e-4).mean())
+
+        elif isinstance(ref_outputs, dict) and 'keypoints' in ref_outputs:
+            metrics['ref_kpts'] = len(ref_outputs['keypoints'][0])
+            metrics['quant_kpts'] = len(quant_outputs['keypoints'][0])
+
+        elif isinstance(ref_outputs, dict) and 'keypoints0' in ref_outputs:
+            metrics['ref_kpts0'] = len(ref_outputs['keypoints0'][0])
+            metrics['quant_kpts0'] = len(quant_outputs['keypoints0'][0])
+            metrics['ref_kpts1'] = len(ref_outputs['keypoints1'][0])
+            metrics['quant_kpts1'] = len(quant_outputs['keypoints1'][0])
+
+        return metrics
+
+    def _save_batch_viz(self, batch, ref_outputs, quant_outputs, idx):
+        try:
+            from src.utils.feature_matching_viz import (
+                save_matching_viz, save_keypoints_viz, save_superglue_keypoints_viz,
+            )
+            viz_dir = os.path.join(self.output_dir, 'visualizations') if self.output_dir else 'visualizations'
+            pair_id = ''
+            if isinstance(batch, dict) and 'pair_id' in batch:
+                pair_id = batch['pair_id'][0] if isinstance(batch['pair_id'], (list, tuple)) else str(batch['pair_id'])
+
+            quant_info = self._get_quant_info()
+            batch_metrics = self._compute_pair_metrics(batch, ref_outputs, quant_outputs)
+
+            if isinstance(ref_outputs, dict) and 'matches0' in ref_outputs:
+                path = os.path.join(viz_dir, f'pair_{idx:03d}_matches.png')
+                save_matching_viz(batch, ref_outputs, quant_outputs, path,
+                                  pair_id=pair_id, quant_info=quant_info,
+                                  batch_metrics=batch_metrics)
+                print(f"  Saved match visualization: {path}")
+                if self._superpoint_is_quantized():
+                    kp_path = os.path.join(viz_dir, f'pair_{idx:03d}_keypoints.png')
+                    # Only pass keypoint counts — precision is a match metric, not a keypoint metric
+                    kp_metrics = {k: v for k, v in batch_metrics.items() if 'kpts' in k}
+                    save_superglue_keypoints_viz(batch, ref_outputs, quant_outputs, kp_path,
+                                                 pair_id=pair_id, quant_info=quant_info,
+                                                 batch_metrics=kp_metrics)
+                    print(f"  Saved keypoint visualization: {kp_path}")
+            elif isinstance(ref_outputs, dict) and 'keypoints' in ref_outputs:
+                path = os.path.join(viz_dir, f'pair_{idx:03d}_keypoints.png')
+                save_keypoints_viz(batch, ref_outputs, quant_outputs, path,
+                                   pair_id=pair_id, quant_info=quant_info,
+                                   batch_metrics=batch_metrics)
+                print(f"  Saved keypoint visualization: {path}")
+        except Exception as e:
+            print(f"Warning: visualization failed for batch {idx}: {e}")
 
     def close(self):
         for hook in self.hooks:

@@ -68,6 +68,8 @@ def get_format_params(q_type: str) -> tuple[int, int]:
     return 0, 0
 
 
+DEFAULT_QUANTIZATION_TYPE = 'fp8_e4m3'
+
 # Legacy constants for backward compatibility
 FP8_E4M3_EXP_BIAS = 7
 FP8_E5M2_EXP_BIAS = 15

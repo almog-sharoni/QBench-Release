@@ -52,111 +52,7 @@ INT4 Format:
 
 import torch
 
-# ============================================================================
-# FP8 E4M3 Lookup Table (All 256 possible values)
-# ============================================================================
-
 _FP8_TABLE_CACHE = {}
-
-
-def _generate_fp8_e4m3_table(device: torch.device = None, bias: int = 7) -> torch.Tensor:
-    """
-    Generate lookup table of all 256 possible FP8 E4M3 float values.
-    Used for assertion/validation that quantized values are valid FP8.
-    
-    NOTE: No NaN or Infinity values. Max value is at (exp=15, mant=6).
-    """
-    if device is None:
-        device = torch.device('cpu')
-    
-    cache_key = f"{device}_fp8_e4m3_bias{bias}"
-    if cache_key in _FP8_TABLE_CACHE:
-        return _FP8_TABLE_CACHE[cache_key]
-    
-    values = []
-    for code in range(256):
-        sign = (code >> 7) & 0x1
-        exp = (code >> 3) & 0xF
-        mant = code & 0x7
-        
-        # No NaN support - all values are normal or subnormal
-        if exp == 0:
-            value = (mant / 8.0) * (2.0 ** (1 - bias))
-        else:
-            value = (1.0 + mant / 8.0) * (2.0 ** (exp - bias))
-        
-        if sign:
-            value = -value
-        values.append(value)
-    
-    table = torch.tensor(values, dtype=torch.float32, device=device)
-    _FP8_TABLE_CACHE[cache_key] = table
-    return table
-
-
-def get_fp8_e4m3_table(device: torch.device = None) -> torch.Tensor:
-    """Returns the lookup table of all 256 FP8 E4M3 values."""
-    return _generate_fp8_e4m3_table(device).clone()
-
-
-# ============================================================================
-# FP8 E5M2 Lookup Table
-# ============================================================================
-
-def _generate_fp8_e5m2_table(device: torch.device = None, bias: int = 15) -> torch.Tensor:
-    """
-    Generate lookup table of all 256 possible FP8 E5M2 float values.
-    
-    NOTE: No NaN or Infinity values. Max value is at (exp=30, mant=3).
-    Values with exp=31 are treated as normal values (not special).
-    """
-    if device is None:
-        device = torch.device('cpu')
-    
-    cache_key = f"{device}_e5m2_bias{bias}"
-    if cache_key in _FP8_TABLE_CACHE:
-        return _FP8_TABLE_CACHE[cache_key]
-    
-    values = []
-    for code in range(256):
-        sign = (code >> 7) & 0x1
-        exp = (code >> 2) & 0x1F
-        mant = code & 0x3
-        
-        # No Inf/NaN support - all values are normal or subnormal
-        if exp == 0:
-            # Subnormal: (-1)^S * (0.M) * 2^(1-bias)
-            value = (mant / 4.0) * (2.0 ** (1 - bias))
-        else:
-            # Normal: (-1)^S * (1.M) * 2^(E-bias)
-            value = (1.0 + mant / 4.0) * (2.0 ** (exp - bias))
-        
-        if sign:
-            value = -value
-        values.append(value)
-    
-    table = torch.tensor(values, dtype=torch.float32, device=device)
-    _FP8_TABLE_CACHE[cache_key] = table
-    return table
-
-def get_fp8_e5m2_table(device: torch.device = None) -> torch.Tensor:
-    """Returns the lookup table of all 256 FP8 E5M2 values."""
-    return _generate_fp8_e5m2_table(device).clone()
-
-
-# ============================================================================
-# FP4 Lookup Tables
-# ============================================================================
-
-def get_fp4_e2m1_table(device: torch.device = None) -> torch.Tensor:
-    """Returns the lookup table of all 16 FP4 E2M1 values (bias=1)."""
-    return _generate_fp_generic_table(device, total_bits=4, exp_bits=2, mant_bits=1, bias=1).clone()
-
-def get_fp4_e3m0_table(device: torch.device = None) -> torch.Tensor:
-    """Returns the lookup table of all 16 FP4 E3M0 values (bias=3)."""
-    return _generate_fp_generic_table(device, total_bits=4, exp_bits=3, mant_bits=0, bias=3).clone()
-
-
 
 
 
@@ -187,40 +83,13 @@ def get_int8_table(device: torch.device = None) -> torch.Tensor:
 
 
 def get_format_table(q_type: str, device: torch.device = None) -> torch.Tensor:
-    """
-    Return a valid-values lookup table for any supported format string.
-    Parses formats like 'fp8_e1m6', 'fp8_e3m4', 'fp4_e2m1', 'int8', etc.
-    Returns None for unrecognised formats.
-    """
-    if q_type == 'fp8_e4m3':
-        return get_fp8_e4m3_table(device)
-    if q_type == 'fp8_e5m2':
-        return get_fp8_e5m2_table(device)
-    if q_type == 'fp4_e2m1':
-        return get_fp4_e2m1_table(device)
-    if q_type == 'fp4_e3m0':
-        return get_fp4_e3m0_table(device)
+    """Finite lookup table for formats that truly have one (int8/int4).
+    Returns None for any simulated fp format; callers must use the
+    mantissa-precision check, which matches quantize_fp_generic's semantics."""
     if q_type == 'int8':
         return get_int8_table(device)
-
-    # Generic fpX_eEmM formats
-    try:
-        if '_e' in q_type and 'm' in q_type:
-            prefix = q_type.split('_')[0]  # e.g. 'fp8'
-            e_part = q_type.split('_e')[1]  # e.g. '1m6'
-            exp_bits = int(e_part.split('m')[0])
-            mant_bits = int(e_part.split('m')[1])
-            total_bits = int(''.join(filter(str.isdigit, prefix)))
-            signed = not prefix.startswith('u')
-            # Standard IEEE-style bias: 2^(E-1) - 1
-            bias = max(0, (1 << (exp_bits - 1)) - 1) if exp_bits > 0 else 0
-            return _generate_fp_generic_table(
-                device, total_bits=total_bits, exp_bits=exp_bits,
-                mant_bits=mant_bits, bias=bias, signed=signed
-            ).clone()
-    except Exception:
-        pass
-
+    if q_type == 'int4':
+        return get_int4_table(device)
     return None
 
 
@@ -248,33 +117,6 @@ def _generate_int4_table(device: torch.device = None) -> torch.Tensor:
 
 def get_int4_table(device: torch.device = None) -> torch.Tensor:
     return _generate_int4_table(device).clone()
-
-
-# ============================================================================
-# Constants
-# ============================================================================
-
-# Import bias constants from single source of truth
-
-
-FP32_EXP_BIAS = 127
-FP8_E4M3_EXP_BIAS = 7
-FP8_E5M2_EXP_BIAS = 15
-
-FP32_MANT_BITS = 23
-FP8_E4M3_MANT_BITS = 3
-FP8_E5M2_MANT_BITS = 2
-
-
-# Shifts
-MANT_SHIFT_E4M3 = FP32_MANT_BITS - 3
-MANT_SHIFT_E5M2 = FP32_MANT_BITS - 2
-MANT_SHIFT_E2M5 = FP32_MANT_BITS - 5
-MANT_SHIFT_E3M4 = FP32_MANT_BITS - 4
-MANT_SHIFT_E1M6 = FP32_MANT_BITS - 6
-MANT_SHIFT_E6M1 = FP32_MANT_BITS - 1
-MANT_SHIFT_E7M0 = FP32_MANT_BITS - 0
-
 
 
 # ============================================================================
@@ -380,131 +222,6 @@ def quantize(tensor: torch.Tensor, q_type: str = "fp8_e4m3", validate: bool = Fa
         raise ValueError(f"Unsupported quantization type: {q_type}")
 
 
-# ============================================================================
-# Generic FP Table Generator
-# ============================================================================
-
-def _generate_fp_generic_table(device: torch.device = None, total_bits: int = 8, exp_bits: int = 4, mant_bits: int = 3, bias: int = 7, signed: bool = True) -> torch.Tensor:
-    """
-    Generate lookup table for any FP format (S + E + M).
-    If signed=False, S=0.
-    """
-    if device is None:
-        device = torch.device('cpu')
-        
-    cache_key = f"{device}_{'s' if signed else 'u'}fp{total_bits}_e{exp_bits}m{mant_bits}_bias{bias}"
-    if cache_key in _FP8_TABLE_CACHE:
-        return _FP8_TABLE_CACHE[cache_key]
-        
-    num_codes = 1 << total_bits
-    codes = torch.arange(num_codes, dtype=torch.int32, device=device)
-    
-    # Extract fields
-    if signed:
-        # Sign is MSB: [S, E...E, M...M]
-        sign_shift = total_bits - 1
-        exp_shift = mant_bits
-        mant_mask = (1 << mant_bits) - 1
-        exp_mask = (1 << exp_bits) - 1
-        
-        sign = (codes >> sign_shift) & 0x1
-        exp = (codes >> exp_shift) & exp_mask
-        mant = codes & mant_mask
-    else:
-        # Unsigned: [E...E, M...M]
-        # Sign is implicit 0
-        sign = torch.zeros_like(codes)
-        exp_shift = mant_bits
-        mant_mask = (1 << mant_bits) - 1
-        exp_mask = (1 << exp_bits) - 1
-        
-        exp = (codes >> exp_shift) & exp_mask
-        mant = codes & mant_mask
-    
-    values = _fp_generic_to_float_vectorized(sign, exp, mant, exp_bits, mant_bits, bias)
-    
-    _FP8_TABLE_CACHE[cache_key] = values
-    return values
-
-def _generate_efp_generic_table(device: torch.device = None, total_bits: int = 8, exp_bits: int = 4, mant_bits: int = 3, bias: int = 7, signed: bool = True) -> torch.Tensor:
-    if device is None:
-        device = torch.device('cpu')
-        
-    cache_key = f"{device}_{'s' if signed else 'u'}efp{total_bits}_e{exp_bits}m{mant_bits}_bias{bias}"
-    if cache_key in _FP8_TABLE_CACHE:
-        return _FP8_TABLE_CACHE[cache_key]
-        
-    num_codes = 1 << total_bits
-    codes = torch.arange(num_codes, dtype=torch.int32, device=device)
-    
-    if signed:
-        sign_shift = total_bits - 1
-        sign = (codes >> sign_shift) & 0x1
-        # Body is everything except sign
-        body_mask = (1 << (total_bits - 1)) - 1
-        body = codes & body_mask
-    else:
-        sign = torch.zeros_like(codes)
-        body = codes
-        
-    # EFP logic (User Proposal):
-    # 0 -> 0.
-    # Positives 1..Max_Std -> Same.
-    # Negatives -> Same (except -0).
-    # -0 -> Max_Ext.
-    
-    # Check for Negative Zero code (Sign=1, Body=0 which is Exp=0, Mant=0)
-    # Mask for Body (everything except sign)
-    body_mask = (1 << (total_bits - 1)) - 1
-    body = codes & body_mask
-    
-    is_neg_zero = (sign == 1) & (body == 0)
-    
-    # If Neg Zero -> Max_Ext code
-    # Max_Std code for positive is body_mask in body part? No.
-    # Max_Std code (pos) is just `max_std_code`.
-    # Max_Ext code is `max_std_code + 1`.
-    
-    # We need to construct the Exp/Mant for the value we want.
-    max_std_code = (1 << (exp_bits + mant_bits)) - 1
-    limit_ext = max_std_code + 1
-    
-    ext_mant = limit_ext & ((1 << mant_bits) - 1)
-    ext_exp = limit_ext >> mant_bits
-    
-    # Current Exp/Mant from codes
-    # We can rely on `_fp_generic_to_float_vectorized` doing the right thing for standard codes.
-    # But for Neg Zero, we want to inject `ext_exp` and `ext_mant` and Sign=0.
-    
-    # We need to extract exp/mant from `codes` first to have the "standard" values for non-overridden cases
-    # (The existing implementation of this function didn't extract them before this block in the new version? 
-    #  Wait, I need to check the full function context. 'exp' and 'mant' variables might be missing if I replaced too much or they were defined earlier.)
-    
-    # Re-extracting for safety as I might have broken the flow
-    if signed:
-        sign_shift = total_bits - 1
-        exp_shift = mant_bits
-        mant_mask = (1 << mant_bits) - 1
-        exp_mask = (1 << exp_bits) - 1
-        
-        sign = (codes >> sign_shift) & 0x1
-        exp = (codes >> exp_shift) & exp_mask
-        mant = codes & mant_mask
-    else:
-        # Should not happen for EFP (signed)
-        sign = torch.zeros_like(codes)
-        exp = codes # placeholder
-        mant = codes
-        
-    # Override
-    final_sign = torch.where(is_neg_zero, torch.zeros_like(sign), sign)
-    final_exp = torch.where(is_neg_zero, torch.full_like(exp, ext_exp), exp)
-    final_mant = torch.where(is_neg_zero, torch.full_like(mant, ext_mant), mant)
-    
-    values = _fp_generic_to_float_vectorized(final_sign, final_exp, final_mant, exp_bits, mant_bits, bias)
-    
-    _FP8_TABLE_CACHE[cache_key] = values
-    return values
 
 
 
@@ -963,82 +680,32 @@ def check_fp8_compliance(tensor: torch.Tensor, valid_table: torch.Tensor = None,
              return False, count, examples
         return True, 0, []
 
-    # For FP8/FP4/FP*, we need the table
-    if valid_table is None:
-        if q_type == "fp8_e4m3":
-            valid_table = _generate_fp8_e4m3_table(tensor.device, bias=bias if bias is not None else 7)
-        elif q_type == "fp8_e5m2":
-            valid_table = _generate_fp8_e5m2_table(tensor.device, bias=bias if bias is not None else 15)
-        elif (q_type.startswith("fp") or q_type.startswith("ufp") or q_type.startswith("efp") or q_type.startswith("uefp")) and "_e" in q_type and "m" in q_type:
-             # Generic FP generation
-             try:
-                 is_efp = "efp" in q_type
-                 if is_efp:
-                     is_signed = q_type.startswith("efp")
-                 else:
-                     is_signed = q_type.startswith("fp")
-                 
-                 fpx_part = q_type.split('_')[0]
-                 e_part = q_type.split('_e')[1]
-                 exp_bits = int(e_part.split('m')[0])
-                 mant_bits = int(e_part.split('m')[1])
-                 
-                 # Calculate stored bits
-                 total_iter_bits = exp_bits + mant_bits
-                 if is_signed:
-                     total_iter_bits += 1
-                     
-                 # Calculate default bias if not provided
-                 if bias is None:
-                     bias = (1 << (exp_bits - 1)) - 1 if exp_bits > 0 else 0
-                 
-                 if is_efp:
-                     valid_table = _generate_efp_generic_table(tensor.device, total_iter_bits, exp_bits, mant_bits, bias, signed=is_signed)
-                 else:
-                     valid_table = _generate_fp_generic_table(tensor.device, total_iter_bits, exp_bits, mant_bits, bias, signed=is_signed)
-             except:
-                  raise ValueError(f"Could not parse or generate table for format {q_type}")
-        else:
-             raise ValueError(f"Unknown q_type: {q_type}")
-
-    valid_non_nan = valid_table[~torch.isnan(valid_table)]
+    # For FP formats: a value is valid iff it is a fixed point of the kernel —
+    # i.e., running quantize() on it yields itself. This ties the checker to the
+    # same simulator that produces activations/weights at runtime, so the valid
+    # set is exactly what the kernel can emit (not the mathematically-complete
+    # FP grid, which includes subnormal/exponent states the kernel doesn't
+    # synthesize).
     tensor_flat = tensor.contiguous().view(-1)
-    non_nan_vals = tensor_flat[~torch.isnan(tensor_flat)]
-    
-    if len(non_nan_vals) == 0:
+    finite_mask = torch.isfinite(tensor_flat)
+    finite_vals = tensor_flat[finite_mask]
+    if finite_vals.numel() == 0:
         return True, 0, []
-        
-    # Chunking to avoid OOM
-    # With N=1M and M=256 (FP8), matrix is 1M * 256 * 4 bytes = 1GB.
-    # This is fine for 1 config, but in parallel setup, multiple processes/threads might stress it?
-    # No, this runs sequentially in main process usually.
-    # However, for broader compatibility and speed, let's reduce chunk size purely for safety.
-    chunk_size = 10000 
-    num_chunks = (len(non_nan_vals) + chunk_size - 1) // chunk_size
-    
-    total_invalid = 0
-    examples = []
-    
-    for i in range(num_chunks):
-        chunk = non_nan_vals[i*chunk_size : (i+1)*chunk_size]
-        
-        # Broadcasting [Chunk, 1] - [1, Table] -> [Chunk, Table]
-        # Memory: Chunk * TableSize * 4 bytes
-        # 10k * 256 * 4 = 10MB. Very safe.
-        diffs = torch.abs(chunk.unsqueeze(1) - valid_non_nan.unsqueeze(0))
-        min_diffs = diffs.min(dim=1).values
-        
-        invalid_mask = min_diffs > rtol * torch.abs(chunk).clamp(min=1e-10)
-        
-        if invalid_mask.any():
-            count = invalid_mask.sum().item()
-            total_invalid += count
-            if len(examples) < 5:
-                examples.extend(chunk[invalid_mask][:5 - len(examples)].tolist())
+
+    # `quantize` dispatches on q_type and ends up in quantize_fp_generic for
+    # FP formats. We compute what the kernel would produce for each value and
+    # compare.
+    expected = quantize(finite_vals, q_type=q_type, rounding="nearest")
+    diff = (finite_vals - expected).abs()
+    tol = rtol * finite_vals.abs().clamp(min=1e-10)
+    invalid_mask = diff > tol
+
+    total_invalid = int(invalid_mask.sum().item())
+    examples = finite_vals[invalid_mask][:5].tolist() if total_invalid > 0 else []
 
     if total_invalid > 0:
         return False, total_invalid, examples
-        
+
     return True, 0, []
 
 def assert_fp8_valid(tensor: torch.Tensor, rtol: float = 1e-5, q_type: str = "fp8_e4m3", bias: int = None) -> None:

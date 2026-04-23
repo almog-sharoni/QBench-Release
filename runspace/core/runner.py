@@ -15,43 +15,47 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.adapters.adapter_factory import create_adapter
-from src.eval.metrics import MetricsEngine
 from src.eval.comparator import LayerComparator
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
 from torch.utils.data import DataLoader
-
-
-class _ImageNetTargetTransform:
-    """
-    Pickle-safe target transform for DataLoader multiprocessing contexts.
-    """
-    def __init__(self, idx_map):
-        self.idx_map = idx_map or {}
-
-    def __call__(self, target):
-        return self.idx_map.get(target, target)
 
 
 class Runner:
     def __init__(self, device=None):
         self.device = device if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._db = None
+        self._fm_db = None
         print(f"Runner initialized on device: {self.device}")
-        
+
+        # Inference throughput knobs: enable cuDNN autotune for fixed-shape convs,
+        # and let matmul use TF32 where it's available (SuperGlue attention is
+        # matmul-heavy). These only affect FP32 reference passes; quantized paths
+        # already control their own precision.
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+        if hasattr(torch, 'set_float32_matmul_precision'):
+            torch.set_float32_matmul_precision('high')
+
         # Aggressive cleanup on init
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    def _to_device(self, x):
+        if isinstance(x, torch.Tensor):
+            return x.to(self.device)
+        if isinstance(x, dict):
+            return {k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                    for k, v in x.items()}
+        return x
+
     @staticmethod
     def _running_accuracy(metrics_engine):
         """Returns running top-1/top-5 accuracy from a MetricsEngine instance."""
-        if metrics_engine.total == 0:
+        total = getattr(metrics_engine, 'total', 0)
+        if total == 0:
             return 0.0, 0.0
-
-        acc1 = 100.0 * metrics_engine.correct_1 / metrics_engine.total
-        acc5 = 100.0 * metrics_engine.correct_5 / metrics_engine.total
+        acc1 = 100.0 * getattr(metrics_engine, 'correct_1', 0) / total
+        acc5 = 100.0 * getattr(metrics_engine, 'correct_5', 0) / total
         return acc1, acc5
 
     @staticmethod
@@ -116,8 +120,21 @@ class Runner:
             return
         try:
             iterator = getattr(data_loader, "_iterator", None)
-            if iterator is not None and hasattr(iterator, "_shutdown_workers"):
-                iterator._shutdown_workers()
+            if iterator is not None:
+                if hasattr(iterator, "_shutdown_workers"):
+                    try:
+                        iterator._shutdown_workers()
+                    except Exception:
+                        pass
+                # Fallback: forcibly terminate any surviving worker processes
+                # (handles the case where __init__ failed before _workers_status was set).
+                for w in getattr(iterator, "_workers", []):
+                    try:
+                        if w.is_alive():
+                            w.terminate()
+                            w.join(timeout=2)
+                    except Exception:
+                        pass
                 data_loader._iterator = None
         except Exception:
             pass
@@ -187,6 +204,22 @@ class Runner:
         elif db_path and os.path.abspath(self._db.db_path) != os.path.abspath(db_path):
             self._db = RunDatabase(db_path=db_path)
         return self._db
+
+    @staticmethod
+    def _fm_db_path(db_path: Optional[str]) -> str:
+        """Derive the FM database path alongside the classification database."""
+        from src.database.handler import RunDatabase
+        base = db_path if db_path else RunDatabase._default_db_path()
+        return os.path.join(os.path.dirname(base), 'fm_runs.db')
+
+    def _get_fm_db(self, db_path: Optional[str] = None):
+        from src.database.handler import RunDatabase
+        fm_path = self._fm_db_path(db_path)
+        if self._fm_db is None:
+            self._fm_db = RunDatabase(db_path=fm_path)
+        elif os.path.abspath(self._fm_db.db_path) != os.path.abspath(fm_path):
+            self._fm_db = RunDatabase(db_path=fm_path)
+        return self._fm_db
 
     @staticmethod
     def _to_json_string(value):
@@ -455,7 +488,16 @@ class Runner:
         activation_dt = exp_cfg.get('activation_dt')
         if not experiment_type:
             return False
-        db = self._get_db(db_path=db_path)
+        is_fm = config.get('adapter', {}).get('type') == 'feature_matching'
+        db = self._get_fm_db(db_path=db_path) if is_fm else self._get_db(db_path=db_path)
+        if is_fm:
+            return db.fm_run_exists(
+                model_name=model_name,
+                experiment_type=experiment_type,
+                weight_dt=weight_dt,
+                activation_dt=activation_dt,
+                status="SUCCESS",
+            )
         return db.run_exists(
             model_name=model_name,
             experiment_type=experiment_type,
@@ -704,6 +746,9 @@ class Runner:
             )
 
         adapter = create_adapter(cfg)
+        # Preserve original weights spec so build_reference_model can reload
+        # pretrained weights via the original source (e.g. torchvision enum).
+        adapter._reference_weights_spec = source_weights
         state_obj = torch.load(weight_file_path, map_location='cpu')
         state_dict = self._extract_raw_state_dict(state_obj)
         self._load_state_dict_resilient(adapter.model, state_dict)
@@ -719,6 +764,11 @@ class Runner:
         adapter.model.eval()
         return adapter.model, adapter
 
+    @staticmethod
+    def _adapter_manages_own_weights(config: dict) -> bool:
+        """True for adapters that load weights internally (e.g. feature_matching via PipelineRegistry)."""
+        return config.get('adapter', {}).get('type') == 'feature_matching'
+
     def prepare_model_with_materialized_weights(
         self,
         config: Dict[str, Any],
@@ -729,6 +779,12 @@ class Runner:
         1) materialize state_dict to disk
         2) rebuild model and load from that file
         """
+        if self._adapter_manages_own_weights(config):
+            adapter = create_adapter(config)
+            adapter.model.to(self.device)
+            adapter.model.eval()
+            return adapter.model, adapter, None
+
         exp_cfg = config.get('experiment', {})
         materialize_cfg = exp_cfg.get('materialize_weights', {})
         force_rebuild = bool(materialize_cfg.get('force_rebuild', False))
@@ -887,14 +943,11 @@ class Runner:
         if exp_cfg.get('log_to_db', True) is False:
             return None
 
-        db = self._get_db(db_path=db_path)
+        is_fm = config.get('adapter', {}).get('type') == 'feature_matching'
+        db = self._get_fm_db(db_path=db_path) if is_fm else self._get_db(db_path=db_path)
         model_name = result.get('model_name', config.get('model', {}).get('name', 'unknown'))
         experiment_type = exp_cfg.get('type') or exp_cfg.get('name') or "runner_eval"
         weight_dt = exp_cfg.get('weight_dt') or result.get('quant_format') or config.get('quantization', {}).get('format') or "fp32"
-        is_input_only_exp = (
-            str(experiment_type).strip().lower().startswith('input_quant')
-            and str(weight_dt).strip().lower() == 'fp32'
-        )
 
         activation_dt = exp_cfg.get('activation_dt')
         if activation_dt is None:
@@ -905,6 +958,42 @@ class Runner:
                 activation_dt = input_quant.get('format', 'fp32')
             else:
                 activation_dt = config.get('quantization', {}).get('input_format', 'fp32')
+
+        if is_fm:
+            def _fm_val(key):
+                v = result.get(key)
+                return float(v) if v else None
+
+            db.log_fm_run(
+                model_name=model_name,
+                weight_dt=str(weight_dt),
+                activation_dt=str(activation_dt),
+                experiment_type=experiment_type,
+                status=result.get('status', 'SUCCESS'),
+                fm_num_keypoints=_fm_val('fm_num_keypoints'),
+                fm_mean_score=_fm_val('fm_mean_score'),
+                fm_desc_norm=_fm_val('fm_desc_norm'),
+                fm_repeatability=_fm_val('fm_repeatability'),
+                matching_precision=_fm_val('matching_precision'),
+                matching_score=_fm_val('matching_score'),
+                mean_num_matches=_fm_val('mean_num_matches'),
+                pose_auc_5=_fm_val('pose_auc_5'),
+                pose_auc_10=_fm_val('pose_auc_10'),
+                pose_auc_20=_fm_val('pose_auc_20'),
+                ref_matching_precision=_fm_val('ref_matching_precision'),
+                ref_matching_score=_fm_val('ref_matching_score'),
+                ref_mean_num_matches=_fm_val('ref_mean_num_matches'),
+                ref_pose_auc_5=_fm_val('ref_pose_auc_5'),
+                ref_pose_auc_10=_fm_val('ref_pose_auc_10'),
+                ref_pose_auc_20=_fm_val('ref_pose_auc_20'),
+                config_json=self._to_json_string(exp_cfg.get('config_json') or config),
+            )
+            return None
+
+        is_input_only_exp = (
+            str(experiment_type).strip().lower().startswith('input_quant')
+            and str(weight_dt).strip().lower() == 'fp32'
+        )
 
         ref_acc1, ref_acc5, ref_certainty = self._resolve_ref_metrics(
             db=db,
@@ -1122,7 +1211,7 @@ class Runner:
         input_quant_cfg: Optional[Dict[str, Any]] = None
     ):
         """Evaluate a model via Runner while updating running accuracy on the progress bar."""
-        metrics_engine = MetricsEngine()
+        metrics_engine = adapter.create_metrics()
         model.eval()
         input_quantizer = None
         input_quant_stats = None
@@ -1155,7 +1244,7 @@ class Runner:
                 input_quant_cfg=normalized_input_quant_cfg
             )
 
-            with torch.no_grad():
+            with torch.inference_mode():
                 pbar = tqdm(
                     total=total_batches,
                     desc=desc,
@@ -1168,8 +1257,8 @@ class Runner:
                         break
 
                     inputs, targets = adapter.prepare_batch(batch)
-                    inputs = inputs.to(self.device)
-                    targets = targets.to(self.device)
+                    inputs = self._to_device(inputs)
+                    targets = self._to_device(targets)
 
                     if normalized_input_quant_cfg.get('enabled', False) and normalized_input_quant_cfg.get('mode') == 'input_only':
                         from src.ops.quant_base import quantize_tensor
@@ -1248,169 +1337,147 @@ class Runner:
                 eval_results['dynamic_input_quant'] = input_quant_stats
         return eval_results
 
-    def setup_data_loader(self, config: dict):
-        """Setup the data loader from config."""
-        dataset_config = config.get('dataset', {})
-        
-        # Check for SLM adapter
-        if config.get('adapter', {}).get('type') == 'slm':
-            print("SLM Adapter detected. Loading wikitext-2 dataset...")
-            try:
-                from datasets import load_dataset
-                # Load wikitext-2 raw test split
-                dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
-                # Filter out empty lines
-                dataset = dataset.filter(lambda x: len(x['text'].strip()) > 0)
-                print(f"Loaded {len(dataset)} samples from wikitext-2.")
-            except Exception as e:
-                print(f"Error loading wikitext-2: {e}")
-                print("Falling back to dummy text dataset.")
-                class DummyTextDataset(torch.utils.data.Dataset):
-                    def __init__(self, length=100):
-                        self.length = length
-                        self.data = ["Hello, my name is", "The quick brown fox", "Once upon a time", "In a galaxy far far away"]
-                    def __len__(self):
-                        return self.length
-                    def __getitem__(self, idx):
-                        return {'text': self.data[idx % len(self.data)]}
-                
-                dataset = DummyTextDataset(length=100)
+    @staticmethod
+    def _resolve_paths(cfg: dict, keys: tuple) -> dict:
+        """Resolve relative path values in cfg against PROJECT_ROOT (runspace/).
 
-            batch_size = dataset_config.get('batch_size', 4) # Default to smaller batch for SLM
-            return DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        Skips torchvision/timm weight-enum sentinels (e.g. 'DEFAULT',
+        'IMAGENET1K_V1') and bare names without separators or known checkpoint
+        suffixes — these are not filesystem paths and must not be rewritten.
+        """
+        _path_suffixes = ('.pt', '.pth', '.bin', '.ckpt', '.safetensors')
+        for key in keys:
+            if key not in cfg or not isinstance(cfg[key], str):
+                continue
+            value = cfg[key]
+            if os.path.isabs(value):
+                continue
+            looks_pathy = (
+                ('/' in value) or ('\\' in value)
+                or value.endswith(_path_suffixes)
+            )
+            if not looks_pathy:
+                continue
+            cfg[key] = os.path.normpath(os.path.join(PROJECT_ROOT, value))
+        return cfg
 
-        # Get dataset path
-        path = dataset_config.get('path', 'tests/data/imagenette2-320/val')
-        if not os.path.isabs(path):
-            data_dir = os.path.join(PROJECT_ROOT, path)
-        else:
-            data_dir = path
-        
-        # Custom Image Size
-        image_size = dataset_config.get('image_size', 224)
-        resize_size = dataset_config.get('resize_size', 256)
+    @staticmethod
+    def _check_dataset_pipeline_compatibility(config: dict) -> None:
+        """
+        Fail fast when a feature-matching pipeline is paired with an
+        incompatible dataset or a `quantize_components` list referencing
+        components the pipeline does not declare. Silently skips for non-FM
+        adapters and for pipelines/datasets that didn't declare their keys.
+        """
+        adapter_cfg = config.get('adapter', {})
+        if adapter_cfg.get('type') != 'feature_matching':
+            return
 
-        # For timm models, use the model's own data config for correct transforms
-        model_source = config.get('model', {}).get('source', 'auto')
-        model_name = config.get('model', {}).get('name', '')
-        if model_source == 'auto':
-            import torchvision.models as _tv_models
-            if hasattr(_tv_models, model_name):
-                model_source = 'torchvision'
-            else:
-                try:
-                    import timm as _timm
-                    model_source = 'timm' if _timm.is_model(model_name) else 'torchvision'
-                except ImportError:
-                    model_source = 'torchvision'
-        print(f"Model source: {model_source}")
-        if model_source == 'timm':
-            try:
-                import timm
-                # Create a lightweight (pretrained=False) instance to get the model's actual
-                # data config — resolve_model_data_config(name_string) returns wrong defaults
-                # for models like mobilevit_xxs.cvnets_in1k that use non-standard normalization.
-                _tmp = timm.create_model(model_name, pretrained=False)
-                data_cfg = timm.data.resolve_model_data_config(_tmp)
-                del _tmp
-                transform = timm.data.create_transform(**data_cfg, is_training=False)
-                print(f"Using timm transforms for {model_name}: "
-                      f"input_size={data_cfg.get('input_size')}, "
-                      f"mean={data_cfg.get('mean')}, std={data_cfg.get('std')}")
-            except Exception as e:
-                print(f"Warning: Could not resolve timm transforms for {model_name}: {e}. "
-                      f"Falling back to standard ImageNet transforms.")
-                transform = transforms.Compose([
-                    transforms.Resize(resize_size),
-                    transforms.CenterCrop(image_size),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                         std=[0.229, 0.224, 0.225]),
-                ])
-        else:
-            # Standard ImageNet transforms
-            transform = transforms.Compose([
-                transforms.Resize(resize_size),
-                transforms.CenterCrop(image_size),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225]),
-            ])
-        
-        if not os.path.exists(data_dir):
-             print(f"Warning: Data directory {data_dir} does not exist. Skipping data loading.")
-             return None
+        pipeline_name = config.get('model', {}).get('name')
+        dataset_name = config.get('dataset', {}).get('name')
+        if not pipeline_name:
+            return
 
-        dataset = datasets.ImageFolder(data_dir, transform=transform)
-        
-        # Load ImageNet Class Index for mapping (copied from run_eval.py)
-        import json
-        index_path = os.path.join(PROJECT_ROOT, 'tests/data/imagenet_class_index.json')
-        if os.path.exists(index_path):
-            with open(index_path, 'r') as f:
-                class_index = json.load(f)
-
-            wnid_to_idx = {v[0]: int(k) for k, v in class_index.items()}
-            local_class_to_idx = dataset.class_to_idx
-            idx_map = {}
-            for wnid, local_idx in local_class_to_idx.items():
-                if wnid in wnid_to_idx:
-                    idx_map[local_idx] = wnid_to_idx[wnid]
-
-            mapped = len(idx_map)
-            total_classes = len(local_class_to_idx)
-            print(f"Label mapping: {mapped}/{total_classes} classes matched to ImageNet canonical indices.")
-            if mapped == 0:
-                print("Warning: No classes matched. Labels may be incorrect. "
-                      "Check that val folder names are WordNet IDs (e.g. n01440764).")
-            elif mapped < total_classes:
-                print(f"Warning: {total_classes - mapped} classes could not be mapped — "
-                      "their local indices will be used as-is.")
-
-            dataset.target_transform = _ImageNetTargetTransform(idx_map)
-        else:
-            print(f"Warning: imagenet_class_index.json not found at {index_path}. "
-                  "Using ImageFolder's default alphabetical label ordering.")
-        
-        batch_size = int(dataset_config.get('batch_size', 32))
-        num_workers = int(dataset_config.get('num_workers', 0))
-
-        # Multiprocessing context policy:
-        # - Do not force 'spawn' globally (it can be very slow with many workers).
-        # - Allow explicit override from config or env.
-        worker_mp_ctx = dataset_config.get('multiprocessing_context')
-        if worker_mp_ctx is None:
-            env_ctx = os.environ.get("QBENCH_DATALOADER_CONTEXT")
-            if env_ctx:
-                worker_mp_ctx = env_ctx.strip().lower()
-        if worker_mp_ctx in ("", "none", "default"):
-            worker_mp_ctx = None
-
-        # Prefer persistent workers by default when num_workers > 0
-        # for faster repeated evaluations on the same DataLoader.
-        persistent_workers = bool(dataset_config.get('persistent_workers', num_workers > 0)) and num_workers > 0
-        pin_memory = torch.cuda.is_available()
-
-        loader_kwargs = dict(
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
+        import src.adapters.pipelines  # noqa: F401 — trigger registrations
+        import src.datasets  # noqa: F401 — trigger registrations
+        from src.adapters.pipeline_registry import (
+            get_pipeline_components,
+            get_pipeline_required_keys,
         )
-        if num_workers > 0:
-            loader_kwargs['persistent_workers'] = persistent_workers
-            if worker_mp_ctx:
-                loader_kwargs['multiprocessing_context'] = worker_mp_ctx
-            prefetch_factor = dataset_config.get('prefetch_factor')
-            if prefetch_factor is not None:
-                loader_kwargs['prefetch_factor'] = int(prefetch_factor)
+        from src.datasets.dataset_registry import get_dataset_provided_keys
 
-        return DataLoader(dataset, **loader_kwargs)
+        # 1) quantize_components ⊆ pipeline-declared components
+        requested_components = adapter_cfg.get('quantize_components') or []
+        if requested_components:
+            try:
+                declared = get_pipeline_components(pipeline_name)
+            except KeyError:
+                declared = None
+            if declared is not None:
+                unknown = [c for c in requested_components if c not in declared]
+                if unknown:
+                    raise ValueError(
+                        f"Pipeline '{pipeline_name}' declares components "
+                        f"{sorted(declared)}, but adapter.quantize_components "
+                        f"requests {sorted(requested_components)}. "
+                        f"Unknown: {sorted(unknown)}."
+                    )
+
+        # 2) dataset provided_keys ⊇ pipeline required_input_keys
+        if not dataset_name:
+            return
+        try:
+            required = set(get_pipeline_required_keys(pipeline_name))
+            provided = set(get_dataset_provided_keys(dataset_name))
+        except KeyError:
+            return
+        if not required or not provided:
+            return
+        missing = required - provided
+        if missing:
+            raise ValueError(
+                f"Dataset '{dataset_name}' provides keys {sorted(provided)}, but "
+                f"pipeline '{pipeline_name}' requires {sorted(required)}. "
+                f"Missing: {sorted(missing)}."
+            )
+
+    def setup_data_loader(self, config: dict):
+        """Setup the data loader from config via DatasetRegistry."""
+        import resource
+        import src.datasets  # triggers all @register_dataset decorators
+        from src.datasets.dataset_registry import build_data_loader
+        dataset_cfg = dict(config['dataset'])
+        # Pass model info so imagenet loader can resolve timm transforms
+        dataset_cfg['model_source'] = config.get('model', {}).get('source', 'torchvision')
+        dataset_cfg['model_name'] = config.get('model', {}).get('name', '')
+        self._resolve_paths(dataset_cfg, ('path', 'pairs_file', 'root'))
+
+        # Cap num_workers to avoid exhausting fds or RAM during long sequential runs.
+        # On unified-memory hosts (e.g. GB10: CPU+GPU share one LPDDR5X pool),
+        # worker RSS starves the NVIDIA driver and can crash the host, so we also
+        # apply a memory-based cap. x86_64 hosts with discrete VRAM don't need it.
+        requested = dataset_cfg.get('num_workers', 0)
+        if requested > 0:
+            try:
+                import platform
+                soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+                fd_cap = max(1, (soft_limit - 512) // 20)
+                cpu_cap = os.cpu_count() or 4
+                caps = {'fd_cap': fd_cap, 'cpu_cap': cpu_cap}
+
+                # Only apply a memory-based cap on unified-memory (ARM64) hosts.
+                if platform.machine() in ('aarch64', 'arm64'):
+                    try:
+                        with open('/proc/meminfo') as f:
+                            for line in f:
+                                if line.startswith('MemTotal:'):
+                                    total_kb = int(line.split()[1])
+                                    total_gb = total_kb / (1024 * 1024)
+                                    # ~4GB RSS per worker; reserve 24GB for model,
+                                    # activations, and torch allocator cache growth.
+                                    caps['mem_cap'] = max(1, int((total_gb - 24) // 4))
+                                    break
+                    except Exception:
+                        pass
+
+                safe_max = max(1, min(caps.values()))
+                if requested > safe_max:
+                    cap_str = ", ".join(f"{k}={v}" for k, v in caps.items())
+                    print(f"Info: Capping num_workers from {requested} to {safe_max} "
+                          f"({cap_str}).")
+                    dataset_cfg['num_workers'] = safe_max
+            except Exception:
+                pass
+
+        return build_data_loader(dataset_cfg['name'], dataset_cfg)
 
     def run_single(self, config: Dict[str, Any], output_root: str = "runspace/outputs") -> Dict[str, Any]:
         """Runs a single configuration and returns the results."""
         model_config = config.get('model', {})
+        self._resolve_paths(model_config, ('weights', 'repo_path', 'root', 'path'))
         model_name = model_config.get('name', 'unknown')
+
+        self._check_dataset_pipeline_compatibility(config)
         weights_spec = model_config.get('weights')
         has_file_backed_weights = (
             isinstance(weights_spec, str)
@@ -1439,6 +1506,7 @@ class Runner:
         
         results = {
             'model_name': model_name,
+            'adapter_type': config.get('adapter', {}).get('type', 'generic'),
             'quant_format': quant_format,
             'base_config_path': meta.get('base_config_path', 'N/A'),
             'generated_config_path': meta.get('generated_config_path', 'N/A'),
@@ -1453,7 +1521,6 @@ class Runner:
             'ref_acc5': 0.0,
             'ref_certainty': 0.0,
             'acc_drop': 0.0,
-            'acc_drop': 0.0,
             'weight_comp_red': 0.0,
             'weight_comp_share': 0.0,
             'input_comp_red': 0.0,
@@ -1461,6 +1528,22 @@ class Runner:
             'dyn_metric': None,
             'dyn_norm_l1': 0.0,
             'dyn_norm_mse': 0.0,
+            'fm_num_keypoints': 0.0,
+            'fm_mean_score': 0.0,
+            'fm_desc_norm': 0.0,
+            'fm_repeatability': 0.0,
+            'matching_precision': 0.0,
+            'matching_score': 0.0,
+            'mean_num_matches': 0.0,
+            'pose_auc_5': 0.0,
+            'pose_auc_10': 0.0,
+            'pose_auc_20': 0.0,
+            'ref_matching_precision': 0.0,
+            'ref_matching_score': 0.0,
+            'ref_mean_num_matches': 0.0,
+            'ref_pose_auc_5': 0.0,
+            'ref_pose_auc_10': 0.0,
+            'ref_pose_auc_20': 0.0,
             'exec_error': None
         }
 
@@ -1545,6 +1628,11 @@ class Runner:
                         print("Graph generation complete. Exiting due to graph-only mode.")
                         return results
                         
+                except FileNotFoundError as e:
+                    if '"dot"' in str(e) or "'dot'" in str(e) or 'dot' in str(e).lower():
+                        print("Skipping graph SVG: Graphviz 'dot' not found. Install with: winget install graphviz")
+                    else:
+                        print(f"Failed to generate graph: {e}")
                 except Exception as e:
                     print(f"Failed to generate graph: {e}")
             else:
@@ -1570,10 +1658,8 @@ class Runner:
                     dynamic_input_quant_cfg=dynamic_input_quant_cfg,
                     input_quant_cfg=input_quant_cfg
                 )
-                
-                results['acc1'] = eval_results.get('acc1', 0.0)
-                results['acc5'] = eval_results.get('acc5', 0.0)
-                results['certainty'] = eval_results.get('certainty', 0.0)
+
+                results.update({k: v for k, v in eval_results.items() if k in results})
                 input_quant_stats = eval_results.get('input_quant') or eval_results.get('dynamic_input_quant')
                 if input_quant_stats:
                     results['input_quant'] = input_quant_stats
@@ -1581,7 +1667,7 @@ class Runner:
                         results['dyn_metric'] = input_quant_stats.get('metric')
                         results['dyn_norm_l1'] = input_quant_stats.get('norm_l1', 0.0)
                         results['dyn_norm_mse'] = input_quant_stats.get('norm_mse', 0.0)
-                
+
                 if results['status'] != 'NO_QUANT':
                     results['status'] = 'SUCCESS'
                 
@@ -1593,15 +1679,18 @@ class Runner:
                 ref_model = adapter.build_reference_model()
                 ref_model.to(self.device)
 
+                eval_cfg = config.get('evaluation', {})
                 comparator = LayerComparator(
-                    ref_model, 
-                    model, 
-                    model_name=model_name, 
-                    quant_type=quant_format.replace('_', ''), 
-                    adapter=adapter, 
+                    ref_model,
+                    model,
+                    model_name=model_name,
+                    quant_type=quant_format.replace('_', ''),
+                    adapter=adapter,
                     device=self.device,
                     output_dir=output_dir,
-                    save_histograms=config.get('evaluation', {}).get('save_histograms', False)
+                    save_histograms=eval_cfg.get('save_histograms', False),
+                    save_visualizations=eval_cfg.get('save_visualizations', False),
+                    num_viz_samples=eval_cfg.get('num_viz_samples', 5),
                 )
                 
                 # Determine number of batches
@@ -1636,16 +1725,13 @@ class Runner:
                 print("Retrieving metrics from comparator...")
                 quant_metrics = comparator.quant_metrics.compute()
                 ref_metrics = comparator.ref_metrics.compute()
-                
-                results['acc1'] = quant_metrics.get('acc1', 0.0)
-                results['acc5'] = quant_metrics.get('acc5', 0.0)
-                results['certainty'] = quant_metrics.get('certainty', 0.0)
-                
-                results['ref_acc1'] = ref_metrics.get('acc1', 0.0)
-                results['ref_acc5'] = ref_metrics.get('acc5', 0.0)
-                results['ref_certainty'] = ref_metrics.get('certainty', 0.0)
-                
-                results['acc_drop'] = results['ref_acc1'] - results['acc1']
+
+                results.update({k: v for k, v in quant_metrics.items() if k in results})
+                results.update({f'ref_{k}': v for k, v in ref_metrics.items() if f'ref_{k}' in results})
+
+                primary = quant_metrics['acc1'] if 'acc1' in quant_metrics else quant_metrics.get('fm_repeatability', 0.0)
+                ref_primary = ref_metrics['acc1'] if 'acc1' in ref_metrics else ref_metrics.get('fm_repeatability', 0.0)
+                results['acc_drop'] = ref_primary - primary
                 if dynamic_stats:
                     results['input_quant'] = dynamic_stats
                     results['dyn_metric'] = dynamic_stats.get('metric')
@@ -1879,7 +1965,7 @@ class Runner:
         # 3. Execution Loop
         max_batches = configs[0].get('evaluation', {}).get('max_batches', -1)
         try:
-            with torch.no_grad():
+            with torch.inference_mode():
                 pbar = tqdm(loader, desc=f"Parallel Eval ({len(active_contexts)} models)", unit="batch")
                 for batch_idx, batch in enumerate(pbar):
                     if max_batches > 0 and batch_idx >= max_batches:
