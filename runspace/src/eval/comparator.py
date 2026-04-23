@@ -497,10 +497,10 @@ class LayerComparator:
                  # Avoid div by zero
                  eps = 1e-9
                  error = torch.abs(orig_max - dequant_max) / (orig_max + eps)
-                 mean_error_pct = error.item() * 100.0
-                 
-                 metrics['xmax_orig_sum'] += orig_max.item()
-                 metrics['xmax_deq_sum'] += dequant_max.item()
+                 mean_error_pct = error.mean().item() * 100.0
+
+                 metrics['xmax_orig_sum'] += orig_max.max().item()
+                 metrics['xmax_deq_sum'] += dequant_max.max().item()
                  metrics['xmax_err_sum'] += mean_error_pct
                  metrics['xmax_count'] += 1
 
