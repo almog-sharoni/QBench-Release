@@ -6,6 +6,7 @@ outputs/
 .env
 tests/
 .cache/
+runspace/inputs/scannet/
 ./claude
 
 # Apptainer

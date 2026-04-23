@@ -1,0 +1,24 @@
+# Focused model set for channel vs chunk quantization A/B.
+# Mix of standard-conv baselines and depthwise-heavy architectures
+# so we can see whether channel mode's per-output-channel scale hurts
+# more on depthwise layers (which have only kH*kW weights per scale).
+
+- name: resnet18
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+- name: resnet152
+  source: torchvision
+  weights: IMAGENET1K_V1
+
+- name: mobilenet_v3_large
+  source: torchvision
+  weights: DEFAULT
+
+- name: mnasnet1_3
+  source: torchvision
+  weights: DEFAULT
+
+- name: convnext_large
+  source: torchvision
+  weights: DEFAULT

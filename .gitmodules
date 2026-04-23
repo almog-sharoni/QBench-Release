@@ -1,0 +1,3 @@
+[submodule "custom/SuperGluePretrainedNetwork"]
+	path = custom/SuperGluePretrainedNetwork
+	url = https://github.com/yarden-carmi/SuperGluePretrainedNetwork.git

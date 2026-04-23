@@ -8,7 +8,7 @@ This ensures the entire dataflow through the network stays in FP8 and is optimiz
 import torch
 import torch.nn as nn
 from ..registry.op_registry import OpRegistry
-from ..quantization.quantizer import quantize, get_fp8_e4m3_table
+from ..quantization.quantizer import quantize
 from .quant_base import quantize_tensor
 
 
@@ -117,7 +117,7 @@ class LUTActivation:
         return output, q_output
 
 
-@OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True, compliance_status="FP32 activation")
+@OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True, passthrough=True)
 class QuantReLU(nn.ReLU):
     """
     Quantized ReLU using LUT.

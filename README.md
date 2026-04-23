@@ -60,8 +60,13 @@ The recommended way to run QBench is using the provided Docker container.
 1. **Build the Image**:
    *Note: If the `qbench` image already exists on your system, you do not need to rebuild it.*
    ```bash
-   docker build -t qbench .
+  docker build -f dockerfile -t qbench .
    ```
+
+  Or with Docker Compose:
+  ```bash
+  docker compose build
+  ```
 
 2. **Start Container**:
    **Important**: Run this command from the root of the cloned repository (where you are now), as it mounts the current directory (`$(pwd)`) to the container.
@@ -77,10 +82,20 @@ The recommended way to run QBench is using the provided Docker container.
    ```
    *Note: Replace `/data/imagenet` with your actual ImageNet dataset path.*
 
+    Or with Docker Compose:
+    ```bash
+    IMAGENET_HOST_PATH=/data/imagenet docker compose up -d
+    ```
+
 3. **Enter Container**:
    ```bash
    docker exec -it qbench bash
    ```
+
+  Or with Docker Compose:
+  ```bash
+  docker compose exec qbench bash
+  ```
 
    **Fixing "I have no name!" Prompt (Optional)**:
    If you see `I have no name!` in the prompt, it's because the container doesn't know your host user. You can fix it by creating a matching user inside the container (run this from your **host** terminal):

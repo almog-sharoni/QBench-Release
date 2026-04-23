@@ -70,9 +70,9 @@ class QuantSoftmax(nn.Softmax):
         # 2.1 Power-of-two scale
         # 2.2 Quantize and dequantize
         input_dequant, _ = quantize_tensor(
-            input, 
-            q_type=self.q_type, 
-            mode=self.quant_mode, 
+            input,
+            q_type=self.q_type,
+            mode=self.quant_mode,
             chunk_size=self.chunk_size
         )
         # 3 Numerically Stable Softmax (Max Subtraction)

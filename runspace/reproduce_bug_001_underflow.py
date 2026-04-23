@@ -71,19 +71,17 @@ def test_bug_001_underflow_clamping():
         # Run compliance check - should fail for underflow values
         print("\nCompliance Check:")
         
-        # Get table from quantizer if available
+        # Table source of truth: get_format_table returns None for simulated fp
+        # formats (they must use mantissa-precision check instead). int8/int4
+        # still return finite tables.
+        from src.quantization.quantizer import get_format_table
         if name == "FP8 E4M3":
-            from src.quantization.quantizer import get_fp8_e4m3_table
-            valid_values = get_fp8_e4m3_table(quantized.device)
             q_type = "fp8_e4m3"
         elif name == "FP8 E5M2":
-            from src.quantization.quantizer import get_fp8_e5m2_table
-            valid_values = get_fp8_e5m2_table(quantized.device)
             q_type = "fp8_e5m2"
         else:
-            # For E1M6, no pre-built table exists - this is related to BUG-002
-            valid_values = None
             q_type = "fp8_e1m6"
+        valid_values = get_format_table(q_type, quantized.device)
         
         if valid_values is not None:
             passed, invalid_count, examples = check_fp8_compliance(quantized, valid_values)

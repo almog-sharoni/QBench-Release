@@ -4,6 +4,7 @@ import torchvision.models as models
 import os
 from .base_adapter import BaseAdapter
 from ..registry.op_registry import OpRegistry
+from ..quantization.constants import DEFAULT_QUANTIZATION_TYPE
 from ..utils.fx_trace_utils import find_non_tensor_nodes, trace_quant_aware
 from ..utils.model_input_utils import resolve_model_input_size
 try:
@@ -30,7 +31,7 @@ class GenericAdapter(BaseAdapter):
         quantize_first_layer: bool = False,
         quantized_ops: list = None,
         excluded_ops: list = None,
-        quantization_type: str = "fp8_e4m3",
+        quantization_type: str = DEFAULT_QUANTIZATION_TYPE,
         quantization_bias: int = None,
         layer_config: dict = None,
         per_chunk_format: bool = False,
@@ -48,9 +49,12 @@ class GenericAdapter(BaseAdapter):
         run_id: str = "default",
         skip_calibration: bool = False,
         build_quantized: bool = True,
+        target_module_prefixes: list = None,
+        strict_format_check: bool = False,
         enable_fx_quantization: bool = True,
     ):
         super().__init__()
+        self.target_module_prefixes = target_module_prefixes or []
         self.skip_calibration = skip_calibration
         self.build_quantized = bool(build_quantized)
         self.enable_fx_quantization = bool(enable_fx_quantization)
@@ -84,6 +88,7 @@ class GenericAdapter(BaseAdapter):
         self.simulate_tf32_accum = simulate_tf32_accum
         self.rounding = rounding
         self.input_chunk_size = input_chunk_size
+        self.strict_format_check = bool(strict_format_check)
         if not self.build_quantized:
             print(
                 f"GenericAdapter: build_quantized=False for {self.model_name} "
@@ -442,6 +447,64 @@ class GenericAdapter(BaseAdapter):
         """Replace standard layers with quantized versions."""
         self._first_layer_found = False
         self._recursive_replace(model)
+        self._configure_remaining_mixin_ops(model)
+
+    def _configure_remaining_mixin_ops(self, model: nn.Module):
+        """Propagate adapter config + per-layer overrides to QuantizedLayerMixin ops
+        that weren't touched by _recursive_replace. Covers Observed* ops registered
+        without original_cls (ObservedAttentionScores / Apply / Concat / Add /
+        DescMatmul) whose q_type would otherwise stay at the ctor default regardless
+        of what config.yaml says."""
+        # Match the absolute prefix SuperGlue uses ([superglue.py:51]) so the
+        # QuantizedLayerMixin class identity is the same as the one Observed* ops
+        # inherit from. A relative import would bind to src.ops.quant_base (a
+        # separate module when both runspace/ and the repo root are on sys.path).
+        from runspace.src.ops.quant_base import QuantizedLayerMixin
+
+        supported_ops_values = tuple(OpRegistry.get_supported_ops().values())
+
+        for full_name, module in model.named_modules():
+            if not isinstance(module, QuantizedLayerMixin):
+                continue
+            # Already configured by Case 1/2 (class is a registered quantized op).
+            if type(module) in supported_ops_values:
+                continue
+
+            # Resolve settings: global config + per-layer override
+            # (mirrors _create_quantized_module's resolution block).
+            q_type = self.quantization_type
+            bias = self.quantization_bias
+            input_q_type = self.input_quantization_type
+            input_mode = self.quant_mode
+            input_chunk_size = self.input_chunk_size if self.input_chunk_size is not None else self.chunk_size
+            rounding = self.rounding
+
+            layer_conf = self.layer_config.get(full_name, {}) if isinstance(self.layer_config, dict) else {}
+            if 'type' in layer_conf:
+                q_type = layer_conf['type']
+            elif 'format' in layer_conf:
+                q_type = layer_conf['format']
+            if 'bias' in layer_conf:
+                bias = layer_conf['bias']
+            if 'input_format' in layer_conf:
+                input_q_type = layer_conf['input_format']
+            if 'mode' in layer_conf:
+                input_mode = layer_conf['mode']
+            if 'chunk_size' in layer_conf:
+                input_chunk_size = layer_conf['chunk_size']
+            if 'rounding' in layer_conf:
+                rounding = layer_conf['rounding']
+
+            module.q_type = q_type
+            module.quantization_bias = bias
+            module.input_q_type = input_q_type if input_q_type else q_type
+            module.input_quantization = self.input_quantization
+            module.weight_quantization = self.weight_quantization
+            module.input_mode = input_mode
+            module.input_chunk_size = input_chunk_size
+            module.rounding = rounding
+            module.layer_name = full_name
+            module.run_id = getattr(self, 'run_id', 'default')
 
     def _create_quantized_module(self, module: nn.Module, QuantClass: type, name: str = "") -> nn.Module:
         """Creates a quantized module from the original module."""
@@ -537,19 +600,18 @@ class GenericAdapter(BaseAdapter):
             module.register_buffer('weight_scale', None)
             module.register_buffer('weight_fp8', None)
             
-            # Set TF32 simulation flag if supported (QuantConv2d)
-            if QuantClass.__name__ == "QuantConv2d":
+            # Set TF32 simulation flag if supported
+            if hasattr(module, 'simulate_tf32_accum') or QuantClass.__name__ in ("QuantConv2d", "QuantConv1d"):
                 module.simulate_tf32_accum = self.simulate_tf32_accum
-            
-            # Handle first layer logic
-            if isinstance(module, nn.Conv2d):
-                 is_first = not self._first_layer_found
-                 if is_first:
-                     self._first_layer_found = True
-                 
-                 module.is_first_layer = is_first
-                 if module.in_channels == 3 and is_first:
-                     module.quantize_first_layer = self.quantize_first_layer
+
+            # Handle first layer logic for conv layers
+            if isinstance(module, (nn.Conv2d, nn.Conv1d)):
+                is_first = not self._first_layer_found
+                if is_first:
+                    self._first_layer_found = True
+                module.is_first_layer = is_first
+                if isinstance(module, nn.Conv2d) and module.in_channels == 3 and is_first:
+                    module.quantize_first_layer = self.quantize_first_layer
             
             return module
 
@@ -576,14 +638,16 @@ class GenericAdapter(BaseAdapter):
 
     def _recursive_replace(self, model: nn.Module, prefix: str = ""):
         """Recursively traverse and replace layers using the registry."""
-        # Check for "quantize all" mode
-        quantize_all = "-1" in self.quantized_ops or "all" in self.quantized_ops
-        
+        quantized_ops_lc = {o.lower() for o in self.quantized_ops}
+        excluded_ops_lc = {o.lower() for o in self.excluded_ops}
+        quantize_all = "-1" in quantized_ops_lc or "all" in quantized_ops_lc
+
         # Get supported ops from registry
         supported_ops = OpRegistry.get_supported_ops()
-        
+
         def _contains_any(names, candidates):
-            return any(n in names for n in candidates)
+            lowered = {n.lower() for n in names}
+            return any(c.lower() in lowered for c in candidates)
 
         def _is_timm_attention_like(m: nn.Module) -> bool:
             return (
@@ -603,6 +667,15 @@ class GenericAdapter(BaseAdapter):
             new_module = None
             should_quantize = False
             quant_class = None
+
+            # If target_module_prefixes is set, only quantize layers whose full path
+            # starts with one of the declared prefixes; others are recursed but skipped.
+            if self.target_module_prefixes and not any(
+                full_name.startswith(p) or p.startswith(full_name)
+                for p in self.target_module_prefixes
+            ):
+                self._recursive_replace(module, prefix=full_name)
+                continue
             matched_op_name = module.__class__.__name__
             matched_original_name = None
 
@@ -623,14 +696,14 @@ class GenericAdapter(BaseAdapter):
                 if matched_original_name is not None:
                     requested_names.add(matched_original_name)
 
-                if quantize_all or _contains_any(self.quantized_ops, requested_names):
+                if quantize_all or _contains_any(quantized_ops_lc, requested_names):
                     should_quantize = True
 
                 # If Linear is requested, decompose MHA as well to expose q/k/v internals.
-                if isinstance(module, nn.MultiheadAttention) and "Linear" in self.quantized_ops and "Linear" not in self.excluded_ops:
+                if isinstance(module, nn.MultiheadAttention) and "linear" in quantized_ops_lc and "linear" not in excluded_ops_lc:
                     should_quantize = True
 
-                if _contains_any(self.excluded_ops, requested_names):
+                if _contains_any(excluded_ops_lc, requested_names):
                     should_quantize = False
 
                 # timm uses BatchNormAct2d (subclass of nn.BatchNorm2d) in many
@@ -650,10 +723,10 @@ class GenericAdapter(BaseAdapter):
             # timm-specific Attention / MLP decomposition
             if not should_quantize and _is_timm_attention_like(module):
                 wants_attention = quantize_all or _contains_any(
-                    self.quantized_ops,
+                    quantized_ops_lc,
                     {"Attention", "MultiheadAttention", "MHA", "QkvAttention"}
                 )
-                wants_internal_linear = "Linear" in self.quantized_ops and "Linear" not in self.excluded_ops
+                wants_internal_linear = "linear" in quantized_ops_lc and "linear" not in excluded_ops_lc
                 if wants_attention or wants_internal_linear:
                     from ..ops.quant_mha import DecomposedQkvAttention
                     quant_class = DecomposedQkvAttention
@@ -661,10 +734,10 @@ class GenericAdapter(BaseAdapter):
 
             if not should_quantize and _is_timm_mlp_like(module):
                 wants_mlp = quantize_all or _contains_any(
-                    self.quantized_ops,
+                    quantized_ops_lc,
                     {"Mlp", "MLP", "FeedForward", "FFN", "MlpBlock"}
                 )
-                wants_internal_linear = "Linear" in self.quantized_ops and "Linear" not in self.excluded_ops
+                wants_internal_linear = "linear" in quantized_ops_lc and "linear" not in excluded_ops_lc
                 if wants_mlp or wants_internal_linear:
                     from ..ops.quant_mha import DecomposedMlpBlock
                     quant_class = DecomposedMlpBlock
@@ -779,11 +852,14 @@ class GenericAdapter(BaseAdapter):
         }
         
         # Filter by requested quantized ops
+        quantized_ops_lc = {o.lower() for o in self.quantized_ops}
+        excluded_ops_lc = {o.lower() for o in self.excluded_ops}
         target_funcs = {}
         for func, op_name in func_map.items():
-            if "-1" in self.quantized_ops or "all" in self.quantized_ops or op_name in self.quantized_ops:
-                # Check exclusions
-                if op_name not in self.excluded_ops:
+            op_name_lc = op_name.lower()
+            bare_lc = op_name_lc[len("quant"):] if op_name_lc.startswith("quant") else op_name_lc
+            if "-1" in quantized_ops_lc or "all" in quantized_ops_lc or op_name_lc in quantized_ops_lc or bare_lc in quantized_ops_lc:
+                if op_name_lc not in excluded_ops_lc and bare_lc not in excluded_ops_lc:
                     target_funcs[func] = op_name
 
         if not target_funcs:
@@ -940,6 +1016,23 @@ class GenericAdapter(BaseAdapter):
         """Return all module names for layer insertion."""
         return [name for name, _ in model.named_modules()]
 
+    def create_metrics(self):
+        """Returns a MetricsEngine for classification/SLM evaluation."""
+        from src.eval.metrics import MetricsEngine
+        return MetricsEngine()
+
     def build_reference_model(self) -> nn.Module:
-        """Build a reference (FP32) model for comparison."""
-        return self._load_base_model()
+        """Build a reference (FP32) model for comparison.
+
+        If the runner's materialize-weights flow clobbered self.weights to None
+        (so the adapter builds a skeleton and loads from a .pt), the runner
+        stashes the original spec on `self._reference_weights_spec`. Use it so
+        the reference model gets real pretrained weights, not random init.
+        """
+        ref_weights = getattr(self, '_reference_weights_spec', None) or self.weights
+        saved = self.weights
+        try:
+            self.weights = ref_weights
+            return self._load_base_model()
+        finally:
+            self.weights = saved
