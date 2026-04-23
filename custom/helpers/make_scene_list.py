@@ -10,7 +10,7 @@ import os
 import sys
 
 DEFAULT_PAIRS = "/home/spark1/yarden/QBench2/QBench-Release/custom/SuperGluePretrainedNetwork/assets/scannet_test_pairs_with_gt.txt"
-DEFAULT_ROOT = "/data/scannet/ref/scans_test"
+DEFAULT_ROOT = "/data/scannet/scans_test"
 
 
 def ordered_scenes(pairs_file):

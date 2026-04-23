@@ -3,8 +3,8 @@ raw .sens files, writing JPEG bytes directly (no decompress/re-encode)."""
 import os, struct, json, sys
 
 NEEDED = json.load(open('/tmp/scannet_extract/needed.json'))
-ROOT_IN  = '/data/scannet/ref/scans_test'
-ROOT_OUT = '/data/scannet/ref/scans_test'   # in-place: write {scene}/sens/frame-NNNNNN.color.jpg
+ROOT_IN  = '/data/scannet/scans_test'
+ROOT_OUT = '/data/scannet/scans_test'   # in-place: write {scene}/sens/frame-NNNNNN.color.jpg
 
 HDR_FIXED = 4 + 8  # version + strlen uint64 (then sensor name variable)
 

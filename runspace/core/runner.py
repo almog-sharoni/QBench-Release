@@ -111,8 +111,21 @@ class Runner:
             return
         try:
             iterator = getattr(data_loader, "_iterator", None)
-            if iterator is not None and hasattr(iterator, "_shutdown_workers"):
-                iterator._shutdown_workers()
+            if iterator is not None:
+                if hasattr(iterator, "_shutdown_workers"):
+                    try:
+                        iterator._shutdown_workers()
+                    except Exception:
+                        pass
+                # Fallback: forcibly terminate any surviving worker processes
+                # (handles the case where __init__ failed before _workers_status was set).
+                for w in getattr(iterator, "_workers", []):
+                    try:
+                        if w.is_alive():
+                            w.terminate()
+                            w.join(timeout=2)
+                    except Exception:
+                        pass
                 data_loader._iterator = None
         except Exception:
             pass
@@ -1401,6 +1414,7 @@ class Runner:
 
     def setup_data_loader(self, config: dict):
         """Setup the data loader from config via DatasetRegistry."""
+        import resource
         import src.datasets  # triggers all @register_dataset decorators
         from src.datasets.dataset_registry import build_data_loader
         dataset_cfg = dict(config['dataset'])
@@ -1408,6 +1422,44 @@ class Runner:
         dataset_cfg['model_source'] = config.get('model', {}).get('source', 'torchvision')
         dataset_cfg['model_name'] = config.get('model', {}).get('name', '')
         self._resolve_paths(dataset_cfg, ('path', 'pairs_file', 'root'))
+
+        # Cap num_workers to avoid exhausting fds or RAM during long sequential runs.
+        # On unified-memory hosts (e.g. GB10: CPU+GPU share one LPDDR5X pool),
+        # worker RSS starves the NVIDIA driver and can crash the host, so we also
+        # apply a memory-based cap. x86_64 hosts with discrete VRAM don't need it.
+        requested = dataset_cfg.get('num_workers', 0)
+        if requested > 0:
+            try:
+                import platform
+                soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+                fd_cap = max(1, (soft_limit - 512) // 20)
+                cpu_cap = os.cpu_count() or 4
+                caps = {'fd_cap': fd_cap, 'cpu_cap': cpu_cap}
+
+                # Only apply a memory-based cap on unified-memory (ARM64) hosts.
+                if platform.machine() in ('aarch64', 'arm64'):
+                    try:
+                        with open('/proc/meminfo') as f:
+                            for line in f:
+                                if line.startswith('MemTotal:'):
+                                    total_kb = int(line.split()[1])
+                                    total_gb = total_kb / (1024 * 1024)
+                                    # ~4GB RSS per worker; reserve 24GB for model,
+                                    # activations, and torch allocator cache growth.
+                                    caps['mem_cap'] = max(1, int((total_gb - 24) // 4))
+                                    break
+                    except Exception:
+                        pass
+
+                safe_max = max(1, min(caps.values()))
+                if requested > safe_max:
+                    cap_str = ", ".join(f"{k}={v}" for k, v in caps.items())
+                    print(f"Info: Capping num_workers from {requested} to {safe_max} "
+                          f"({cap_str}).")
+                    dataset_cfg['num_workers'] = safe_max
+            except Exception:
+                pass
+
         return build_data_loader(dataset_cfg['name'], dataset_cfg)
 
     def run_single(self, config: Dict[str, Any], output_root: str = "runspace/outputs") -> Dict[str, Any]:

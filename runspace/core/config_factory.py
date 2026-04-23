@@ -38,6 +38,8 @@ class ConfigFactory:
         generated_configs = []
         target_pipeline = base_config_data.get('target_pipeline')
 
+        adapter_type = base_config_data.get('adapter', {}).get('type', 'generic')
+
         for model in models:
             # Skip models that don't match the base config's declared pipeline.
             # This prevents Cartesian-product sweeps from generating incompatible
@@ -45,6 +47,14 @@ class ConfigFactory:
             # single-image pipeline).
             model_pipeline = model.get('pipeline', model.get('name'))
             if target_pipeline and model_pipeline != target_pipeline:
+                continue
+
+            # Keep source and adapter in sync:
+            #   custom-source models → only feature_matching adapter
+            #   non-custom models    → only non-feature_matching adapters
+            is_custom = model.get('source') == 'custom'
+            is_fm = adapter_type == 'feature_matching'
+            if is_custom != is_fm:
                 continue
 
             # Deep copy the base config to avoid modifying it for other models

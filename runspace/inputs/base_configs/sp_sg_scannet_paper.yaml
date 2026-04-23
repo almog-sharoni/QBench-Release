@@ -17,7 +17,7 @@ quantization:
 # Yields the full 1500 paper pairs.
 dataset:
   name: scannet_pairs
-  path: /data/scannet/ref
+  path: /data/scannet
   pairs_file: /app/runspace/inputs/scannet/pairs_test_paper_100scenes.txt
   image_size: [480, 640]
   batch_size: 1

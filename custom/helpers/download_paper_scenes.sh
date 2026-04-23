@@ -2,7 +2,7 @@
 set -u
 
 PAIRS_SRC=/home/spark1/yarden/QBench2/QBench-Release/custom/SuperGluePretrainedNetwork/assets/scannet_test_pairs_with_gt.txt
-SCANNET_ROOT=/data/scannet/ref
+SCANNET_ROOT=/data/scannet
 NUM_SCENES=100
 
 DIR="$(cd "$(dirname "$0")" && pwd)"

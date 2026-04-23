@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -u
 SCRIPT="/home/spark1/yarden/QBench2/QBench-Release/custom/helpers/download-scannet.py"
-OUT=/data/scannet/ref
-LOG=/data/scannet/ref/_download.log
+OUT=/data/scannet
+LOG=/data/scannet/_download.log
 SCENE_LIST="${1:-/tmp/scannet_test_scenes.txt}"
 echo "=== start $(date -Iseconds) list=$SCENE_LIST ===" >> "$LOG"
 while IFS= read -r scene; do
