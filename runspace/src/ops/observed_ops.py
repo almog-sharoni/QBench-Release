@@ -346,3 +346,151 @@ class ObservedMatchSelect(nn.Module):
         indices0 = torch.where(valid0, indices0, indices0.new_tensor(-1))
         indices1 = torch.where(valid1, indices1, indices1.new_tensor(-1))
         return indices0, indices1, mscores0, mscores1
+
+
+# ---------------------------------------------------------------------------
+# Design C — learned unrolled Sinkhorn (T iterations, weight-tied)
+# ---------------------------------------------------------------------------
+
+@OpRegistry.register("ObservedLearnedSinkhorn", compliance_status="BF16 required")
+class ObservedLearnedSinkhorn(nn.Module):
+    """Learned unrolled Sinkhorn head (Design C).
+
+    Each iteration performs a canonical Sinkhorn log-space update (row then col)
+    followed by a learned per-row / per-col delta produced by a small MLP whose
+    input is assembled from log_T via logsumexp and topk only — no exp, softmax,
+    or log in the feature path.
+
+    With zero-init output layers the learned deltas are exactly zero across all
+    iterations, so forward reduces to `_log_sinkhorn_iterations(...)` with the
+    same non-uniform log_mu / log_nu used by ObservedSinkhorn.
+    """
+    FEATURE_DIM = 16  # 1 (LSE) + 1 (offset) + 5 (top-k gap) + 1 (spread) + 8 (proj desc)
+
+    def __init__(
+        self,
+        iters: int = 3,
+        descriptor_dim: int = 256,
+        proj_dim: int = 8,
+        hidden: int = 64,
+        topk: int = 5,
+    ):
+        super().__init__()
+        self.iters = iters
+        self.descriptor_dim = descriptor_dim
+        self.proj_dim = proj_dim
+        self.topk = topk
+
+        # Shared across all T iterations (weight-tied unrolling).
+        self.proj_A = nn.Linear(descriptor_dim, proj_dim, bias=True)
+        self.proj_B = nn.Linear(descriptor_dim, proj_dim, bias=True)
+
+        self.row_mlp = self._build_mlp(hidden)
+        self.col_mlp = self._build_mlp(hidden)
+
+    def _build_mlp(self, hidden: int) -> nn.Module:
+        mlp = nn.Sequential(
+            nn.Linear(self.FEATURE_DIM, hidden),
+            nn.GELU(),
+            nn.LayerNorm(hidden),
+            nn.Linear(hidden, hidden),
+            nn.GELU(),
+            nn.LayerNorm(hidden),
+            nn.Linear(hidden, 1),
+        )
+        # Zero-init output layer so at initialization the learned delta ≡ 0 and
+        # the block reduces to hand-coded log-domain Sinkhorn.
+        nn.init.zeros_(mlp[-1].weight)
+        nn.init.zeros_(mlp[-1].bias)
+        return mlp
+
+    def _project_descriptors(self, mdesc0: torch.Tensor, mdesc1: torch.Tensor):
+        """Project (B, D, M) descriptors to (B, M+1, proj_dim), zero-padding the dustbin row."""
+        B = mdesc0.shape[0]
+        dA = self.proj_A(mdesc0.transpose(1, 2))  # (B, M, proj_dim)
+        dB = self.proj_B(mdesc1.transpose(1, 2))  # (B, N, proj_dim)
+        dA = torch.cat([dA, dA.new_zeros(B, 1, self.proj_dim)], dim=1)
+        dB = torch.cat([dB, dB.new_zeros(B, 1, self.proj_dim)], dim=1)
+        return dA, dB
+
+    def _build_features(self, log_T: torch.Tensor, offset: torch.Tensor,
+                        desc_proj: torch.Tensor, axis: str) -> torch.Tensor:
+        if axis == 'row':
+            lse = torch.logsumexp(log_T, dim=2)           # (B, M+1)
+            mx = log_T.max(dim=2).values                  # (B, M+1)
+            top_vals = log_T.topk(self.topk, dim=2).values  # (B, M+1, k)
+            top_gap = mx.unsqueeze(-1) - top_vals         # (B, M+1, k)
+        else:  # 'col'
+            lse = torch.logsumexp(log_T, dim=1)           # (B, N+1)
+            mx = log_T.max(dim=1).values                  # (B, N+1)
+            top_vals = log_T.topk(self.topk, dim=1).values.transpose(1, 2)  # (B, N+1, k)
+            top_gap = mx.unsqueeze(-1) - top_vals
+
+        spread = lse - mx                                 # (B, *)
+        feats = torch.cat([
+            lse.unsqueeze(-1),
+            offset.unsqueeze(-1),
+            top_gap,
+            spread.unsqueeze(-1),
+            desc_proj,
+        ], dim=-1)
+        return feats
+
+    def _assemble(self, scores: torch.Tensor, alpha: torch.Tensor):
+        """Build couplings S, log_mu, log_nu, norm — identical to ObservedSinkhorn."""
+        b, m, n = scores.shape
+        one = scores.new_tensor(1)
+        ms, ns = (m * one).to(scores), (n * one).to(scores)
+
+        bins0 = alpha.expand(b, m, 1)
+        bins1 = alpha.expand(b, 1, n)
+        alpha_e = alpha.expand(b, 1, 1)
+        S = torch.cat([torch.cat([scores, bins0], -1),
+                       torch.cat([bins1, alpha_e], -1)], 1)      # (B, M+1, N+1)
+
+        norm = -(ms + ns).log()
+        log_mu = torch.cat([norm.expand(m), ns.log()[None] + norm])
+        log_nu = torch.cat([norm.expand(n), ms.log()[None] + norm])
+        log_mu = log_mu[None].expand(b, -1)
+        log_nu = log_nu[None].expand(b, -1)
+        return S, log_mu, log_nu, norm
+
+    def forward(self, scores: torch.Tensor, alpha: torch.Tensor,
+                mdesc0: torch.Tensor, mdesc1: torch.Tensor,
+                return_trace: bool = False):
+        """Run T unrolled iterations.
+
+        If `return_trace=True`, also return a list of length T containing the
+        log_T snapshot at the end of each iteration (for the auxiliary loss
+        during Phase 2 training). The first element is iteration t=1, etc.
+        """
+        S, log_mu, log_nu, norm = self._assemble(scores, alpha)
+        B, Mp1, Np1 = S.shape
+        u = S.new_zeros(B, Mp1)
+        v = S.new_zeros(B, Np1)
+        dA, dB = self._project_descriptors(mdesc0, mdesc1)
+
+        trace = [] if return_trace else None
+
+        for _ in range(self.iters):
+            # Canonical Sinkhorn row update.
+            u = log_mu - torch.logsumexp(S + v.unsqueeze(1), dim=2)
+            # Learned row delta (zero at init).
+            log_T_cur = S + u.unsqueeze(2) + v.unsqueeze(1)
+            feats_r = self._build_features(log_T_cur, u, dA, axis='row')
+            u = u + self.row_mlp(feats_r).squeeze(-1)
+
+            # Canonical Sinkhorn col update.
+            v = log_nu - torch.logsumexp(S + u.unsqueeze(2), dim=1)
+            # Learned col delta (zero at init).
+            log_T_cur = S + u.unsqueeze(2) + v.unsqueeze(1)
+            feats_c = self._build_features(log_T_cur, v, dB, axis='col')
+            v = v + self.col_mlp(feats_c).squeeze(-1)
+
+            if return_trace:
+                trace.append(S + u.unsqueeze(2) + v.unsqueeze(1) - norm)
+
+        final = S + u.unsqueeze(2) + v.unsqueeze(1) - norm
+        if return_trace:
+            return final, trace, log_mu, log_nu
+        return final

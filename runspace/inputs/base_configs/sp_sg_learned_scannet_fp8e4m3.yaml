@@ -1,0 +1,37 @@
+target_pipeline: superpoint_superglue_learned
+
+adapter:
+  type: feature_matching
+  # Quantize the SuperGlue backbone Conv1d layers only. The learned head's
+  # Linear layers at backbone.superglue.sinkhorn.{row_mlp,col_mlp,proj_*}
+  # are NOT in quantized_ops and so remain FP32. This isolates quantization
+  # failures to the pre-existing components during Phase 1 integration.
+  quantize_components: ["superglue"]
+  quantized_ops: ["Conv1d"]
+  weight_quantization: true
+  input_quantization: false
+
+quantization:
+  format: fp8_e4m3
+  weight_mode: channel
+  calib_method: max
+
+dataset:
+  name: scannet_pairs
+  path: /data/scannet
+  pairs_file: /app/runspace/inputs/scannet/pairs_test_paper_100scenes.txt
+  image_size: [480, 640]
+  batch_size: 1
+  num_workers: 4
+  max_pairs: 50
+
+model:
+  sp_config:
+    max_keypoints: 1024
+  sg_config:
+    learned_sinkhorn_iterations: 3
+    learned_proj_dim: 8
+
+evaluation:
+  mode: compare
+  compare_batches: 5

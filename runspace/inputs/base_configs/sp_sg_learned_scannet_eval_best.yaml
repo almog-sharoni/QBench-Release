@@ -1,0 +1,37 @@
+target_pipeline: superpoint_superglue_learned
+
+adapter:
+  type: feature_matching
+  quantize_components: []
+  quantized_ops: []
+  weight_quantization: false
+  input_quantization: false
+  build_quantized: false
+
+quantization:
+  format: fp8_e4m3
+  weight_mode: channel
+  calib_method: max
+
+# Post-Phase-2 FP32 eval on the ScanNet paper test set with the trained head.
+dataset:
+  name: scannet_pairs
+  path: /data/scannet
+  pairs_file: /app/runspace/inputs/scannet/pairs_test_paper_100scenes.txt
+  image_size: [480, 640]
+  batch_size: 1
+  num_workers: 4
+  max_pairs: 100
+
+model:
+  sp_config:
+    max_keypoints: 1024
+  sg_config:
+    learned_sinkhorn_iterations: 3
+    learned_proj_dim: 8
+    learned_head_ckpt: /app/runspace/outputs/design_c_t3/checkpoints/best.pt
+
+evaluation:
+  mode: inference
+  compare_batches: -1
+  max_batches: -1

@@ -1,0 +1,58 @@
+target_pipeline: superpoint_superglue_learned
+
+model:
+  repo_path: /app/custom/SuperGluePretrainedNetwork
+  sg_weights: indoor
+  sp_config:
+    max_keypoints: 512
+  sg_config:
+    learned_sinkhorn_iterations: 3
+    learned_proj_dim: 8
+
+train:
+  val_every_epochs: 1
+
+  dataset:
+    name: scannet_training_pairs
+    # Paths in pairs_train.txt are relative to the posed_images/ layout
+    # (e.g. scene0265_02/00480.jpg). Depth PNGs sit alongside the JPGs.
+    path: /data/scannet/posed_images
+    pairs_file: /app/runspace/inputs/scannet/pairs_train.txt
+    image_size: [480, 640]
+    # batch_size=1: SuperPoint emits variable-count kpts per image and the
+    # SuperGlue pipeline stacks via `torch.stack(data[k])` — matches QBench's
+    # existing batch-of-one convention for feature matching.
+    batch_size: 1
+    num_workers: 4
+    shuffle: true
+    max_pairs: -1
+
+  val_dataset:
+    name: scannet_pairs
+    path: /data/scannet
+    pairs_file: /app/runspace/inputs/scannet/pairs_test_paper_100scenes.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 4
+    max_pairs: 300
+
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+
+  schedule:
+    epochs: 30
+    warmup_epochs: 1
+    cosine: true
+
+  loss:
+    lambda_marg_initial: 0.1
+    lambda_marg_final: 0.01
+    lambda_marg_anneal_epoch: 10
+    lambda_aux: 0.3
+    gt_reproj_threshold_px: 3.0
+
+checkpoint:
+  out_dir: /app/runspace/outputs/design_c_t3/checkpoints
+  select_metric: pose_auc_10

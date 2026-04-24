@@ -34,3 +34,8 @@
   source: custom
   repo_path: /app/custom/SuperGluePretrainedNetwork
   sg_weights: indoor
+
+- name: superpoint_superglue_learned
+  source: custom
+  repo_path: /app/custom/SuperGluePretrainedNetwork
+  sg_weights: indoor
