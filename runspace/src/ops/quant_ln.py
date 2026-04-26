@@ -7,10 +7,15 @@ from ..quantization.quantizer import quantize
 
 # @OpRegistry.register("QuantLayerNorm", original_cls=nn.LayerNorm, under_construction=True)
 class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
+    q_type: str
+    quantization_bias: int | None
+    weight_scale: torch.Tensor | None
+    weight_fp8: torch.Tensor | None
+
     """
     Quantized LayerNorm layer.
     """
-    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True, device=None, dtype=None, q_type="fp8_e4m3", quantization_bias: int = None):
+    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True, device=None, dtype=None, q_type="fp8_e4m3", quantization_bias: int | None = None):
         super().__init__(normalized_shape, eps=eps, elementwise_affine=elementwise_affine, device=device, dtype=dtype)
         self.q_type = q_type
         self.quantization_bias = quantization_bias
@@ -52,11 +57,14 @@ try:
     
     @OpRegistry.register("QuantLayerNorm2d", original_cls=LayerNorm2d, under_construction=True)
     class QuantLayerNorm2d(QuantLayerNorm):
+        q_type: str
+        quantization_bias: int | None
+
         """
         Quantized LayerNorm2d layer (from ConvNext).
         Expects input (N, C, H, W), normalizes over C.
         """
-        def __init__(self, normalized_shape, eps=1e-6, elementwise_affine=True, device=None, dtype=None, q_type="fp8_e4m3", quantization_bias: int = None):
+        def __init__(self, normalized_shape, eps=1e-6, elementwise_affine=True, device=None, dtype=None, q_type="fp8_e4m3", quantization_bias: int | None = None):
             # LayerNorm2d in ConvNext takes normalized_shape as int (channels) or list
             # We pass it to QuantLayerNorm which expects it.
             super().__init__(normalized_shape, eps=eps, elementwise_affine=elementwise_affine, device=device, dtype=dtype, q_type=q_type, quantization_bias=quantization_bias)

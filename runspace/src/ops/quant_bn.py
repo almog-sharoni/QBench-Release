@@ -8,6 +8,10 @@ from .quant_base import QuantizedLayerMixin, quantize_tensor
 
 @OpRegistry.register("QuantBatchNorm2d", original_cls=nn.BatchNorm2d)
 class QuantBatchNorm2d(nn.BatchNorm2d, QuantizedLayerMixin):
+    q_type: str
+    weight_scale: torch.Tensor | None
+    weight_fp8: torch.Tensor | None
+
     """
     Quantized BatchNorm2d layer that simulates FP8 quantization.
     Quantizes input and weight (gamma). Bias, running_mean, running_var remain FP32.
@@ -87,6 +91,10 @@ class QuantBatchNorm2d(nn.BatchNorm2d, QuantizedLayerMixin):
 
 @OpRegistry.register("QuantBatchNorm1d", original_cls=nn.BatchNorm1d)
 class QuantBatchNorm1d(nn.BatchNorm1d, QuantizedLayerMixin):
+    q_type: str
+    weight_scale: torch.Tensor | None
+    weight_fp8: torch.Tensor | None
+
     """
     Quantized BatchNorm1d: quantizes input and gamma (weight); bias / running stats stay FP32.
     """
@@ -129,6 +137,12 @@ class QuantBatchNorm1d(nn.BatchNorm1d, QuantizedLayerMixin):
 
 @OpRegistry.register("QuantBatchNormAct2d")
 class QuantBatchNormAct2d(nn.Module, QuantizedLayerMixin):
+    q_type: str
+    quantization_bias: int | None
+    bn: QuantBatchNorm2d
+    drop: nn.Module
+    act: nn.Module
+
     """
     Quantized wrapper for timm-style BatchNormAct2d blocks.
     Preserves drop/activation behavior while quantizing the internal BN op.
