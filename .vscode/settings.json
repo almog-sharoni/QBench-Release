@@ -1,4 +1,6 @@
-// {
+{
+    "python.languageServer": "None"
+} // {
 //     "python.analysis.extraPaths": [
 //         "${workspaceFolder}/qbench_sandbox/usr/local/lib/python3.12/dist-packages"
 //     ],
