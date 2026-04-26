@@ -2,45 +2,22 @@ import torch
 import torch.nn as nn
 from ..registry.op_registry import OpRegistry
 from .quant_base import quantize_tensor
+from ..quantization.quantizer import round_fractional_part
 
-# def get_mant_bits(q_type: str) -> int:
-#     prefix = q_type.split('_')[0]  # e.g. 'fp8'
-#     e_part = q_type.split('_e')[1]  # e.g. '1m6'
-#     exp_bits = int(e_part.split('m')[0])
-#     mant_bits = int(e_part.split('m')[1])
-#     return mant_bits
-
-def round_fractional_part(y_frac: torch.Tensor) -> torch.Tensor:
-    mant_bits = 8
-    drop_bits = 23 - mant_bits  # 15 bits to drop
-
-    orig_shape = y_frac.shape
-    f32 = y_frac.contiguous().view(-1).view(torch.int32)
-
-    exp32 = (f32 >> 23) & 0xFF
-    mant32 = f32 & 0x7FFFFF
-
-    # Add implicit leading 1 only for normal numbers (exp32 == 0 means zero/subnormal)
-    is_normal = (exp32 != 0).int()
-    mant_with_implicit = mant32 | (is_normal << 23)
-
-    # Round-to-nearest: add half LSB before truncating (standard add-half-then-truncate)
-    mant_rounded = ((mant_with_implicit + (1 << (drop_bits - 1))) >> drop_bits) << drop_bits
-
-    # On rounding overflow (carry into bit 24), increment exponent and zero mantissa
-    overflow = (mant_rounded >> 24) & 0x1
-    exp32 = exp32 + overflow
-    mant_rounded = torch.where(overflow == 1, torch.zeros_like(mant_rounded), mant_rounded)
-
-    mant32_final = mant_rounded & 0x7FFFFF
-    f32_out = (f32 & 0x80000000) | (exp32 << 23) | mant32_final
-
-    return f32_out.view(torch.float32).view(orig_shape)
 
 
 @OpRegistry.register("QuantSoftmax", original_cls=nn.Softmax)
 # @OpRegistry.register("QuantSoftmax", original_cls=nn.Softmax,is_activation=True, compliance_status = "treat softmax like activation", under_construction=True)
 class QuantSoftmax(nn.Softmax):
+    q_type: str
+    quantization_bias: int | None
+    quant_mode: str
+    chunk_size: int | None
+    capture_activations: bool
+    last_quant_input: torch.Tensor | None
+    last_quant_output_unscaled: torch.Tensor | None
+    exp2_lut: torch.Tensor | None
+
     """
     1 Goal and Notation
     Quantized Softmax operation following a hardware-friendly paradigm.
@@ -53,7 +30,7 @@ class QuantSoftmax(nn.Softmax):
     7 Normalization and Output
     8 Output Quantization
     """
-    def __init__(self, dim: int = None, q_type: str = "fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
+    def __init__(self, dim: int | None = None, q_type: str = "fp8_e4m3", quantization_bias: int | None = None, quant_mode: str = "tensor", chunk_size: int | None = None):
         super().__init__(dim=dim)
         self.q_type = q_type
         self.quantization_bias = None

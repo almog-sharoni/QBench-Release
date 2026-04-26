@@ -6,6 +6,12 @@ from .quant_base import QuantizedLayerMixin
 
 @OpRegistry.register("QuantConv2d", original_cls=nn.Conv2d)
 class QuantConv2d(nn.Conv2d, QuantizedLayerMixin):
+    q_type: str
+    is_first_layer: bool
+    simulate_tf32_accum: bool
+    weight_scale: torch.Tensor | None
+    weight_fp8: torch.Tensor | None
+
     """
     Quantized Convolution layer that simulates FP8 quantization.
     """

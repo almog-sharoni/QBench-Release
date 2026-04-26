@@ -1,122 +1,34 @@
-"""
-FP8 E4M3 Quantizer - Hardware-Friendly Implementation
-
-This module implements FP8 quantization using simple exponent/mantissa operations
-that can be easily translated to hardware (FPGA/ASIC).
-
-NOTE: This implementation does NOT support Infinity or NaN values.
-All overflow values are clamped to the maximum representable value.
-
-FP8 E4M3 Format:
-- 1 sign bit (S)
-- 4 exponent bits (E), bias = 7
-- 3 mantissa bits (M)
-- Value = (-1)^S * (1.M) * 2^(E-7) for normal (E > 0)
-- Value = (-1)^S * (0.M) * 2^(-6) for subnormal (E = 0)
-- Max value: 448 (E=15, M=6)
-- No Infinity or NaN representation
-
-FP8 E5M2 Format:
-- 1 sign bit (S)
-- 5 exponent bits (E), bias = 15
-- 2 mantissa bits (M)
-- Value = (-1)^S * (1.M) * 2^(E-15) for normal (E > 0)
-- Value = (-1)^S * (0.M) * 2^(-14) for subnormal (E = 0)
-- Max value: 57344 (E=30, M=3)
-- No Infinity or NaN representation
-
-FP4 E2M1 Format (OCP Microscaling):
-- 1 sign bit
-- 2 exponent bits, bias = 1
-- 1 mantissa bit
-- Range: +/- 6
-- No Infinity or NaN representation
-
-FP4 E3M0 Format (OCP Microscaling):
-- 1 sign bit
-- 3 exponent bits, bias = 3
-- 0 mantissa bits
-- Range: +/- 12
-- No Infinity or NaN representation
-
-INT8 Format:
-- Symmetric signed 8-bit integer
-- Range: [-128, 127] (256 values)
-- Assumes input is pre-scaled to this range
-
-INT4 Format:
-- Symmetric signed 4-bit integer
-- Range: [-8, 7] (16 values)
-- Assumes input is pre-scaled to this range
-"""
-
 import torch
 
 _FP8_TABLE_CACHE = {}
 
+def round_fractional_part(y_frac: torch.Tensor) -> torch.Tensor:
+    mant_bits = 8
+    drop_bits = 23 - mant_bits  # 15 bits to drop
 
+    orig_shape = y_frac.shape
+    f32 = y_frac.contiguous().view(-1).view(torch.int32)
 
-# ============================================================================
-# INT8 Lookup Table
-# ============================================================================
+    exp32 = (f32 >> 23) & 0xFF
+    mant32 = f32 & 0x7FFFFF
 
-def _generate_int8_table(device: torch.device = None) -> torch.Tensor:
-    """
-    Generate lookup table of all 256 possible INT8 values (casted to float).
-    Range: [-128, 127]
-    """
-    if device is None:
-        device = torch.device('cpu')
-    
-    cache_key = f"{device}_int8"
-    if cache_key in _FP8_TABLE_CACHE:
-        return _FP8_TABLE_CACHE[cache_key]
-    
-    # Generate all int8 values
-    values = torch.arange(-128, 128, dtype=torch.float32, device=device)
-    
-    _FP8_TABLE_CACHE[cache_key] = values
-    return values
+    # Add implicit leading 1 only for normal numbers (exp32 == 0 means zero/subnormal)
+    is_normal = (exp32 != 0).int()
+    mant_with_implicit = mant32 | (is_normal << 23)
 
-def get_int8_table(device: torch.device = None) -> torch.Tensor:
-    return _generate_int8_table(device).clone()
+    # Round-to-nearest: add half LSB before truncating (standard add-half-then-truncate)
+    mant_rounded = ((mant_with_implicit + (1 << (drop_bits - 1))) >> drop_bits) << drop_bits
 
+    # On rounding overflow (carry into bit 24), increment exponent and zero mantissa
+    overflow = (mant_rounded >> 24) & 0x1
+    exp32 = exp32 + overflow
+    mant_rounded = torch.where(overflow == 1, torch.zeros_like(mant_rounded), mant_rounded)
 
-def get_format_table(q_type: str, device: torch.device = None) -> torch.Tensor:
-    """Finite lookup table for formats that truly have one (int8/int4).
-    Returns None for any simulated fp format; callers must use the
-    mantissa-precision check, which matches quantize_fp_generic's semantics."""
-    if q_type == 'int8':
-        return get_int8_table(device)
-    if q_type == 'int4':
-        return get_int4_table(device)
-    return None
+    mant32_final = mant_rounded & 0x7FFFFF
+    f32_out = (f32 & 0x80000000) | (exp32 << 23) | mant32_final
 
+    return f32_out.view(torch.float32).view(orig_shape)
 
-# ============================================================================
-# INT4 Lookup Table
-# ============================================================================
-
-def _generate_int4_table(device: torch.device = None) -> torch.Tensor:
-    """
-    Generate lookup table of all 16 possible INT4 values (casted to float).
-    Range: [-8, 7]
-    """
-    if device is None:
-        device = torch.device('cpu')
-    
-    cache_key = f"{device}_int4"
-    if cache_key in _FP8_TABLE_CACHE:
-        return _FP8_TABLE_CACHE[cache_key]
-    
-    # Generate all int4 values
-    values = torch.arange(-8, 8, dtype=torch.float32, device=device)
-    
-    _FP8_TABLE_CACHE[cache_key] = values
-    return values
-
-def get_int4_table(device: torch.device = None) -> torch.Tensor:
-    return _generate_int4_table(device).clone()
 
 
 # ============================================================================
@@ -203,26 +115,11 @@ def quantize(tensor: torch.Tensor, q_type: str = "fp8_e4m3", validate: bool = Fa
              assert_fp8_valid(result, q_type=q_type)
         return result
 
-    elif q_type == "int8":
-        result = quantize_int8(tensor)
-        if validate:
-            assert_fp8_valid(result, q_type="int8")
-        return result
-
-    elif q_type == "int4":
-        result = quantize_int4(tensor)
-        if validate:
-            assert_fp8_valid(result, q_type="int4")
-        return result
-
     elif q_type == "tf32":
         return quantize_tf32(tensor)
 
     else:
         raise ValueError(f"Unsupported quantization type: {q_type}")
-
-
-
 
 
 
@@ -385,243 +282,12 @@ def quantize_fp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rou
     # shift = torch.where(is_fp8_sub, shift + (1 - fp8_exp), shift)
     # shift = torch.clamp(shift, max=31)
 
-def quantize_fp_generic_i32(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rounding: str = "nearest", clip_max_exp: int = None, clip_max_mant: int = None, is_efp: bool = False) -> torch.Tensor:
-    """
-    Generic FP quantization for any E/M split.
-    Uses 'No Inf/NaN' policy (clamps to max representable).
-    
-    Args:
-        tensor: Input tensor
-        exp_bits: Number of exponent bits
-        mant_bits: Number of mantissa bits
-        rounding: Rounding mode
-        clip_max_exp: Optional override for max allowable exponent (raw integer value)
-        clip_max_mant: Optional override for max allowable mantissa at max exponent
-    """
-    orig_shape = tensor.shape
-    tensor_flat = tensor.contiguous().view(-1)
-    
-    i32 = tensor_flat.view(torch.int32)
-    sign = (i32 >> 31) & 0x1
-    exp32 = (i32 >> 23) & 0xFF
-    mant32 = i32 & 0x7FFFFF
-    
-    if exp_bits == 0:
-        bias = 0
-    elif exp_bits == 1:
-        bias = 1
-    else:
-        bias = (1 << (exp_bits - 1)) - 1
-
-    fp8_exp = exp32.int() - (127 - bias)
-    
-    mant_full = mant32 | 0x800000
-    is_fp32_sub = (exp32 == 0)
-    mant_full = torch.where(is_fp32_sub, mant32, mant_full)
-    
-    # Calculate shift
-    # FP32 mantissa = 23 bits. FP8 mantissa = M bits.
-    # Shift = 23 - M
-    mant_shift_val = 23 - mant_bits
-    shift = torch.full_like(fp8_exp, mant_shift_val)
-    
-    # Subnormal handling
-    is_fp8_sub = fp8_exp < 1
-    shift = torch.where(is_fp8_sub, shift + (1 - fp8_exp), shift)
-    shift = torch.clamp(shift, max=31)
-    
-    if rounding == "nearest":
-        round_bit = (1 << (shift - 1).clamp(min=0))
-        mant_rounded = mant_full + round_bit
-    else: # truncate
-        mant_rounded = mant_full
-
-    mant_shifted = mant_rounded >> shift
-    
-    # Overflow check
-    overflow_threshold = 1 << (mant_bits + 1)
-    is_efp_t = torch.tensor(is_efp, device=sign.device)  # scalar tensor, broadcastable
-    cond = (sign == 1) | (~is_efp_t)                      # elementwise OR
-    overflow = cond & (mant_shifted >= overflow_threshold)
-    mant_shifted = torch.where(overflow, mant_shifted >> 1, mant_shifted)
-    fp8_exp = torch.where(overflow, fp8_exp + 1, fp8_exp)
-    
-    # Store
-    implicit_one = 1 << mant_bits
-    
-    # Renormalize subnormal to normal if rounded up
-    is_subnorm_to_norm = (fp8_exp == 0) & (mant_shifted >= implicit_one)
-    fp8_exp = torch.where(is_subnorm_to_norm, torch.ones_like(fp8_exp), fp8_exp)
-
-    # Special handling for Exp=0 (no normal numbers)
-    if exp_bits > 0:
-        is_normal = mant_shifted >= implicit_one
-    else:
-        is_normal = torch.zeros_like(mant_shifted, dtype=torch.bool)
-    
-    stored_exp = torch.where(is_normal, fp8_exp, torch.zeros_like(fp8_exp))
-    mask = (1 << mant_bits) - 1
-    stored_mant = torch.where(is_normal, mant_shifted & mask, mant_shifted)
-    
-    # Clamp to Max Value
-    # Max Exp = 2^E - 1 (since we assume no NaN/Inf)
-    if exp_bits > 0:
-        if clip_max_exp is not None:
-            max_exp_val = clip_max_exp
-        else:
-            max_exp_val = (1 << exp_bits) - 1
-            
-        if clip_max_mant is not None:
-             max_mant_val = clip_max_mant
-        else:
-             max_mant_val = mask
-
-        # If we overflowed beyond max representable
-        # Logic: If exp > max_exp, clamp. 
-        # OR if exp == max_exp AND mant > max_mant, clamp.
-        is_overflow = (stored_exp > max_exp_val) | ((stored_exp == max_exp_val) & (stored_mant > max_mant_val))
-        
-        stored_exp = torch.where(is_overflow, torch.full_like(stored_exp, max_exp_val), stored_exp)
-        stored_mant = torch.where(is_overflow, torch.full_like(stored_mant, max_mant_val), stored_mant)
-    else:
-        # For E=0, max value is just max mantissa (all 1s)
-        max_exp_val = 0
-        stored_exp = torch.zeros_like(stored_exp)
-        
-        # Check if we exceeded max mantissa bits? 
-        if clip_max_mant is not None:
-             limit_mant = clip_max_mant
-        else:
-             limit_mant = mask
-             
-        stored_mant = torch.clamp(stored_mant, max=limit_mant)
-        
-    
-    # Handle NaN/Inf input (clamp to max)
-    is_nan_inf = (exp32 == 255)
-    
-    # Use computed max values for clamping NaNs/Infs too
-    # If exp_bits=0, max_exp_val is 0.
-    # If exp_bits>0, it's what we computed above.
-    stored_exp = torch.where(is_nan_inf, torch.full_like(stored_exp, max_exp_val), stored_exp)
-    
-    target_mant_clamp = max_mant_val if exp_bits > 0 else (clip_max_mant if clip_max_mant is not None else mask)
-    stored_mant = torch.where(is_nan_inf, torch.full_like(stored_mant, target_mant_clamp), stored_mant)
-    
-    # Convert back to float
-    result = _fp_generic_to_float_vectorized(sign, stored_exp, stored_mant, exp_bits, mant_bits, bias)
-    return result.view(orig_shape)
-
-def _fp_generic_to_float_vectorized(sign: torch.Tensor, exp: torch.Tensor, mant: torch.Tensor, exp_bits: int, mant_bits: int, bias: int) -> torch.Tensor:
-    """Convert generic FP fields to float32."""
-    if mant_bits > 0:
-        div_factor = float(1 << mant_bits)
-        m_val = mant.float() / div_factor
-        m_val = torch.where(exp > 0, m_val + 1.0, m_val)
-    else:
-        # e.g. E7M0. Mantissa is 0. Normal implies 1.0. Subnormal implies 0.0.
-        m_val = torch.where(exp > 0, torch.ones_like(exp, dtype=torch.float), torch.zeros_like(exp, dtype=torch.float))
-
-    e_val = exp.float() - float(bias)
-    e_val = torch.where(exp == 0, torch.full_like(e_val, 1.0 - float(bias)), e_val)
-    
-    result = m_val * torch.pow(2.0, e_val)
-    result = torch.where(sign == 1, -result, result)
-    return result
-
 
 
 
 
 def quantize_efp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rounding: str = "nearest") -> torch.Tensor:
     return quantize_fp_generic(tensor, exp_bits, mant_bits, rounding, is_efp=True)
-
-
-def quantize_int8(tensor: torch.Tensor, rounding: str = "nearest") -> torch.Tensor:
-    """
-    INT8 quantization (symmetric).
-    Assumes tensor is already scaled to [-127, 127] range.
-    Rounds to nearest integer and clamps to [-127, 127].
-    
-    Args:
-        tensor: Input tensor
-        rounding: "nearest" or "truncate"
-    """
-    return quantize_int8_manual(tensor, rounding=rounding)
-
-def quantize_int8_manual(tensor: torch.Tensor, rounding: str = "nearest") -> torch.Tensor:
-    """
-    Manual INT8 quantization using bitwise operations (simulating hardware).
-    """
-    orig_shape = tensor.shape
-    tensor_flat = tensor.contiguous().view(-1)
-    
-    i32 = tensor_flat.view(torch.int32)
-    sign = (i32 >> 31) & 0x1
-    exp32 = (i32 >> 23) & 0xFF
-    mant32 = i32 & 0x7FFFFF
-    
-    # 1.M * 2^(E-127)
-    # We want Integer Value. 
-    # Mantissa represents 1.M * 2^23 (if we treat 1.M as 1M...M)
-    # Value = (Mant_Int * 2^-23) * 2^(E-127) = Mant_Int * 2^(E - 150)
-    # To get integer: Shift Right by (150 - E)
-    
-    # Handle normal vs subnormal (exp=0)
-    # Normals: Implicit 1 at bit 23
-    mant_full = mant32 | 0x800000
-    # Subnormals: No implicit 1. Effective exp is same as E=1 for shift purposes (-126)
-    # Formula above for E=1: 1 - 150 = -149.
-    # Subnormal val: 0.M * 2^-126 = M * 2^-23 * 2^-126 = M * 2^-149.
-    # So for Exp=0, we use shift corresponding to E=1 (149), and no implicit 1.
-    
-    is_subnormal = (exp32 == 0)
-    mant_full = torch.where(is_subnormal, mant32, mant_full)
-    
-    # Calculate shift
-    # Shift = 150 - E
-    # For subnormals (E=0), Shift = 149.
-    eff_exp = torch.where(is_subnormal, torch.ones_like(exp32), exp32.int())
-    shift = 150 - eff_exp
-    
-    # Clamp shift to 0 (for large inputs > 2^23, though they will be clamped anyway)
-    shift = torch.clamp(shift, min=0, max=31) 
-    
-    if rounding == "nearest":
-        # Add 0.5 (1 << (shift - 1))
-        round_bit = (1 << (shift - 1).clamp(min=0))
-        mant_rounded = mant_full + round_bit
-    else:
-        mant_rounded = mant_full
-        
-    int_val = mant_rounded >> shift
-    
-    # Apply sign
-    # 2s complement negation: ~x + 1 or just -x since we are in signed int container
-    int_val = torch.where(sign == 1, -int_val.float(), int_val.float())
-    
-    # Clamp to [-127, 127]
-    result = torch.clamp(int_val, -127.0, 127.0)
-    
-    return result.view(orig_shape)
-
-
-def quantize_int4(tensor: torch.Tensor) -> torch.Tensor:
-    """
-    INT4 quantization (symmetric).
-    Assumes tensor is already scaled to [-7, 7] range.
-    Rounds to nearest integer and clamps to [-8, 7].
-    
-    Note: Range is [-8, 7] (16 values) for symmetric 4-bit signed integer.
-    """
-    # Round to nearest integer
-    result = torch.round(tensor)
-    # Clamp to valid range [-8, 7]
-    result = torch.clamp(result, -8.0, 7.0)
-    return result
-
-
-
 
 
 
@@ -795,6 +461,35 @@ def get_q_type_bounds(q_type: str) -> float:
     except Exception:
         # Fallback
         return 128.0
+
+
+def get_format_table(q_type: str, device: torch.device = None) -> torch.Tensor:
+    """
+    Return a valid-values lookup table for any supported format string.
+    Parses formats like 'fp8_e1m6', 'fp8_e3m4', 'fp4_e2m1', 'int8', etc.
+    Returns None for unrecognised formats.
+    """
+
+    # Generic fpX_eEmM formats
+    try:
+        if '_e' in q_type and 'm' in q_type:
+            prefix = q_type.split('_')[0]  # e.g. 'fp8'
+            e_part = q_type.split('_e')[1]  # e.g. '1m6'
+            exp_bits = int(e_part.split('m')[0])
+            mant_bits = int(e_part.split('m')[1])
+            total_bits = int(''.join(filter(str.isdigit, prefix)))
+            signed = not prefix.startswith('u')
+            # Standard IEEE-style bias: 2^(E-1) - 1
+            bias = max(0, (1 << (exp_bits - 1)) - 1) if exp_bits > 0 else 0
+            return _generate_fp_generic_table(
+                device, total_bits=total_bits, exp_bits=exp_bits,
+                mant_bits=mant_bits, bias=bias, signed=signed
+            ).clone()
+    except Exception:
+        print(f"Error generating format table for {q_type}")
+        pass
+
+    return None
 
 
 if __name__ == "__main__":

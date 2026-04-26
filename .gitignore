@@ -23,3 +23,5 @@ tailscale.tgz
 tailscale_state/
 tailscaled
 systemd/
+
+pyrightconfig.json

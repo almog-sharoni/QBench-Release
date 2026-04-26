@@ -7,6 +7,10 @@ from .quant_base import QuantizedLayerMixin
 
 @OpRegistry.register("QuantLinear", original_cls=nn.Linear)
 class QuantLinear(nn.Linear, QuantizedLayerMixin):
+    q_type: str
+    weight_scale: torch.Tensor | None
+    weight_fp8: torch.Tensor | None
+
     """
     Quantized Linear layer (simulated weight quantization).
     All computation stays in float32 — weights are stored in dequantized form

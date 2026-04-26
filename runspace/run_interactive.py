@@ -3,6 +3,8 @@ import sys
 import yaml
 import glob
 import json
+import shlex
+from datetime import datetime, timezone
 
 # Add project root to sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
@@ -17,9 +19,9 @@ if 'TORCH_HOME' not in os.environ:
 if 'PYTORCH_KERNEL_CACHE_PATH' not in os.environ:
     os.environ['PYTORCH_KERNEL_CACHE_PATH'] = os.path.join(PROJECT_ROOT, '.cache', 'torch', 'kernels')
 
-from runspace.core.config_factory import ConfigFactory
-from runspace.core.runner import Runner
-from runspace.core.report_aggregator import ReportAggregator
+SCRIPT_REL_PATH = os.path.relpath(__file__, PROJECT_ROOT)
+DEFAULT_COMMAND_LOG_PATH = os.path.join(PROJECT_ROOT, 'runspace', 'interactive_commands.log')
+PYTHON_COMMAND = os.path.basename(sys.executable) or 'python'
 
 def load_models_list(path: str) -> list:
     with open(path, 'r') as f:
@@ -71,6 +73,138 @@ def _parse_csv_arg(value: str) -> list:
     return [v.strip() for v in value.split(',') if v.strip()]
 
 
+def _csv_arg(values: list) -> str:
+    return ",".join(values)
+
+
+def _command_to_argv(command: str) -> list:
+    """Extract run_interactive.py arguments from a saved shell command."""
+    parts = shlex.split(command)
+    for idx, part in enumerate(parts):
+        if os.path.basename(part) == 'run_interactive.py':
+            return parts[idx + 1:]
+    return parts
+
+
+def _load_command_history(path: str) -> list:
+    if not path or not os.path.exists(path):
+        return []
+
+    commands = []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                command = entry.get('command')
+            except json.JSONDecodeError:
+                command = line
+            if command:
+                commands.append(command)
+    return commands
+
+
+def _append_command_history(path: str, command: str):
+    log_dir = os.path.dirname(path)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+    entry = {
+        'timestamp': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+        'command': command,
+    }
+    with open(path, 'a') as f:
+        f.write(json.dumps(entry, sort_keys=True) + '\n')
+
+
+def _print_command_history(commands: list, limit: int = None):
+    if not commands:
+        print("No saved interactive commands found.")
+        return
+
+    shown = commands if limit is None else commands[-limit:]
+    start = len(commands) - len(shown) + 1
+    print("\nSaved interactive commands:")
+    for offset, command in enumerate(shown):
+        print(f"{start + offset}. {command}")
+
+
+def _select_command_from_history(commands: list) -> str:
+    if not commands:
+        print("No saved interactive commands found.")
+        return None
+
+    _print_command_history(commands, limit=10)
+    print("\nEnter a command number to run it again, 'last' for the newest command,")
+    print("or press Enter to start a new interactive run.")
+    while True:
+        choice = input("Command: ").strip().lower()
+        if not choice:
+            return None
+        if choice in ('last', 'l'):
+            return commands[-1]
+        try:
+            index = int(choice)
+        except ValueError:
+            print("Invalid input. Enter a command number, 'last', or press Enter.")
+            continue
+        if 1 <= index <= len(commands):
+            return commands[index - 1]
+        print(f"Invalid choice '{index}'. Please enter a number between 1 and {len(commands)}.")
+
+
+def _has_run_selection_args(args) -> bool:
+    return any([
+        args.base_config,
+        args.models_file,
+        args.models,
+        args.batches is not None,
+        args.default_batches,
+        args.workers is not None,
+        args.histograms,
+        args.no_histograms,
+        args.graph_only,
+    ])
+
+
+def _build_replay_command(
+    selected_base_config_names: list,
+    selected_model_files: list,
+    selected_model_names: list,
+    batch_arg,
+    histogram_arg,
+    workers,
+    graph_only: bool,
+) -> str:
+    command = [
+        PYTHON_COMMAND,
+        SCRIPT_REL_PATH,
+        '--base-config',
+        _csv_arg(selected_base_config_names),
+        '--models-file',
+        _csv_arg(selected_model_files),
+        '--models',
+        _csv_arg(selected_model_names),
+    ]
+    if graph_only:
+        command.append('--graph-only')
+    elif batch_arg == 'default':
+        command.append('--default-batches')
+    elif batch_arg is not None:
+        command.extend(['--batches', str(batch_arg)])
+
+    if workers is not None:
+        command.extend(['--workers', str(workers)])
+
+    if histogram_arg == 'enabled':
+        command.append('--histograms')
+    elif histogram_arg == 'defaults':
+        command.append('--no-histograms')
+
+    return shlex.join(command)
+
+
 def _resolve_selection(cli_values, options: list, name: str) -> list:
     """
     Use cli_values if provided, otherwise fall back to interactive prompt.
@@ -91,7 +225,7 @@ def _resolve_selection(cli_values, options: list, name: str) -> list:
     return cli_values
 
 
-def main():
+def _build_parser():
     import argparse
     parser = argparse.ArgumentParser(
         description="Run QBench. All arguments are optional; omitting any triggers an interactive prompt for that step.",
@@ -109,6 +243,9 @@ Examples:
 
   # Multiple base configs
   python run_interactive.py --base-config fp8e4m3.yaml,fp8e5m2.yaml --models-file imagenet_models.yaml --models all
+
+  # Run the last saved resolved interactive command
+  python run_interactive.py --last-command
 """,
     )
     parser.add_argument(
@@ -133,6 +270,11 @@ Examples:
         help="Number of batches (-1 for all). Skips the batches prompt.",
     )
     parser.add_argument(
+        "--default-batches",
+        action="store_true",
+        help="Use each config's default batch count. Skips the batches prompt.",
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         metavar="N",
@@ -147,19 +289,92 @@ Examples:
     parser.add_argument(
         "--no-histograms",
         action="store_true",
-        help="Disable histogram generation (skips the histogram prompt).",
+        help="Use configuration defaults for histogram generation (skips the histogram prompt).",
     )
     parser.add_argument(
         "--graph-only",
         action="store_true",
         help="Only generate quantization graphs, skip evaluation.",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--command-log",
+        default=DEFAULT_COMMAND_LOG_PATH,
+        help="Path to the resolved interactive command history log.",
+    )
+    parser.add_argument(
+        "--list-commands",
+        action="store_true",
+        help="List saved resolved interactive commands and exit.",
+    )
+    parser.add_argument(
+        "--choose-command",
+        action="store_true",
+        help="Choose a saved resolved interactive command to run.",
+    )
+    parser.add_argument(
+        "--last-command",
+        "--rerun-last",
+        dest="last_command",
+        action="store_true",
+        help="Run the newest saved resolved interactive command.",
+    )
+    parser.add_argument(
+        "--no-command-prompt",
+        action="store_true",
+        help="Do not offer saved commands before a fully interactive run.",
+    )
+    return parser
+
+
+def main(argv=None, allow_command_prompt=True):
+    parser = _build_parser()
+    args = parser.parse_args(argv)
 
     # Normalise histogram flag
     if args.histograms and args.no_histograms:
         parser.error("--histograms and --no-histograms are mutually exclusive.")
+    if args.batches is not None and args.default_batches:
+        parser.error("--batches and --default-batches are mutually exclusive.")
     histogram_cli = True if args.histograms else (False if args.no_histograms else None)
+
+    command_history = _load_command_history(args.command_log)
+    if args.list_commands:
+        _print_command_history(command_history)
+        return
+
+    if args.last_command:
+        if not command_history:
+            print(f"No saved interactive commands found in {args.command_log}.")
+            sys.exit(1)
+        command = command_history[-1]
+        replay_argv = _command_to_argv(command)
+        if args.command_log != DEFAULT_COMMAND_LOG_PATH and '--command-log' not in replay_argv:
+            replay_argv.extend(['--command-log', args.command_log])
+        print(f"Running last saved command:\n{command}\n")
+        return main(replay_argv, allow_command_prompt=False)
+
+    if args.choose_command:
+        command = _select_command_from_history(command_history)
+        if command is not None:
+            replay_argv = _command_to_argv(command)
+            if args.command_log != DEFAULT_COMMAND_LOG_PATH and '--command-log' not in replay_argv:
+                replay_argv.extend(['--command-log', args.command_log])
+            print(f"Running saved command:\n{command}\n")
+            return main(replay_argv, allow_command_prompt=False)
+
+    if (
+        allow_command_prompt
+        and not args.no_command_prompt
+        and not _has_run_selection_args(args)
+        and command_history
+    ):
+        command = _select_command_from_history(command_history)
+        if command is not None:
+            replay_argv = _command_to_argv(command)
+            if args.command_log != DEFAULT_COMMAND_LOG_PATH and '--command-log' not in replay_argv:
+                replay_argv.extend(['--command-log', args.command_log])
+            print(f"Running saved command:\n{command}\n")
+            return main(replay_argv, allow_command_prompt=False)
 
     print("=== QBench Interactive Run ===\n")
     if args.graph_only:
@@ -224,6 +439,10 @@ Examples:
             selected_models.append(m)
             seen_names.add(m['name'])
 
+    from runspace.core.config_factory import ConfigFactory
+    from runspace.core.runner import Runner
+    from runspace.core.report_aggregator import ReportAggregator
+
     # 3. Generate Configs
     print(f"\nGenerating configurations...")
     factory = ConfigFactory()
@@ -254,8 +473,12 @@ Examples:
         print(f"dataset.num_workers set to {args.workers} (from --workers).")
 
     # 3.5. Batches
+    batch_arg = None
     if not args.graph_only:
-        if args.batches is not None:
+        if args.default_batches:
+            batch_arg = 'default'
+            print("Using each configuration's default batch count (from --default-batches).")
+        elif args.batches is not None:
             new_batches = args.batches
             for config in all_configs:
                 config.setdefault('evaluation', {})
@@ -263,6 +486,7 @@ Examples:
                 config['evaluation']['max_batches'] = new_batches
             batch_msg = "ALL" if new_batches == -1 else str(new_batches)
             print(f"Batches set to {batch_msg} (from --batches).")
+            batch_arg = new_batches
         else:
             first_config = all_configs[0]
             current_batches = first_config.get('evaluation', {}).get('compare_batches', -1)
@@ -272,6 +496,7 @@ Examples:
             while True:
                 batch_input = input("Batches: ").strip()
                 if not batch_input:
+                    batch_arg = 'default'
                     break
                 try:
                     new_batches = int(batch_input)
@@ -282,6 +507,7 @@ Examples:
                             config['evaluation']['max_batches'] = new_batches
                         batch_msg = "ALL" if new_batches == -1 else str(new_batches)
                         print(f"Set number of batches to {batch_msg}")
+                        batch_arg = new_batches
                         break
                     else:
                         print("Please enter a positive number or -1.")
@@ -289,6 +515,7 @@ Examples:
                     print("Invalid input. Please enter a number.")
 
     # 3.6. Histograms
+    histogram_arg = None
     if not args.graph_only:
         if histogram_cli is not None:
             enable_histograms = histogram_cli
@@ -305,8 +532,23 @@ Examples:
                 config.setdefault('evaluation', {})
                 config['evaluation']['save_histograms'] = True
                 config['evaluation']['mode'] = 'compare'
+            histogram_arg = 'enabled'
         else:
             print("Using configuration defaults for histograms.")
+            histogram_arg = 'defaults'
+
+    replay_command = _build_replay_command(
+        selected_base_config_names,
+        selected_model_files,
+        selected_model_names,
+        batch_arg,
+        histogram_arg,
+        args.workers,
+        args.graph_only,
+    )
+    _append_command_history(args.command_log, replay_command)
+    print(f"\nSaved replay command to {args.command_log}:")
+    print(replay_command)
         
     # 4. Run Configs Sequentially (explicit loop; runner handles single-run only)
     print(f"\nStarting execution of {len(all_configs)} configurations...")

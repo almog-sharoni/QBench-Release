@@ -30,7 +30,21 @@ def calculate_scale(max_val: torch.Tensor, q_type: str):
     return s
 
 
-def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscaled: bool = False, return_scale: bool = False, mode: str = 'tensor', chunk_size: int = None, rounding: str = 'nearest', validate: bool = False, chunk_formats: list = None):
+def quantize_tensor(
+    input: torch.Tensor, 
+    q_type: str = 'fp8_e4m3', 
+    return_unscaled: bool = False, 
+    return_scale: bool = False, 
+    mode: str = 'tensor', 
+    chunk_size: int | None = None, 
+    rounding: str = 'nearest', 
+    validate: bool = False, 
+    chunk_formats: list[str] | None = None
+) -> (
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] |
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor] |
+    tuple[torch.Tensor, torch.Tensor]
+):
     """
     Quantizes a tensor to FP8 or other supported formats.
     Args:
