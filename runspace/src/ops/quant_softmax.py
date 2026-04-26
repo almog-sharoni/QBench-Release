@@ -3,6 +3,29 @@ import torch.nn as nn
 from ..registry.op_registry import OpRegistry
 from .quant_base import quantize_tensor
 
+
+def log2sumexp2(x: torch.Tensor, dim: int) -> torch.Tensor:
+    """Base-2 counterpart of torch.logsumexp: log2(sum(2**x, dim)).
+
+    Numerically stable via max-subtraction. Uses native torch.exp2 / torch.log2;
+    the LEO-NG hardware path substitutes a 16-entry exp2 LUT (see
+    `exp2_lut` pattern in QuantSoftmax.forward) and an inverse LUT for log2.
+    FP32 accumulator is used for the sum.
+
+    Args:
+      x: input tensor (any shape).
+      dim: reduction dimension.
+    Returns:
+      Tensor with `dim` removed (like torch.logsumexp).
+    """
+    max_val = x.amax(dim=dim, keepdim=True)
+    shifted = x - max_val
+    # 2**shifted: shifted values are all <= 0, so 2**shifted in (0, 1].
+    s = torch.exp2(shifted).to(torch.float32).sum(dim=dim)
+    # log2 of a positive sum; clamp away from zero to survive degenerate batches.
+    return max_val.squeeze(dim) + torch.log2(s.clamp(min=1e-30)).to(x.dtype)
+
+
 @OpRegistry.register("QuantSoftmax", original_cls=nn.Softmax, is_activation=True)
 class QuantSoftmax(nn.Softmax):
     """

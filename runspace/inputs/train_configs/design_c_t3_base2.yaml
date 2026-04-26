@@ -1,0 +1,63 @@
+target_pipeline: superpoint_superglue_learned_base2
+
+model:
+  repo_path: /app/custom/SuperGluePretrainedNetwork
+  sg_weights: indoor
+  sp_config:
+    max_keypoints: 512
+  sg_config:
+    learned_sinkhorn_iterations: 3
+    learned_proj_dim: 8
+
+train:
+  val_every_epochs: 1
+
+  # Warm start from the Phase 2 best.pt per plan (user-selected: ep005 best
+  # since ckpt_ep030.pt does not exist). Trainer.load_checkpoint restores
+  # head_state_dict + bin_score; optimizer and scheduler start fresh.
+  resume_from: /app/runspace/outputs/design_c_t3/checkpoints/best.pt
+
+  dataset:
+    name: scannet_training_pairs
+    path: /data/scannet/posed_images
+    pairs_file: /app/runspace/inputs/scannet/pairs_train.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 4
+    shuffle: true
+    max_pairs: -1
+    samples_per_epoch: 20000
+
+  val_dataset:
+    name: scannet_pairs
+    path: /data/scannet
+    pairs_file: /app/runspace/inputs/scannet/pairs_test_paper_100scenes.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 4
+    max_pairs: 300
+
+  optimizer:
+    name: adamw
+    lr: 1.0e-5
+    weight_decay: 1.0e-4
+
+  schedule:
+    epochs: 10
+    warmup_epochs: 0
+    cosine: true
+
+  loss:
+    # Base2 loss magnitudes:
+    # - match is rescaled *log(2) -> nats, so lambda_marg tuning stays intuitive.
+    # - marg is in log2^2 units (~ 2.08x smaller than log^2); lambda_marg here
+    #   matches the Phase 2 V2 initial weight. Anneal ratio same as V2.
+    lambda_marg_initial: 1.0
+    lambda_marg_final: 0.1
+    lambda_marg_anneal_epoch: 5
+    lambda_aux: 0.3
+    gt_reproj_threshold_px: 3.0
+
+checkpoint:
+  out_dir: /app/runspace/outputs/design_c_t3_base2/checkpoints
+  select_metric: pose_auc_10

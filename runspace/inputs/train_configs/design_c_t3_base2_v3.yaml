@@ -1,0 +1,70 @@
+target_pipeline: superpoint_superglue_learned_base2
+
+# Cold-start base-2 retrain (v3). No `resume_from` — head is initialized from
+# scratch. The trainer auto-dispatches `design_c_prime_base2_total_loss` based
+# on the `_base2` suffix in target_pipeline (see trainer.py:79).
+
+model:
+  repo_path: /app/custom/SuperGluePretrainedNetwork
+  sg_weights: indoor
+  sp_config:
+    max_keypoints: 512
+  sg_config:
+    learned_sinkhorn_iterations: 3
+    learned_proj_dim: 8
+
+train:
+  val_every_epochs: 1
+
+  dataset:
+    name: scannet_training_pairs
+    path: /data/scannet/posed_images
+    pairs_file: /app/runspace/inputs/scannet/pairs_train.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 4
+    shuffle: true
+    max_pairs: -1
+    # Per-epoch resampling: draw a fresh random 40K subset from the 238,462-pair
+    # pool every epoch via RandomSampler(replacement=False, num_samples=40000).
+    # See scannet_training_pairs.py:130-141.
+    samples_per_epoch: 40000
+
+  val_dataset:
+    name: scannet_pairs
+    path: /data/scannet/posed_images
+    # Disjoint val: scenes from val_scenes_all.txt; no overlap with
+    # pairs_train.txt scenes or pairs_test_paper_100scenes.txt scenes.
+    # See gen_val_pairs.py.
+    pairs_file: /app/runspace/inputs/scannet/pairs_val_disjoint_1500.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 4
+    max_pairs: -1
+
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+
+  schedule:
+    epochs: 30
+    warmup_epochs: 1
+    cosine: true
+
+  loss:
+    # V2's working anneal (0.3 -> 0.03 at epoch 10). The base-2 marginal is in
+    # log2² units, ~2x smaller than the natural-base log² used by V2, so the
+    # effective gradient pressure on the marginal is mildly conservative — that
+    # is intentional for cold-start to avoid the marg-dominance crashes V2 saw
+    # at lambda=1.0. If the run shows the V2 ep2-spike/ep3-crash failure mode
+    # in history.json, drop initial to 0.1 and rerun.
+    lambda_marg_initial: 0.3
+    lambda_marg_final: 0.03
+    lambda_marg_anneal_epoch: 10
+    lambda_aux: 0.3
+    gt_reproj_threshold_px: 3.0
+
+checkpoint:
+  out_dir: /app/runspace/outputs/design_c_t3_base2_v3/checkpoints
+  select_metric: pose_auc_10

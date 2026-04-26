@@ -2,20 +2,10 @@
 
 All operate on log transport matrices of shape (B, M+1, N+1) where the last
 row/column are the dustbin channel.
-
-Also provides Design C' Base2 variants (Phase 2b) that consume log2_T and
-base-2 targets — see `design_c_prime_base2_total_loss` at the bottom.
 """
 from __future__ import annotations
 
-import math
-
 import torch
-
-from src.ops.quant_softmax import log2sumexp2
-
-
-_LN2 = math.log(2.0)
 
 
 def match_nll_loss(
@@ -106,93 +96,11 @@ def design_c_total_loss(
     intermediate iterations (t=1 .. T-1) with weight `lambda_aux` each.
     """
     loss_match = match_nll_loss(final_log_T, gt_matches0, gt_matches1)
-    # No hard-fail guard on negative match NLL here: legitimate warm starts
-    # from concentrated-match checkpoints (e.g. V1 ep005) can have per-step
-    # match values around -200 on pair 1 and still converge under the widened
-    # marginal regularizer. Runaway shows up immediately in history.json via
-    # match/marg/aux magnitudes and is easy to catch on epoch summaries.
-
-    # Marginal penalty applies to every iteration (final + all trace snapshots),
-    # not just the final iteration. This enforces the same marginal constraint
-    # against which the auxiliary match NLL is applied, preventing the optimizer
-    # from exploiting unconstrained intermediate log_T values.
     loss_marg = marginal_l2_loss(final_log_T, log_mu, log_nu)
-    n_aux = max(len(trace) - 1, 0)
-    for t in range(n_aux):
-        loss_marg = loss_marg + marginal_l2_loss(trace[t], log_mu, log_nu)
-    loss_marg = loss_marg / max(len(trace), 1)
-
     loss_aux = final_log_T.new_zeros(())
+    n_aux = max(len(trace) - 1, 0)
     for t in range(n_aux):
         loss_aux = loss_aux + match_nll_loss(trace[t], gt_matches0, gt_matches1)
-    total = loss_match + lambda_marg * loss_marg + lambda_aux * loss_aux
-    return {
-        'total': total,
-        'match': loss_match.detach(),
-        'marg': loss_marg.detach(),
-        'aux': loss_aux.detach(),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Design C' Base2 variants (Phase 2b)
-# ---------------------------------------------------------------------------
-
-def match_nll_loss_base2(
-    log2_T: torch.Tensor,
-    gt_matches0: torch.Tensor,
-    gt_matches1: torch.Tensor,
-) -> torch.Tensor:
-    """Match NLL on a base-2 log transport matrix, reported in nats.
-
-    The raw NLL in log2 space is `-log2_T[i,j]`. Per plan §3.5, multiply by
-    `ln(2)` so the reported magnitude matches the natural-log NLL — keeps the
-    Phase 2 history.json loss-scale comparable.
-    """
-    return match_nll_loss(log2_T, gt_matches0, gt_matches1) * _LN2
-
-
-def marginal_l2_loss_base2(
-    log2_T: torch.Tensor,
-    log2_mu: torch.Tensor,
-    log2_nu: torch.Tensor,
-) -> torch.Tensor:
-    """L2 penalty on row/col log2-marginal deviation from log2 targets."""
-    row_err = log2sumexp2(log2_T, dim=2) - log2_mu
-    col_err = log2sumexp2(log2_T, dim=1) - log2_nu
-    return (row_err.pow(2).mean() + col_err.pow(2).mean()) * 0.5
-
-
-def design_c_prime_base2_total_loss(
-    final_log2_T: torch.Tensor,
-    trace: list[torch.Tensor],
-    log2_mu: torch.Tensor,
-    log2_nu: torch.Tensor,
-    gt_matches0: torch.Tensor,
-    gt_matches1: torch.Tensor,
-    lambda_marg: float = 1.0,
-    lambda_aux: float = 0.3,
-) -> dict:
-    """Base-2 counterpart of `design_c_total_loss` — Phase 2b training loss.
-
-    Includes the Phase 2 V2 fix: marginal penalty applies to every trace
-    iteration (not just the final one), with the same sanity assertion on
-    match NLL sign.
-    """
-    loss_match = match_nll_loss_base2(final_log2_T, gt_matches0, gt_matches1)
-    # Runaway monitoring is via history.json, not a hard guard — see the
-    # matching comment in design_c_total_loss above.
-
-    loss_marg = marginal_l2_loss_base2(final_log2_T, log2_mu, log2_nu)
-    n_aux = max(len(trace) - 1, 0)
-    for t in range(n_aux):
-        loss_marg = loss_marg + marginal_l2_loss_base2(trace[t], log2_mu, log2_nu)
-    loss_marg = loss_marg / max(len(trace), 1)
-
-    loss_aux = final_log2_T.new_zeros(())
-    for t in range(n_aux):
-        loss_aux = loss_aux + match_nll_loss_base2(trace[t], gt_matches0, gt_matches1)
-
     total = loss_match + lambda_marg * loss_marg + lambda_aux * loss_aux
     return {
         'total': total,

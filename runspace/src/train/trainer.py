@@ -28,7 +28,7 @@ from src.datasets.dataset_registry import build_data_loader
 from src.eval.metrics.matching import MatchingMetrics
 from src.train import scannet_training_pairs  # noqa: F401 — registers dataset
 from src.train.gt_correspondences import batch_compute_gt_matches
-from src.train.losses import design_c_total_loss
+from src.train.losses import design_c_prime_base2_total_loss, design_c_total_loss
 
 
 def _pad_kpts(kpt_list: list[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -58,6 +58,14 @@ class Trainer:
 
         self.model = self._build_model()
         self._freeze_non_head()
+
+        # Warm-start from a prior checkpoint if requested (plan §3.7). Restores
+        # head_state_dict + bin_score only; optimizer and scheduler state are
+        # fresh — Phase 2b begins a new cosine schedule.
+        resume_from = cfg['train'].get('resume_from') if 'train' in cfg else None
+        if resume_from:
+            self.load_checkpoint(resume_from)
+
         self.optimizer = self._build_optimizer()
         self.scheduler = self._build_scheduler()
 
@@ -66,9 +74,29 @@ class Trainer:
         self.val_loader = build_data_loader(
             cfg['train']['val_dataset']['name'], cfg['train']['val_dataset'])
 
+        # Loss dispatch: Base2 pipelines use the base-2 variant of the loss.
+        pipeline_name = cfg.get('target_pipeline', 'superpoint_superglue_learned')
+        self._use_base2_loss = pipeline_name.endswith('_base2')
+
         self.global_step = 0
         self.best_score = -float('inf')
         self.history: list[dict] = []
+
+    def load_checkpoint(self, path: str) -> None:
+        """Restore head_state_dict + bin_score from a Phase 2 / Phase 2b checkpoint.
+
+        Skips optimizer and scheduler state intentionally — Phase 2b begins a
+        fresh cosine schedule per plan §3.7.
+        """
+        ckpt = torch.load(path, map_location=self.device)
+        head_state = ckpt['head_state_dict'] if isinstance(ckpt, dict) else ckpt
+        self.model.backbone.superglue.sinkhorn.load_state_dict(head_state)
+        if isinstance(ckpt, dict) and 'bin_score' in ckpt:
+            with torch.no_grad():
+                self.model.backbone.superglue.bin_score.copy_(
+                    ckpt['bin_score'].to(self.model.backbone.superglue.bin_score.device)
+                )
+        print(f"[resume] loaded head weights + bin_score from {path}", flush=True)
 
     # ---------- setup ----------
 
@@ -204,16 +232,28 @@ class Trainer:
             sp_out, sg_out = self._forward_with_superpoint(batch)
             gt0, gt1 = self._gt_matches(sp_out, batch)
 
-            losses = design_c_total_loss(
-                final_log_T=sg_out['log_T'],
-                trace=sg_out['trace'],
-                log_mu=sg_out['log_mu'],
-                log_nu=sg_out['log_nu'],
-                gt_matches0=gt0,
-                gt_matches1=gt1,
-                lambda_marg=lambda_marg,
-                lambda_aux=lambda_aux,
-            )
+            if self._use_base2_loss:
+                losses = design_c_prime_base2_total_loss(
+                    final_log2_T=sg_out['log_T'],
+                    trace=sg_out['trace'],
+                    log2_mu=sg_out['log_mu'],
+                    log2_nu=sg_out['log_nu'],
+                    gt_matches0=gt0,
+                    gt_matches1=gt1,
+                    lambda_marg=lambda_marg,
+                    lambda_aux=lambda_aux,
+                )
+            else:
+                losses = design_c_total_loss(
+                    final_log_T=sg_out['log_T'],
+                    trace=sg_out['trace'],
+                    log_mu=sg_out['log_mu'],
+                    log_nu=sg_out['log_nu'],
+                    gt_matches0=gt0,
+                    gt_matches1=gt1,
+                    lambda_marg=lambda_marg,
+                    lambda_aux=lambda_aux,
+                )
 
             self.optimizer.zero_grad(set_to_none=True)
             losses['total'].backward()

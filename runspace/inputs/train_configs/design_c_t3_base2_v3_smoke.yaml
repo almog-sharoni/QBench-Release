@@ -1,0 +1,62 @@
+target_pipeline: superpoint_superglue_learned_base2
+
+# Smoke variant of design_c_t3_base2_v3.yaml. Same pipeline, same paths, but:
+#   - epochs: 1 (vs 30)
+#   - dataset.max_pairs: 1000 (caps the train pool so RandomSampler is happy)
+#   - samples_per_epoch: 200 (vs 40000)
+#   - val_dataset.max_pairs: 20 (vs 1500 -> full)
+# Goal: confirm cold-start head loads, val dataloader on the new disjoint file
+# works, base-2 loss path runs, history.json populates.
+
+model:
+  repo_path: /app/custom/SuperGluePretrainedNetwork
+  sg_weights: indoor
+  sp_config:
+    max_keypoints: 512
+  sg_config:
+    learned_sinkhorn_iterations: 3
+    learned_proj_dim: 8
+
+train:
+  val_every_epochs: 1
+
+  dataset:
+    name: scannet_training_pairs
+    path: /data/scannet/posed_images
+    pairs_file: /app/runspace/inputs/scannet/pairs_train.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 2
+    shuffle: true
+    max_pairs: 1000
+    samples_per_epoch: 200
+
+  val_dataset:
+    name: scannet_pairs
+    path: /data/scannet/posed_images
+    pairs_file: /app/runspace/inputs/scannet/pairs_val_disjoint_1500.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 2
+    max_pairs: 20
+
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+
+  schedule:
+    epochs: 1
+    warmup_epochs: 0
+    cosine: false
+
+  loss:
+    lambda_marg_initial: 0.3
+    lambda_marg_final: 0.03
+    lambda_marg_anneal_epoch: 10
+    lambda_aux: 0.3
+    gt_reproj_threshold_px: 3.0
+
+checkpoint:
+  out_dir: /app/runspace/outputs/design_c_t3_base2_v3_smoke/checkpoints
+  select_metric: pose_auc_10

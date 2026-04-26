@@ -116,16 +116,33 @@ def build_scannet_training_pairs_data_loader(dataset_cfg: dict) -> DataLoader:
     batch_size = int(dataset_cfg.get('batch_size', 1))
     num_workers = int(dataset_cfg.get('num_workers', 0))
     shuffle = bool(dataset_cfg.get('shuffle', True))
+    samples_per_epoch = int(dataset_cfg.get('samples_per_epoch', 0))
 
     dataset = ScanNetTrainingPairsDataset(root=root, pairs_file=pairs_file,
                                           image_size=image_size, max_pairs=max_pairs)
     persistent_workers = bool(dataset_cfg.get('persistent_workers', num_workers > 0)) and num_workers > 0
     pin_memory = torch.cuda.is_available()
     prefetch_factor = int(dataset_cfg.get('prefetch_factor', 4)) if num_workers > 0 else None
-    loader_kwargs = dict(batch_size=batch_size, shuffle=shuffle,
+    loader_kwargs = dict(batch_size=batch_size,
                          num_workers=num_workers, collate_fn=_collate_fn,
                          pin_memory=pin_memory,
                          persistent_workers=persistent_workers)
+    if samples_per_epoch > 0:
+        # Fresh random subset of `samples_per_epoch` pairs drawn from the full
+        # dataset every epoch. RandomSampler generates a new permutation on
+        # each __iter__ call, so each epoch sees different pairs.
+        if samples_per_epoch > len(dataset):
+            raise ValueError(
+                f"samples_per_epoch={samples_per_epoch} > len(dataset)={len(dataset)}; "
+                "RandomSampler requires num_samples <= dataset size when replacement=False."
+            )
+        sampler = torch.utils.data.RandomSampler(
+            dataset, replacement=False, num_samples=samples_per_epoch
+        )
+        loader_kwargs['sampler'] = sampler
+        # `sampler` and `shuffle` are mutually exclusive in DataLoader.
+    else:
+        loader_kwargs['shuffle'] = shuffle
     if prefetch_factor is not None:
         loader_kwargs['prefetch_factor'] = prefetch_factor
     return DataLoader(dataset, **loader_kwargs)

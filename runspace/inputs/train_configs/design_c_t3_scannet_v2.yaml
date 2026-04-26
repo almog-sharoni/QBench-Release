@@ -1,0 +1,67 @@
+target_pipeline: superpoint_superglue_learned
+
+model:
+  repo_path: /app/custom/SuperGluePretrainedNetwork
+  sg_weights: indoor
+  sp_config:
+    max_keypoints: 512
+  sg_config:
+    learned_sinkhorn_iterations: 3
+    learned_proj_dim: 8
+
+train:
+  val_every_epochs: 1
+
+  # Warm start from Phase 2 ep005 (pose_auc_10=0.294). Without this, V2 gets
+  # trapped on a flat plateau because lambda_marg=1.0 pins the zero-init MLP
+  # to near-uniform predictions.
+  resume_from: /app/runspace/outputs/design_c_t3/checkpoints/ckpt_ep005.pt
+
+  dataset:
+    name: scannet_training_pairs
+    path: /data/scannet/posed_images
+    pairs_file: /app/runspace/inputs/scannet/pairs_train.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 4
+    shuffle: true
+    max_pairs: -1
+    # V2: per-epoch resampling — draw a fresh random 20K subset from the
+    # 238K-pair pool every epoch. Requires samples_per_epoch <= len(dataset).
+    samples_per_epoch: 20000
+
+  val_dataset:
+    name: scannet_pairs
+    path: /data/scannet
+    pairs_file: /app/runspace/inputs/scannet/pairs_test_paper_100scenes.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 4
+    max_pairs: 300
+
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+
+  schedule:
+    epochs: 30
+    warmup_epochs: 1
+    cosine: true
+
+  loss:
+    # V2 refinement (Part C): softened lambda_marg from 1.0 -> 0.3 after the
+    # initial V2 runs showed either stuck-at-uniform (fresh init) or chaotic
+    # ep2-spike/ep3-crash (warm start from ep005). Middle ground between V1's
+    # 0.1 (ran away) and V2's 1.0 (too tight). Kept the 10x anneal ratio; the
+    # trace-iteration marg reg (design_c_total_loss) compensates for the
+    # final-epoch weight being lower than V1's initial.
+    lambda_marg_initial: 0.3
+    lambda_marg_final: 0.03
+    lambda_marg_anneal_epoch: 10
+    lambda_aux: 0.3
+    gt_reproj_threshold_px: 3.0
+
+checkpoint:
+  out_dir: /app/runspace/outputs/design_c_t3_v2/checkpoints
+  select_metric: pose_auc_10
