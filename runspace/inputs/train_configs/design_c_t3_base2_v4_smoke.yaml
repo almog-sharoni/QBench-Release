@@ -1,0 +1,78 @@
+target_pipeline: superpoint_superglue_learned_base2
+
+# Smoke variant of design_c_t3_base2_v4.yaml: 1 epoch, 200 train pairs, 30 val
+# pairs. Verifies the quantized-backbone training path (calibration, head
+# warm-start, base-2 loss dispatch) before kicking off the full 30-epoch run.
+
+adapter:
+  type: feature_matching
+  quantized_ops: ["all"]
+  excluded_ops: ["softmax"]
+  weight_quantization: true
+  input_quantization: true
+  quantize_first_layer: false
+  quantize_components: ["superpoint", "superglue_backbone"]
+
+quantization:
+  format: fp8_e4m3
+  mode: chunk
+  chunk_size: 128
+  weight_chunk_size: 128
+  weight_mode: chunk
+  calib_method: max
+  strict_format_check: true
+
+model:
+  repo_path: /app/custom/SuperGluePretrainedNetwork
+  sg_weights: indoor
+  sp_config:
+    max_keypoints: 512
+  sg_config:
+    learned_sinkhorn_iterations: 3
+    learned_proj_dim: 8
+
+train:
+  resume_from: /app/runspace/outputs/design_c_t3_base2_v3/checkpoints/best.pt
+
+  val_every_epochs: 1
+
+  dataset:
+    name: scannet_training_pairs
+    path: /data/scannet/posed_images
+    pairs_file: /app/runspace/inputs/scannet/pairs_train.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 2
+    shuffle: true
+    max_pairs: -1
+    samples_per_epoch: 200
+
+  val_dataset:
+    name: scannet_pairs
+    path: /data/scannet/posed_images
+    pairs_file: /app/runspace/inputs/scannet/pairs_val_disjoint_1500.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 2
+    max_pairs: 30
+
+  optimizer:
+    name: adamw
+    lr: 1.0e-5
+    weight_decay: 1.0e-4
+
+  schedule:
+    epochs: 1
+    warmup_epochs: 0
+    cosine: false
+
+  loss:
+    lambda_marg_initial: 0.03
+    lambda_marg_final: 0.03
+    lambda_marg_anneal_epoch: 0
+    lambda_aux: 0.3
+    gt_reproj_threshold_px: 3.0
+
+checkpoint:
+  out_dir: /app/runspace/outputs/design_c_t3_base2_v4_smoke/checkpoints
+  select_metric: pose_auc_10

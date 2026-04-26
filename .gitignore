@@ -10,7 +10,6 @@ runspace/inputs/scannet/
 ./claude
 
 # Apptainer
-Apptainer.def
 qbench_sandbox/
 *.sif
 *.img

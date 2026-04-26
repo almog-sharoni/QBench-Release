@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 import src.adapters.pipelines  # noqa: F401 — triggers pipeline registration
 import src.datasets  # noqa: F401 — triggers val dataset registration
 # Side-effect imports: register dataset + pipeline
-from src.adapters.feature_matching_adapter import FeatureMatchingPipeline
+from src.adapters.feature_matching_adapter import FeatureMatchingAdapter, FeatureMatchingPipeline
 from src.adapters.pipeline_registry import load_pipeline
 from src.datasets.dataset_registry import build_data_loader
 from src.eval.metrics.matching import MatchingMetrics
@@ -103,6 +103,49 @@ class Trainer:
     def _build_model(self) -> nn.Module:
         model_cfg = dict(self.cfg['model'])
         pipeline_name = self.cfg.get('target_pipeline', 'superpoint_superglue_learned')
+
+        # Quantized training path (v4+): when the config declares an `adapter:`
+        # block, route through FeatureMatchingAdapter so SP/SG ops are replaced
+        # with their QuantLinear/QuantConv counterparts and weight scales are
+        # calibrated before the optimizer is built. The trainable head's Linear
+        # layers are kept FP via `quantize_components` excluding sinkhorn — see
+        # design_c_t3_base2_v4.yaml.
+        adapter_cfg = self.cfg.get('adapter')
+        if adapter_cfg:
+            quant_cfg = self.cfg.get('quantization', {})
+            adapter = FeatureMatchingAdapter(
+                pipeline_name=pipeline_name,
+                model_cfg=model_cfg,
+                quantization_type=quant_cfg.get('format', 'fp8_e4m3'),
+                quantized_ops=adapter_cfg.get('quantized_ops'),
+                excluded_ops=adapter_cfg.get('excluded_ops'),
+                quantize_first_layer=adapter_cfg.get('quantize_first_layer', False),
+                weight_quantization=adapter_cfg.get('weight_quantization', True),
+                input_quantization=adapter_cfg.get('input_quantization', False),
+                quantize_components=adapter_cfg.get('quantize_components'),
+                quant_mode=quant_cfg.get('mode', 'tensor'),
+                chunk_size=quant_cfg.get('chunk_size'),
+                weight_mode=quant_cfg.get('weight_mode', 'channel'),
+                weight_chunk_size=quant_cfg.get('weight_chunk_size'),
+                strict_format_check=quant_cfg.get('strict_format_check', False),
+                skip_calibration=False,
+                build_quantized=True,
+            )
+            model = adapter.build_model(quantized=True)
+            # Calibration sets `weight_fp8` / `weight_scale` from `self.weight`
+            # while autograd was active, so the buffer carries a stale graph
+            # and the second training-step backward fails with
+            # "Trying to backward through the graph a second time". Detach the
+            # post-calibration buffers — the head (FP, gradient-trainable) is
+            # excluded from quantization, so this does not affect its grads.
+            with torch.no_grad():
+                for m in model.modules():
+                    for buf_name in ('weight_fp8', 'weight_scale', 'weight_scale_packed'):
+                        buf = getattr(m, buf_name, None)
+                        if isinstance(buf, torch.Tensor):
+                            setattr(m, buf_name, buf.detach())
+            return model.to(self.device)
+
         backbone = load_pipeline(pipeline_name, model_cfg)
         model = FeatureMatchingPipeline(backbone).to(self.device)
         return model

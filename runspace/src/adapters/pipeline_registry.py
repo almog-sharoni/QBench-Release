@@ -85,19 +85,29 @@ def resolve_component_prefixes(pipeline_name: str,
                                 component_names: list[str]) -> list[str]:
     """
     Translate logical component names to module path prefixes.
+
+    A component value may be either a single prefix string or a list of prefix
+    strings (used for fine-grained components that span multiple submodule
+    paths, e.g. 'superglue_backbone' = kenc + gnn + final_proj). List values
+    are flattened into the returned list.
+
     Raises KeyError if a name is not declared for this pipeline.
     """
     if pipeline_name not in _REGISTRY:
         raise KeyError(f"Pipeline '{pipeline_name}' not registered.")
     _, _, components, _ = _REGISTRY[pipeline_name]
-    prefixes = []
+    prefixes: list[str] = []
     for comp in component_names:
         if comp not in components:
             raise KeyError(
                 f"Component '{comp}' not declared for pipeline '{pipeline_name}'. "
                 f"Declared components: {list(components)}"
             )
-        prefixes.append(components[comp])
+        value = components[comp]
+        if isinstance(value, (list, tuple)):
+            prefixes.extend(value)
+        else:
+            prefixes.append(value)
     return prefixes
 
 

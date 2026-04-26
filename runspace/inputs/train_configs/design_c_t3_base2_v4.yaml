@@ -1,0 +1,88 @@
+target_pipeline: superpoint_superglue_learned_base2
+
+# Design C' Step 2 — quantized SP+SG retrofit, warm-started from v3 best.pt.
+#
+# v3 (FP32 backbone) converged to pose_auc_10 ~0.188 stable from epoch 10
+# onward. Step 2 swaps the backbone for FP8 E4M3 chunk-128 (LEO-NG deployment
+# target) and continues head-only training for 30 epochs so the Base-2 head
+# adapts to the quantized descriptor / GNN-output distribution. The trainable
+# sinkhorn head stays FP via `quantize_components: [superpoint, superglue_backbone]`
+# (the SG component carve-out — kenc + gnn + final_proj — registered in
+# runspace/src/adapters/pipelines/superpoint_superglue_learned_base2.py).
+
+adapter:
+  type: feature_matching
+  quantized_ops: ["all"]
+  excluded_ops: ["softmax"]
+  weight_quantization: true
+  input_quantization: true
+  quantize_first_layer: false
+  quantize_components: ["superpoint", "superglue_backbone"]
+
+quantization:
+  format: fp8_e4m3
+  mode: chunk
+  chunk_size: 128
+  weight_chunk_size: 128
+  weight_mode: chunk
+  calib_method: max
+  strict_format_check: true
+
+model:
+  repo_path: /app/custom/SuperGluePretrainedNetwork
+  sg_weights: indoor
+  sp_config:
+    max_keypoints: 512
+  sg_config:
+    learned_sinkhorn_iterations: 3
+    learned_proj_dim: 8
+
+train:
+  # Warm start from v3 best.pt (head_state_dict + bin_score). Fresh optimizer
+  # and scheduler — see trainer.load_checkpoint.
+  resume_from: /app/runspace/outputs/design_c_t3_base2_v3/checkpoints/best.pt
+
+  val_every_epochs: 1
+
+  dataset:
+    name: scannet_training_pairs
+    path: /data/scannet/posed_images
+    pairs_file: /app/runspace/inputs/scannet/pairs_train.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 4
+    shuffle: true
+    max_pairs: -1
+    samples_per_epoch: 40000
+
+  val_dataset:
+    name: scannet_pairs
+    path: /data/scannet/posed_images
+    pairs_file: /app/runspace/inputs/scannet/pairs_val_disjoint_1500.txt
+    image_size: [480, 640]
+    batch_size: 1
+    num_workers: 4
+    max_pairs: -1
+
+  optimizer:
+    name: adamw
+    lr: 1.0e-5     # ↓ from v3's 1e-4: head is converged, only absorbing quant noise
+    weight_decay: 1.0e-4
+
+  schedule:
+    epochs: 30
+    warmup_epochs: 1
+    cosine: true
+
+  loss:
+    # v3 already annealed lambda_marg from 0.3 -> 0.03 by epoch 10. Step 2
+    # holds at 0.03 for the full 30-epoch run.
+    lambda_marg_initial: 0.03
+    lambda_marg_final: 0.03
+    lambda_marg_anneal_epoch: 0
+    lambda_aux: 0.3
+    gt_reproj_threshold_px: 3.0
+
+checkpoint:
+  out_dir: /app/runspace/outputs/design_c_t3_base2_v4/checkpoints
+  select_metric: pose_auc_10

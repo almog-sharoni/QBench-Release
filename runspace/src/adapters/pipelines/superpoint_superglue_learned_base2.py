@@ -45,8 +45,17 @@ def _inject_repo(repo_path: str, pipeline_name: str) -> None:
     'superpoint_superglue_learned_base2',
     metrics_cls=MatchingMetrics,
     components={
-        'superpoint': 'backbone.superpoint',
-        'superglue':  'backbone.superglue',
+        'superpoint':         'backbone.superpoint',
+        'superglue':          'backbone.superglue',
+        # Fine-grained: SG kenc + gnn + final_proj only, excluding the trainable
+        # base-2 sinkhorn head and the match selector. Used by the v4 quantized
+        # warm-start config so that quantization replaces SP+SG ops while the
+        # head's Linear layers stay FP and remain gradient-trainable.
+        'superglue_backbone': [
+            'backbone.superglue.kenc',
+            'backbone.superglue.gnn',
+            'backbone.superglue.final_proj',
+        ],
     },
     required_input_keys=('image0', 'image1'),
 )
