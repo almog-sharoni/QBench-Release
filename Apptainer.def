@@ -1,0 +1,24 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:26.03-py3
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends \
+        git curl wget ca-certificates build-essential graphviz
+    rm -rf /var/lib/apt/lists/*
+
+    python -m pip install --no-cache-dir --upgrade pip
+    python -m pip uninstall -y pynvml || true
+    python -m pip install --no-cache-dir \
+        numpy pandas pyyaml tqdm matplotlib scikit-learn optuna pytest \
+        pillow pydot streamlit timm torchview opencv-python-headless nvidia-ml-py
+
+    mkdir -p /app
+
+%environment
+    export PYTHONPATH=/app
+    export TORCH_HOME=/app/.cache/torch
+    export PYTORCH_KERNEL_CACHE_PATH=/app/.cache/torch/kernels
+
+%runscript
+    exec /bin/bash "$@"

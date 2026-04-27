@@ -10,7 +10,6 @@ runspace/inputs/scannet/
 ./claude
 
 # Apptainer
-Apptainer.def
 qbench_sandbox/
 *.sif
 *.img
@@ -23,3 +22,4 @@ tailscale.tgz
 tailscale_state/
 tailscaled
 systemd/
+build-temp-*/
