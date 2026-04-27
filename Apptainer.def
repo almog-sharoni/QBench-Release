@@ -4,7 +4,12 @@ From: nvcr.io/nvidia/pytorch:26.03-py3
 %post
     export DEBIAN_FRONTEND=noninteractive
     apt-get update && apt-get install -y --no-install-recommends \
-        git curl wget ca-certificates build-essential graphviz
+        git curl wget ca-certificates build-essential graphviz \
+        software-properties-common gnupg
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update && apt-get install -y --no-install-recommends \
+        python3.13 python3.13-venv python3.13-dev
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.13
     rm -rf /var/lib/apt/lists/*
 
     python -m pip install --no-cache-dir --upgrade pip

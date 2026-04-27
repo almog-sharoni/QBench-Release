@@ -8,3 +8,8 @@
 //     "python.analysis.typeCheckingMode": "basic",
 //     "python.analysis.diagnosticMode": "workspace"
 // }
+
+{
+  "python.defaultInterpreterPath": "./qbench_sandbox/bin/python3.13",
+  "python-envs.defaultEnvManager": "ms-python.python:system"
+}

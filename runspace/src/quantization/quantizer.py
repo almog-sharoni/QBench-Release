@@ -51,6 +51,9 @@ INT4 Format:
 """
 
 import torch
+import os
+from .cuda import encode_fp8_tensor as _encode_fp8_tensor
+from .cuda import decode_fp8_tensor as _decode_fp8_tensor
 
 _FP8_TABLE_CACHE = {}
 
@@ -318,10 +321,100 @@ def quantize_tf32(tensor: torch.Tensor) -> torch.Tensor:
     
     return final_i32.view(torch.float32).view(orig_shape)
 
+def _can_use_cuda_quantize(
+    tensor, exp_bits, mant_bits, rounding,
+    clip_max_exp, clip_max_mant, is_efp,
+) -> bool:
+    """Check eligibility for the CUDA fast path."""
+    if os.environ.get('QBENCH_DISABLE_CUDA_QUANTIZE', '0') == '1':
+        return False
+    if not tensor.is_cuda:                          return False
+    if tensor.dtype != torch.float32:               return False
+    if rounding != "nearest":                       return False
+    if clip_max_exp is not None:                    return False
+    if clip_max_mant is not None:                   return False
+    if is_efp:                                      return False
+    if (1 + exp_bits + mant_bits) != 8:             return False     # FP8 kernels only
+    return True
 
 
+def _cuda_quantize_fp(tensor, exp_bits, mant_bits, bias):
+    """CUDA fast path: encode/decode at scale = 1 to round to the FP grid."""
+    orig_shape = tensor.shape
+    x_flat = tensor.contiguous().flatten()
+    N = x_flat.numel()
 
-def quantize_fp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rounding: str = "nearest", clip_max_exp: int = None, clip_max_mant: int = None, is_efp: bool = False) -> torch.Tensor:
+    storage = torch.empty(N, dtype=torch.uint8,   device=tensor.device)
+    out     = torch.empty(N, dtype=torch.float32, device=tensor.device)
+
+    _encode_fp8_tensor(x_flat, storage, 1.0, exp_bits, mant_bits, bias)
+    _decode_fp8_tensor(storage, out,    1.0, exp_bits, mant_bits, bias)
+    return out.view(orig_shape)
+
+
+# def quantize_fp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rounding: str = "nearest", clip_max_exp: int = None, clip_max_mant: int = None, is_efp: bool = False) -> torch.Tensor:
+#     orig_shape = tensor.shape
+#     tensor_flat = tensor.contiguous().view(-1)
+
+#     f32 = tensor_flat.view(torch.int32)
+#     sign = (f32 >> 31) & 0x1
+#     exp32 = (f32 >> 23) & 0xFF
+#     mant32 = f32 & 0x7FFFFF | (1 << 23)
+    
+#     m_mask_number = 127 - 2**exp_bits + 2 - exp32
+
+#     m_mask_number = torch.where(m_mask_number < 0, 0, m_mask_number)
+    
+#     residue =(mant32 >> (23 - (mant_bits + 1) + m_mask_number) & 0x1) << (23 - mant_bits + m_mask_number)
+
+#     mant_trunc = mant32 >> (23 - mant_bits + m_mask_number) << (23-mant_bits + m_mask_number)
+
+#     mant_trunc = mant_trunc + residue
+
+
+#     mant32 = mant_trunc & 0x7FFFFF
+
+
+#     overflow = mant_trunc >> 24 & 0x1
+#     underflow = mant_trunc >> 23 & 0x3
+
+#     exp32 = torch.where((overflow == 1), exp32 + 1, exp32)
+
+#     exp32 = torch.where((underflow == 0), 0, exp32)
+#     mant32 = torch.where((underflow == 0), 0, mant32)
+
+#     max_value_exp = 0x7F
+#     max_value_mant = (0xFFFF_FFFF << (23 - mant_bits)) & 0x7FFFFF
+
+#     if not is_efp:
+#         mant32 = torch.where((exp32 > max_value_exp), max_value_mant, mant32)
+#         exp32 = torch.where((exp32 > max_value_exp), max_value_exp, exp32)
+#     else:
+#         mant32 = torch.where((exp32 > max_value_exp) & (sign ==1), max_value_mant, mant32)
+#         exp32 = torch.where((exp32 > max_value_exp) & (sign ==1), max_value_exp, exp32)
+
+    
+#     sign = sign << 31
+#     exp32 = exp32 << 23
+
+    
+#     # mant32 = mant_trunc
+
+#     return (sign | exp32 | mant32).view(torch.float32).view(orig_shape)
+
+    
+
+def quantize_fp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rounding: str = "nearest", clip_max_exp: int = None, clip_max_mant: int = None, is_efp: bool = False,bias: int = None) -> torch.Tensor:
+    if bias is None:
+        bias = (1 << exp_bits) - 1
+    
+    if _can_use_cuda_quantize(tensor, exp_bits, mant_bits, rounding,
+                              clip_max_exp, clip_max_mant, is_efp):
+        return _cuda_quantize_fp(tensor, exp_bits, mant_bits, bias)
+    else:
+        print("Using slower PyTorch quantization path (consider using CUDA tensors for faster quantization)")
+
+
     orig_shape = tensor.shape
     tensor_flat = tensor.contiguous().view(-1)
 
@@ -370,10 +463,6 @@ def quantize_fp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rou
     # mant32 = mant_trunc
 
     return (sign | exp32 | mant32).view(torch.float32).view(orig_shape)
-
-    
-        
-    
 
 
 

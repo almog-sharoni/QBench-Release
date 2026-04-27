@@ -11,7 +11,7 @@ if [ ! -d "$SANDBOX_DIR" ]; then
 fi
 
 # Build the exact command string
-CMD="apptainer exec --nv --env PYTHONNOUSERSITE=1 --pwd /app --bind \"$PWD\":/app --bind /data/shared_data/imagenet:/data/imagenet --bind /data/yarden/scannet:/data/scannet \"$SANDBOX_DIR\" python $*"
+CMD="apptainer exec --nv --env PYTHONNOUSERSITE=1 --env TORCH_CUDA_ARCH_LIST=9.0 --pwd /app --bind \"$PWD\":/app --bind /data/shared_data/imagenet:/data/imagenet --bind /data/yarden/scannet:/data/scannet \"$SANDBOX_DIR\" $*"
 
 # Append command to log
 echo "$CMD" >> "$LOG_FILE"
