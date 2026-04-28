@@ -40,3 +40,6 @@
 - name: vit_b_16
   source: torchvision
   weights: DEFAULT
+- name: resnet18
+  source: torchvision
+  weights: DEFAULT

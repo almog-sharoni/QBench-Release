@@ -1,0 +1,13 @@
+{
+  "project-includes": [
+    "**/*.py"
+  ],
+  "project-excludes": [
+    "**/__pycache__",
+    "../qbench_sandbox/**"
+  ],
+  "search-path": [
+    "."
+  ],
+  "disable-search-path-heuristics": true
+}

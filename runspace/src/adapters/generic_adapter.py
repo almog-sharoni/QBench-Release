@@ -75,15 +75,11 @@ class GenericAdapter(BaseAdapter):
         self.input_quantization_type = input_quantization_type
         self.unsigned_input_sources = unsigned_input_sources or []
         self.run_id = run_id
-        
 
-        
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
         self.weight_mode = weight_mode
         self.weight_chunk_size = weight_chunk_size
-        self.act_mode = act_mode
-        self.act_chunk_size = act_chunk_size
         self.act_mode = act_mode
         self.act_chunk_size = act_chunk_size
         self.fold_layers = fold_layers
@@ -129,7 +125,6 @@ class GenericAdapter(BaseAdapter):
             return self._load_timm_model()
         else:
             raise ValueError(f"Unknown model_source: '{self.model_source}'. Use 'torchvision', 'timm', or 'auto'.")
-
 
     def _load_torchvision_model(self) -> nn.Module:
         """Load a model from torchvision.models."""
@@ -385,64 +380,28 @@ class GenericAdapter(BaseAdapter):
         This is done before quantization to improve efficiency and accuracy.
         """
         import torch.quantization
-        
-        # Fusion requires eval mode
+
         model.eval()
-        
-        # Find pairs to fuse
-        # We iterate over the model and look for Conv2d/Linear followed by BatchNorm
-        # This is a heuristic that works for many standard models (ResNet, etc.)
-        # For more complex graphs, a graph traversal (FX) would be better.
-        
+
         modules_to_fuse = []
-        
-        # Helper to traverse and find sequences
-        # We look at named_modules to find adjacent layers in the definition
-        # This works for ResNet BasicBlock where conv is followed by bn
-        
-        # Strategy: Iterate over named_modules. Keep track of the "previous" module.
-        # If prev is Conv and curr is BN, and they are "connected" (heuristic: same parent or sequential), fuse.
-        
-        # Better Strategy for standard models:
-        # Iterate over all sub-modules. If a module is a Sequential or has a forward that executes sequentially,
-        # we can inspect its children.
-        
-        # Let's try a global search on named_modules which is flattened.
-        # We need to be careful about the names.
-        # e.g. layer1.0.conv1, layer1.0.bn1
-        
         named_modules = list(model.named_modules())
-        
+
         i = 0
         while i < len(named_modules) - 1:
             name_curr, mod_curr = named_modules[i]
             name_next, mod_next = named_modules[i+1]
-            
-            # Check for Conv2d + BatchNorm2d
-            if isinstance(mod_curr, nn.Conv2d) and isinstance(mod_next, nn.BatchNorm2d):
-                # Check if they are likely connected
-                # Heuristic: names share a prefix and are likely sequential
-                # e.g. ...conv1 and ...bn1
-                # or just trusting the order in named_modules for standard torchvision models
-                
-                # Verify they are in the same container or adjacent
-                # For ResNet: layer1.0.conv1, layer1.0.bn1 -> fused
-                
-                # We simply add them to the list
-                modules_to_fuse.append([name_curr, name_next])
-                i += 2 # Skip next since we consumed it
-                continue
-                
-            # Check for Linear + BatchNorm1d
-            if isinstance(mod_curr, nn.Linear) and isinstance(mod_next, nn.BatchNorm1d):
+
+            if (
+                isinstance(mod_curr, nn.Conv2d) and isinstance(mod_next, nn.BatchNorm2d)
+                or isinstance(mod_curr, nn.Linear) and isinstance(mod_next, nn.BatchNorm1d)
+            ):
                 modules_to_fuse.append([name_curr, name_next])
                 i += 2
                 continue
-                
+
             i += 1
-            
+
         if modules_to_fuse:
-            # print(f"Fusing layers: {modules_to_fuse}")
             torch.quantization.fuse_modules(model, modules_to_fuse, inplace=True)
 
     def _replace_layers(self, model: nn.Module):
@@ -472,93 +431,71 @@ class GenericAdapter(BaseAdapter):
             if type(module) in supported_ops_values:
                 continue
 
-            # Resolve settings: global config + per-layer override
-            # (mirrors _create_quantized_module's resolution block).
-            q_type = self.quantization_type
-            bias = self.quantization_bias
-            input_q_type = self.input_quantization_type
-            input_mode = self.quant_mode
-            input_chunk_size = self.input_chunk_size if self.input_chunk_size is not None else self.chunk_size
-            rounding = self.rounding
-
-            layer_conf = self.layer_config.get(full_name, {}) if isinstance(self.layer_config, dict) else {}
-            if 'type' in layer_conf:
-                q_type = layer_conf['type']
-            elif 'format' in layer_conf:
-                q_type = layer_conf['format']
-            if 'bias' in layer_conf:
-                bias = layer_conf['bias']
-            if 'input_format' in layer_conf:
-                input_q_type = layer_conf['input_format']
-            if 'mode' in layer_conf:
-                input_mode = layer_conf['mode']
-            if 'chunk_size' in layer_conf:
-                input_chunk_size = layer_conf['chunk_size']
-            if 'rounding' in layer_conf:
-                rounding = layer_conf['rounding']
-
-            module.q_type = q_type
-            module.quantization_bias = bias
-            module.input_q_type = input_q_type if input_q_type else q_type
+            settings = self._layer_quant_settings(full_name)
+            module.q_type = settings['q_type']
+            module.quantization_bias = settings['bias']
+            module.input_q_type = self._effective_input_q_type(settings)
             module.input_quantization = self.input_quantization
             module.weight_quantization = self.weight_quantization
-            module.input_mode = input_mode
-            module.input_chunk_size = input_chunk_size
-            module.rounding = rounding
+            module.input_mode = settings['input_mode']
+            module.input_chunk_size = settings['input_chunk_size']
+            module.rounding = settings['rounding']
             module.layer_name = full_name
             module.run_id = getattr(self, 'run_id', 'default')
+
+    def _layer_quant_settings(self, name: str) -> dict:
+        """Resolve global quantization settings plus per-layer overrides."""
+        layer_conf = self.layer_config.get(name, {}) if isinstance(self.layer_config, dict) else {}
+        q_type = layer_conf.get('type', layer_conf.get('format', self.quantization_type))
+
+        return {
+            'layer_conf': layer_conf,
+            'q_type': q_type,
+            'bias': layer_conf.get('bias', self.quantization_bias),
+            'input_q_type': layer_conf.get('input_format', self.input_quantization_type),
+            'input_mode': layer_conf.get('mode', self.quant_mode),
+            'input_chunk_size': layer_conf.get(
+                'chunk_size',
+                self.input_chunk_size if self.input_chunk_size is not None else self.chunk_size,
+            ),
+            'weight_mode': layer_conf.get('weight_mode', self.weight_mode),
+            'weight_chunk_size': layer_conf.get('weight_chunk_size', self.weight_chunk_size),
+            'act_mode': layer_conf.get('act_mode', self.act_mode),
+            'act_chunk_size': layer_conf.get('act_chunk_size', self.act_chunk_size),
+            'rounding': layer_conf.get('rounding', self.rounding),
+        }
+
+    @staticmethod
+    def _effective_input_q_type(settings: dict) -> str:
+        return settings['input_q_type'] if settings['input_q_type'] else settings['q_type']
+
+    @staticmethod
+    def _contains_requested_name(configured_names, candidate_names) -> bool:
+        lowered = {name.lower() for name in configured_names}
+        return any(candidate.lower() in lowered for candidate in candidate_names)
+
+    @staticmethod
+    def _is_timm_attention_like(module: nn.Module) -> bool:
+        return (
+            hasattr(module, "qkv") and isinstance(getattr(module, "qkv"), nn.Linear) and
+            hasattr(module, "proj") and isinstance(getattr(module, "proj"), nn.Linear) and
+            hasattr(module, "num_heads")
+        )
+
+    @staticmethod
+    def _is_timm_mlp_like(module: nn.Module) -> bool:
+        return (
+            hasattr(module, "fc1") and isinstance(getattr(module, "fc1"), nn.Linear) and
+            hasattr(module, "fc2") and isinstance(getattr(module, "fc2"), nn.Linear)
+        )
 
     def _create_quantized_module(self, module: nn.Module, QuantClass: type, name: str = "") -> nn.Module:
         """Creates a quantized module from the original module."""
         from ..ops.quant_base import QuantizedLayerMixin
-        
-        # Determine quantization settings for this module
-        q_type = self.quantization_type
-        bias = self.quantization_bias
-        input_q_type = self.input_quantization_type # Default to global input format
-        
-        # Default modes
-        input_mode = self.quant_mode
-        act_chunk_size = self.act_chunk_size
-        rounding = self.rounding
-        input_chunk_size = self.input_chunk_size if self.input_chunk_size is not None else self.chunk_size
-        
-        # Restore missing assignments
-        weight_mode = self.weight_mode
-        weight_chunk_size = self.weight_chunk_size
-        act_mode = self.act_mode
-        
-        
-        # Check for layer-specific config
-        layer_conf = {}
-        if name in self.layer_config:
-            layer_conf = self.layer_config[name]
-            # Support both 'type' and 'format' keys for q_type
-            if 'type' in layer_conf:
-                q_type = layer_conf['type']
-            elif 'format' in layer_conf:
-                q_type = layer_conf['format']
-                
-        if 'bias' in layer_conf:
-            bias = layer_conf['bias']
-            
-        if 'input_format' in layer_conf:
-            input_q_type = layer_conf['input_format']
-            
-        if 'mode' in layer_conf:
-            input_mode = layer_conf['mode']
-        if 'chunk_size' in layer_conf:
-            input_chunk_size = layer_conf['chunk_size']
-        if 'weight_mode' in layer_conf:
-            weight_mode = layer_conf['weight_mode']
-        if 'weight_chunk_size' in layer_conf:
-            weight_chunk_size = layer_conf['weight_chunk_size']
-        if 'act_mode' in layer_conf:
-            act_mode = layer_conf['act_mode']
-        if 'act_chunk_size' in layer_conf:
-            act_chunk_size = layer_conf['act_chunk_size']
-        if 'rounding' in layer_conf:
-            rounding = layer_conf['rounding']
+        settings = self._layer_quant_settings(name)
+        q_type = settings['q_type']
+        bias = settings['bias']
+        layer_conf = settings['layer_conf']
         
         # Case 1: Custom from_native factory (e.g. MHA, BasicConv2d)
         if hasattr(QuantClass, 'from_native'):
@@ -566,14 +503,14 @@ class GenericAdapter(BaseAdapter):
              if isinstance(created, QuantizedLayerMixin):
                  created.q_type = q_type
                  created.quantization_bias = bias
-                 created.input_q_type = input_q_type if input_q_type else q_type
+                 created.input_q_type = self._effective_input_q_type(settings)
                  created.input_quantization = self.input_quantization
                  created.weight_quantization = self.weight_quantization
-                 created.input_mode = input_mode
-                 created.input_chunk_size = input_chunk_size
-                 created.weight_mode = weight_mode
-                 created.weight_chunk_size = weight_chunk_size
-                 created.rounding = rounding
+                 created.input_mode = settings['input_mode']
+                 created.input_chunk_size = settings['input_chunk_size']
+                 created.weight_mode = settings['weight_mode']
+                 created.weight_chunk_size = settings['weight_chunk_size']
+                 created.rounding = settings['rounding']
              return created
 
         # Case 2: Layer with weights (Conv, Linear, BN) - In-place class swap
@@ -585,15 +522,15 @@ class GenericAdapter(BaseAdapter):
             # Initialize Mixin state
             module.q_type = q_type
             module.quantization_bias = bias
-            module.input_q_type = input_q_type if input_q_type else q_type
+            module.input_q_type = self._effective_input_q_type(settings)
             
             module.input_quantization = self.input_quantization
             module.weight_quantization = self.weight_quantization
-            module.input_mode = input_mode
-            module.input_chunk_size = input_chunk_size
-            module.weight_mode = weight_mode
-            module.weight_chunk_size = weight_chunk_size
-            module.rounding = rounding
+            module.input_mode = settings['input_mode']
+            module.input_chunk_size = settings['input_chunk_size']
+            module.weight_mode = settings['weight_mode']
+            module.weight_chunk_size = settings['weight_chunk_size']
+            module.rounding = settings['rounding']
             
             # Per-chunk format configuration
             if self.per_chunk_format and 'chunk_formats' in layer_conf:
@@ -623,10 +560,8 @@ class GenericAdapter(BaseAdapter):
             kwargs['quantization_bias'] = bias
             
         # Pass input mode params to activation (activations only have inputs)
-        # Use act_mode if available, otherwise fallback to input_mode?
-        # No, user explicitly asked for separate mode for activations.
-        kwargs['quant_mode'] = act_mode
-        kwargs['chunk_size'] = act_chunk_size
+        kwargs['quant_mode'] = settings['act_mode']
+        kwargs['chunk_size'] = settings['act_chunk_size']
         
         # Copy common attributes if they exist
         if hasattr(module, 'inplace'):
@@ -646,23 +581,6 @@ class GenericAdapter(BaseAdapter):
 
         # Get supported ops from registry
         supported_ops = OpRegistry.get_supported_ops()
-
-        def _contains_any(names, candidates):
-            lowered = {n.lower() for n in names}
-            return any(c.lower() in lowered for c in candidates)
-
-        def _is_timm_attention_like(m: nn.Module) -> bool:
-            return (
-                hasattr(m, "qkv") and isinstance(getattr(m, "qkv"), nn.Linear) and
-                hasattr(m, "proj") and isinstance(getattr(m, "proj"), nn.Linear) and
-                hasattr(m, "num_heads")
-            )
-
-        def _is_timm_mlp_like(m: nn.Module) -> bool:
-            return (
-                hasattr(m, "fc1") and isinstance(getattr(m, "fc1"), nn.Linear) and
-                hasattr(m, "fc2") and isinstance(getattr(m, "fc2"), nn.Linear)
-            )
 
         for name, module in model.named_children():
             full_name = f"{prefix}.{name}" if prefix else name
@@ -698,14 +616,14 @@ class GenericAdapter(BaseAdapter):
                 if matched_original_name is not None:
                     requested_names.add(matched_original_name)
 
-                if quantize_all or _contains_any(quantized_ops_lc, requested_names):
+                if quantize_all or self._contains_requested_name(quantized_ops_lc, requested_names):
                     should_quantize = True
 
                 # If Linear is requested, decompose MHA as well to expose q/k/v internals.
                 if isinstance(module, nn.MultiheadAttention) and "linear" in quantized_ops_lc and "linear" not in excluded_ops_lc:
                     should_quantize = True
 
-                if _contains_any(excluded_ops_lc, requested_names):
+                if self._contains_requested_name(excluded_ops_lc, requested_names):
                     should_quantize = False
 
                 # timm uses BatchNormAct2d (subclass of nn.BatchNorm2d) in many
@@ -723,8 +641,8 @@ class GenericAdapter(BaseAdapter):
                     should_quantize = True
 
             # timm-specific Attention / MLP decomposition
-            if not should_quantize and _is_timm_attention_like(module):
-                wants_attention = quantize_all or _contains_any(
+            if not should_quantize and self._is_timm_attention_like(module):
+                wants_attention = quantize_all or self._contains_requested_name(
                     quantized_ops_lc,
                     {"Attention", "MultiheadAttention", "MHA", "QkvAttention"}
                 )
@@ -734,8 +652,8 @@ class GenericAdapter(BaseAdapter):
                     quant_class = DecomposedQkvAttention
                     should_quantize = True
 
-            if not should_quantize and _is_timm_mlp_like(module):
-                wants_mlp = quantize_all or _contains_any(
+            if not should_quantize and self._is_timm_mlp_like(module):
+                wants_mlp = quantize_all or self._contains_requested_name(
                     quantized_ops_lc,
                     {"Mlp", "MLP", "FeedForward", "FFN", "MlpBlock"}
                 )
