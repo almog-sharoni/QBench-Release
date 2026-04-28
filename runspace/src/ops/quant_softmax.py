@@ -60,7 +60,7 @@ class QuantSoftmax(nn.Softmax):
     7 Normalization and Output
     8 Output Quantization
     """
-    def __init__(self, dim: int | None = None, q_type: str = "fp8_e4m3", quantization_bias: int | None = None, quant_mode: str = "tensor", chunk_size: int | None = None):
+    def __init__(self, dim: int | None = None, q_type: str = "fp8_e4m3", quantization_bias: int | None = None, quant_mode: str = "tensor", chunk_size: int | None = None, unsigned_input_sources: list | None = None):
         super().__init__(dim=dim)
         self.uq_type = qtype_to_unsigned_qtype(q_type, add_to_mant=True)
         self.q_type = q_type
@@ -71,6 +71,7 @@ class QuantSoftmax(nn.Softmax):
         self.last_quant_input = None
         self.last_quant_output_unscaled = None
         self.exp2_lut = None
+        self.unsigned_input_sources = [s.lower() for s in (unsigned_input_sources or [])]
         # self.mant_bits = get_mant_bits(q_type)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
@@ -105,13 +106,17 @@ class QuantSoftmax(nn.Softmax):
         sum_exp = torch.clamp(sum_exp, min=1e-14)
         
         # input quant again for second pipeline trough ipu
+        # Use ufp if softmax is in unsigned_input_sources
+        q_type_x = self.uq_type if any(s in self.unsigned_input_sources for s in ["softmax", "quantsoftmax"]) else self.q_type
+        
         x_val, _ = quantize_tensor(
             x_val,
-            q_type=self.q_type,
+            q_type=q_type_x,
             mode=self.quant_mode,
             chunk_size=self.chunk_size
         )
 
+        
         # Division
         prob = x_val / sum_exp
         
