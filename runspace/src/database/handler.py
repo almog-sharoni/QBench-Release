@@ -231,6 +231,7 @@ class RunDatabase:
         """
         Returns latest fp32 reference tuple: (acc1, acc5, certainty), or None.
         Looks for successful fp32/fp32 runs, prioritizing explicit fp32_ref experiment type.
+        If none found, searches for any run of this model that recorded non-zero reference metrics.
         """
         ref_row = self.get_latest_run(
             model_name=model_name,
@@ -246,12 +247,29 @@ class RunDatabase:
                 activation_dt="fp32",
                 status="SUCCESS",
             )
+        
+        if ref_row is None:
+            # Fallback: Search for ANY run of this model that has ref_acc1 recorded
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT ref_acc1, ref_acc5, ref_certainty 
+                    FROM runs 
+                    WHERE model_name = ? AND ref_acc1 IS NOT NULL AND ref_acc1 != 0.0
+                    ORDER BY id DESC LIMIT 1
+                """, (model_name,))
+                ref_row = cursor.fetchone()
+                if ref_row:
+                    ref_row = dict(ref_row)
+
         if ref_row is None:
             return None
+            
         return (
-            float(ref_row.get('acc1', 0.0) or 0.0),
-            float(ref_row.get('acc5', 0.0) or 0.0),
-            float(ref_row.get('certainty', 0.0) or 0.0),
+            float(ref_row.get('ref_acc1', 0.0) or 0.0),
+            float(ref_row.get('ref_acc5', 0.0) or 0.0),
+            float(ref_row.get('ref_certainty', 0.0) or 0.0),
         )
 
     def get_best_run(self, model_name, experiment_type=None, weight_dt=None, activation_dt=None):

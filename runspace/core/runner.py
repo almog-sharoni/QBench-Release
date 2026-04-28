@@ -296,8 +296,6 @@ class Runner:
             fmt_spec = entry.get('format') if isinstance(value, dict) else value
             if fmt_spec is None and isinstance(entry, dict):
                 fmt_spec = entry.get('chunk_formats')
-            if fmt_spec is None:
-                continue
 
             counts = {}
             raw_counts = entry.get('format_counts') if isinstance(entry, dict) else None
@@ -324,6 +322,8 @@ class Runner:
                 dominant_format = sorted(counts.items(), key=lambda x: (-x[1], x[0]))[0][0]
             else:
                 dominant_format = str(dominant_format)
+            if fmt_spec is None:
+                fmt_spec = dominant_format
 
             normalized = dict(entry) if isinstance(entry, dict) else {}
             normalized['format'] = fmt_spec
@@ -426,7 +426,65 @@ class Runner:
 
         return cls._enrich_quant_map(quant_map)
 
-    def _resolve_quant_map_for_run(self, config: Dict[str, Any], materialized_weight_path: Optional[str] = None):
+    def _extract_quant_map_from_model(self, model: torch.nn.Module):
+        """
+        Dynamically probe the model's modules to build a quantization map.
+        This captures runtime settings that might not be in the static config.
+        """
+        quant_map = {}
+        for name, module in model.named_modules():
+            # Standard quantized layers (Linear, Conv, etc.)
+            if hasattr(module, 'q_type'):
+                fmt = module.q_type
+                
+                # Check for per-chunk weight formats
+                if getattr(module, 'weight_chunk_formats', None):
+                    fmt = module.weight_chunk_formats
+                
+                # Special case: Unsigned logic (e.g. for Softmax)
+                if hasattr(module, 'uq_type') and getattr(module, 'unsigned_input_sources', None):
+                    # If this layer's name or type is in unsigned_input_sources, use uq_type
+                    # We check common aliases for Softmax as used in the logic
+                    sources = module.unsigned_input_sources
+                    if any(s in sources for s in ["softmax", "quantsoftmax"]):
+                         # Only apply if it's actually a Softmax-like module
+                         if "softmax" in module.__class__.__name__.lower():
+                            fmt = module.uq_type
+                
+                quant_map[str(name)] = fmt
+
+        return self._enrich_quant_map(quant_map) if quant_map else None
+
+    def _extract_input_map_from_model(self, model: torch.nn.Module):
+        """
+        Probe quantized modules for their activation/input formats.
+
+        This captures static input_q_type changes such as unsigned propagation
+        (ufp*) that are not represented by the weight q_type map.
+        """
+        input_map = {}
+        for name, module in model.named_modules():
+            fmt = None
+            if getattr(module, 'input_chunk_formats', None):
+                fmt = getattr(module, 'input_chunk_formats')
+            elif hasattr(module, 'input_q_type'):
+                fmt = getattr(module, 'input_q_type')
+            elif hasattr(module, 'uq_type') and getattr(module, 'unsigned_input_sources', None):
+                sources = getattr(module, 'unsigned_input_sources', [])
+                if any(s in sources for s in ["softmax", "quantsoftmax"]):
+                    fmt = getattr(module, 'uq_type')
+
+            if fmt is None:
+                continue
+
+            input_map[str(name)] = {
+                'format': fmt,
+                'type': module.__class__.__name__,
+            }
+
+        return self._enrich_quant_map(input_map) if input_map else None
+
+    def _resolve_quant_map_for_run(self, config: Dict[str, Any], materialized_weight_path: Optional[str] = None, model: Optional[torch.nn.Module] = None):
         exp_cfg = config.get('experiment', {})
 
         explicit_quant_map = self._safe_json_load(exp_cfg.get('quant_map_json'))
@@ -434,10 +492,18 @@ class Runner:
         if enriched_explicit is not None:
             return enriched_explicit
 
+        # Priority 1: Probing the live model (most accurate for runtime logic)
+        if model is not None:
+            model_quant_map = self._extract_quant_map_from_model(model)
+            if model_quant_map is not None:
+                return model_quant_map
+
+        # Priority 2: Config
         cfg_quant_map = self._build_quant_map_from_layer_config(config)
         if cfg_quant_map is not None:
             return cfg_quant_map
 
+        # Priority 3: Filesystem/Checkpoints
         model_weights = config.get('model', {}).get('weights')
         paths_to_probe = []
         if isinstance(model_weights, str) and os.path.isfile(model_weights):
@@ -1059,21 +1125,21 @@ class Runner:
         if l1 is None:
             l1 = input_quant.get('norm_l1', result.get('dyn_norm_l1'))
 
-        quant_map_json = None
-        if not weights_are_fp32:
-            quant_map_json = self._to_json_string(exp_cfg.get('quant_map_json'))
-            if quant_map_json is None and result.get('weight_quant_map') is not None:
-                quant_map_json = self._to_json_string(result.get('weight_quant_map'))
-            if quant_map_json is None:
-                inferred_map = self._resolve_quant_map_for_run(
-                    config=config,
-                    materialized_weight_path=result.get('materialized_weight_path')
-                )
-                if inferred_map is not None:
-                    quant_map_json = self._to_json_string(inferred_map)
+        quant_map_json = self._to_json_string(exp_cfg.get('quant_map_json'))
+        if quant_map_json is None and result.get('weight_quant_map') is not None:
+            quant_map_json = self._to_json_string(result.get('weight_quant_map'))
+        if quant_map_json is None:
+            inferred_map = self._resolve_quant_map_for_run(
+                config=config,
+                materialized_weight_path=result.get('materialized_weight_path')
+            )
+            if inferred_map is not None:
+                quant_map_json = self._to_json_string(inferred_map)
         input_map_json = self._to_json_string(exp_cfg.get('input_map_json'))
         if input_map_json is None and isinstance(input_quant.get('layer_stats'), dict):
             input_map_json = self._build_input_map_json(input_quant.get('layer_stats'))
+        if input_map_json is None and result.get('input_quant_map') is not None:
+            input_map_json = self._to_json_string(result.get('input_quant_map'))
 
         payload = {
             'model_name': model_name,
@@ -1493,9 +1559,16 @@ class Runner:
         import src.datasets  # triggers all @register_dataset decorators
         from src.datasets.dataset_registry import build_data_loader
         dataset_cfg = dict(config['dataset'])
-        # Pass model info so imagenet loader can resolve timm transforms
-        dataset_cfg['model_source'] = config.get('model', {}).get('source', 'torchvision')
-        dataset_cfg['model_name'] = config.get('model', {}).get('name', '')
+        # Pass model info so imagenet loader can resolve source-specific transforms.
+        # The adapter accepts source='auto', but the dataset needs the resolved
+        # source before it decides between torchvision and timm preprocessing.
+        model_cfg = config.get('model', {})
+        model_name = model_cfg.get('name', '')
+        dataset_cfg['model_source'] = self._resolve_model_source_for_data(
+            model_name,
+            model_cfg.get('source', 'auto'),
+        )
+        dataset_cfg['model_name'] = model_name
         self._resolve_paths(dataset_cfg, ('path', 'pairs_file', 'root'))
 
         # Cap num_workers to avoid exhausting fds or RAM during long sequential runs.
@@ -1536,6 +1609,28 @@ class Runner:
                 pass
 
         return build_data_loader(dataset_cfg['name'], dataset_cfg)
+
+    @staticmethod
+    def _resolve_model_source_for_data(model_name: str, source: str) -> str:
+        """Resolve adapter-style model source values for dataset preprocessing."""
+        if source and source != 'auto':
+            return source
+
+        try:
+            import torchvision.models as tv_models
+            if hasattr(tv_models, model_name):
+                return 'torchvision'
+        except Exception:
+            pass
+
+        try:
+            import timm
+            if timm.is_model(model_name):
+                return 'timm'
+        except Exception:
+            pass
+
+        return source or 'torchvision'
 
     @staticmethod
     def _resolve_quant_format(config: Dict[str, Any]) -> str:
@@ -1668,10 +1763,14 @@ class Runner:
             results['materialized_weight_path'] = materialized_weight_path
             resolved_quant_map = self._resolve_quant_map_for_run(
                 config=config,
-                materialized_weight_path=materialized_weight_path
+                materialized_weight_path=materialized_weight_path,
+                model=model
             )
             if resolved_quant_map is not None:
                 results['weight_quant_map'] = resolved_quant_map
+            resolved_input_map = self._extract_input_map_from_model(model)
+            if resolved_input_map is not None:
+                results['input_quant_map'] = resolved_input_map
             
             # Check for quantized layers
             quant_layer_count = self._count_quant_layers(model)

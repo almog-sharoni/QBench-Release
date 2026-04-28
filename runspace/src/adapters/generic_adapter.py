@@ -53,6 +53,7 @@ class GenericAdapter(BaseAdapter):
         strict_format_check: bool = False,
         enable_fx_quantization: bool = True,
         unsigned_input_sources: list = None,
+        input_size: int | tuple = None,
     ):
         super().__init__()
         self.target_module_prefixes = target_module_prefixes or []
@@ -75,6 +76,7 @@ class GenericAdapter(BaseAdapter):
         self.input_quantization_type = input_quantization_type
         self.unsigned_input_sources = unsigned_input_sources or []
         self.run_id = run_id
+        self.input_size = input_size
 
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
@@ -356,16 +358,20 @@ class GenericAdapter(BaseAdapter):
                 f"Check available models with: timm.list_models('{self.model_name}*')"
             )
 
+        create_kwargs = {}
+        if self.input_size is not None:
+            create_kwargs['img_size'] = self.input_size
+
         if custom_weight_file:
             print(f"Loading custom timm weights from {self.weights}...")
-            model = timm.create_model(self.model_name, pretrained=False)
+            model = timm.create_model(self.model_name, pretrained=False, **create_kwargs)
             try:
                 self._load_custom_weights_into_model(model, self.weights)
             except Exception as e:
                 raise RuntimeError(f"Failed to load weights from {self.weights}: {e}")
             return model
 
-        model = timm.create_model(self.model_name, pretrained=pretrained)
+        model = timm.create_model(self.model_name, pretrained=pretrained, **create_kwargs)
         return model
 
     def _calibrate_model(self, model: nn.Module):
@@ -562,6 +568,7 @@ class GenericAdapter(BaseAdapter):
         # Pass input mode params to activation (activations only have inputs)
         kwargs['quant_mode'] = settings['act_mode']
         kwargs['chunk_size'] = settings['act_chunk_size']
+        kwargs['unsigned_input_sources'] = self.unsigned_input_sources
         
         # Copy common attributes if they exist
         if hasattr(module, 'inplace'):
@@ -996,6 +1003,7 @@ class GenericAdapter(BaseAdapter):
 
         cls_name = type(module).__name__
         module_name = type(module).__module__
+        
         safe_names = {
             "Block",
             "ResPostBlock",
