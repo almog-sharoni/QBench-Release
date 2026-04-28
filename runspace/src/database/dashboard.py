@@ -73,6 +73,56 @@ def make_safe_db_filename(name):
         safe_name += ".db"
     return safe_name
 
+
+def resolve_db_path(db_name, sanitize=False):
+    db_filename = make_safe_db_filename(db_name) if sanitize else os.path.basename(str(db_name or ""))
+    if not db_filename.endswith(".db"):
+        raise ValueError("Database filename must end with .db.")
+    db_path = os.path.abspath(os.path.join(DB_FOLDER, db_filename))
+    db_folder = os.path.abspath(DB_FOLDER)
+    if os.path.commonpath([db_folder, db_path]) != db_folder:
+        raise ValueError("Database path must stay inside runspace/database.")
+    return db_path
+
+
+def rename_database_file(current_db_name, new_db_name):
+    current_path = resolve_db_path(current_db_name)
+    new_safe_name = make_safe_db_filename(new_db_name)
+    new_path = resolve_db_path(new_safe_name, sanitize=True)
+    if not os.path.exists(current_path):
+        raise FileNotFoundError(f"Database not found: {current_db_name}")
+    if os.path.exists(new_path):
+        raise FileExistsError(f"Database already exists: {new_safe_name}")
+    os.rename(current_path, new_path)
+    return new_safe_name
+
+
+def delete_database_file(db_name):
+    db_path = resolve_db_path(db_name)
+    if not os.path.exists(db_path):
+        raise FileNotFoundError(f"Database not found: {db_name}")
+    os.remove(db_path)
+
+
+def choose_db_after_delete(deleted_db_name):
+    remaining = [name for name in list_database_files() if name != deleted_db_name]
+    default_db_name = os.path.basename(DEFAULT_DB_PATH)
+    if default_db_name in remaining:
+        return default_db_name
+    return remaining[0] if remaining else default_db_name
+
+
+def reset_filters_for_db_change():
+    filter_key_prefixes = (
+        "filter_",
+        "table_",
+        "name_input_",
+    )
+    for key in list(st.session_state.keys()):
+        if key.startswith(filter_key_prefixes) or key == "dashboard_date_range":
+            del st.session_state[key]
+    st.session_state.num_tables = 1
+
 def load_presets():
     if os.path.exists(PRESETS_FILE):
         try:
@@ -805,6 +855,26 @@ flash_message = st.session_state.pop("dashboard_flash_message", None)
 if flash_message:
     st.success(flash_message)
 
+
+@st.dialog("Delete Database?", width="small")
+def show_delete_database_dialog(db_name):
+    st.warning(f"You are about to permanently delete `{db_name}`.")
+    st.caption("This removes the database file from `runspace/database` and cannot be undone.")
+    col_cancel, col_delete = st.columns(2)
+    if col_cancel.button("Cancel", key=f"cancel_delete_db_{db_name}", use_container_width=True):
+        st.rerun()
+    if col_delete.button("Yes, Delete DB", key=f"confirm_delete_db_modal_{db_name}", type="primary", use_container_width=True):
+        try:
+            next_db_name = choose_db_after_delete(db_name)
+            delete_database_file(db_name)
+        except (FileNotFoundError, ValueError) as exc:
+            st.error(str(exc))
+        else:
+            reset_filters_for_db_change()
+            st.session_state["pending_selected_experiment_db"] = next_db_name
+            st.session_state["dashboard_flash_message"] = f"Deleted `{db_name}`."
+            st.rerun()
+
 # Initial Session State for Presets
 if 'presets' not in st.session_state:
     st.session_state.presets = load_presets()
@@ -812,15 +882,55 @@ if 'presets' not in st.session_state:
 st.sidebar.header("Database")
 db_options = list_database_files()
 default_db_name = os.path.basename(DEFAULT_DB_PATH)
+pending_db_selection = st.session_state.pop("pending_selected_experiment_db", None)
+if pending_db_selection in db_options:
+    st.session_state["selected_experiment_db"] = pending_db_selection
 default_db_index = db_options.index(default_db_name) if default_db_name in db_options else 0
 selected_db_name = st.sidebar.selectbox(
     "Experiment DB",
     options=db_options,
     index=default_db_index,
+    key="selected_experiment_db",
+    on_change=reset_filters_for_db_change,
     help="Choose a SQLite database from runspace/database for the experiments table.",
 )
 DB_PATH = os.path.join(DB_FOLDER, selected_db_name)
 st.sidebar.caption(f"Using `{selected_db_name}`")
+
+with st.sidebar.expander("Manage DB", expanded=False):
+    rename_db_name = st.text_input(
+        "Rename selected DB",
+        value=selected_db_name,
+        key=f"rename_selected_db_name_{selected_db_name}",
+        help="Renames the selected database file inside runspace/database.",
+    )
+    rename_safe_name = make_safe_db_filename(rename_db_name)
+    st.caption(f"New filename: `{rename_safe_name}`")
+    if st.button("Rename DB", key="rename_selected_db_btn", use_container_width=True):
+        try:
+            renamed_db_name = rename_database_file(selected_db_name, rename_db_name)
+        except (FileExistsError, FileNotFoundError, ValueError) as exc:
+            st.error(str(exc))
+        else:
+            reset_filters_for_db_change()
+            st.session_state["pending_selected_experiment_db"] = renamed_db_name
+            st.session_state["dashboard_flash_message"] = (
+                f"Renamed `{selected_db_name}` to `{renamed_db_name}`."
+            )
+            st.rerun()
+
+    st.markdown("---")
+    confirm_delete_db = st.checkbox(
+        f"Confirm deleting `{selected_db_name}`",
+        key=f"confirm_delete_selected_db_{selected_db_name}",
+    )
+    if st.button(
+        "Delete Selected DB",
+        key="delete_selected_db_btn",
+        use_container_width=True,
+        disabled=not confirm_delete_db,
+    ):
+        show_delete_database_dialog(selected_db_name)
 
 st.sidebar.header("⚡ Performance")
 run_window_label = st.sidebar.selectbox(
@@ -2255,7 +2365,13 @@ else:
     else:
         min_date = valid_run_dates.min().date()
         max_date = valid_run_dates.max().date()
-    date_range = st.sidebar.date_input("Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+    date_range = st.sidebar.date_input(
+        "Date Range",
+        value=(min_date, max_date),
+        min_value=min_date,
+        max_value=max_date,
+        key="dashboard_date_range",
+    )
 
     if len(date_range) == 2:
         start_date, end_date = date_range
