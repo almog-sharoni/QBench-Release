@@ -11,6 +11,7 @@ runspace/inputs/scannet/
 
 # Apptainer
 qbench_sandbox/
+.qbench_sandbox/
 *.sif
 *.img
 

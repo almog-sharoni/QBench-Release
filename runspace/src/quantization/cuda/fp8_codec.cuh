@@ -98,6 +98,125 @@ uint8_t encode_fp8_emb(float y, int e, int m, int b) {
 
 
 // ----------------------------------------------------------------------------
+// Helper C2: encode_fp8_emb_rhup. FP32 -> FP8(e, m, b) with round-half-up.
+// Identical to encode_fp8_emb except ties always round up (no sticky/lsb check).
+// Matches the Python quantize_fp_generic fallback rounding convention.
+// ----------------------------------------------------------------------------
+__device__ __forceinline__
+uint8_t encode_fp8_emb_rhup(float y, int e, int m, int b) {
+    const uint32_t u    = __float_as_uint(y);
+    const uint32_t sign = (u >> 31) & 1u;
+    const uint32_t mag  = u & 0x7FFFFFFFu;
+
+    if (mag == 0u) return 0u;
+
+    const int32_t  exp_f  = int32_t((mag >> 23) & 0xFFu) - 127;
+    const uint32_t mant_f = mag & 0x7FFFFFu;
+    const int32_t  exp_t  = exp_f + b;
+
+    if (exp_t < 1) return uint8_t(sign << 7);
+
+    const int      shift     = 23 - m;
+    const uint32_t round_bit = (mant_f >> (shift - 1)) & 1u;
+    uint32_t       mant_t    = mant_f >> shift;
+    mant_t += round_bit;                              // round-half-up: always round up on tie
+
+    int32_t exp_out = exp_t;
+    if (mant_t == (1u << m)) { mant_t = 0u; exp_out += 1; }
+
+    const int32_t max_exp = (1 << e) - 1;
+    if (exp_out > max_exp) { exp_out = max_exp; mant_t = (1u << m) - 1u; }
+
+    return uint8_t((sign << 7) | (uint32_t(exp_out) << m) | mant_t);
+}
+
+
+// ----------------------------------------------------------------------------
+// Helper C3: encode_fp8_emb_noflush. RNTE + proper subnormal encoding.
+// Values below 2^(1-b) are encoded as FP8 subnormals instead of flushed to 0.
+// ----------------------------------------------------------------------------
+__device__ __forceinline__
+uint8_t encode_fp8_emb_noflush(float y, int e, int m, int b) {
+    const uint32_t u    = __float_as_uint(y);
+    const uint32_t sign = (u >> 31) & 1u;
+    const uint32_t mag  = u & 0x7FFFFFFFu;
+
+    if (mag == 0u) return 0u;
+
+    const int32_t  exp_f  = int32_t((mag >> 23) & 0xFFu) - 127;
+    const uint32_t mant_f = mag & 0x7FFFFFu;
+    const int32_t  exp_t  = exp_f + b;
+
+    if (exp_t < 1) {
+        // Subnormal: stored_exp=0, mant = round(|y| * 2^(b+m-1))
+        // sub_shift = bits to right-shift the FP32 significand to get FP8 mant.
+        const int sub_shift = (23 - m) + (1 - exp_t);
+        if (sub_shift > 24) return uint8_t(sign << 7);     // below min subnormal
+        const uint32_t full_mant = (1u << 23) | mant_f;
+        const uint32_t round_bit = (full_mant >> (sub_shift - 1)) & 1u;
+        const uint32_t sticky    = (full_mant & ((1u << (sub_shift - 1)) - 1u)) ? 1u : 0u;
+        uint32_t mant_t = full_mant >> sub_shift;
+        mant_t += round_bit & (sticky | (mant_t & 1u));    // RNTE
+        if (mant_t == (1u << m))
+            return uint8_t((sign << 7) | (1u << m));       // overflow to smallest normal
+        return uint8_t((sign << 7) | mant_t);
+    }
+
+    // Normal range (identical to encode_fp8_emb).
+    const int      shift     = 23 - m;
+    const uint32_t round_bit = (mant_f >> (shift - 1)) & 1u;
+    const uint32_t sticky    = (mant_f & ((1u << (shift - 1)) - 1u)) ? 1u : 0u;
+    uint32_t       mant_t    = mant_f >> shift;
+    mant_t += round_bit & (sticky | (mant_t & 1u));
+    int32_t exp_out = exp_t;
+    if (mant_t == (1u << m)) { mant_t = 0u; exp_out += 1; }
+    const int32_t max_exp = (1 << e) - 1;
+    if (exp_out > max_exp) { exp_out = max_exp; mant_t = (1u << m) - 1u; }
+    return uint8_t((sign << 7) | (uint32_t(exp_out) << m) | mant_t);
+}
+
+
+// ----------------------------------------------------------------------------
+// Helper C4: encode_fp8_emb_rhup_noflush. Round-half-up + proper subnormals.
+// ----------------------------------------------------------------------------
+__device__ __forceinline__
+uint8_t encode_fp8_emb_rhup_noflush(float y, int e, int m, int b) {
+    const uint32_t u    = __float_as_uint(y);
+    const uint32_t sign = (u >> 31) & 1u;
+    const uint32_t mag  = u & 0x7FFFFFFFu;
+
+    if (mag == 0u) return 0u;
+
+    const int32_t  exp_f  = int32_t((mag >> 23) & 0xFFu) - 127;
+    const uint32_t mant_f = mag & 0x7FFFFFu;
+    const int32_t  exp_t  = exp_f + b;
+
+    if (exp_t < 1) {
+        const int sub_shift = (23 - m) + (1 - exp_t);
+        if (sub_shift > 24) return uint8_t(sign << 7);
+        const uint32_t full_mant = (1u << 23) | mant_f;
+        const uint32_t round_bit = (full_mant >> (sub_shift - 1)) & 1u;
+        uint32_t mant_t = full_mant >> sub_shift;
+        mant_t += round_bit;                               // round-half-up
+        if (mant_t == (1u << m))
+            return uint8_t((sign << 7) | (1u << m));       // overflow to smallest normal
+        return uint8_t((sign << 7) | mant_t);
+    }
+
+    // Normal range (identical to encode_fp8_emb_rhup).
+    const int      shift     = 23 - m;
+    const uint32_t round_bit = (mant_f >> (shift - 1)) & 1u;
+    uint32_t       mant_t    = mant_f >> shift;
+    mant_t += round_bit;
+    int32_t exp_out = exp_t;
+    if (mant_t == (1u << m)) { mant_t = 0u; exp_out += 1; }
+    const int32_t max_exp = (1 << e) - 1;
+    if (exp_out > max_exp) { exp_out = max_exp; mant_t = (1u << m) - 1u; }
+    return uint8_t((sign << 7) | (uint32_t(exp_out) << m) | mant_t);
+}
+
+
+// ----------------------------------------------------------------------------
 // Helper D: decode_fp8_emb. FP8(e, m, b) -> FP32. Inverse of encode_fp8_emb.
 // ----------------------------------------------------------------------------
 __device__ __forceinline__

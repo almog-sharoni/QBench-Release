@@ -9,12 +9,17 @@ From: nvcr.io/nvidia/pytorch:26.03-py3
     add-apt-repository -y ppa:deadsnakes/ppa
     apt-get update && apt-get install -y --no-install-recommends \
         python3.13 python3.13-venv python3.13-dev
-    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.13
+    
+    curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+    
+    python3.13 get-pip.py --ignore-installed --break-system-packages
+    
+    rm get-pip.py
     rm -rf /var/lib/apt/lists/*
 
-    python -m pip install --no-cache-dir --upgrade pip
-    python -m pip uninstall -y pynvml || true
-    python -m pip install --no-cache-dir \
+    python3.13 -m pip uninstall -y pynvml || true
+    
+    python3.13 -m pip install --no-cache-dir --break-system-packages \
         numpy pandas pyyaml tqdm matplotlib scikit-learn optuna pytest \
         pillow pydot streamlit timm torchview opencv-python-headless nvidia-ml-py
 

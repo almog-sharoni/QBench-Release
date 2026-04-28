@@ -1,7 +1,7 @@
 #!/bin/bash
 # Wrapper script to run QBench interactions within the Apptainer sandbox.
 
-SANDBOX_DIR="qbench_sandbox"
+SANDBOX_DIR=".qbench_sandbox"
 LOG_FILE="exec_commands.log"
 
 # Verify sandbox exists

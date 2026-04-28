@@ -52,9 +52,11 @@ INT4 Format:
 
 import torch
 import os
+from .cuda import decode_fp8_tensor      as _decode_fp8_tensor
 from .cuda import encode_fp8_tensor as _encode_fp8_tensor
-from .cuda import decode_fp8_tensor as _decode_fp8_tensor
-
+from .cuda import encode_fp8_tensor_rhup as _encode_fp8_tensor_rhup
+from .cuda import encode_fp8_tensor_noflush      as _encode_fp8_tensor_noflush
+from .cuda import encode_fp8_tensor_rhup_noflush as _encode_fp8_tensor_rhup_noflush
 _FP8_TABLE_CACHE = {}
 
 
@@ -347,7 +349,7 @@ def _cuda_quantize_fp(tensor, exp_bits, mant_bits, bias):
     storage = torch.empty(N, dtype=torch.uint8,   device=tensor.device)
     out     = torch.empty(N, dtype=torch.float32, device=tensor.device)
 
-    _encode_fp8_tensor(x_flat, storage, 1.0, exp_bits, mant_bits, bias)
+    _encode_fp8_tensor_rhup_noflush(x_flat, storage, 1.0, exp_bits, mant_bits, bias)
     _decode_fp8_tensor(storage, out,    1.0, exp_bits, mant_bits, bias)
     return out.view(orig_shape)
 
