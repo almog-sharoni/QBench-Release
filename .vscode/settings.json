@@ -8,14 +8,3 @@
 //     "python.analysis.typeCheckingMode": "basic",
 //     "python.analysis.diagnosticMode": "workspace"
 // }
-
-{
-  "python.defaultInterpreterPath": "./.qbench_sandbox/bin/python3.13",
-  "python-envs.defaultEnvManager": "ms-python.python:system",
-  "python.analysis.extraPaths": [
-      "/data/yarden/qbench_sandbox/usr/local/lib/python3.13/dist-packages",
-      "/data/yarden/qbench_sandbox/usr/lib/python3/dist-packages",
-      "/data/yarden/qbench_sandbox/usr/lib/python3.13",
-      "${workspaceFolder}"
-    ]
-}

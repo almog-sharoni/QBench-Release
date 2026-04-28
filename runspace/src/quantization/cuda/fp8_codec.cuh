@@ -76,6 +76,122 @@ uint8_t encode_fp8(float y, int e, int m, int b) {
 
 
 // ----------------------------------------------------------------------------
+// Helper C2: encode_fp8_ARU. Same as encode_fp8 but Always Rounds Up (no sticky).
+// ----------------------------------------------------------------------------
+__device__ __forceinline__
+uint8_t encode_fp8_ARU(float y, int e, int m, int b) {
+    const uint32_t u    = __float_as_uint(y);
+    const uint32_t sign = (u >> 31) & 1u;
+    const uint32_t mag  = u & 0x7FFFFFFFu;
+
+    if (mag == 0u) return 0u;
+
+    const int32_t  exp_f  = int32_t((mag >> 23) & 0xFFu) - 127;
+    const uint32_t mant_f = mag & 0x7FFFFFu;
+    const int32_t  exp_t  = exp_f + b;
+
+    if (exp_t < 1) return uint8_t(sign << 7);
+
+    const int      shift     = 23 - m;
+    const uint32_t round_bit = (mant_f >> (shift - 1)) & 1u;
+    uint32_t       mant_t    = mant_f >> shift;
+    mant_t += round_bit;                                        // ARU: no sticky
+
+    int32_t exp_out = exp_t;
+    if (mant_t == (1u << m)) {
+        mant_t  = 0u;
+        exp_out += 1;
+    }
+
+    const int32_t max_exp = (1 << e) - 1;
+    if (exp_out > max_exp) {
+        exp_out = max_exp;
+        mant_t  = (1u << m) - 1u;
+    }
+
+    return uint8_t((sign << 7) | (uint32_t(exp_out) << m) | mant_t);
+}
+
+
+// ----------------------------------------------------------------------------
+// Helper C3: encode_fp8_nf. Same as encode_fp8 (RNTE) but No subnormal Flush.
+// ----------------------------------------------------------------------------
+__device__ __forceinline__
+uint8_t encode_fp8_nf(float y, int e, int m, int b) {
+    const uint32_t u    = __float_as_uint(y);
+    const uint32_t sign = (u >> 31) & 1u;
+    const uint32_t mag  = u & 0x7FFFFFFFu;
+
+    if (mag == 0u) return 0u;
+
+    const int32_t  exp_f  = int32_t((mag >> 23) & 0xFFu) - 127;
+    const uint32_t mant_f = mag & 0x7FFFFFu;
+    const int32_t  exp_t  = exp_f + b;
+
+    // No flush guard: values with exp_t < 1 fall through the rounding path.
+
+    const int      shift     = 23 - m;
+    const uint32_t round_bit = (mant_f >> (shift - 1)) & 1u;
+    const uint32_t sticky    = (mant_f & ((1u << (shift - 1)) - 1u)) ? 1u : 0u;
+    uint32_t       mant_t    = mant_f >> shift;
+    const uint32_t round_up  = round_bit & (sticky | (mant_t & 1u));
+    mant_t += round_up;
+
+    int32_t exp_out = exp_t;
+    if (mant_t == (1u << m)) {
+        mant_t  = 0u;
+        exp_out += 1;
+    }
+
+    const int32_t max_exp = (1 << e) - 1;
+    if (exp_out > max_exp) {
+        exp_out = max_exp;
+        mant_t  = (1u << m) - 1u;
+    }
+
+    return uint8_t((sign << 7) | (uint32_t(exp_out) << m) | mant_t);
+}
+
+
+// ----------------------------------------------------------------------------
+// Helper C4: encode_fp8_ARU_nf. ARU rounding + No subnormal Flush.
+// ----------------------------------------------------------------------------
+__device__ __forceinline__
+uint8_t encode_fp8_ARU_nf(float y, int e, int m, int b) {
+    const uint32_t u    = __float_as_uint(y);
+    const uint32_t sign = (u >> 31) & 1u;
+    const uint32_t mag  = u & 0x7FFFFFFFu;
+
+    if (mag == 0u) return 0u;
+
+    const int32_t  exp_f  = int32_t((mag >> 23) & 0xFFu) - 127;
+    const uint32_t mant_f = mag & 0x7FFFFFu;
+    const int32_t  exp_t  = exp_f + b;
+
+    // No flush guard.
+
+    const int      shift     = 23 - m;
+    const uint32_t round_bit = (mant_f >> (shift - 1)) & 1u;
+    uint32_t       mant_t    = mant_f >> shift;
+    mant_t += round_bit;                                        // ARU: no sticky
+
+    int32_t exp_out = exp_t;
+    if (mant_t == (1u << m)) {
+        mant_t  = 0u;
+        exp_out += 1;
+    }
+
+    const int32_t max_exp = (1 << e) - 1;
+    if (exp_out > max_exp) {
+        exp_out = max_exp;
+        mant_t  = (1u << m) - 1u;
+    }
+
+    return uint8_t((sign << 7) | (uint32_t(exp_out) << m) | mant_t);
+}
+
+
+// ----------------------------------------------------------------------------
 // Helper D: decode_fp8. FP8(e, m, b) -> FP32. Inverse of encode_fp8.
 // ----------------------------------------------------------------------------
 __device__ __forceinline__

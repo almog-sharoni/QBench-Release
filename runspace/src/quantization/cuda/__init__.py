@@ -27,3 +27,18 @@ decode_fp8_tensor    = _module.decode_fp8_tensor
 # Per-channel codec (one scale per channel of [C, K] input).
 encode_fp8_channel   = _module.encode_fp8_channel
 decode_fp8_channel   = _module.decode_fp8_channel
+
+# ARU variants (Always Round Up — round-half-up, no sticky bit).
+encode_fp8_chunk_ARU    = _module.encode_fp8_chunk_ARU
+encode_fp8_tensor_ARU   = _module.encode_fp8_tensor_ARU
+encode_fp8_channel_ARU  = _module.encode_fp8_channel_ARU
+
+# nf variants (No subnormal Flush — RNTE rounding).
+encode_fp8_chunk_nf     = _module.encode_fp8_chunk_nf
+encode_fp8_tensor_nf    = _module.encode_fp8_tensor_nf
+encode_fp8_channel_nf   = _module.encode_fp8_channel_nf
+
+# ARU_nf variants (Always Round Up + No subnormal Flush).
+encode_fp8_chunk_ARU_nf    = _module.encode_fp8_chunk_ARU_nf
+encode_fp8_tensor_ARU_nf   = _module.encode_fp8_tensor_ARU_nf
+encode_fp8_channel_ARU_nf  = _module.encode_fp8_channel_ARU_nf
