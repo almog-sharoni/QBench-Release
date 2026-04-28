@@ -46,6 +46,7 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
     Returns:
         Quantized tensor (scaled back to original range)
     """
+
     # # Check for FP8 support
     # if q_type == 'fp8_e4m3' and not hasattr(torch, 'float8_e4m3fn'):
     #         raise RuntimeError("FP8 E4M3 support (torch.float8_e4m3fn) is required.")
@@ -81,6 +82,23 @@ def quantize_tensor(input: torch.Tensor, q_type: str = 'fp8_e4m3', return_unscal
             'fp7_e6m0'
         ]
         
+        fp8candidates = [
+            'fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6', 
+            'fp8_e6m1', 'fp8_e7m0',
+        ]
+        
+        if q_type in fp8candidates:
+            # CUDA-backed path (bit-exact mirror via _ARU_nf encoder).
+            from .quant_base_cuda import quantize_tensor_cuda
+            return quantize_tensor_cuda(
+                input, q_type=q_type, return_unscaled=return_unscaled,
+                return_scale=return_scale, mode=mode, chunk_size=chunk_size,
+                rounding=rounding, validate=validate, chunk_formats=chunk_formats,
+            )
+
+        else:
+            print(f"cuda not used.")
+
         # Flatten and chunk
         if input.dim() > 1:
             flat_input = input.flatten(1)
