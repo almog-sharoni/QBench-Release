@@ -5,7 +5,7 @@ from .quant_base import QuantizedLayerMixin
 
 @OpRegistry.register("QuantAdd", is_activation=False, compliance_status="Fixed-Point Addition")
 class QuantAdd(nn.Module, QuantizedLayerMixin):
-    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="chunk", chunk_size=None):
         super().__init__()
         self.q_type = q_type
         self.quantization_bias = quantization_bias
@@ -22,7 +22,7 @@ class QuantAdd(nn.Module, QuantizedLayerMixin):
 
 @OpRegistry.register("QuantSub", is_activation=False, compliance_status="Fixed-Point Subtraction")
 class QuantSub(nn.Module, QuantizedLayerMixin):
-    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="chunk", chunk_size=None):
         super().__init__()
         self.q_type = q_type
         self.quantization_bias = quantization_bias
@@ -39,7 +39,7 @@ class QuantSub(nn.Module, QuantizedLayerMixin):
 
 @OpRegistry.register("QuantMul", is_activation=False, compliance_status="Fixed-Point Multiplication")
 class QuantMul(nn.Module, QuantizedLayerMixin):
-    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="chunk", chunk_size=None):
         super().__init__()
         self.q_type = q_type
         self.quantization_bias = quantization_bias
@@ -56,7 +56,7 @@ class QuantMul(nn.Module, QuantizedLayerMixin):
 
 @OpRegistry.register("QuantDiv", is_activation=False, compliance_status="Fixed-Point Division")
 class QuantDiv(nn.Module, QuantizedLayerMixin):
-    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="chunk", chunk_size=None):
         super().__init__()
         self.q_type = q_type
         self.quantization_bias = quantization_bias
@@ -73,7 +73,7 @@ class QuantDiv(nn.Module, QuantizedLayerMixin):
 
 @OpRegistry.register("QuantCat", is_activation=False, compliance_status="Token Concatenation")
 class QuantCat(nn.Module, QuantizedLayerMixin):
-    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="chunk", chunk_size=None):
         super().__init__()
         self.q_type = q_type
         self.quantization_bias = quantization_bias

@@ -193,7 +193,7 @@ class ObservedKeypointNormalize(nn.Module):
 @OpRegistry.register("ObservedConcat", is_activation=False)
 class ObservedConcat(nn.Module, QuantizedLayerMixin):
     """torch.cat wrapped as a module; quantizes each operand (mirrors QuantCat)."""
-    def __init__(self, dim: int = 1, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+    def __init__(self, dim: int = 1, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="chunk", chunk_size=None):
         super().__init__()
         self.dim = dim
         self.q_type = q_type
@@ -212,7 +212,7 @@ class ObservedConcat(nn.Module, QuantizedLayerMixin):
 @OpRegistry.register("ObservedAdd", is_activation=False)
 class ObservedAdd(nn.Module, QuantizedLayerMixin):
     """Element-wise add (residual connections); quantizes each operand (mirrors QuantAdd)."""
-    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="chunk", chunk_size=None):
         super().__init__()
         self.q_type = q_type
         self.quantization_bias = quantization_bias
@@ -234,7 +234,7 @@ class ObservedAttentionScores(nn.Module, QuantizedLayerMixin):
 
     Quantizes both operands to FP8 before the einsum, mirroring QuantMatMul.
     """
-    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="chunk", chunk_size=None):
         super().__init__()
         self.q_type = q_type
         self.quantization_bias = quantization_bias
@@ -255,7 +255,7 @@ class ObservedAttentionApply(nn.Module, QuantizedLayerMixin):
 
     Quantizes both operands to FP8 before the einsum, mirroring QuantMatMul.
     """
-    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="chunk", chunk_size=None):
         super().__init__()
         self.q_type = q_type
         self.quantization_bias = quantization_bias
@@ -275,7 +275,7 @@ class ObservedDescMatmul(nn.Module, QuantizedLayerMixin):
 
     Quantizes both operands to FP8 before the einsum, mirroring QuantMatMul.
     """
-    def __init__(self, descriptor_dim: int, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="tensor", chunk_size=None):
+    def __init__(self, descriptor_dim: int, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="chunk", chunk_size=None):
         super().__init__()
         self.scale = descriptor_dim ** 0.5
         self.q_type = q_type

@@ -144,8 +144,15 @@ def get_format_bits(fmt):
     if fmt == 'int4': return 4
     
     try:
-        is_signed = fmt.startswith('fp')
-        if '_e' in fmt and 'm' in fmt:
+        # Detect signedness and prefix
+        prefix = None
+        for p in ['uefp', 'ufp', 'efp', 'fp']:
+            if fmt.startswith(p):
+                prefix = p
+                break
+        
+        if prefix and '_e' in fmt and 'm' in fmt:
+             is_signed = prefix in ('fp', 'efp')
              parts = fmt.split('_e')[1].split('m')
              exp = int(parts[0])
              mant = int(parts[1])
@@ -157,15 +164,12 @@ def get_format_bits(fmt):
     except:
         pass
         
-    if fmt.startswith('fp'):
-        try:
-            return int(fmt.split('_')[0].replace('fp',''))
-        except: pass
-    if fmt.startswith('ufp'):
-         try:
-            return int(fmt.split('_')[0].replace('ufp',''))
-         except: pass
-         
+    for p in ['uefp', 'ufp', 'efp', 'fp']:
+        if fmt.startswith(p):
+            try:
+                return int(fmt.split('_')[0].replace(p, ''))
+            except: pass
+             
     return 32 
 
 def plot_chunk_win_rate(win_counts, formats, output_dir, metric, layer_winners=None):

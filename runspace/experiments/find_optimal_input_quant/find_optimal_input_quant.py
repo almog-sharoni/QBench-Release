@@ -28,14 +28,14 @@ os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib'
 #     'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
 # ]
 baseline_formats = [
-    'fp32', 'fp8_e4m3'
-# 'fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
-# 'fp7_e1m5','fp7_e2m4','fp7_e3m3','fp7_e4m2','fp7_e5m1','fp7_e6m0',
-# 'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
-# 'fp5_e1m3','fp5_e2m2','fp5_e3m1','fp5_e4m0',
-# 'fp4_e1m2','fp4_e2m1','fp4_e3m0',
-# 'fp3_e1m1','fp3_e2m0',
-# 'fp2_e1m0'
+    # 'fp32',
+    'fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
+    'fp7_e1m5','fp7_e2m4','fp7_e3m3','fp7_e4m2','fp7_e5m1','fp7_e6m0',
+    'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
+    # 'fp5_e1m3','fp5_e2m2','fp5_e3m1','fp5_e4m0',
+    # 'fp4_e1m2','fp4_e2m1','fp4_e3m0',
+    # 'fp3_e1m1','fp3_e2m0',
+    # 'fp2_e1m0'
 ]
 
 candidate_formats = ['fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0']
@@ -82,6 +82,7 @@ def _iter_quantized_modules(model):
 
 def _build_input_quant_config(args, model_name, weights, default_format, quantize_first_layer=False, input_quantization=True):
     """Build the actual runtime config used by this experiment."""
+    unsigned_input_sources = getattr(args, 'unsigned_input_sources', [])
     return {
         'model': {'name': model_name, 'weights': weights},
         'adapter': {
@@ -91,6 +92,7 @@ def _build_input_quant_config(args, model_name, weights, default_format, quantiz
             'quantize_first_layer': quantize_first_layer,
             'input_quantization': input_quantization,
             'weight_quantization': False,
+            'input_size': getattr(args, 'input_size', 224),
         },
         'dataset': {
             'name': args.dataset_name,
@@ -106,7 +108,8 @@ def _build_input_quant_config(args, model_name, weights, default_format, quantiz
             'weight_mode': 'tensor',
             'weight_chunk_size': args.chunk_size,
             'rounding': 'nearest',
-            'calib_method': 'max'
+            'calib_method': 'max',
+            'unsigned_input_sources': unsigned_input_sources,
         },
         'experiment': {
             'materialize_weights': {
@@ -135,6 +138,7 @@ def _serialize_runtime_config(config, model=None, *, experiment_type=None, activ
                 'rounding': str(getattr(first_quant, 'rounding', None)),
                 'input_quantization': bool(getattr(first_quant, 'input_quantization', False)),
                 'weight_quantization': bool(getattr(first_quant, 'weight_quantization', False)),
+                'unsigned_input_sources': ["relu", "softmax", "quantrelu", "quantsoftmax"]
             }
 
     cfg['experiment'] = {
@@ -157,6 +161,7 @@ def get_args():
     parser.add_argument("--output_dir", type=str, default=os.path.join(os.path.dirname(__file__), "results"), help="Output directory")
     parser.add_argument("--metric", type=str, default="mse,l1", help="Comma-separated error metrics for dynamic selection (e.g. 'mse,l1')")
     parser.add_argument("--chunk_size", type=int, default=128, help="Chunk size for input quantization (blocks)")
+    parser.add_argument("--input_size", type=int, default=224, help="Input image size (resolution)")
     parser.add_argument(
         "--baseline_formats",
         type=str,
@@ -189,11 +194,33 @@ def get_args():
         default="input_quant_baseline",
         help="Experiment type name for baseline runs (default: input_quant_baseline)"
     )
+    parser.add_argument(
+        "--unsigned_input_sources",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated activation sources that should use unsigned input/output "
+            "formats. If omitted, experiment types containing 'ufp' enable "
+            "relu,softmax,quantrelu,quantsoftmax."
+        ),
+    )
     # Add other args as needed
     args = parser.parse_args()
     args.excluded_ops = [op.strip() for op in args.excluded_ops.split(',') if op.strip()]
     args.baseline_formats = _parse_csv_arg(args.baseline_formats, baseline_formats)
     args.candidate_formats = _parse_csv_arg(args.candidate_formats, candidate_formats)
+    if args.unsigned_input_sources is None:
+        args.unsigned_input_sources = (
+            ["relu", "softmax", "quantrelu", "quantsoftmax"]
+            if "ufp" in str(args.experiment_type).lower()
+            else []
+        )
+    else:
+        args.unsigned_input_sources = [
+            item.strip().lower()
+            for item in args.unsigned_input_sources.split(',')
+            if item.strip()
+        ]
     return args
 
 

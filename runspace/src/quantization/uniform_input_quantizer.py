@@ -52,13 +52,35 @@ class UniformInputQuantizer:
         )
         return x_q
 
+    def _effective_format_for_module(self, module):
+        sources = [str(s).lower() for s in getattr(module, 'unsigned_input_sources', [])]
+        if hasattr(module, 'uq_type') and any(s in sources for s in ["softmax", "quantsoftmax"]):
+            return getattr(module, 'uq_type')
+
+        input_q_type = getattr(module, 'input_q_type', None)
+        if isinstance(input_q_type, str) and input_q_type.startswith('ufp'):
+            return input_q_type
+
+        return self.fmt
+
+    def _quantize_with_format(self, x, fmt):
+        x_q, _ = quantize_tensor(
+            x,
+            q_type=fmt,
+            mode='chunk',
+            chunk_size=self.chunk_size,
+            rounding='nearest',
+        )
+        return x_q
+
     def _make_hook(self, layer_name):
         def hook(module, inputs):
             if not inputs or not isinstance(inputs[0], torch.Tensor):
                 return None
 
             x = inputs[0]
-            x_q = self._quantize(x)
+            fmt = self._effective_format_for_module(module)
+            x_q = self._quantize_with_format(x, fmt)
 
             if x.dim() > 1:
                 flat = x.flatten(1)
@@ -78,7 +100,7 @@ class UniformInputQuantizer:
             module.input_quantization = True
             module.input_mode = 'chunk'
             module.input_chunk_size = self.chunk_size
-            module.input_q_type = self.fmt
+            module.input_q_type = fmt
             module.input_chunk_formats = None
             module.rounding = 'nearest'
 
@@ -93,7 +115,7 @@ class UniformInputQuantizer:
                 layer_name,
                 {'format_counts': {}, 'total_chunks': 0, 'type': module.__class__.__name__}
             )
-            stats['format_counts'][self.fmt] = stats['format_counts'].get(self.fmt, 0) + total_chunks
+            stats['format_counts'][fmt] = stats['format_counts'].get(fmt, 0) + total_chunks
             stats['total_chunks'] += total_chunks
 
             return None

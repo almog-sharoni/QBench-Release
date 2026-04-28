@@ -473,8 +473,8 @@ def get_q_type_bounds(q_type: str) -> float:
 
 
 if __name__ == "__main__":
-    tensor = torch.arange(-1.99, 1.99, 0.01)
-    quantized = quantize(tensor, q_type="efp4_e3m0")
+    tensor = torch.tensor([1.165880322318247803008543e-41])
+    quantized = quantize(tensor, q_type="fp8_e7m0")
     # print(quantized)
     for x, q in zip(tensor, quantized):
-        print(f"{x.item():.2f}  ->  {q.item():.4f}")
+        print(f"{x.item():.8e}  ->  {q.item():.8e}")

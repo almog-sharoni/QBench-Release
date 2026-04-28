@@ -293,11 +293,15 @@ def parse_dt(dt_str):
     
     bits, exp, mant = None, None, None
     parts = dt_clean.split('_')
-    if parts[0].startswith('fp'):
-        try: bits = int(parts[0][2:])
-        except: pass
-    elif parts[0] == 'dyn':
-        bits = 0 # Sentinel for Dynamic
+    for p in ['uefp', 'ufp', 'efp', 'fp']:
+        if parts[0].startswith(p):
+            try: 
+                bits = int(parts[0][len(p):])
+                break
+            except: pass
+    else:
+        if parts[0] == 'dyn':
+            bits = 0 # Sentinel for Dynamic
     if len(parts) > 1:
         em = parts[1] # e1m2 or e1
         if 'e' in em:
@@ -430,12 +434,13 @@ def _get_format_bits(fmt):
         return 8
     if text == "int4":
         return 4
-    if text.startswith("fp"):
-        base = text.split("_", 1)[0]
-        try:
-            return int(base.replace("fp", ""))
-        except Exception:
-            return 32
+    for p in ["uefp", "ufp", "efp", "fp"]:
+        if text.startswith(p):
+            base = text.split("_", 1)[0]
+            try:
+                return int(base[len(p):])
+            except Exception:
+                continue
     return 32
 
 
@@ -861,6 +866,22 @@ else:
                 st.error(f"Could not parse {title} map JSON.")
                 return
 
+            def _format_count_summary(counts):
+                if not isinstance(counts, dict) or not counts:
+                    return None
+                items = []
+                sortable_counts = []
+                for fmt, cnt in counts.items():
+                    try:
+                        cnt_i = int(cnt)
+                    except Exception:
+                        continue
+                    sortable_counts.append((str(fmt), cnt_i))
+                for fmt, cnt_i in sorted(sortable_counts, key=lambda x: (-x[1], x[0])):
+                    if cnt_i > 0:
+                        items.append(f"{fmt}×{cnt_i}")
+                return ", ".join(items) if items else None
+
             rows = []
             chunk_dist_rows = []  # For per-layer chunk distribution (dynamic runs)
             for layer, value in quant_map.items():
@@ -871,22 +892,45 @@ else:
                     layer_type = value.get("type", "?")
                     per_chunk_counts = value.get("format_counts")
                     total_chunks = value.get("total_chunks")
+                    dominant_fmt = value.get("dominant_format")
                 else:
                     fmt = value
                     layer_type = "?"
                     per_chunk_counts = None
                     total_chunks = None
+                    dominant_fmt = None
 
-                if isinstance(fmt, list):
+                count_summary = _format_count_summary(per_chunk_counts)
+                if count_summary and len(per_chunk_counts) > 1:
+                    rows.append({
+                        "Layer": layer,
+                        "Type": layer_type,
+                        "Format": count_summary,
+                        "Dominant": str(dominant_fmt or "?"),
+                        "Mode": "per-chunk",
+                    })
+                elif isinstance(fmt, list):
                     counts = {}
                     for f in fmt:
                         counts[f] = counts.get(f, 0) + 1
                     fmt_str = ", ".join(
                         f"{f}×{c}" for f, c in sorted(counts.items(), key=lambda x: -x[1])
                     )
-                    rows.append({"Layer": layer, "Type": layer_type, "Format": fmt_str, "Mode": "per-chunk"})
+                    rows.append({
+                        "Layer": layer,
+                        "Type": layer_type,
+                        "Format": fmt_str,
+                        "Dominant": str(dominant_fmt or "?"),
+                        "Mode": "per-chunk",
+                    })
                 else:
-                    rows.append({"Layer": layer, "Type": layer_type, "Format": str(fmt), "Mode": mode_label})
+                    rows.append({
+                        "Layer": layer,
+                        "Type": layer_type,
+                        "Format": count_summary or str(fmt),
+                        "Dominant": str(dominant_fmt or fmt),
+                        "Mode": mode_label,
+                    })
 
                 if per_chunk_counts and total_chunks:
                     row = {"Layer": layer, "Type": layer_type, "Total Chunks": total_chunks}
@@ -910,6 +954,7 @@ else:
                     "Layer":  st.column_config.TextColumn("Layer", width="large"),
                     "Type":   st.column_config.TextColumn("Type"),
                     "Format": st.column_config.TextColumn("Format"),
+                    "Dominant": st.column_config.TextColumn("Dominant"),
                     "Mode":   st.column_config.TextColumn("Mode"),
                 },
             )
@@ -929,9 +974,10 @@ else:
                     chunk_df["Total Chunks"] = chunk_df["Total Chunks"].astype(int)
                     st.dataframe(chunk_df, use_container_width=True)
 
+        act_mode = "dynamic" if ("dyn" in a_dt.lower() or "oracle" in a_dt.lower()) else "static"
         if not is_input_exp:
             _render_map_section("⚖️ Weight Formats", weight_map_json, "per-layer")
-        _render_map_section("⚡ Input Formats",  input_map_json,  "dynamic")
+        _render_map_section("⚡ Input Formats",  input_map_json,  act_mode)
 
     @st.dialog("⚙️ Run Configurations", width="large")
     def show_run_config(run_rows):
@@ -2503,20 +2549,20 @@ else:
         
         st.markdown("---")
         
-        # --- Model Architecture Graph Visualization ---
-        st.markdown(f"#### 🏗️ Model Architecture & Quantization")
-        if not filtered_df.empty:
-            available_models = sorted(filtered_df['model_name'].unique())
-            graph_status_col, graph_action_col = st.columns([3, 2])
-            graph_status_col.caption(
-                "Open the dedicated graph viewer to generate a fresh architecture graph from the current code."
-            )
-            if graph_action_col.button("🏗️ Open Graph Viewer", key=f"open_graph_viewer_{i}", type="primary", use_container_width=True):
-                show_graph_viewer(i, available_models)
-        else:
-            st.info("No data to display. Apply filters above to see models.")
+        # # --- Model Architecture Graph Visualization ---
+        # st.markdown(f"#### 🏗️ Model Architecture & Quantization")
+        # if not filtered_df.empty:
+        #     available_models = sorted(filtered_df['model_name'].unique())
+        #     graph_status_col, graph_action_col = st.columns([3, 2])
+        #     graph_status_col.caption(
+        #         "Open the dedicated graph viewer to generate a fresh architecture graph from the current code."
+        #     )
+        #     if graph_action_col.button("🏗️ Open Graph Viewer", key=f"open_graph_viewer_{i}", type="primary", use_container_width=True):
+        #         show_graph_viewer(i, available_models)
+        # else:
+        #     st.info("No data to display. Apply filters above to see models.")
         
-        st.markdown("---")
+        # st.markdown("---")
 
     # Add Table Button
     st.button("➕ Add Table", on_click=add_table)

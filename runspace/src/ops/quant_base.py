@@ -95,22 +95,6 @@ def quantize_tensor(
             'fp7_e6m0'
         ]
         
-        fp8candidates = [
-            'fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6', 
-            'fp8_e6m1', 'fp8_e7m0',
-        ]
-        
-        if q_type in fp8candidates:
-            # CUDA-backed path (bit-exact mirror via _ARU_nf encoder).
-            from .quant_base_cuda import quantize_tensor_cuda
-            return quantize_tensor_cuda(
-                input, q_type=q_type, return_unscaled=return_unscaled,
-                return_scale=return_scale, mode=mode, chunk_size=chunk_size,
-                rounding=rounding, validate=validate, chunk_formats=chunk_formats,
-            )
-
-        else:
-            print(f"cuda not used.")
 
         # Flatten and chunk
         if input.dim() > 1:
@@ -210,6 +194,25 @@ def quantize_tensor(
         return output_fp8, max_val
 
     s = None
+
+    fp8candidates = [
+    'fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6', 
+    'fp8_e6m1', 'fp8_e7m0',
+    ]
+
+    if q_type in fp8candidates:
+        # CUDA-backed path (bit-exact mirror via _ARU_nf encoder).
+        from .quant_base_cuda import quantize_tensor_cuda
+        return quantize_tensor_cuda(
+            input, q_type=q_type, return_unscaled=return_unscaled,
+            return_scale=return_scale, mode=mode, chunk_size=chunk_size,
+            rounding=rounding, validate=validate, chunk_formats=chunk_formats,
+        )
+
+    else:
+        # print(f"cuda not used.")
+        pass
+
     
     if mode == 'chunk':
         if chunk_size is None:
@@ -633,7 +636,7 @@ class QuantizedLayerMixin:
         capture = getattr(self, 'capture_activations', False)
         
 
-        mode = getattr(self, 'input_mode', getattr(self, 'quant_mode', 'tensor')) # Use input_mode if set, else quant_mode
+        mode = getattr(self, 'input_mode', getattr(self, 'quant_mode', 'chunk')) # Use input_mode if set, else quant_mode
         chunk_size = getattr(self, 'input_chunk_size', getattr(self, 'chunk_size', None))
         rounding = getattr(self, 'rounding', 'nearest') # Default to nearest for inputs
         chunk_formats = getattr(self, 'input_chunk_formats', None) # Per-chunk input formats

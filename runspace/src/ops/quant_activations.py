@@ -17,7 +17,7 @@ class LUTActivation:
     Mixin for LUT-based FP8 activations.
     Precomputes outputs for all 256 possible FP8 inputs.
     """
-    def build_lut(self, activation_fn, q_type="fp8_e4m3", bias=None, quant_mode="tensor", chunk_size=None):
+    def build_lut(self, activation_fn, q_type="fp8_e4m3", bias=None, quant_mode="chunk", chunk_size=None):
         """
         Builds the Look-Up Table (LUT) for the given activation function.
         """
@@ -122,7 +122,7 @@ class QuantReLU(nn.ReLU):
     """
     Quantized ReLU using LUT.
     """
-    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
+    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, **kwargs):
         super().__init__(inplace=inplace)
         self.capture_activations = False
         self.quantization_bias = quantization_bias
@@ -145,7 +145,7 @@ class QuantReLU6(nn.ReLU6):
     """
     Quantized ReLU6 using LUT.
     """
-    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
+    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, **kwargs):
         super().__init__(inplace=inplace)
         self.capture_activations = False
         self.quantization_bias = quantization_bias
@@ -168,7 +168,7 @@ class QuantSiLU(nn.SiLU):
     Quantized SiLU (Swish). Applies standard SiLU; quantization of the output
     is handled by the next layer's input quantizer (same pattern as QuantReLU).
     """
-    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None):
+    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, **kwargs):
         super().__init__(inplace=inplace)
         self.capture_activations = False
         self.quantization_bias = quantization_bias
@@ -196,7 +196,7 @@ class QuantGELU(nn.GELU, LUTActivation):
       
     Where index(x) maps [-A, +A] to [0, 255].
     """
-    def __init__(self, approximate: str = 'none', q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, A: float = 4.0):
+    def __init__(self, approximate: str = 'none', q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, A: float = 4.0, **kwargs):
         super().__init__(approximate=approximate)
         self.capture_activations = False
         self.quantization_bias = quantization_bias
