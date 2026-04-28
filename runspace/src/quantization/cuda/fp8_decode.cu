@@ -1,7 +1,7 @@
 // runspace/src/quantization/cuda/fp8_decode.cu
 //
 // Phase 0 decode kernels:
-//   decode_fp8_emb_chunk : per-chunk power-of-two scale.
+//   decode_fp8_chunk : per-chunk power-of-two scale.
 //   decode_fp8_tensor    : single scalar scale. Accepts any N >= 1 via
 //                          vectorized bulk + scalar tail handler.
 //   decode_fp8_channel   : per-channel scales, K multiple of 4.
@@ -17,7 +17,7 @@
 // ============================================================================
 
 extern "C" __global__
-void decode_fp8_emb_chunk(
+void decode_fp8_chunk(
     const uint8_t* __restrict__ in,
     const float*   __restrict__ scales,
     float*         __restrict__ out,
@@ -32,15 +32,15 @@ void decode_fp8_emb_chunk(
     const uint32_t packed = reinterpret_cast<const uint32_t*>(in + base)[lane];
 
     float4 v;
-    v.x = decode_fp8_emb(uint8_t( packed        & 0xFFu), e, m, b) * s;
-    v.y = decode_fp8_emb(uint8_t((packed >>  8) & 0xFFu), e, m, b) * s;
-    v.z = decode_fp8_emb(uint8_t((packed >> 16) & 0xFFu), e, m, b) * s;
-    v.w = decode_fp8_emb(uint8_t((packed >> 24) & 0xFFu), e, m, b) * s;
+    v.x = decode_fp8(uint8_t( packed        & 0xFFu), e, m, b) * s;
+    v.y = decode_fp8(uint8_t((packed >>  8) & 0xFFu), e, m, b) * s;
+    v.z = decode_fp8(uint8_t((packed >> 16) & 0xFFu), e, m, b) * s;
+    v.w = decode_fp8(uint8_t((packed >> 24) & 0xFFu), e, m, b) * s;
 
     reinterpret_cast<float4*>(out + base)[lane] = v;
 }
 
-void launch_decode_fp8_emb_chunk(
+void launch_decode_fp8_chunk(
     torch::Tensor in, torch::Tensor scales, torch::Tensor out,
     int e, int m, int b, int chunk_size)
 {
@@ -57,7 +57,7 @@ void launch_decode_fp8_emb_chunk(
 
     const dim3 grid(N / chunk_size);
     const dim3 block(32);
-    decode_fp8_emb_chunk<<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
+    decode_fp8_chunk<<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
         in.data_ptr<uint8_t>(), scales.data_ptr<float>(), out.data_ptr<float>(),
         N, chunk_size, e, m, b);
     AT_CUDA_CHECK(cudaGetLastError());
@@ -83,19 +83,19 @@ void decode_fp8_tensor(
     if (gid < n4) {
         const uint32_t packed = reinterpret_cast<const uint32_t*>(in)[gid];
         float4 v;
-        v.x = decode_fp8_emb(uint8_t( packed        & 0xFFu), e, m, b) * s;
-        v.y = decode_fp8_emb(uint8_t((packed >>  8) & 0xFFu), e, m, b) * s;
-        v.z = decode_fp8_emb(uint8_t((packed >> 16) & 0xFFu), e, m, b) * s;
-        v.w = decode_fp8_emb(uint8_t((packed >> 24) & 0xFFu), e, m, b) * s;
+        v.x = decode_fp8(uint8_t( packed        & 0xFFu), e, m, b) * s;
+        v.y = decode_fp8(uint8_t((packed >>  8) & 0xFFu), e, m, b) * s;
+        v.z = decode_fp8(uint8_t((packed >> 16) & 0xFFu), e, m, b) * s;
+        v.w = decode_fp8(uint8_t((packed >> 24) & 0xFFu), e, m, b) * s;
         reinterpret_cast<float4*>(out)[gid] = v;
         return;
     }
 
     if (gid == n4 && tail > 0) {
         const int base = n4 << 2;
-        if (tail >= 1) out[base + 0] = decode_fp8_emb(in[base + 0], e, m, b) * s;
-        if (tail >= 2) out[base + 1] = decode_fp8_emb(in[base + 1], e, m, b) * s;
-        if (tail >= 3) out[base + 2] = decode_fp8_emb(in[base + 2], e, m, b) * s;
+        if (tail >= 1) out[base + 0] = decode_fp8(in[base + 0], e, m, b) * s;
+        if (tail >= 2) out[base + 1] = decode_fp8(in[base + 1], e, m, b) * s;
+        if (tail >= 3) out[base + 2] = decode_fp8(in[base + 2], e, m, b) * s;
     }
 }
 
@@ -146,10 +146,10 @@ void decode_fp8_channel(
 
     const uint32_t packed = reinterpret_cast<const uint32_t*>(in + base)[element_in_ch];
     float4 v;
-    v.x = decode_fp8_emb(uint8_t( packed        & 0xFFu), e, m, b) * s;
-    v.y = decode_fp8_emb(uint8_t((packed >>  8) & 0xFFu), e, m, b) * s;
-    v.z = decode_fp8_emb(uint8_t((packed >> 16) & 0xFFu), e, m, b) * s;
-    v.w = decode_fp8_emb(uint8_t((packed >> 24) & 0xFFu), e, m, b) * s;
+    v.x = decode_fp8(uint8_t( packed        & 0xFFu), e, m, b) * s;
+    v.y = decode_fp8(uint8_t((packed >>  8) & 0xFFu), e, m, b) * s;
+    v.z = decode_fp8(uint8_t((packed >> 16) & 0xFFu), e, m, b) * s;
+    v.w = decode_fp8(uint8_t((packed >> 24) & 0xFFu), e, m, b) * s;
     reinterpret_cast<float4*>(out + base)[element_in_ch] = v;
 }
 

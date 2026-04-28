@@ -17,22 +17,13 @@ _module = load(
 )
 
 # Per-chunk codec.
-encode_fp8_emb_chunk = _module.encode_fp8_emb_chunk
-decode_fp8_emb_chunk = _module.decode_fp8_emb_chunk
-encode_fp8_emb_chunk_rhup         = _module.encode_fp8_emb_chunk_rhup
-encode_fp8_emb_chunk_noflush      = _module.encode_fp8_emb_chunk_noflush
-encode_fp8_emb_chunk_rhup_noflush = _module.encode_fp8_emb_chunk_rhup_noflush
+encode_fp8_chunk = _module.encode_fp8_chunk
+decode_fp8_chunk = _module.decode_fp8_chunk
 
 # Per-tensor codec (scalar scale).
 encode_fp8_tensor    = _module.encode_fp8_tensor
 decode_fp8_tensor    = _module.decode_fp8_tensor
-encode_fp8_tensor_rhup         = _module.encode_fp8_tensor_rhup
-encode_fp8_tensor_noflush      = _module.encode_fp8_tensor_noflush
-encode_fp8_tensor_rhup_noflush = _module.encode_fp8_tensor_rhup_noflush
 
 # Per-channel codec (one scale per channel of [C, K] input).
-encode_fp8_channel     = _module.encode_fp8_channel
-decode_fp8_channel     = _module.decode_fp8_channel
-encode_fp8_channel_rhup           = _module.encode_fp8_channel_rhup
-encode_fp8_channel_noflush        = _module.encode_fp8_channel_noflush
-encode_fp8_channel_rhup_noflush   = _module.encode_fp8_channel_rhup_noflush
+encode_fp8_channel   = _module.encode_fp8_channel
+decode_fp8_channel   = _module.decode_fp8_channel
