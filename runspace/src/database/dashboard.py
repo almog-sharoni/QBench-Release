@@ -35,14 +35,43 @@ class NpEncoder(json.JSONEncoder):
         return super(NpEncoder, self).default(obj)
 
 PRESETS_FILE = os.path.join(os.path.dirname(__file__), "presets.json")
-DB_PATH = os.path.join(PROJECT_ROOT, "runspace/database/runs.db")
-FM_DB_PATH = os.path.join(PROJECT_ROOT, "runspace/database/fm_runs.db")
+DB_FOLDER = os.path.join(PROJECT_ROOT, "runspace/database")
+DEFAULT_DB_PATH = os.path.join(DB_FOLDER, "runs.db")
+DB_PATH = DEFAULT_DB_PATH
+FM_DB_PATH = os.path.join(DB_FOLDER, "fm_runs.db")
 RUN_WINDOW_TO_LIMIT = {
     "200 (fastest)": 200,
     "500": 500,
     "1000": 1000,
     "All": None,
 }
+
+
+def list_database_files():
+    os.makedirs(DB_FOLDER, exist_ok=True)
+    db_files = [
+        name for name in os.listdir(DB_FOLDER)
+        if name.endswith(".db") and os.path.isfile(os.path.join(DB_FOLDER, name))
+    ]
+    if not db_files:
+        return [os.path.basename(DEFAULT_DB_PATH)]
+    return sorted(db_files)
+
+
+def make_safe_db_filename(name):
+    raw_name = str(name or "").strip()
+    safe_chars = []
+    for char in raw_name:
+        if char.isalnum() or char in ("-", "_", "."):
+            safe_chars.append(char)
+        elif char.isspace():
+            safe_chars.append("_")
+    safe_name = "".join(safe_chars).strip("._")
+    if not safe_name:
+        safe_name = f"selected_runs_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    if not safe_name.endswith(".db"):
+        safe_name += ".db"
+    return safe_name
 
 def load_presets():
     if os.path.exists(PRESETS_FILE):
@@ -330,6 +359,16 @@ def get_fm_runs(limit):
 def delete_runs_by_ids(run_ids):
     db = RunDatabase(db_path=DB_PATH)
     return db.delete_runs_by_ids(run_ids)
+
+
+def update_experiment_type_by_ids(run_ids, experiment_type):
+    db = RunDatabase(db_path=DB_PATH)
+    return db.update_experiment_type_by_ids(run_ids, experiment_type)
+
+
+def create_database_from_run_ids(run_ids, destination_db_path):
+    db = RunDatabase(db_path=DB_PATH)
+    return db.create_database_from_run_ids(run_ids, destination_db_path)
 
 
 def preprocess_runs_df(df):
@@ -770,6 +809,19 @@ if flash_message:
 if 'presets' not in st.session_state:
     st.session_state.presets = load_presets()
 
+st.sidebar.header("Database")
+db_options = list_database_files()
+default_db_name = os.path.basename(DEFAULT_DB_PATH)
+default_db_index = db_options.index(default_db_name) if default_db_name in db_options else 0
+selected_db_name = st.sidebar.selectbox(
+    "Experiment DB",
+    options=db_options,
+    index=default_db_index,
+    help="Choose a SQLite database from runspace/database for the experiments table.",
+)
+DB_PATH = os.path.join(DB_FOLDER, selected_db_name)
+st.sidebar.caption(f"Using `{selected_db_name}`")
+
 st.sidebar.header("⚡ Performance")
 run_window_label = st.sidebar.selectbox(
     "Rows to Load",
@@ -1048,7 +1100,7 @@ else:
                 run_ids.append(int(run_id))
         run_ids = sorted(set(run_ids))
 
-        st.warning("This permanently deletes the selected rows from `runs.db`. This action cannot be undone.")
+        st.warning(f"This permanently deletes the selected rows from `{selected_db_name}`. This action cannot be undone.")
 
         preview_cols = [
             'id', 'model_name', 'experiment_type', 'weight_dt', 'activation_dt',
@@ -1087,6 +1139,110 @@ else:
                 f"table_{table_index}",
             ):
                 st.session_state.pop(key, None)
+            st.rerun()
+
+    @st.dialog("✏️ Edit Experiment Name", width="large")
+    def show_edit_experiment_dialog(run_rows, table_index):
+        if not run_rows:
+            st.info("No runs selected.")
+            return
+
+        selected_df = pd.DataFrame(run_rows)
+        run_ids = []
+        for row in run_rows:
+            run_id = row.get('id')
+            if pd.notna(run_id):
+                run_ids.append(int(run_id))
+        run_ids = sorted(set(run_ids))
+
+        current_values = sorted(
+            selected_df.get('experiment_type', pd.Series(dtype=object)).fillna('').astype(str).unique().tolist()
+        )
+        default_value = current_values[0] if len(current_values) == 1 else ""
+        if len(current_values) > 1:
+            st.caption(f"Current experiment names: {', '.join(current_values)}")
+
+        new_experiment_type = st.text_input(
+            "Experiment name",
+            value=default_value,
+            key=f"edit_experiment_type_{table_index}",
+            placeholder="e.g. input_quant_sweep_v2",
+        )
+
+        preview_cols = [
+            'id', 'model_name', 'experiment_type', 'weight_dt', 'activation_dt',
+            'acc1', 'acc5', 'status', 'run_date'
+        ]
+        existing_preview_cols = [c for c in preview_cols if c in selected_df.columns]
+        st.dataframe(selected_df[existing_preview_cols], use_container_width=True, hide_index=True)
+
+        if st.button(
+            f"Save Experiment Name For {len(run_ids)} Row{'s' if len(run_ids) != 1 else ''}",
+            key=f"confirm_edit_experiment_{table_index}",
+            type="primary",
+            use_container_width=True,
+        ):
+            if not str(new_experiment_type).strip():
+                st.error("Enter an experiment name.")
+                return
+            updated_count = update_experiment_type_by_ids(run_ids, new_experiment_type)
+            st.session_state["dashboard_flash_message"] = (
+                f"Updated experiment name for {updated_count} row{'s' if updated_count != 1 else ''}."
+            )
+            st.session_state.pop(f"table_{table_index}", None)
+            st.rerun()
+
+    @st.dialog("💾 Create Database From Selected Rows", width="large")
+    def show_create_db_dialog(run_rows, table_index):
+        if not run_rows:
+            st.info("No runs selected.")
+            return
+
+        selected_df = pd.DataFrame(run_rows)
+        run_ids = []
+        for row in run_rows:
+            run_id = row.get('id')
+            if pd.notna(run_id):
+                run_ids.append(int(run_id))
+        run_ids = sorted(set(run_ids))
+
+        default_name = f"selected_runs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+        db_name = st.text_input(
+            "New DB filename",
+            value=default_name,
+            key=f"new_db_name_{table_index}",
+            help="The database will be created in runspace/database.",
+        )
+        safe_name = make_safe_db_filename(db_name)
+        destination_db_path = os.path.join(DB_FOLDER, safe_name)
+        st.caption(f"Destination: `{destination_db_path}`")
+
+        preview_cols = [
+            'id', 'model_name', 'experiment_type', 'weight_dt', 'activation_dt',
+            'acc1', 'acc5', 'status', 'run_date'
+        ]
+        existing_preview_cols = [c for c in preview_cols if c in selected_df.columns]
+        st.dataframe(selected_df[existing_preview_cols], use_container_width=True, hide_index=True)
+
+        if os.path.exists(destination_db_path):
+            st.error("A database with this name already exists. Choose a new filename.")
+            return
+
+        if st.button(
+            f"Create DB With {len(run_ids)} Row{'s' if len(run_ids) != 1 else ''}",
+            key=f"confirm_create_db_{table_index}",
+            type="primary",
+            use_container_width=True,
+        ):
+            try:
+                copied_count = create_database_from_run_ids(run_ids, destination_db_path)
+            except FileExistsError as exc:
+                st.error(str(exc))
+                return
+            st.session_state["dashboard_flash_message"] = (
+                f"Created `{safe_name}` with {copied_count} selected row{'s' if copied_count != 1 else ''}."
+            )
+            st.session_state.pop(f"table_{table_index}", None)
             st.rerun()
 
     @st.dialog("📈 Accuracy Comparison", width="large")
@@ -2403,7 +2559,7 @@ else:
                     f"""
                     <div class="dashboard-selection-banner">
                         <strong>{selected_count} row{'s' if selected_count != 1 else ''} selected.</strong>
-                        <span> Use the actions below to open configs, inspect layer formats, compare accuracy, or remove rows from the database.</span>
+                        <span> Use the actions below to open configs, inspect layer formats, compare accuracy, rename experiments, export rows, or remove rows.</span>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -2484,6 +2640,19 @@ else:
                     "type": "primary",
                     "handler": None,
                 })
+                if selected_run_ids:
+                    action_specs.append({
+                        "label": f"✏️ Rename Experiment ({len(selected_run_ids)})",
+                        "key": f"btn_edit_experiment_{i}",
+                        "type": "secondary",
+                        "handler": lambda selected_run_rows=selected_run_rows, table_index=i: show_edit_experiment_dialog(selected_run_rows, table_index),
+                    })
+                    action_specs.append({
+                        "label": f"💾 Create DB ({len(selected_run_ids)})",
+                        "key": f"btn_create_db_{i}",
+                        "type": "secondary",
+                        "handler": lambda selected_run_rows=selected_run_rows, table_index=i: show_create_db_dialog(selected_run_rows, table_index),
+                    })
                 if selected_run_ids:
                     delete_label = (
                         f"🗑️ Delete Selected Rows ({len(selected_run_ids)})"

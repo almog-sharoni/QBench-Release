@@ -350,6 +350,84 @@ class RunDatabase:
             conn.commit()
             return deleted_count
 
+    def update_experiment_type_by_ids(self, run_ids, experiment_type):
+        """Update experiment_type for one or more run rows and return updated count."""
+        if experiment_type is None:
+            experiment_type = ""
+        experiment_type = str(experiment_type).strip()
+
+        normalized_ids = self._normalize_run_ids(run_ids)
+        if not normalized_ids:
+            return 0
+
+        placeholders = ",".join("?" for _ in normalized_ids)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE runs SET experiment_type = ? WHERE id IN ({placeholders})",
+                [experiment_type] + normalized_ids,
+            )
+            updated_count = max(cursor.rowcount, 0)
+            conn.commit()
+            return updated_count
+
+    def create_database_from_run_ids(self, run_ids, destination_db_path):
+        """
+        Create a new SQLite run database containing the selected runs.
+
+        The destination database is initialized with the current schema and then
+        populated with matching columns from the source `runs` table. Existing
+        destination files are rejected so accidental overwrites stay explicit.
+        """
+        normalized_ids = self._normalize_run_ids(run_ids)
+        if not normalized_ids:
+            return 0
+
+        destination_db_path = os.path.abspath(destination_db_path)
+        if os.path.exists(destination_db_path):
+            raise FileExistsError(f"Destination database already exists: {destination_db_path}")
+
+        os.makedirs(os.path.dirname(destination_db_path), exist_ok=True)
+        destination_db = RunDatabase(db_path=destination_db_path)
+
+        placeholders = ",".join("?" for _ in normalized_ids)
+        with sqlite3.connect(self.db_path) as src_conn, sqlite3.connect(destination_db.db_path) as dst_conn:
+            src_conn.row_factory = sqlite3.Row
+            src_cursor = src_conn.cursor()
+            dst_cursor = dst_conn.cursor()
+
+            src_cursor.execute(f"SELECT * FROM runs WHERE id IN ({placeholders})", normalized_ids)
+            rows = [dict(row) for row in src_cursor.fetchall()]
+            if not rows:
+                return 0
+
+            dst_cursor.execute("PRAGMA table_info(runs)")
+            destination_cols = [row[1] for row in dst_cursor.fetchall()]
+            insert_cols = [col for col in destination_cols if col in rows[0]]
+            if not insert_cols:
+                return 0
+
+            col_sql = ", ".join(insert_cols)
+            value_sql = ", ".join("?" for _ in insert_cols)
+            dst_cursor.executemany(
+                f"INSERT INTO runs ({col_sql}) VALUES ({value_sql})",
+                [[row.get(col) for col in insert_cols] for row in rows],
+            )
+            dst_conn.commit()
+            return len(rows)
+
+    @staticmethod
+    def _normalize_run_ids(run_ids):
+        normalized_ids = []
+        for run_id in run_ids or []:
+            if run_id is None:
+                continue
+            try:
+                normalized_ids.append(int(run_id))
+            except (TypeError, ValueError):
+                continue
+        return sorted(set(normalized_ids))
+
     def get_summary(self):
         """Returns a summary of runs grouped by model and status."""
         df = self.get_runs()
