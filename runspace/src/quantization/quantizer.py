@@ -52,11 +52,6 @@ INT4 Format:
 
 import torch
 import os
-from .cuda import decode_fp8_tensor      as _decode_fp8_tensor
-from .cuda import encode_fp8_tensor as _encode_fp8_tensor
-from .cuda import encode_fp8_tensor_rhup as _encode_fp8_tensor_rhup
-from .cuda import encode_fp8_tensor_noflush      as _encode_fp8_tensor_noflush
-from .cuda import encode_fp8_tensor_rhup_noflush as _encode_fp8_tensor_rhup_noflush
 _FP8_TABLE_CACHE = {}
 
 

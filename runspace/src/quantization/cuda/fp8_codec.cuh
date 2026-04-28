@@ -1,26 +1,4 @@
 // runspace/src/quantization/cuda/fp8_codec.cuh
-//
-// Shared device helpers for FP8(e, m, b) codecs used by the QBench Phase 0
-// encode and decode kernels and by the encode epilogue of every compute
-// kernel in the plan §2.2 inventory.
-//
-// Conventions (see plan §3.3 risk R4 and §6 risk R6):
-//   - FP8 layout per element: 1 sign | e exponent | m mantissa, with
-//     1 + e + m == 8. Biased exponent uses the runtime argument b.
-//   - Rounding: round to nearest, ties to even (IEEE 754-2008 §4.3.1).
-//   - Saturation: clamp magnitude only when exp_out > max_exp = (1 << e) - 1.
-//     Permissive convention; treats every bit pattern with exp == max_exp as
-//     a legal normal. Matches QBench quantize_fp_generic and OCP E4M3
-//     permissive. For OCP E5M2 strict (reserve all-ones exp for Inf/NaN),
-//     pass an effective `e' = e - 1` cap by the caller, or post-mask.
-//   - Subnormals: flushed to zero below 2^(1 - b). Matches QBench BUG-001
-//     in the existing Python quantizer per R6.
-//
-// References
-//   [1] IEEE Std 754-2008, §3.4, §4.3.1.
-//   [2] NVIDIA, CUDA C++ Programming Guide, §B.20 Warp Shuffle Functions.
-//   [3] OCP, 8-bit Floating Point Specification (OFP8) Revision 1.0, §3, §4.
-
 #pragma once
 
 #include <cuda_runtime.h>
