@@ -5,7 +5,6 @@ import json
 from tqdm import tqdm
 import torch
 import yaml
-import time
 import gc
 from typing import List, Dict, Any, Optional
 
@@ -16,7 +15,6 @@ if PROJECT_ROOT not in sys.path:
 
 from src.adapters.adapter_factory import create_adapter
 from src.eval.comparator import LayerComparator
-from torch.utils.data import DataLoader
 
 
 class Runner:
@@ -67,11 +65,7 @@ class Runner:
         )
 
     @staticmethod
-    def _expects_quantized_layers(config: Dict[str, Any]) -> bool:
-        """
-        Return True when adapter config indicates wrapper-based quantized layers
-        are expected in the built model graph.
-        """
+    def _quantization_build_requested(config: Dict[str, Any]) -> bool:
         adapter_cfg = config.get('adapter', {}) or {}
         quant_cfg = config.get('quantization', {}) or {}
 
@@ -88,11 +82,13 @@ class Runner:
 
         explicit_build_quantized = adapter_cfg.get('build_quantized')
         if explicit_build_quantized is None:
-            build_quantized = bool(quantize_first_layer or has_qops or has_layer_overrides)
-        else:
-            build_quantized = bool(explicit_build_quantized)
+            return bool(quantize_first_layer or has_qops or has_layer_overrides)
+        return bool(explicit_build_quantized)
 
-        return build_quantized
+    @staticmethod
+    def _expects_quantized_layers(config: Dict[str, Any]) -> bool:
+        """True when config asks adapters to build quantized wrapper layers."""
+        return Runner._quantization_build_requested(config)
 
     @staticmethod
     def _looks_like_weight_file_path(weights_spec) -> bool:
@@ -147,28 +143,8 @@ class Runner:
         calibration before snapshotting a materialized weight file.
         """
         adapter_cfg = config.get('adapter', {}) or {}
-        quant_cfg = config.get('quantization', {}) or {}
-
-        quantized_ops = adapter_cfg.get('quantized_ops', ['all'])
-        if quantized_ops is None:
-            quantized_ops = []
-        if not isinstance(quantized_ops, list):
-            quantized_ops = [quantized_ops]
-        has_qops = any(bool(str(op).strip()) for op in quantized_ops)
-
-        layer_cfg = quant_cfg.get('layers', adapter_cfg.get('layers'))
-        has_layer_overrides = isinstance(layer_cfg, dict) and len(layer_cfg) > 0
-        quantize_first_layer = bool(adapter_cfg.get('quantize_first_layer', False))
-        default_build_quantized = bool(quantize_first_layer or has_qops or has_layer_overrides)
-
-        explicit_build_quantized = adapter_cfg.get('build_quantized')
-        if explicit_build_quantized is None:
-            build_quantized = default_build_quantized
-        else:
-            build_quantized = bool(explicit_build_quantized)
-
         weight_quantization = bool(adapter_cfg.get('weight_quantization', True))
-        return bool(build_quantized and weight_quantization)
+        return bool(Runner._quantization_build_requested(config) and weight_quantization)
 
     def _resolve_skip_calibration_for_build(
         self,
@@ -606,6 +582,26 @@ class Runner:
             or key.endswith('in_proj_bias')
         )
 
+    @classmethod
+    def _materialized_file_has_weight_quant_buffers(cls, weight_file_path: str) -> bool:
+        try:
+            state_obj = torch.load(weight_file_path, map_location='cpu')
+            state_dict = cls._extract_raw_state_dict(state_obj)
+        except Exception as e:
+            print(f"Warning: could not inspect materialized weight cache {weight_file_path}: {e}")
+            return False
+
+        if not isinstance(state_dict, dict):
+            return False
+
+        quant_buffer_suffixes = (
+            '.weight_fp8',
+            '.weight_scale',
+            '.weight_scale_packed',
+            '.weight_chunk_formats',
+        )
+        return any(str(key).endswith(quant_buffer_suffixes) for key in state_dict.keys())
+
     def _assert_state_dict_loaded(
         self,
         source_state,
@@ -769,6 +765,14 @@ class Runner:
         """True for adapters that load weights internally (e.g. feature_matching via PipelineRegistry)."""
         return config.get('adapter', {}).get('type') == 'feature_matching'
 
+    @staticmethod
+    def _adapter_build_config(config: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop runner-only metadata before passing config to adapters."""
+        cfg = copy.deepcopy(config)
+        for key in ('experiment', 'meta', 'debug'):
+            cfg.pop(key, None)
+        return cfg
+
     def _build_reference_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Creates a version of the config for the FP32 reference model that matches 
@@ -798,9 +802,8 @@ class Runner:
         eval_cfg = ref_cfg.setdefault('evaluation', {})
         eval_cfg['dynamic_input_quant'] = None
         eval_cfg['input_quant'] = None
-        
-        return ref_cfg
 
+        return ref_cfg
 
     def prepare_model_with_materialized_weights(
         self,
@@ -857,6 +860,18 @@ class Runner:
                 "weights rebuild to avoid stale FP32 cache reuse."
             )
             force_rebuild = True
+        if (
+            not source_is_file
+            and not force_rebuild
+            and config.get('adapter', {}).get('weight_quantization') is False
+            and os.path.exists(weight_file_path)
+            and self._materialized_file_has_weight_quant_buffers(weight_file_path)
+        ):
+            print(
+                "Info: weight_quantization=false; forcing materialized weights "
+                "rebuild to avoid stale quantized weight buffers."
+            )
+            force_rebuild = True
         if source_is_file:
             try:
                 sz_mb = os.path.getsize(source_weights) / (1024 * 1024)
@@ -869,12 +884,8 @@ class Runner:
         # This avoids back-to-back architecture construction in a single run.
         if not source_is_file:
             if not force_rebuild and os.path.exists(weight_file_path):
-                load_cfg = copy.deepcopy(config)
-                load_cfg.pop('experiment', None)
-                load_cfg.pop('meta', None)
-                load_cfg.pop('debug', None)
                 model, adapter = self.load_model_from_weight_file(
-                    config=load_cfg,
+                    config=self._adapter_build_config(config),
                     weight_file_path=weight_file_path,
                     skip_calibration=True,
                 )
@@ -882,10 +893,7 @@ class Runner:
 
             adapter = None
             try:
-                build_cfg = copy.deepcopy(config)
-                build_cfg.pop('experiment', None)
-                build_cfg.pop('meta', None)
-                build_cfg.pop('debug', None)
+                build_cfg = self._adapter_build_config(config)
                 build_cfg.setdefault('adapter', {})
                 build_cfg['adapter']['skip_calibration'] = self._resolve_skip_calibration_for_build(
                     config=build_cfg,
@@ -923,10 +931,7 @@ class Runner:
                     torch.cuda.empty_cache()
                 raise
 
-        snapshot_cfg = copy.deepcopy(config)
-        snapshot_cfg.pop('experiment', None)
-        snapshot_cfg.pop('meta', None)
-        snapshot_cfg.pop('debug', None)
+        snapshot_cfg = self._adapter_build_config(config)
 
         weight_file_path = self.materialize_weight_file(
             config=snapshot_cfg,
@@ -934,12 +939,8 @@ class Runner:
             force_rebuild=force_rebuild,
         )
 
-        load_cfg = copy.deepcopy(config)
-        load_cfg.pop('experiment', None)
-        load_cfg.pop('meta', None)
-        load_cfg.pop('debug', None)
         model, adapter = self.load_model_from_weight_file(
-            config=load_cfg,
+            config=self._adapter_build_config(config),
             weight_file_path=weight_file_path,
             skip_calibration=True,
         )
@@ -963,6 +964,22 @@ class Runner:
             float(ref_certainty or 0.0),
         )
 
+    @staticmethod
+    def _effective_weight_dt(config: Dict[str, Any], result: Dict[str, Any], exp_cfg: Dict[str, Any]) -> str:
+        explicit_weight_dt = exp_cfg.get('weight_dt')
+        if explicit_weight_dt:
+            return str(explicit_weight_dt)
+
+        adapter_cfg = config.get('adapter', {}) or {}
+        if adapter_cfg.get('weight_quantization') is False:
+            return "fp32"
+
+        return str(
+            result.get('quant_format')
+            or config.get('quantization', {}).get('format')
+            or "fp32"
+        )
+
     def log_experiment_result(
         self,
         config: Dict[str, Any],
@@ -980,7 +997,7 @@ class Runner:
         db = self._get_fm_db(db_path=db_path) if is_fm else self._get_db(db_path=db_path)
         model_name = result.get('model_name', config.get('model', {}).get('name', 'unknown'))
         experiment_type = exp_cfg.get('type') or exp_cfg.get('name') or "runner_eval"
-        weight_dt = exp_cfg.get('weight_dt') or result.get('quant_format') or config.get('quantization', {}).get('format') or "fp32"
+        weight_dt = self._effective_weight_dt(config, result, exp_cfg)
 
         activation_dt = exp_cfg.get('activation_dt')
         if activation_dt is None:
@@ -1023,10 +1040,7 @@ class Runner:
             )
             return None
 
-        is_input_only_exp = (
-            str(experiment_type).strip().lower().startswith('input_quant')
-            and str(weight_dt).strip().lower() == 'fp32'
-        )
+        weights_are_fp32 = str(weight_dt).strip().lower() == 'fp32'
 
         ref_acc1, ref_acc5, ref_certainty = self._resolve_ref_metrics(
             db=db,
@@ -1046,7 +1060,7 @@ class Runner:
             l1 = input_quant.get('norm_l1', result.get('dyn_norm_l1'))
 
         quant_map_json = None
-        if not is_input_only_exp:
+        if not weights_are_fp32:
             quant_map_json = self._to_json_string(exp_cfg.get('quant_map_json'))
             if quant_map_json is None and result.get('weight_quant_map') is not None:
                 quant_map_json = self._to_json_string(result.get('weight_quant_map'))
@@ -1144,6 +1158,25 @@ class Runner:
         if cfg.get('enabled') and 'mode' not in cfg:
             cfg['mode'] = 'dynamic'
         return cfg
+
+    @staticmethod
+    def _implicit_uniform_input_quant_cfg(config: Dict[str, Any]) -> Dict[str, Any]:
+        adapter_cfg = config.get('adapter', {}) or {}
+        quant_cfg = config.get('quantization', {}) or {}
+
+        if adapter_cfg.get('input_quantization') is not True:
+            return {}
+
+        fmt = quant_cfg.get('input_format') or quant_cfg.get('format')
+        if not fmt or str(fmt).strip().lower() == 'fp32':
+            return {}
+
+        return {
+            'enabled': True,
+            'mode': 'uniform',
+            'format': fmt,
+            'chunk_size': int(quant_cfg.get('chunk_size', 128) or 128),
+        }
 
     def _build_layer_input_quantizer(self, model, input_quant_cfg: Dict[str, Any]):
         if not input_quant_cfg.get('enabled', False):
@@ -1504,47 +1537,50 @@ class Runner:
 
         return build_data_loader(dataset_cfg['name'], dataset_cfg)
 
-    def run_single(self, config: Dict[str, Any], output_root: str = "runspace/outputs") -> Dict[str, Any]:
-        """Runs a single configuration and returns the results."""
-        model_config = config.get('model', {})
-        self._resolve_paths(model_config, ('weights', 'repo_path', 'root', 'path'))
-        model_name = model_config.get('name', 'unknown')
-
-        self._check_dataset_pipeline_compatibility(config)
-        weights_spec = model_config.get('weights')
-        has_file_backed_weights = (
-            isinstance(weights_spec, str)
-            and weights_spec not in ("", "DEFAULT", "default", "None", "none")
-            and os.path.isfile(weights_spec)
-        )
+    @staticmethod
+    def _resolve_quant_format(config: Dict[str, Any]) -> str:
         quant_format = config.get('quantization', {}).get('format', 'fp8')
-        
-        # Check for mixed precision
         layer_configs = config.get('quantization', {}).get('layers', {})
-        if layer_configs:
-            unique_formats = set()
-            for layer_name, layer_cfg in layer_configs.items():
-                if isinstance(layer_cfg, dict) and 'format' in layer_cfg:
-                    unique_formats.add(layer_cfg['format'])
-            
-            if len(unique_formats) > 1:
-                quant_format = "mixed"
-            elif len(unique_formats) == 1:
-                # If all layers override to the same thing, report that thing
-                quant_format = list(unique_formats)[0]
-        
+        if not layer_configs:
+            return quant_format
+
+        unique_formats = {
+            layer_cfg['format']
+            for layer_cfg in layer_configs.values()
+            if isinstance(layer_cfg, dict) and 'format' in layer_cfg
+        }
+        if len(unique_formats) > 1:
+            return "mixed"
+        if len(unique_formats) == 1:
+            return next(iter(unique_formats))
+        return quant_format
+
+    @staticmethod
+    def _output_dir(config: Dict[str, Any], output_root: str, model_name: str, quant_format: str) -> str:
         meta = config.get('meta', {})
-        
-        print(f"--- Running {model_name} with {quant_format} ---")
-        
-        results = {
+        output_name = config.get('output_name', '')
+        if output_name:
+            return os.path.join(output_root, output_name)
+        if meta.get('base_config_path'):
+            base_name = os.path.splitext(os.path.basename(meta['base_config_path']))[0]
+            return os.path.join(output_root, base_name, model_name, quant_format.replace('_', ''))
+        return os.path.join(output_root, model_name, quant_format.replace('_', ''))
+
+    @staticmethod
+    def _count_quant_layers(model) -> int:
+        return sum(1 for module in model.modules() if 'Quant' in module.__class__.__name__)
+
+    @staticmethod
+    def _base_result(config: Dict[str, Any], model_name: str, quant_format: str) -> Dict[str, Any]:
+        meta = config.get('meta', {})
+        return {
             'model_name': model_name,
             'adapter_type': config.get('adapter', {}).get('type', 'generic'),
             'quant_format': quant_format,
             'base_config_path': meta.get('base_config_path', 'N/A'),
             'generated_config_path': meta.get('generated_config_path', 'N/A'),
-            'output_name': config.get('output_name', ''), # Custom identifier
-            'source_weights': weights_spec,
+            'output_name': config.get('output_name', ''),
+            'source_weights': config.get('model', {}).get('weights'),
             'materialized_weight_path': None,
             'status': 'FAILED',
             'acc1': 0.0,
@@ -1577,22 +1613,35 @@ class Runner:
             'ref_pose_auc_5': 0.0,
             'ref_pose_auc_10': 0.0,
             'ref_pose_auc_20': 0.0,
-            'exec_error': None
+            'exec_error': None,
         }
 
+    @staticmethod
+    def _store_input_quant_stats(results: Dict[str, Any], stats: Optional[Dict[str, Any]]) -> None:
+        if not stats:
+            return
+        results['input_quant'] = stats
+        if stats.get('mode') == 'dynamic':
+            results['dyn_metric'] = stats.get('metric')
+            results['dyn_norm_l1'] = stats.get('norm_l1', 0.0)
+            results['dyn_norm_mse'] = stats.get('norm_mse', 0.0)
+
+    def run_single(self, config: Dict[str, Any], output_root: str = "runspace/outputs") -> Dict[str, Any]:
+        """Runs a single configuration and returns the results."""
+        model_config = config.get('model', {})
+        self._resolve_paths(model_config, ('weights', 'repo_path', 'root', 'path'))
+        model_name = model_config.get('name', 'unknown')
+
+        self._check_dataset_pipeline_compatibility(config)
+        weights_spec = model_config.get('weights')
+        has_file_backed_weights = self._is_file_backed_weights(weights_spec)
+        quant_format = self._resolve_quant_format(config)
+
+        print(f"--- Running {model_name} with {quant_format} ---")
+        results = self._base_result(config, model_name, quant_format)
+
         try:
-            # Generate Output Directory
-            base_config_path = meta.get('base_config_path', '')
-            output_name = config.get('output_name', '')
-            
-            if output_name:
-                output_dir = os.path.join(output_root, output_name)
-            elif base_config_path:
-                base_config_name = os.path.splitext(os.path.basename(base_config_path))[0]
-                output_dir = os.path.join(output_root, base_config_name, model_name, quant_format.replace('_', ''))
-            else:
-                output_dir = os.path.join(output_root, model_name, quant_format.replace('_', ''))
-            
+            output_dir = self._output_dir(config, output_root, model_name, quant_format)
             os.makedirs(output_dir, exist_ok=True)
 
             # Save Config
@@ -1625,12 +1674,7 @@ class Runner:
                 results['weight_quant_map'] = resolved_quant_map
             
             # Check for quantized layers
-            quant_layer_count = 0
-            for module in model.modules():
-                # Check if module name contains 'Quant' (simple heuristic based on class name)
-                if 'Quant' in module.__class__.__name__:
-                    quant_layer_count += 1
-            
+            quant_layer_count = self._count_quant_layers(model)
             if quant_layer_count == 0:
                 if has_file_backed_weights:
                     print(
@@ -1679,6 +1723,8 @@ class Runner:
             eval_mode = config.get('evaluation', {}).get('mode', 'compare')
             dynamic_input_quant_cfg = config.get('evaluation', {}).get('dynamic_input_quant', {})
             input_quant_cfg = config.get('evaluation', {}).get('input_quant', {})
+            if not input_quant_cfg and not dynamic_input_quant_cfg:
+                input_quant_cfg = self._implicit_uniform_input_quant_cfg(config)
 
             if eval_mode == 'evaluate':
                 print(f"Running in EVALUATE mode (Quantized Model Only)...")
@@ -1694,12 +1740,7 @@ class Runner:
 
                 results.update({k: v for k, v in eval_results.items() if k in results})
                 input_quant_stats = eval_results.get('input_quant') or eval_results.get('dynamic_input_quant')
-                if input_quant_stats:
-                    results['input_quant'] = input_quant_stats
-                    if input_quant_stats.get('mode') == 'dynamic':
-                        results['dyn_metric'] = input_quant_stats.get('metric')
-                        results['dyn_norm_l1'] = input_quant_stats.get('norm_l1', 0.0)
-                        results['dyn_norm_mse'] = input_quant_stats.get('norm_mse', 0.0)
+                self._store_input_quant_stats(results, input_quant_stats)
 
                 if results['status'] != 'NO_QUANT':
                     results['status'] = 'SUCCESS'
@@ -1776,11 +1817,7 @@ class Runner:
                 primary = quant_metrics['acc1'] if 'acc1' in quant_metrics else quant_metrics.get('fm_repeatability', 0.0)
                 ref_primary = ref_metrics['acc1'] if 'acc1' in ref_metrics else ref_metrics.get('fm_repeatability', 0.0)
                 results['acc_drop'] = ref_primary - primary
-                if dynamic_stats:
-                    results['input_quant'] = dynamic_stats
-                    results['dyn_metric'] = dynamic_stats.get('metric')
-                    results['dyn_norm_l1'] = dynamic_stats.get('norm_l1', 0.0)
-                    results['dyn_norm_mse'] = dynamic_stats.get('norm_mse', 0.0)
+                self._store_input_quant_stats(results, dynamic_stats)
                 
                 # Retrieve Compression Stats
                 comp_stats = comparator.compression_tracker.get_stats()
@@ -1844,243 +1881,3 @@ class Runner:
             "Runner parallel batch API is deprecated. "
             "Iterate configs in the caller and use run_single(config, ...)."
         )
-
-    def _run_parallel_group_safe(self, configs: List[Dict[str, Any]], output_root: str) -> List[Dict[str, Any]]:
-        """Recursively try to run configs. If OOM, split."""
-        if not configs: return []
-        
-        # Ensure clean slate
-        gc.collect()
-        torch.cuda.empty_cache()
-        
-        try:
-            return self._run_parallel_execution(configs, output_root)
-        except RuntimeError as e:
-            if "out of memory" in str(e).lower():
-                print(f"OOM detected with {len(configs)} models. Splitting batch...")
-                torch.cuda.empty_cache()
-                gc.collect()
-                
-                if len(configs) <= 1:
-                     print(f"Error: Single model caused OOM. Marking as failed.")
-                     return [self._create_failed_result(configs[0], f"OOM Error: {str(e)}")]
-                     
-                mid = len(configs) // 2
-                left = configs[:mid]
-                right = configs[mid:]
-                
-                print(f"Retrying with split batches: {len(left)} and {len(right)}")
-                res_left = self._run_parallel_group_safe(left, output_root)
-                
-                torch.cuda.empty_cache()
-                gc.collect()
-                
-                res_right = self._run_parallel_group_safe(right, output_root)
-                return res_left + res_right
-            else:
-                print(f"Unexpected error in parallel batch: {e}")
-                import traceback
-                traceback.print_exc()
-                # Fail all
-                return [self._create_failed_result(c, str(e)) for c in configs]
-
-    def _create_failed_result(self, config, error_msg):
-        model_name = config.get('model', {}).get('name', 'unknown')
-        quant_format = config.get('quantization', {}).get('format', 'fp8')
-        return {
-            'model_name': model_name,
-            'quant_format': quant_format,
-            'output_name': config.get('output_name', ''),
-            'status': 'FAILED',
-            'exec_error': error_msg,
-            'acc1': 0.0, 'acc5': 0.0, 'certainty': 0.0
-        }
-
-    def _setup_single_context(self, config, output_root):
-        """Prepares a single model context for parallel execution."""
-        model_config = config.get('model', {})
-        model_name = model_config.get('name', 'unknown')
-        weights_spec = model_config.get('weights')
-        has_file_backed_weights = (
-            isinstance(weights_spec, str)
-            and weights_spec not in ("", "DEFAULT", "default", "None", "none")
-            and os.path.isfile(weights_spec)
-        )
-        quant_format = config.get('quantization', {}).get('format', 'fp8')
-        
-        # Determine paths (same logic as run_single)
-        meta = config.get('meta', {})
-        base_config_path = meta.get('base_config_path', '')
-        output_name = config.get('output_name', '')
-        
-        if output_name:
-            output_dir = os.path.join(output_root, output_name)
-        elif base_config_path:
-            base_config_name = os.path.splitext(os.path.basename(base_config_path))[0]
-            output_dir = os.path.join(output_root, base_config_name, model_name, quant_format.replace('_', ''))
-        else:
-            output_dir = os.path.join(output_root, model_name, quant_format.replace('_', ''))
-            
-        result_template = {
-            'model_name': model_name,
-            'quant_format': quant_format,
-            'output_name': output_name,
-            'materialized_weight_path': None,
-            'status': 'FAILED',
-            'acc1': 0.0, 'acc5': 0.0, 'certainty': 0.0,
-            'ref_acc1': 0.0, 'ref_acc5': 0.0
-        }
-        
-        try:
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # Save Config
-            config_path = os.path.join(output_dir, "config.yaml")
-            with open(config_path, 'w') as f:
-                yaml.dump(config, f, default_flow_style=False)
-                
-            # Build model from materialized weight file.
-            model, adapter, materialized_weight_path = self.prepare_model_with_materialized_weights(
-                config=config,
-                output_dir=output_dir
-            )
-            result_template['materialized_weight_path'] = materialized_weight_path
-            
-            # Check quant layers
-            quant_layer_count = 0
-            for module in model.modules():
-                if 'Quant' in module.__class__.__name__:
-                    quant_layer_count += 1
-            
-            if quant_layer_count == 0:
-                if has_file_backed_weights:
-                    print(
-                        f"Info: No quantized wrapper layers found for {model_name} ({output_name}), "
-                        "but file-backed weights are in use."
-                    )
-                else:
-                    print(f"Warning: No quantized layers found for {model_name} ({output_name})")
-                
-            # Metrics
-            metrics_engine = MetricsEngine()
-            
-            return {
-                'status': 'READY',
-                'model': model,
-                'adapter': adapter,
-                'metrics': metrics_engine,
-                'result': result_template,
-                'output_dir': output_dir,
-                'quant_layer_count': quant_layer_count,
-                'has_file_backed_weights': has_file_backed_weights,
-            }
-            
-        except Exception as e:
-            print(f"Error setting up {output_name}: {e}")
-            result_template['exec_error'] = str(e)
-            return {'status': 'FAILED', 'result': result_template}
-
-    def _run_parallel_execution(self, configs, output_root):
-        print(f"--- Loading {len(configs)} models for parallel execution ---")
-        
-        # Suppress torchvision warnings during bulk loading
-        import warnings
-        warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.models._utils")
-        
-        # 1. Setup Models
-        contexts = []
-        for cfg in tqdm(configs, desc="Loading Models"):
-            ctx = self._setup_single_context(cfg, output_root)
-            contexts.append(ctx)
-            
-        active_contexts = [c for c in contexts if c['status'] == 'READY']
-        
-        if not active_contexts:
-            print("No valid models to run.")
-            return [c['result'] for c in contexts]
-            
-        print(f"Successfully loaded {len(active_contexts)} models.")
-        
-        # 2. Setup Data Loader (using first config)
-        loader = self.setup_data_loader(configs[0])
-        if loader is None:
-             raise RuntimeError("Failed to setup data loader")
-             
-        # 3. Execution Loop
-        max_batches = configs[0].get('evaluation', {}).get('max_batches', -1)
-        try:
-            with torch.inference_mode():
-                pbar = tqdm(loader, desc=f"Parallel Eval ({len(active_contexts)} models)", unit="batch")
-                for batch_idx, batch in enumerate(pbar):
-                    if max_batches > 0 and batch_idx >= max_batches:
-                        break
-                    # Use first adapter for preparation (assuming compatible input pipeline)
-                    adapter = active_contexts[0]['adapter']
-                    inputs, targets = adapter.prepare_batch(batch)
-                    inputs = inputs.to(self.device)
-                    targets = targets.to(self.device)
-                    
-                    for ctx in active_contexts:
-                        mdl = ctx['model']
-                        adp = ctx['adapter']
-                        
-                        # Forward
-                        outputs = adp.forward(mdl, (inputs, targets))
-                        ctx['metrics'].update(outputs, targets)
-                        
-                        # Optional: clear intermediate tensors if tight on memory?
-                        # outputs usually needed for metrics.
-                        del outputs
-
-                    running_acc1 = []
-                    running_acc5 = []
-                    for ctx in active_contexts:
-                        acc1, acc5 = self._running_accuracy(ctx['metrics'])
-                        running_acc1.append(acc1)
-                        running_acc5.append(acc5)
-
-                    if running_acc1 and running_acc5:
-                        avg_acc1 = sum(running_acc1) / len(running_acc1)
-                        avg_acc5 = sum(running_acc5) / len(running_acc5)
-                        pbar.set_postfix({
-                            'avg_acc1': f"{avg_acc1:.2f}%",
-                            'avg_acc5': f"{avg_acc5:.2f}%"
-                        })
-                    
-        except RuntimeError as e:
-            # If OOM happens here, it bubbles up
-            raise e
-        finally:
-             if 'inputs' in locals(): del inputs
-             if 'targets' in locals(): del targets
-             
-        # 4. Finalize
-        results = []
-        for ctx in contexts:
-            if ctx['status'] == 'READY':
-                # Compute metrics
-                m = ctx['metrics'].compute()
-                res = ctx['result']
-                res['acc1'] = m.get('acc1', 0.0)
-                res['acc5'] = m.get('acc5', 0.0)
-                res['certainty'] = m.get('certainty', 0.0)
-                
-                if ctx['quant_layer_count'] == 0 and not ctx.get('has_file_backed_weights', False):
-                    res['status'] = 'NO_QUANT'
-                else:
-                    res['status'] = 'SUCCESS'
-                    
-                results.append(res)
-                
-                # Cleanup
-                del ctx['model']
-                del ctx['adapter']
-                del ctx['metrics']
-            else:
-                results.append(ctx['result'])
-        
-        # Global Cleanup
-        torch.cuda.empty_cache()
-        gc.collect()
-        
-        return results
