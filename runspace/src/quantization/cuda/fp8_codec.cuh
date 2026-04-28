@@ -168,7 +168,30 @@ uint8_t encode_fp8_ARU_nf(float y, int e, int m, int b) {
     const uint32_t mant_f = mag & 0x7FFFFFu;
     const int32_t  exp_t  = exp_f + b;
 
-    // No flush guard.
+    // Subnormal path: encode as IEEE-style subnormal byte (exp_field=0).
+    // Mirrors `quantize_fp_generic` (round-half-up, no sticky).
+    if (exp_t < 1) {
+        const uint32_t mant_with_lead = (1u << 23) | mant_f;
+        const int      shift_sub      = 24 - b - m - exp_f;
+        uint32_t mant_sub = 0u;
+        int32_t  exp_sub  = 0;
+
+        if (shift_sub >= 25) {
+            mant_sub = 0u;                          // deep underflow
+        } else if (shift_sub == 24) {
+            mant_sub = 1u;                          // implicit 1 acts as round bit
+        } else {
+            const uint32_t round_bit = (mant_with_lead >> (shift_sub - 1)) & 1u;
+            mant_sub = mant_with_lead >> shift_sub;
+            mant_sub += round_bit;
+        }
+
+        if (mant_sub == (1u << m)) {                // carry to smallest normal
+            mant_sub = 0u;
+            exp_sub  = 1;
+        }
+        return uint8_t((sign << 7) | (uint32_t(exp_sub) << m) | uint8_t(mant_sub));
+    }
 
     const int      shift     = 23 - m;
     const uint32_t round_bit = (mant_f >> (shift - 1)) & 1u;
