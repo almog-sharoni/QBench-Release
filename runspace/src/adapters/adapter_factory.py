@@ -12,6 +12,15 @@ from .base_adapter import BaseAdapter
 from ..quantization.constants import DEFAULT_QUANTIZATION_TYPE
 
 
+ADAPTER_SCHEMA = {
+    'model': ['name', 'pipeline', 'source', 'weights', 'repo_path', 'sg_weights', 'sp_config', 'sg_config'],
+    'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'weight_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size', 'skip_calibration', 'build_quantized', 'quantize_components'],
+    'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format', 'strict_format_check', 'cache_simulation_path', 'unsigned_input_sources'],
+    'dataset': ['name', 'path', 'batch_size', 'num_workers', 'image_size', 'grayscale', 'pairs_file', 'max_pairs', 'resize_size', 'multiprocessing_context', 'persistent_workers', 'prefetch_factor'],
+    'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms', 'max_batches', 'graph_only', 'dynamic_input_quant', 'input_quant', 'save_visualizations', 'num_viz_samples'],
+}
+
+
 def _should_print_adapter_config(config: dict) -> bool:
     """Return True if adapter config snapshots should be printed."""
     env_flag = os.environ.get("QBENCH_PRINT_ADAPTER_CONFIG", "").strip().lower()
@@ -38,6 +47,115 @@ def _print_adapter_config_snapshot(config: dict, adapter_type: str, resolved_kwa
     print("[AdapterConfig] BEGIN")
     print(json.dumps(snapshot, indent=2, sort_keys=True, default=str))
     print("[AdapterConfig] END")
+
+
+def _merge_cache_sim_overrides(layer_config, quantization_config, quantization_type, input_quantization_type):
+    cache_sim_path = quantization_config.get('cache_simulation_path')
+    if not cache_sim_path:
+        return layer_config
+
+    abs_path = os.path.abspath(cache_sim_path)
+    if not os.path.isfile(abs_path):
+        import warnings
+        warnings.warn(f"cache_simulation_path '{abs_path}' not found — skipping FP8 overrides.")
+        return layer_config
+
+    with open(abs_path, 'r') as f:
+        sim = json.load(f)
+    off_chip = sim.get('off_chip_layers', [])
+    if not off_chip:
+        return layer_config
+
+    overrides = {
+        name: {
+            'format': quantization_type,
+            'input_format': input_quantization_type or quantization_type,
+            'mode': quantization_config.get('mode', 'tensor'),
+            'weight_mode': quantization_config.get('weight_mode', 'channel'),
+        }
+        for name in off_chip
+    }
+    print(
+        f"[CacheSim] Applied {len(off_chip)} off-chip layer overrides "
+        f"(format={quantization_type}, mode={quantization_config.get('mode', 'tensor')}) from {abs_path}"
+    )
+    return dict(overrides, **(layer_config or {}))
+
+
+def _build_quantized_default(adapter_config: dict, quantized_ops, layer_config) -> bool:
+    qops = quantized_ops if isinstance(quantized_ops, list) else [quantized_ops]
+    has_qops = any(bool(op) for op in qops)
+    has_layer_overrides = isinstance(layer_config, dict) and len(layer_config) > 0
+    return bool(adapter_config.get('quantize_first_layer', False) or has_qops or has_layer_overrides)
+
+
+def _resolve_adapter_inputs(config: dict) -> dict:
+    model_config = config.get('model', {})
+    adapter_config = config.get('adapter', {})
+    quantization_config = config.get('quantization', {})
+
+    quantization_type = quantization_config.get('format', DEFAULT_QUANTIZATION_TYPE)
+    input_quantization_type = adapter_config.get(
+        'input_quantization_type',
+        quantization_config.get('input_format', None),
+    )
+    layer_config = quantization_config.get('layers', adapter_config.get('layers', None))
+    layer_config = _merge_cache_sim_overrides(
+        layer_config,
+        quantization_config,
+        quantization_type,
+        input_quantization_type,
+    )
+
+    quantized_ops = adapter_config.get('quantized_ops', ['all'])
+    default_build_quantized = _build_quantized_default(adapter_config, quantized_ops, layer_config)
+
+    return {
+        'model_config': model_config,
+        'adapter_config': adapter_config,
+        'adapter_type': adapter_config.get('type', 'generic'),
+        'model_name': model_config.get('name', 'resnet18'),
+        'model_source': model_config.get('source', 'auto'),
+        'weights': model_config.get('weights', None),
+        'input_quantization': adapter_config.get('input_quantization', True),
+        'weight_quantization': adapter_config.get('weight_quantization', True),
+        'quantize_first_layer': adapter_config.get('quantize_first_layer', False),
+        'quantized_ops': quantized_ops,
+        'excluded_ops': adapter_config.get('excluded_ops', []),
+        'fold_layers': adapter_config.get('fold_layers', False),
+        'skip_calibration': adapter_config.get('skip_calibration', False),
+        'quantization_type': quantization_type,
+        'quantization_bias': quantization_config.get('bias', None),
+        'input_quantization_type': input_quantization_type,
+        'quant_mode': quantization_config.get('mode', 'tensor'),
+        'chunk_size': quantization_config.get('chunk_size', None),
+        'weight_mode': quantization_config.get('weight_mode', 'channel'),
+        'weight_chunk_size': quantization_config.get('weight_chunk_size', None),
+        'act_mode': quantization_config.get('act_mode', 'tensor'),
+        'act_chunk_size': quantization_config.get('act_chunk_size', None),
+        'input_chunk_size': adapter_config.get('input_chunk_size', quantization_config.get('chunk_size', None)),
+        'rounding': quantization_config.get('rounding', 'nearest'),
+        'simulate_tf32_accum': quantization_config.get('simulate_tf32_accum', False),
+        'layer_config': layer_config,
+        'per_chunk_format': quantization_config.get('per_chunk_format', False),
+        'strict_format_check': quantization_config.get('strict_format_check', False),
+        'build_quantized': adapter_config.get('build_quantized', default_build_quantized),
+        'run_id': config.get('output_name', 'default'),
+        'unsigned_input_sources': quantization_config.get('unsigned_input_sources', []),
+    }
+
+
+def _common_adapter_kwargs(params: dict) -> dict:
+    keys = (
+        'model_name', 'model_source', 'weights', 'input_quantization',
+        'weight_quantization', 'quantize_first_layer', 'quantized_ops',
+        'excluded_ops', 'quantization_type', 'quantization_bias',
+        'layer_config', 'input_quantization_type', 'quant_mode',
+        'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode',
+        'act_chunk_size', 'fold_layers', 'simulate_tf32_accum', 'rounding',
+        'input_chunk_size',
+    )
+    return {key: params[key] for key in keys}
 
 
 def create_adapter(config: dict) -> BaseAdapter:
@@ -67,198 +185,55 @@ def create_adapter(config: dict) -> BaseAdapter:
     # Validate config
     validate_config(config)
 
-    model_config = config.get('model', {})
-    adapter_config = config.get('adapter', {})
-    
-    # Get adapter type (default to 'generic')
-    adapter_type = adapter_config.get('type', 'generic')
-    
-    # Extract common parameters
-    model_name = model_config.get('name', 'resnet18')
-    model_source = model_config.get('source', 'auto')
-    weights = model_config.get('weights', None)
-    
-    quantize_first_layer = adapter_config.get('quantize_first_layer', False)
-    quantized_ops = adapter_config.get('quantized_ops', ['all'])
-    excluded_ops = adapter_config.get('excluded_ops', [])
-    fold_layers = adapter_config.get('fold_layers', False)
-    weight_quantization = adapter_config.get('weight_quantization', True)
-    # input_quantization is now True by default, unless explicitly disabled in adapter config (which we removed from base config but keep support for overrides if needed, or just force True as per request)
-    # User said "we asking id to quant inputs - this shouldnt be a question". So we default to True.
-    input_quantization = adapter_config.get('input_quantization', True)
-    skip_calibration = adapter_config.get('skip_calibration', False)
-    
-    # Check for quantization type in adapter config first, then in quantization section
-    quantization_config = config.get('quantization', {})
-    # quantization_type is now solely determined by quantization.format
-    quantization_type = quantization_config.get('format', DEFAULT_QUANTIZATION_TYPE)
-    quantization_bias = quantization_config.get('bias', None)
-    
-    # Extract global input format if present
-    input_quantization_type = adapter_config.get('input_quantization_type', quantization_config.get('input_format', None))
-    
-    # Extract quantization modes
-    quant_mode = quantization_config.get('mode', 'tensor')
-    chunk_size = quantization_config.get('chunk_size', None)
-    weight_mode = quantization_config.get('weight_mode', 'channel') # Default weights to channel
-    weight_chunk_size = quantization_config.get('weight_chunk_size', None)
-    act_mode = quantization_config.get('act_mode', 'tensor') # Default activations to tensor
-
-    act_chunk_size = quantization_config.get('act_chunk_size', None)
-    
-    # Extract input chunk size from adapter config if present
-    input_chunk_size = adapter_config.get('input_chunk_size', chunk_size)
-    
-    # Extract rounding mode
-    rounding = quantization_config.get('rounding', 'nearest')
-    
-    # Extract TF32 simulation flag
-    simulate_tf32_accum = quantization_config.get('simulate_tf32_accum', False)
-    
-    # Extract layer-specific config
-    # Can be in quantization.layers or adapter.layers (prefer quantization.layers)
-    layer_config = quantization_config.get('layers', adapter_config.get('layers', None))
-
-    # Merge forced-FP8 overrides from a cache simulation result file.
-    # quantization.cache_simulation_path points to a simulation_results.json produced by
-    # simulate_cache.py.  The forced_fp8_layers block in that file is merged on top of any
-    # existing layer_config entries so those layers are always pinned to FP8 regardless of
-    # the global quantization format chosen for the run.
-    cache_sim_path = quantization_config.get('cache_simulation_path', None)
-    if cache_sim_path:
-        abs_path = os.path.abspath(cache_sim_path)
-        if not os.path.isfile(abs_path):
-            import warnings
-            warnings.warn(f"cache_simulation_path '{abs_path}' not found — skipping FP8 overrides.")
-        else:
-            with open(abs_path, 'r') as _f:
-                _sim = json.load(_f)
-            _off_chip = _sim.get('off_chip_layers', [])
-            if _off_chip:
-                # Build a layer config entry for each off-chip layer using this run's
-                # global format and modes so the format decision stays with the runner.
-                _sim_overrides = {
-                    name: {
-                        'format':      quantization_type,
-                        'input_format': input_quantization_type or quantization_type,
-                        'mode':        quant_mode,
-                        'weight_mode': weight_mode,
-                    }
-                    for name in _off_chip
-                }
-                # Explicit layer_config entries take priority over simulation overrides.
-                layer_config = dict(_sim_overrides, **(layer_config or {}))
-                print(f"[CacheSim] Applied {len(_off_chip)} off-chip layer overrides "
-                      f"(format={quantization_type}, mode={quant_mode}) from {abs_path}")
-    
-    # Check if per-chunk format mode is enabled
-    per_chunk_format = quantization_config.get('per_chunk_format', False)
-
-    # Opt-in: when true, the FP8 compliance table validates each tensor against
-    # the grid of its own declared format (weight/input/output) rather than a
-    # single per-module q_type. Default False to preserve existing behavior.
-    strict_format_check = quantization_config.get('strict_format_check', False)
-
-    # If nothing is requested to be quantized, avoid the quantized build path.
-    # This keeps pure FP32 / file-backed state-dict runs on a simpler, safer path.
-    qops_list = quantized_ops if isinstance(quantized_ops, list) else [quantized_ops]
-    has_qops = any(bool(x) for x in qops_list)
-    has_layer_overrides = isinstance(layer_config, dict) and len(layer_config) > 0
-    default_build_quantized = bool(quantize_first_layer or has_qops or has_layer_overrides)
-    build_quantized = adapter_config.get('build_quantized', default_build_quantized)
-    
-    # Extract output_name as run_id for tracking
-    run_id = config.get('output_name', 'default')
+    params = _resolve_adapter_inputs(config)
+    model_config = params['model_config']
+    adapter_config = params['adapter_config']
+    adapter_type = params['adapter_type']
 
     if adapter_type == 'generic' or adapter_type == 'resnet':
         from .generic_adapter import GenericAdapter
-        # For 'resnet' type, we just use GenericAdapter with defaults or config overrides
-        resolved_kwargs = dict(
-            model_name=model_name,
-            model_source=model_source,
-            weights=weights,
-            input_quantization=input_quantization,
-            weight_quantization=weight_quantization,
-            quantize_first_layer=quantize_first_layer,
-            quantized_ops=quantized_ops,
-            excluded_ops=excluded_ops,
-            quantization_type=quantization_type,
-            quantization_bias=quantization_bias,
-            layer_config=layer_config,
-            input_quantization_type=input_quantization_type,
-            quant_mode=quant_mode,
-            chunk_size=chunk_size,
-            weight_mode=weight_mode,
-            weight_chunk_size=weight_chunk_size,
-            act_mode=act_mode,
-            act_chunk_size=act_chunk_size,
-            fold_layers=fold_layers,
-            simulate_tf32_accum=simulate_tf32_accum,
-            rounding=rounding,
-            per_chunk_format=per_chunk_format,
-            input_chunk_size=input_chunk_size,
-            run_id=run_id,
-            skip_calibration=skip_calibration,
-            build_quantized=build_quantized,
-            strict_format_check=strict_format_check,
-            unsigned_input_sources=quantization_config.get('unsigned_input_sources', []),
+        resolved_kwargs = _common_adapter_kwargs(params)
+        resolved_kwargs.update(
+            per_chunk_format=params['per_chunk_format'],
+            run_id=params['run_id'],
+            skip_calibration=params['skip_calibration'],
+            build_quantized=params['build_quantized'],
+            strict_format_check=params['strict_format_check'],
+            unsigned_input_sources=params['unsigned_input_sources'],
         )
         if _should_print_adapter_config(config):
             _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)
         return GenericAdapter(**resolved_kwargs)
     
-    elif adapter_type == 'slm':
-        from .slm_adapter import SLMAdapter
-        resolved_kwargs = dict(
-            model_name=model_name,
-            model_source=model_source,
-            weights=weights,
-            input_quantization=input_quantization,
-            weight_quantization=weight_quantization,
-            quantize_first_layer=quantize_first_layer,
-            quantized_ops=quantized_ops,
-            excluded_ops=excluded_ops,
-            quantization_type=quantization_type,
-            quantization_bias=quantization_bias,
-            layer_config=layer_config,
-            input_quantization_type=input_quantization_type,
-            quant_mode=quant_mode,
-            chunk_size=chunk_size,
-            weight_mode=weight_mode,
-            weight_chunk_size=weight_chunk_size,
-            act_mode=act_mode,
-            act_chunk_size=act_chunk_size,
-            fold_layers=fold_layers,
-            simulate_tf32_accum=simulate_tf32_accum,
-            rounding=rounding,
-            input_chunk_size=input_chunk_size
-        )
-        if _should_print_adapter_config(config):
-            _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)
-        return SLMAdapter(**resolved_kwargs)
+    # elif adapter_type == 'slm':
+    #     from .slm_adapter import SLMAdapter
+    #     resolved_kwargs = _common_adapter_kwargs(params)
+    #     if _should_print_adapter_config(config):
+    #         _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)
+    #     return SLMAdapter(**resolved_kwargs)
 
     elif adapter_type == 'feature_matching':
         from .feature_matching_adapter import FeatureMatchingAdapter
         resolved_kwargs = dict(
             pipeline_name=model_config.get('pipeline', model_config['name']),
             model_cfg=model_config,
-            quantization_type=quantization_type,
-            quantized_ops=quantized_ops,
-            excluded_ops=excluded_ops,
-            quantize_first_layer=quantize_first_layer,
-            weight_quantization=weight_quantization,
-            input_quantization=input_quantization,
-            layer_config=layer_config,
-            quant_mode=quant_mode,
-            chunk_size=chunk_size,
-            weight_mode=weight_mode,
-            weight_chunk_size=weight_chunk_size,
-            rounding=rounding,
-            run_id=run_id,
-            skip_calibration=skip_calibration,
-            build_quantized=build_quantized,
+            quantization_type=params['quantization_type'],
+            quantized_ops=params['quantized_ops'],
+            excluded_ops=params['excluded_ops'],
+            quantize_first_layer=params['quantize_first_layer'],
+            weight_quantization=params['weight_quantization'],
+            input_quantization=params['input_quantization'],
+            layer_config=params['layer_config'],
+            quant_mode=params['quant_mode'],
+            chunk_size=params['chunk_size'],
+            weight_mode=params['weight_mode'],
+            weight_chunk_size=params['weight_chunk_size'],
+            rounding=params['rounding'],
+            run_id=params['run_id'],
+            skip_calibration=params['skip_calibration'],
+            build_quantized=params['build_quantized'],
             quantize_components=adapter_config.get('quantize_components', []),
-            strict_format_check=strict_format_check,
+            strict_format_check=params['strict_format_check'],
         )
         if _should_print_adapter_config(config):
             _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)
@@ -281,68 +256,16 @@ def load_reference_model(config: dict):
     Returns:
         A PyTorch model instance.
     """
-    import torchvision.models as models
-    
+    from .generic_adapter import GenericAdapter
+
     model_config = config.get('model', {})
-    model_name = model_config.get('name', 'resnet18')
-    model_source = model_config.get('source', 'auto')
-    weights = model_config.get('weights', None)
-    
-    if model_source == 'auto':
-        if hasattr(models, model_name):
-            model_source = 'torchvision'
-        else:
-            try:
-                import timm as _timm
-                model_source = 'timm' if _timm.is_model(model_name) else 'torchvision'
-            except ImportError:
-                model_source = 'torchvision'
-
-    if model_source == 'torchvision':
-        if not hasattr(models, model_name):
-            raise ValueError(f"Model '{model_name}' not found in torchvision.models.")
-
-        model_fn = getattr(models, model_name)
-        if not weights or str(weights).strip().lower() in ('none', 'false', '0', 'null', ''):
-            return model_fn(weights=None)
-
-        # Resolve weight enums safely (no deprecated weights=True / string fallbacks).
-        try:
-            from torchvision.models import get_model_weights
-            weights_cls = get_model_weights(model_fn)
-            token = str(weights).strip()
-            token_l = token.lower()
-            if token_l in ('default', 'true', '1'):
-                return model_fn(weights=weights_cls.DEFAULT if hasattr(weights_cls, 'DEFAULT') else None)
-            if hasattr(weights_cls, token):
-                return model_fn(weights=getattr(weights_cls, token))
-            token_up = token.upper()
-            for attr in dir(weights_cls):
-                if attr.upper() == token_up:
-                    return model_fn(weights=getattr(weights_cls, attr))
-            if hasattr(weights_cls, 'DEFAULT'):
-                return model_fn(weights=weights_cls.DEFAULT)
-        except Exception:
-            pass
-
-        # Last resort: run uninitialized rather than using deprecated bool path.
-        print(
-            f"Warning: Could not resolve torchvision weights '{weights}' for "
-            f"{model_name}; using weights=None."
-        )
-        return model_fn(weights=None)
-    elif model_source == 'timm':
-        try:
-            import timm
-        except ImportError:
-            raise ImportError(
-                "The 'timm' package is required to load this model. "
-                "Install it with: pip install timm"
-            )
-        pretrained = bool(weights) and str(weights).lower() not in ('none', 'false', '0')
-        return timm.create_model(model_name, pretrained=pretrained)
-    else:
-        raise ValueError(f"Unsupported model source: {model_source}")
+    adapter = GenericAdapter(
+        model_name=model_config.get('name', 'resnet18'),
+        model_source=model_config.get('source', 'auto'),
+        weights=model_config.get('weights', None),
+        build_quantized=False,
+    )
+    return adapter.model
 
 
 def validate_config(config: dict):
@@ -352,23 +275,14 @@ def validate_config(config: dict):
     """
     import warnings
     
-    # Define allowed keys
-    schema = {
-        'model': ['name', 'pipeline', 'source', 'weights', 'repo_path', 'sg_weights', 'sp_config', 'sg_config'],
-        'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'weight_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size', 'skip_calibration', 'build_quantized', 'quantize_components'],
-        'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format', 'strict_format_check', 'cache_simulation_path', 'unsigned_input_sources'],
-        'dataset': ['name', 'path', 'batch_size', 'num_workers', 'image_size', 'grayscale', 'pairs_file', 'max_pairs', 'resize_size', 'multiprocessing_context', 'persistent_workers', 'prefetch_factor'],
-        'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms', 'max_batches', 'graph_only', 'dynamic_input_quant', 'input_quant', 'save_visualizations', 'num_viz_samples']
-    }
-    
     # Check top-level keys
-    allowed_top_level = list(schema.keys()) + ['output_name', 'meta', 'debug', 'experiment', 'target_pipeline']  # metadata/debug keys used by runners
+    allowed_top_level = list(ADAPTER_SCHEMA.keys()) + ['output_name', 'meta', 'debug', 'experiment', 'target_pipeline']
     for key in config:
         if key not in allowed_top_level:
             warnings.warn(f"Unknown top-level config key: '{key}'")
             
     # Check nested keys
-    for section, allowed_keys in schema.items():
+    for section, allowed_keys in ADAPTER_SCHEMA.items():
         if section in config:
             section_config = config[section]
             if isinstance(section_config, dict):

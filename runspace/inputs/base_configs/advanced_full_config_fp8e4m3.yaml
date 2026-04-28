@@ -34,11 +34,11 @@ quantization:
   # Optional input format override (e.g., quantize inputs to int8 while weights are fp8)
   input_format: fp8_e4m3
 
-  # --- Weight Quantization ---
-  # Mode: tensor, channel, chunk
-  weight_mode: tensor
-  # Chunk size for 'chunk' mode
-  weight_chunk_size: 128
+  # # --- Weight Quantization ---
+  # # Mode: tensor, channel, chunk
+  # weight_mode: tensor
+  # # Chunk size for 'chunk' mode
+  # weight_chunk_size: 128
 
   # # --- Activation Quantization (ReLU, Softmax, etc.) ---
   # # Mode: tensor, channel, chunk
@@ -59,7 +59,7 @@ quantization:
 dataset:
   name: imagenet
   path: /data/imagenet/val
-  batch_size: 64
+  batch_size: 128
   num_workers: 32
 
 evaluation:

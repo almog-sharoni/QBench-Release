@@ -28,10 +28,10 @@ os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib'
 #     'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
 # ]
 baseline_formats = [
-    # 'fp32',
-'fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
-'fp7_e1m5','fp7_e2m4','fp7_e3m3','fp7_e4m2','fp7_e5m1','fp7_e6m0',
-'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
+    'fp32', 'fp8_e4m3'
+# 'fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
+# 'fp7_e1m5','fp7_e2m4','fp7_e3m3','fp7_e4m2','fp7_e5m1','fp7_e6m0',
+# 'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
 # 'fp5_e1m3','fp5_e2m2','fp5_e3m1','fp5_e4m0',
 # 'fp4_e1m2','fp4_e2m1','fp4_e3m0',
 # 'fp3_e1m1','fp3_e2m0',
