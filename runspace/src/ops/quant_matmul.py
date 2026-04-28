@@ -23,8 +23,10 @@ class QuantMatMul(nn.Module, QuantizedLayerMixin):
         self.input_quantization = False
 
     def forward(self, input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
-        q1 = self.quantize_input(input1)
-        q2 = self.quantize_input(input2)
+        q1_type = getattr(self, 'input1_q_type', None)
+        q2_type = getattr(self, 'input2_q_type', None)
+        q1 = self.quantize_input(input1, override_q_type=q1_type)
+        q2 = self.quantize_input(input2, override_q_type=q2_type)
         return torch.matmul(q1, q2)
 
 
@@ -46,8 +48,10 @@ class QuantBMM(nn.Module, QuantizedLayerMixin):
         self.input_quantization = False
 
     def forward(self, input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
-        q1 = self.quantize_input(input1)
-        q2 = self.quantize_input(input2)
+        q1_type = getattr(self, 'input1_q_type', None)
+        q2_type = getattr(self, 'input2_q_type', None)
+        q1 = self.quantize_input(input1, override_q_type=q1_type)
+        q2 = self.quantize_input(input2, override_q_type=q2_type)
         return torch.bmm(q1, q2)
 
 

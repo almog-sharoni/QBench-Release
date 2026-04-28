@@ -769,6 +769,39 @@ class Runner:
         """True for adapters that load weights internally (e.g. feature_matching via PipelineRegistry)."""
         return config.get('adapter', {}).get('type') == 'feature_matching'
 
+    def _build_reference_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Creates a version of the config for the FP32 reference model that matches 
+        the structure of the quantized model (same ops, folding, etc) but with 
+        quantization disabled.
+        """
+        ref_cfg = copy.deepcopy(config)
+        
+        # 1. Disable all quantization flags in adapter
+        adapter_cfg = ref_cfg.setdefault('adapter', {})
+        adapter_cfg['input_quantization'] = False
+        adapter_cfg['weight_quantization'] = False
+        
+        # 2. Set global format to fp32
+        quant_cfg = ref_cfg.setdefault('quantization', {})
+        quant_cfg['format'] = 'fp32'
+        quant_cfg['input_format'] = 'fp32'
+        
+        # 3. Handle layer-specific overrides
+        if 'layers' in quant_cfg and isinstance(quant_cfg['layers'], dict):
+            for name, layer_cfg in quant_cfg['layers'].items():
+                if isinstance(layer_cfg, dict):
+                    layer_cfg['format'] = 'fp32'
+                    layer_cfg['input_format'] = 'fp32'
+        
+        # 4. Disable dynamic quantization for reference
+        eval_cfg = ref_cfg.setdefault('evaluation', {})
+        eval_cfg['dynamic_input_quant'] = None
+        eval_cfg['input_quant'] = None
+        
+        return ref_cfg
+
+
     def prepare_model_with_materialized_weights(
         self,
         config: Dict[str, Any],
@@ -1675,9 +1708,20 @@ class Runner:
                 # COMPARE mode
                 print(f"Running in COMPARE mode (Reference vs Quantized)...")
                 
-                # Build reference model
-                ref_model = adapter.build_reference_model()
-                ref_model.to(self.device)
+                # Build structured reference model using a proper config to ensure 
+                # identical structure (folding, ops) to the quantized model.
+                print(f"Building structured reference model (FP32 baseline)...")
+                ref_config = self._build_reference_config(config)
+                
+                # We use a sub-directory for the reference to avoid overwriting the main config/weights
+                ref_output_dir = os.path.join(output_dir, "reference_fp32")
+                os.makedirs(ref_output_dir, exist_ok=True)
+                
+                ref_model, _, _ = self.prepare_model_with_materialized_weights(
+                    config=ref_config,
+                    output_dir=ref_output_dir
+                )
+                # Note: prepare_model_with_materialized_weights already moved ref_model to self.device
 
                 eval_cfg = config.get('evaluation', {})
                 comparator = LayerComparator(

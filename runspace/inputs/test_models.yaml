@@ -1,3 +1,0 @@
-- name: resnet18
-  type: torchvision
-  weights: DEFAULT
