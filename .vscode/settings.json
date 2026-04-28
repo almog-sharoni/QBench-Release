@@ -1,12 +1,10 @@
 {
-    "python.languageServer": "None"
-} // {
-//     "python.analysis.extraPaths": [
-//         "${workspaceFolder}/qbench_sandbox/usr/local/lib/python3.12/dist-packages"
-//     ],
-//     "python.autoComplete.extraPaths": [
-//         "${workspaceFolder}/qbench_sandbox/usr/local/lib/python3.12/dist-packages"
-//     ],
-//     "python.analysis.typeCheckingMode": "basic",
-//     "python.analysis.diagnosticMode": "workspace"
-// }
+    "python.languageServer": "Pylance",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}",
+        "${workspaceFolder}/runspace",
+        "${workspaceFolder}/qbench_sandbox/usr/local/lib/python3.12/dist-packages"
+    ],
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticMode": "workspace"
+}

@@ -52,6 +52,7 @@ class GenericAdapter(BaseAdapter):
         target_module_prefixes: list = None,
         strict_format_check: bool = False,
         enable_fx_quantization: bool = True,
+        unsigned_input_sources: list = None,
     ):
         super().__init__()
         self.target_module_prefixes = target_module_prefixes or []
@@ -72,6 +73,7 @@ class GenericAdapter(BaseAdapter):
         self.layer_config = layer_config if layer_config is not None else {}
         self.per_chunk_format = per_chunk_format
         self.input_quantization_type = input_quantization_type
+        self.unsigned_input_sources = unsigned_input_sources or []
         self.run_id = run_id
         
 
@@ -809,8 +811,126 @@ class GenericAdapter(BaseAdapter):
                     # Control-flow models (e.g. timm MobileViT) can't be FX-traced — that's fine,
                     # recursive replacement already handled all registered ops.
                     print(f"Note: FX quantization skipped ({type(e).__name__}: {e})")
+                    
+            if self.unsigned_input_sources:
+                self._propagate_unsigned_inputs(model)
         
         return model
+
+    def _propagate_unsigned_inputs(self, model: nn.Module):
+        """
+        Propagates the 'unsigned' input property to layers that follow unsigned sources.
+        """
+        unsigned_sources_lc = {s.lower() for s in self.unsigned_input_sources}
+        if not unsigned_sources_lc:
+            return model
+            
+        from ..ops.quant_softmax import qtype_to_unsigned_qtype
+
+        def _process_graph_module(gm: torch.fx.GraphModule):
+            modified_any = False
+            # First pass: identify unsigned nodes
+            unsigned_nodes = set()
+            passthrough_ops_lc = {'dropout', 'quantdropout'}
+            
+            # Map node name to the module instance for easier access
+            modules = dict(gm.named_modules())
+            
+            for node in gm.graph.nodes:
+                is_unsigned_source = False
+                is_passthrough = False
+                
+                if node.op == 'call_module':
+                    target_mod = modules.get(node.target)
+                    if target_mod is not None:
+                        class_name = target_mod.__class__.__name__.lower()
+                        if class_name in unsigned_sources_lc or class_name.replace('quant', '') in unsigned_sources_lc:
+                            is_unsigned_source = True
+                        elif class_name in passthrough_ops_lc or class_name.replace('quant', '') in passthrough_ops_lc:
+                            is_passthrough = True
+                elif node.op == 'call_function':
+                    # target for call_function can be a string (from builtins) or the function itself
+                    if isinstance(node.target, str):
+                        func_name = node.target.lower()
+                    else:
+                        func_name = node.target.__name__.lower()
+                        
+                    if func_name in unsigned_sources_lc:
+                        is_unsigned_source = True
+                    elif func_name in passthrough_ops_lc:
+                        is_passthrough = True
+                
+                if is_unsigned_source:
+                    unsigned_nodes.add(node.name)
+                elif is_passthrough:
+                    # Passthrough nodes inherit 'unsigned' if their input is unsigned
+                    node_inputs = [arg for arg in node.args if isinstance(arg, torch.fx.Node)]
+                    if node_inputs and any(inp.name in unsigned_nodes for inp in node_inputs):
+                        unsigned_nodes.add(node.name)
+            
+            # Second pass: update inputs
+            for node in gm.graph.nodes:
+                if node.op == 'call_module':
+                    target_mod = modules.get(node.target)
+                    if target_mod is not None:
+                        # Extract all positional nodes (most common for activations/weights)
+                        node_inputs = [arg for arg in node.args if isinstance(arg, torch.fx.Node)]
+                        
+                        # Handle multi-input modules (MatMul, Add, etc.)
+                        if len(node_inputs) > 1:
+                            for idx, inp in enumerate(node_inputs):
+                                if inp.name in unsigned_nodes:
+                                    attr_name = f'input{idx+1}_q_type'
+                                    # Fallback to general input_q_type or q_type
+                                    base_qtype = getattr(target_mod, attr_name, 
+                                                       getattr(target_mod, 'input_q_type', 
+                                                              getattr(target_mod, 'q_type', 'fp8_e4m3')))
+                                    setattr(target_mod, attr_name, qtype_to_unsigned_qtype(base_qtype))
+                                    modified_any = True
+                                    
+                        # Handle single-input modules
+                        elif len(node_inputs) == 1 and node_inputs[0].name in unsigned_nodes:
+                            if hasattr(target_mod, 'input_q_type'):
+                                target_mod.input_q_type = qtype_to_unsigned_qtype(target_mod.input_q_type)
+                                modified_any = True
+                            elif hasattr(target_mod, 'q_type'):
+                                # Fallback if only q_type exists but no explicit input_q_type
+                                # We set input_q_type to avoid changing weight q_type
+                                setattr(target_mod, 'input_q_type', qtype_to_unsigned_qtype(target_mod.q_type))
+                                modified_any = True
+                                
+            return modified_any
+
+        # If model is already a GraphModule (e.g. from _fx_quantize), use it directly
+        if isinstance(model, torch.fx.GraphModule):
+            if _process_graph_module(model):
+                print(f"Propagated unsigned input formats using existing GraphModule.")
+            return model
+
+        # Try whole model trace
+        try:
+            _, _, gm = trace_quant_aware(model)
+            if _process_graph_module(gm):
+                print(f"Propagated unsigned input formats using full-model FX trace.")
+            return model
+        except Exception as e:
+            pass
+            
+        # Fall back to submodules
+        modified = False
+        for child_name, child in model.named_children():
+            if self._is_safe_fx_submodule(child):
+                try:
+                    _, _, gm = trace_quant_aware(child)
+                    if _process_graph_module(gm):
+                        modified = True
+                except Exception:
+                    pass
+        if modified:
+             print(f"Propagated unsigned input formats using submodule FX trace.")
+             
+        return model
+
 
     def _fx_quantize(self, model: nn.Module):
         """

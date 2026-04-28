@@ -603,7 +603,7 @@ class QuantizedLayerMixin:
             self.last_quant_weight = (self.weight_fp8.float() * self.weight_scale).detach()
             self.last_quant_weight_scale = self.weight_scale.detach()
 
-    def quantize_input(self, input: torch.Tensor):
+    def quantize_input(self, input: torch.Tensor, override_q_type: str = None):
         """
         Quantizes input tensor to FP8.
         Returns: (input_fp8, scale)
@@ -612,7 +612,7 @@ class QuantizedLayerMixin:
             return input
             
         # Use input_q_type if available, otherwise fallback to q_type
-        q_type = getattr(self, 'input_q_type', getattr(self, 'q_type', 'fp8_e4m3'))
+        q_type = override_q_type or getattr(self, 'input_q_type', getattr(self, 'q_type', 'fp8_e4m3'))
         capture = getattr(self, 'capture_activations', False)
         
 
