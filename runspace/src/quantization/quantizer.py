@@ -1,4 +1,5 @@
 import torch
+import os
 
 _FP8_TABLE_CACHE = {}
 
@@ -217,71 +218,78 @@ def quantize_tf32(tensor: torch.Tensor) -> torch.Tensor:
 
 
 
-
 def quantize_fp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rounding: str = "nearest", clip_max_exp: int = None, clip_max_mant: int = None, is_efp: bool = False) -> torch.Tensor:
     orig_shape = tensor.shape
     tensor_flat = tensor.contiguous().view(-1)
 
+    # Reinterpret float32 bit pattern as int32 to allow bitwise operations
     f32 = tensor_flat.view(torch.int32)
+    # Extract the sign bit (1 bit at position 31)
     sign = (f32 >> 31) & 0x1
+    # Extract the exponent (8 bits at position 23)
     exp32 = (f32 >> 23) & 0xFF
+    # Extract the mantissa (23 bits) and restore the implicit leading 1
     mant32 = f32 & 0x7FFFFF | (1 << 23)
     
+    # Calculate shift amount for subnormal numbers relative to target exponent bits.
+    # 127 is the FP32 bias, 2**exp_bits - 2 is the target format bias.
     m_mask_number = 127 - 2**exp_bits + 2 - exp32
 
+    # If shift amount is negative, it's a normal number, so clamp shift to 0
     m_mask_number = torch.where(m_mask_number < 0, 0, m_mask_number)
     
+    # Extract the rounding bit (the bit just below the new least significant bit)
+    # and shift it to the LSB position of the target mantissa
     residue =(mant32 >> (23 - (mant_bits + 1) + m_mask_number) & 0x1) << (23 - mant_bits + m_mask_number)
 
+    # Truncate the mantissa to the target number of mantissa bits, incorporating subnormal shift
     mant_trunc = mant32 >> (23 - mant_bits + m_mask_number) << (23-mant_bits + m_mask_number)
 
+    # Add the rounding bit back to the truncated mantissa (round half up)
     mant_trunc = mant_trunc + residue
 
 
+    # Remove the implicit leading 1 to get standard mantissa representation
     mant32 = mant_trunc & 0x7FFFFF
 
 
+    # Check for overflow/underflow caused by rounding
+    # Overflow occurs if rounding carried over into the exponent bit position (bit 24)
     overflow = mant_trunc >> 24 & 0x1
+    # Underflow checks if the implicit leading 1 was lost (i.e. flush to zero)
     underflow = mant_trunc >> 23 & 0x3
 
+    # If mantissa overflowed, increment the exponent
     exp32 = torch.where((overflow == 1), exp32 + 1, exp32)
 
+    # If the number underflowed to 0, flush exponent and mantissa to 0
     exp32 = torch.where((underflow == 0), 0, exp32)
     mant32 = torch.where((underflow == 0), 0, mant32)
 
+    # Hardcoded maximum representable exponent (127 in FP32 corresponds to value 1.0 -> 2.0 max clamp)
     max_value_exp = 0x7F
+    # Mask to keep only the most significant `mant_bits` of the mantissa set to 1
     max_value_mant = (0xFFFF_FFFF << (23 - mant_bits)) & 0x7FFFFF
 
+    # Handle overflow clipping (clamping values exceeding the max representable format value)
     if not is_efp:
+        # Standard clamping for symmetric formats: clamp to max value
         mant32 = torch.where((exp32 > max_value_exp), max_value_mant, mant32)
         exp32 = torch.where((exp32 > max_value_exp), max_value_exp, exp32)
     else:
+        # Asymmetric clamping (EFP formats): clamp only for negative numbers (sign == 1)
         mant32 = torch.where((exp32 > max_value_exp) & (sign ==1), max_value_mant, mant32)
         exp32 = torch.where((exp32 > max_value_exp) & (sign ==1), max_value_exp, exp32)
 
     
+    # Shift sign and exponent back to their correct positions for float32
     sign = sign << 31
     exp32 = exp32 << 23
 
     
-    # mant32 = mant_trunc
 
+    # Combine sign, exponent, and mantissa, and reinterpret back as float32
     return (sign | exp32 | mant32).view(torch.float32).view(orig_shape)
-
-    
-        
-    
-
-
-
-
-
-    
-    # # Subnormal handling
-    # is_fp8_sub = fp8_exp < 1
-    # shift = torch.where(is_fp8_sub, shift + (1 - fp8_exp), shift)
-    # shift = torch.clamp(shift, max=31)
-
 
 
 
@@ -462,34 +470,6 @@ def get_q_type_bounds(q_type: str) -> float:
         # Fallback
         return 128.0
 
-
-def get_format_table(q_type: str, device: torch.device = None) -> torch.Tensor:
-    """
-    Return a valid-values lookup table for any supported format string.
-    Parses formats like 'fp8_e1m6', 'fp8_e3m4', 'fp4_e2m1', 'int8', etc.
-    Returns None for unrecognised formats.
-    """
-
-    # Generic fpX_eEmM formats
-    try:
-        if '_e' in q_type and 'm' in q_type:
-            prefix = q_type.split('_')[0]  # e.g. 'fp8'
-            e_part = q_type.split('_e')[1]  # e.g. '1m6'
-            exp_bits = int(e_part.split('m')[0])
-            mant_bits = int(e_part.split('m')[1])
-            total_bits = int(''.join(filter(str.isdigit, prefix)))
-            signed = not prefix.startswith('u')
-            # Standard IEEE-style bias: 2^(E-1) - 1
-            bias = max(0, (1 << (exp_bits - 1)) - 1) if exp_bits > 0 else 0
-            return _generate_fp_generic_table(
-                device, total_bits=total_bits, exp_bits=exp_bits,
-                mant_bits=mant_bits, bias=bias, signed=signed
-            ).clone()
-    except Exception:
-        print(f"Error generating format table for {q_type}")
-        pass
-
-    return None
 
 
 if __name__ == "__main__":

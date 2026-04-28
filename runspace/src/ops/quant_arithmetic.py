@@ -14,8 +14,10 @@ class QuantAdd(nn.Module, QuantizedLayerMixin):
         self.input_quantization = False
 
     def forward(self, input: torch.Tensor, other: torch.Tensor) -> torch.Tensor:
-        q1 = self.quantize_input(input)
-        q2 = self.quantize_input(other)
+        q1_type = getattr(self, 'input1_q_type', None)
+        q2_type = getattr(self, 'input2_q_type', None)
+        q1 = self.quantize_input(input, override_q_type=q1_type)
+        q2 = self.quantize_input(other, override_q_type=q2_type)
         return torch.add(q1, q2)
 
 @OpRegistry.register("QuantSub", is_activation=False, compliance_status="Fixed-Point Subtraction")
@@ -29,8 +31,10 @@ class QuantSub(nn.Module, QuantizedLayerMixin):
         self.input_quantization = False
 
     def forward(self, input: torch.Tensor, other: torch.Tensor) -> torch.Tensor:
-        q1 = self.quantize_input(input)
-        q2 = self.quantize_input(other)
+        q1_type = getattr(self, 'input1_q_type', None)
+        q2_type = getattr(self, 'input2_q_type', None)
+        q1 = self.quantize_input(input, override_q_type=q1_type)
+        q2 = self.quantize_input(other, override_q_type=q2_type)
         return torch.sub(q1, q2)
 
 @OpRegistry.register("QuantMul", is_activation=False, compliance_status="Fixed-Point Multiplication")
@@ -44,8 +48,10 @@ class QuantMul(nn.Module, QuantizedLayerMixin):
         self.input_quantization = False
 
     def forward(self, input: torch.Tensor, other: torch.Tensor) -> torch.Tensor:
-        q1 = self.quantize_input(input)
-        q2 = self.quantize_input(other)
+        q1_type = getattr(self, 'input1_q_type', None)
+        q2_type = getattr(self, 'input2_q_type', None)
+        q1 = self.quantize_input(input, override_q_type=q1_type)
+        q2 = self.quantize_input(other, override_q_type=q2_type)
         return torch.mul(q1, q2)
 
 @OpRegistry.register("QuantDiv", is_activation=False, compliance_status="Fixed-Point Division")
@@ -59,8 +65,10 @@ class QuantDiv(nn.Module, QuantizedLayerMixin):
         self.input_quantization = False
 
     def forward(self, input: torch.Tensor, other: torch.Tensor) -> torch.Tensor:
-        q1 = self.quantize_input(input)
-        q2 = self.quantize_input(other)
+        q1_type = getattr(self, 'input1_q_type', None)
+        q2_type = getattr(self, 'input2_q_type', None)
+        q1 = self.quantize_input(input, override_q_type=q1_type)
+        q2 = self.quantize_input(other, override_q_type=q2_type)
         return torch.div(q1, q2)
 
 @OpRegistry.register("QuantCat", is_activation=False, compliance_status="Token Concatenation")

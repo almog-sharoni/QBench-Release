@@ -27,7 +27,16 @@ os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib'
 # baseline_formats = [ 'fp32', 'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
 #     'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
 # ]
-baseline_formats = ['fp32','fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0']
+baseline_formats = [
+    # 'fp32',
+'fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
+'fp7_e1m5','fp7_e2m4','fp7_e3m3','fp7_e4m2','fp7_e5m1','fp7_e6m0',
+'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
+# 'fp5_e1m3','fp5_e2m2','fp5_e3m1','fp5_e4m0',
+# 'fp4_e1m2','fp4_e2m1','fp4_e3m0',
+# 'fp3_e1m1','fp3_e2m0',
+# 'fp2_e1m0'
+]
 
 candidate_formats = ['fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0']
 # [
@@ -71,7 +80,7 @@ def _iter_quantized_modules(model):
             yield module
 
 
-def _build_input_quant_config(args, model_name, weights, default_format, quantize_first_layer=False):
+def _build_input_quant_config(args, model_name, weights, default_format, quantize_first_layer=False, input_quantization=True):
     """Build the actual runtime config used by this experiment."""
     return {
         'model': {'name': model_name, 'weights': weights},
@@ -80,7 +89,7 @@ def _build_input_quant_config(args, model_name, weights, default_format, quantiz
             'quantized_ops': INPUT_ONLY_QUANTIZED_OPS,
             'excluded_ops': args.excluded_ops,
             'quantize_first_layer': quantize_first_layer,
-            'input_quantization': True,
+            'input_quantization': input_quantization,
             'weight_quantization': False,
         },
         'dataset': {
@@ -174,6 +183,12 @@ def get_args():
         action="store_true",
         help="Force rebuilding cached materialized weights/checkpoints used by the experiment",
     )
+    parser.add_argument(
+        "--experiment_type",
+        type=str,
+        default="input_quant_baseline",
+        help="Experiment type name for baseline runs (default: input_quant_baseline)"
+    )
     # Add other args as needed
     args = parser.parse_args()
     args.excluded_ops = [op.strip() for op in args.excluded_ops.split(',') if op.strip()]
@@ -221,12 +236,16 @@ def run_baselines(args, device, formats, on_result=None):
 
     try:
         for fmt in formats:
+            input_quantization=True
+            if fmt == "fp32":
+                input_quantization=False
             config = _build_input_quant_config(
                 args,
                 args.model_name,
                 args.weights,
                 fmt,
-                quantize_first_layer=False
+                quantize_first_layer=False,
+                input_quantization=input_quantization
             )
             baseline_run_dir = os.path.join(args.output_dir, args.model_name, f"baseline_{fmt}")
             model, adapter, _ = runner.prepare_model_with_materialized_weights(
@@ -269,7 +288,7 @@ def run_baselines(args, device, formats, on_result=None):
             config_json_by_fmt[fmt] = _serialize_runtime_config(
                 config,
                 model=model,
-                experiment_type="input_quant_baseline",
+                experiment_type=args.experiment_type,
                 activation_dt=fmt,
                 metric=None,
                 limit_batches=args.limit_batches,
@@ -417,7 +436,7 @@ def process_single_model(args, model_config, device, metrics):
         formats_to_run = []
         if not args.force_rerun:
             for fmt in args.baseline_formats:
-                if _input_quant_run_exists(db, model_name, 'input_quant_baseline', fmt) or fmt == 'fp32' and _input_quant_run_exists(db, model_name, 'fp32_ref', 'fp32'):
+                if _input_quant_run_exists(db, model_name, args.experiment_type, fmt) or fmt == 'fp32' and _input_quant_run_exists(db, model_name, 'fp32_ref', 'fp32'):
                     all_runs = db.get_runs()
                     row = all_runs[
                         (all_runs['model_name'] == model_name) &
@@ -455,7 +474,7 @@ def process_single_model(args, model_config, device, metrics):
             )
             log_cfg['experiment'] = {
                 'name': 'find_optimal_input_quant',
-                'type': 'input_quant_baseline',
+                'type': args.experiment_type,
                 'weight_dt': 'fp32',
                 'activation_dt': fmt,
                 'ref_acc1': ref_acc1_live,

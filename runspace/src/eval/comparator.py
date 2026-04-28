@@ -45,6 +45,7 @@ class LayerComparator:
         # vs. module.q_type). When False, the existing single-format-per-module
         # behavior is preserved.
         self.strict_format_check = bool(getattr(adapter, 'strict_format_check', False))
+
         
         # Compression Stats
         from src.eval.compression import CompressionTracker
@@ -53,6 +54,7 @@ class LayerComparator:
         self._register_hooks()
         self._enable_quant_capture()
         self._load_compliance_config()
+
 
     def _to_device(self, x):
         if isinstance(x, torch.Tensor):
@@ -74,6 +76,7 @@ class LayerComparator:
             self.compliance_config = {
                 'quantized_params': ['last_quant_rm', 'last_quant_rv', 'bias_quant', 'weight_fp8', 'weight']
             }
+
 
     def _register_hooks(self):
         def get_activation_hook(name):
@@ -527,11 +530,9 @@ class LayerComparator:
 
     def _generate_report(self):
         print("Generating evaluation report... (this might take a moment)")
-        from src.eval.metrics import compute_mse, compute_cosine_similarity, compute_min_max, check_fp8_compliance
+        from src.eval.metrics import compute_mse, compute_cosine_similarity, compute_min_max
         from runspace.src.ops.quant_base import QuantizedLayerMixin
-        from src.ops.quant_mha import DecomposedMultiheadAttention
-        import os
-        import torch.nn as nn
+
         
         report_lines = []
         
@@ -588,10 +589,8 @@ class LayerComparator:
         report_lines.append("-" * 66)
         report_lines.append("\n")
         
-        # 2. FP8 Compliance Check
-        # Emit ANSI color codes only when stdout is a TTY. Otherwise the report
-        # (which is also written to a .txt file) ends up with gibberish escapes
-        # when viewed in a non-terminal editor.
+        # 2. FP8 Compliance Check (Value-Based)
+        # Emit ANSI color codes only when stdout is a TTY.
         _use_color = sys.stdout.isatty() if hasattr(sys.stdout, 'isatty') else False
         GREEN = "\033[92m" if _use_color else ""
         RED = "\033[91m" if _use_color else ""
@@ -600,9 +599,6 @@ class LayerComparator:
         RESET = "\033[0m" if _use_color else ""
 
         def _wpad(s, width):
-            # Emojis render as 2 display cells but count as 1 char in len().
-            # east_asian_width catches ✅/❌ but misses 🚧 (classified 'N'),
-            # so also treat the SMP emoji blocks as wide.
             import unicodedata
             def _is_wide(ch):
                 if unicodedata.east_asian_width(ch) in ('W', 'F'):
@@ -634,18 +630,10 @@ class LayerComparator:
         )
         report_lines.append("-" * _SEP_W)
         
-        # Import FP8/FP4/INT8 table getters and compliance checker
-        from ..quantization.quantizer import (
-            get_format_table,
-            check_fp8_compliance
-        )
-
-        # Native formats use exact value-set compliance; simulated custom formats use
-        # mantissa-precision compliance (the quantizer preserves only mant_bits in FP32 space).
-        _NATIVE_FORMATS = {'int8', 'int4', 'fp32'}
+        # Import compliance checker (functional version)
+        from src.quantization.quantizer import check_fp8_compliance
 
         def _parse_mant_bits(q_type: str):
-            """Return mantissa bit count for a simulated FP format, or None if not parseable."""
             try:
                 if '_e' in q_type and 'm' in q_type:
                     return int(q_type.split('_e')[1].split('m')[1])
@@ -663,301 +651,151 @@ class LayerComparator:
             examples = tensor.float()[bad].flatten()[:5].tolist() if inv_count > 0 else []
             return inv_count == 0, inv_count, examples
 
-        # Pre-fetch tables (cached per-format, keyed by q_type string)
-        device = next(self.quant_model.parameters()).device
-        _table_cache = {}
         strict = self.strict_format_check
 
         def _fmt_strings(module):
-            """Return (weight_fmt, input_quantized, pre_quant_fmt, input_fmt, output_fmt)
-            strings for a module. Uses duck-typing on module attributes so the result
-            is independent of which QuantizedLayerMixin module a given class was loaded
-            from (the project has both `src.ops.quant_base` and
-            `runspace.src.ops.quant_base` live at the same time)."""
             cls_name = module.__class__.__name__
             is_activation = OpRegistry.is_activation(cls_name)
-            # Weight fmt: only ops that carry trainable weights.
             if hasattr(module, 'weight') and module.weight is not None:
                 w = getattr(module, 'q_type', None) or 'N/A'
             else:
                 w = 'N/A'
-            # Input fmt + "input quantized?" flag.
-            # Every layer receives an FP32 tensor on the wire (the previous op emits
-            # an FP32 accumulator regardless of target format), so pre-quant is FP32
-            # whenever the layer actually rounds its input.
             if getattr(module, 'input_quantization', False):
-                iq = 'Yes'
-                pq = 'FP32'
-                i = getattr(module, 'input_q_type', None) or getattr(module, 'q_type', None) or 'N/A'
-            elif is_activation and hasattr(module, 'q_type') and module.q_type is not None:
-                iq = 'Yes'
-                pq = 'FP32'
-                i = module.q_type
+                iq = 'Yes'; pq = 'FP32'
+                i1 = getattr(module, 'input1_q_type', None)
+                i2 = getattr(module, 'input2_q_type', None)
+                
+                if i1 or i2:
+                    i1_str = i1 or getattr(module, 'input_q_type', getattr(module, 'q_type', 'N/A'))
+                    i2_str = i2 or getattr(module, 'input_q_type', getattr(module, 'q_type', 'N/A'))
+                    
+                    if i1_str == i2_str:
+                        i = i1_str
+                    else:
+                        # Shorten the format names for space (e.g. ufp8_e4m3 -> ufp8)
+                        def shorten(fmt):
+                            if not fmt or fmt == 'N/A': return 'N/A'
+                            return fmt.split('_')[0] if '_' in fmt else fmt
+                        i = f"{shorten(i1_str)}|{shorten(i2_str)}"
+                else:
+                    i = getattr(module, 'input_q_type', None) or getattr(module, 'q_type', None) or 'N/A'
+            elif is_activation and (hasattr(module, 'q_type') or hasattr(module, 'uq_type')):
+                iq = 'Yes'; pq = 'FP32'
+                i = getattr(module, 'input_q_type', getattr(module, 'q_type', 'N/A'))
             else:
-                iq = 'No'
-                pq = 'N/A'
-                i = 'N/A'
-            # Output fmt: activation ops quantize output via q_type; other quantized
-            # ops (conv/matmul) emit FP32 accumulators; everything else is N/A.
+                iq = 'No'; pq = 'N/A'; i = 'N/A'
+
             if is_activation:
-                o = getattr(module, 'q_type', None) or 'N/A'
+                # Use uq_type if available (e.g. for Softmax), otherwise q_type
+                o = getattr(module, 'uq_type', getattr(module, 'q_type', 'N/A'))
             elif hasattr(module, 'q_type') and module.q_type is not None:
                 o = 'FP32'
             else:
                 o = 'N/A'
             return w, iq, pq, i, o
 
-        def _check_for_fmt(tensor, fmt):
-            """Validate tensor against the grid of the given format string.
-            Used only when strict_format_check is enabled. Returns the same
-            (passed, inv_count, examples) tuple shape as _compliance_check,
-            or None if the format is unrecognised."""
-            if fmt in (None, 'N/A', 'FP32'):
+        def _compliance_check(tensor, q_type):
+            """Run non-LUT compliance check using mantissa precision or re-quantization."""
+            if q_type in (None, 'N/A', 'FP32'):
                 return None
-            if fmt not in _table_cache:
-                _table_cache[fmt] = get_format_table(fmt, device)
-            table = _table_cache[fmt]
-            mb = _parse_mant_bits(fmt) if fmt not in _NATIVE_FORMATS else None
-            if table is None and mb is None:
-                return None
-            if table is None:
+            mb = _parse_mant_bits(q_type)
+            # Use mantissa check for simulated FP if available, otherwise fallback to functional check
+            if mb is not None:
                 return _check_mantissa_precision(tensor, mb)
-            return check_fp8_compliance(tensor, table)
+            return check_fp8_compliance(tensor, q_type=q_type)
         
-        # Determine global q_type from the model (check first quantized layer)
-        global_q_type = 'fp8_e4m3'
-        for module in self.quant_model.modules():
-            if hasattr(module, 'q_type'):
-                global_q_type = module.q_type
-                break
-        
-        # Store detailed failures for separate table
         detailed_failures = []
-        
-        # Determine iteration order
-        # If it's a GraphModule, use graph nodes to get topological order
-        import torch.fx
         modules_to_process = []
-
-        if isinstance(self.quant_model, torch.fx.GraphModule):
-            for node in self.quant_model.graph.nodes:
-                if node.op == 'call_module':
-                    module = self.quant_model.get_submodule(node.target)
-                    modules_to_process.append((node.target, module))
-        else:
-            # Forward hooks populate self.quant_activations in execution order,
-            # so its keys give the true forward-call order for every leaf that ran.
-            # Fall back to named_modules() for any leaf that never fired so the
-            # table still lists them.
-            seen = set()
-            for name in self.quant_activations.keys():
-                try:
-                    module = self.quant_model.get_submodule(name)
-                except AttributeError:
-                    continue
+        seen = set()
+        for name in self.quant_activations.keys():
+            try:
+                module = self.quant_model.get_submodule(name)
+            except AttributeError: continue
+            modules_to_process.append((name, module))
+            seen.add(name)
+        for name, module in self.quant_model.named_modules():
+            if name not in seen:
                 modules_to_process.append((name, module))
-                seen.add(name)
-            for name, module in self.quant_model.named_modules():
-                if name not in seen:
-                    modules_to_process.append((name, module))
 
-        # Track the last non-passthrough layer's Output Fmt so pass-through rows
-        # can inherit it (a pass-through op receives and emits the same tensor,
-        # so its "flowing format" is whatever the upstream op produced).
         prev_output_fmt = 'N/A'
-
         for name, module in modules_to_process:
-            # Check leaf modules or DecomposedMHA
-            if len(list(module.children())) == 0 or isinstance(module, DecomposedMultiheadAttention):
+            if len(list(module.children())) == 0 or module.__class__.__name__ == 'DecomposedMultiheadAttention':
                 layer_type = module.__class__.__name__
-                
-                # Determine q_type for this module
-                # Use module's q_type if available, otherwise use global default
-                q_type = getattr(module, 'q_type', global_q_type)
-                
-                if q_type not in _table_cache:
-                    _table_cache[q_type] = get_format_table(q_type, device)
-                valid_values = _table_cache[q_type]
-                
-                # Check for Under Construction Status
                 is_under_construction = OpRegistry.is_under_construction(layer_type)
-                under_construction_str = f"{RED}{_wpad('🚧 UNDER CONSTRUCTION', _CHECK_W)}{RESET}"
-
-                # Pass-through ops forward to the next quantized layer and own
-                # neither weight nor activation quantization. Short-circuit the
-                # row with a distinct tag; skip all compliance checks.
+                
                 if OpRegistry.is_passthrough(layer_type):
                     passthrough_str = f"{BLUE}{_wpad('↪ PASS-THROUGH', _CHECK_W)}{RESET}"
-                    shape_str = "N/A"
-                    if name in self.ref_activations:
-                        shape_str = str(tuple(self.ref_activations[name].shape[1:]))
-
-                    # Pass-through ops receive and emit the same tensor, so the
-                    # "flowing format" is whatever the previous non-passthrough
-                    # layer produced. Default to FP32 when there's no predecessor
-                    # or the predecessor emitted a raw accumulator.
+                    shape_str = str(tuple(self.ref_activations[name].shape[1:])) if name in self.ref_activations else "N/A"
                     flow_fmt = prev_output_fmt if prev_output_fmt not in ('N/A', None) else 'FP32'
-
-                    # Under strict_format_check only: if the predecessor claimed a
-                    # specific (non-FP32) format, run a compliance check on the
-                    # captured incoming tensor to verify the claim matches reality.
-                    # Non-strict mode leaves the Input Check as ↪ PASS-THROUGH.
                     input_check_str = passthrough_str
                     if strict and flow_fmt != 'FP32' and name in self.quant_activations:
                         captured = self.quant_activations[name]
                         if isinstance(captured, torch.Tensor):
-                            res = _check_for_fmt(captured, flow_fmt)
-                            if res is not None:
-                                passed, cnt, examples = res
-                                input_check_str = format_status(passed, cnt, _CHECK_W, examples)
-
-                    na_fmt = f"{'N/A':<{_FMT_W}}"
-                    no_iq = f"{'No':<{_IQ_W}}"
-                    flow_cell = f"{flow_fmt:<{_FMT_W}}"
+                            res = _compliance_check(captured, flow_fmt)
+                            if res: input_check_str = format_status(res[0], res[1], _CHECK_W, res[2])
+                    
+                    na_fmt = f"{'N/A':<{_FMT_W}}"; no_iq = f"{'No':<{_IQ_W}}"; flow_cell = f"{flow_fmt:<{_FMT_W}}"
                     report_lines.append(
                         f"{name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {shape_str:<{_SHAPE_W}} | "
                         f"{na_fmt} | {no_iq} | {flow_cell} | {flow_cell} | {flow_cell} | "
                         f"{passthrough_str} | {input_check_str}"
                     )
-                    # Pass-through preserves the upstream fmt for subsequent passthroughs.
                     continue
 
-                # Determine whether to use table-based or mantissa-precision compliance
-                use_mant_check = q_type not in _NATIVE_FORMATS
-                mant_bits = _parse_mant_bits(q_type) if use_mant_check else None
-
-                # Check Parameters (Weights + Stats)
-                unknown_fmt = valid_values is None and mant_bits is None
-                unknown_fmt_str = f"{'N/A (Unknown fmt)':<{_CHECK_W}}"
-                weight_str = f"{'N/A':<{_CHECK_W}}"
-
-                # Per-tensor fmt strings for the display columns and strict checks.
                 weight_fmt, input_quantized, pre_quant_fmt, input_fmt, output_fmt = _fmt_strings(module)
-
-                def _compliance_check(tensor):
-                    """Run the appropriate compliance check and return (passed, inv_count, examples)."""
-                    if use_mant_check and mant_bits is not None:
-                        return _check_mantissa_precision(tensor, mant_bits)
-                    return check_fp8_compliance(tensor, valid_values)
-
-                def _check_input(tensor):
-                    if strict:
-                        res = _check_for_fmt(tensor, input_fmt)
-                        if res is not None:
-                            return res
-                    return _compliance_check(tensor)
-
-                def _check_output(tensor):
-                    if strict:
-                        res = _check_for_fmt(tensor, output_fmt)
-                        if res is not None:
-                            return res
-                    return _compliance_check(tensor)
-
-                if unknown_fmt:
-                    weight_str = unknown_fmt_str
-                elif is_under_construction:
-                     weight_str = under_construction_str
-                # 1. Weights (Main Table) — always use _compliance_check since
-                # weight_fmt == module.q_type by definition.
+                weight_str = f"{'N/A':<{_CHECK_W}}"
+                if is_under_construction:
+                    weight_str = f"{RED}{_wpad('🚧 UNDER CONSTRUCTION', _CHECK_W)}{RESET}"
                 elif hasattr(module, 'weight_fp8') and module.weight_fp8 is not None:
-                    passed, inv_count, examples = _compliance_check(module.weight_fp8.float())
-                    weight_str = format_status(passed, inv_count, _CHECK_W, examples)
-                    if not passed:
-                        detailed_failures.append((name, layer_type, 'weight_fp8', inv_count, examples))
-                elif hasattr(module, 'q_type') and hasattr(module, 'weight') and module.weight is not None:
-                    passed, inv_count, examples = _compliance_check(module.weight)
-                    weight_str = format_status(passed, inv_count, _CHECK_W, examples)
-                    if not passed:
-                        detailed_failures.append((name, layer_type, 'weight', inv_count, examples))
-                    
-                # 2. Other Quantized Stats (Detailed Table Only)
-                # Load from config or use default list
-                potential_stats = self.compliance_config.get('quantized_params', ['last_quant_rm', 'last_quant_rv', 'bias_quant'])
-                
-                # Filter out weight/weight_fp8 as they are handled in main table (or should we just loop all?)
-                # The user wanted main table to be "Weight Check".
-                # So we keep weight/weight_fp8 separate for the main table logic, 
-                # and use potential_stats for the detailed table (excluding weight/weight_fp8 if they are in there).
-                
-                if not unknown_fmt:
-                    for stat_name in potential_stats:
-                        if stat_name in ['weight', 'weight_fp8']:
-                            continue
+                    res = _compliance_check(module.weight_fp8.float(), weight_fmt)
+                    if res:
+                        weight_str = format_status(res[0], res[1], _CHECK_W, res[2])
+                        if not res[0]: detailed_failures.append((name, layer_type, 'weight_fp8', res[1], res[2]))
+                elif hasattr(module, 'weight') and module.weight is not None and weight_fmt != 'N/A':
+                    res = _compliance_check(module.weight, weight_fmt)
+                    if res:
+                        weight_str = format_status(res[0], res[1], _CHECK_W, res[2])
+                        if not res[0]: detailed_failures.append((name, layer_type, 'weight', res[1], res[2]))
 
-                        if hasattr(module, stat_name) and getattr(module, stat_name) is not None:
-                            passed, inv_count, examples = _compliance_check(getattr(module, stat_name).float())
-                            if not passed:
-                                detailed_failures.append((name, layer_type, stat_name, inv_count, examples))
+                potential_stats = self.compliance_config.get('quantized_params', [])
+                for stat_name in potential_stats:
+                    if stat_name in ['weight', 'weight_fp8']: continue
+                    if hasattr(module, stat_name) and getattr(module, stat_name) is not None:
+                        res = _compliance_check(getattr(module, stat_name).float(), weight_fmt)
+                        if res and not res[0]: detailed_failures.append((name, layer_type, stat_name, res[1], res[2]))
 
-                # Check Inputs
-                input_str = f"{'N/A (No Capture)':<{_CHECK_W}}"
-
-                # Check for custom compliance status in registry
-                custom_status = OpRegistry.get_compliance_status(module.__class__.__name__)
-
-                if unknown_fmt:
-                    input_str = unknown_fmt_str
-                elif is_under_construction:
-                    if custom_status:
-                        # Append under construction to custom status
-                        input_str = f"{ORANGE}{custom_status}{RESET} {RED}🚧 UNDER CONSTRUCTION{RESET}"
-                    else:
-                        input_str = under_construction_str
-                elif custom_status:
-                     # Just custom status (Orange)
-                     input_str = f"{ORANGE}{_wpad(custom_status, _CHECK_W)}{RESET}"
-                # Prefer internal unscaled capture for Quant layers
+                input_str = f"{'N/A':<{_CHECK_W}}"
+                custom_status = OpRegistry.get_compliance_status(layer_type)
+                if custom_status:
+                    input_str = f"{ORANGE}{_wpad(custom_status, _CHECK_W)}{RESET}"
                 elif hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
-                    input_passed, i_inv_count, i_examples = _check_input(module.last_quant_input_unscaled)
-                    input_str = format_status(input_passed, i_inv_count, _CHECK_W, i_examples)
-                # Check output for activation layers (they quantize output, not input)
+                    res = _compliance_check(module.last_quant_input_unscaled, input_fmt if strict else (getattr(module, 'q_type', 'N/A')))
+                    if res: input_str = format_status(res[0], res[1], _CHECK_W, res[2])
                 elif hasattr(module, 'last_quant_output_unscaled') and module.last_quant_output_unscaled is not None:
-                    input_passed, i_inv_count, i_examples = _check_output(module.last_quant_output_unscaled)
-                    input_str = format_status(input_passed, i_inv_count, _CHECK_W, i_examples)
-                # Fallback to hook capture
-                elif name in self.quant_activations:
-                    # We captured the raw input, which is likely FP32 in a simulated quantization setup.
-                    # Checking it against FP8 will fail and is technically incorrect unless we expect
-                    # the previous layer to output quantized values (which QuantConv2d does not, it outputs FP32).
-                    # So we mark it as N/A (FP32).
-                    input_str = f"{'N/A (FP32 Input)':<{_CHECK_W}}"
-                
-                # Get Shape
-                shape_str = "N/A"
-                if name in self.ref_activations:
-                    shape_str = str(tuple(self.ref_activations[name].shape[1:]))
-                else:
-                    # Fallback to internal capture
-                    if hasattr(module, 'last_quant_input') and module.last_quant_input is not None:
-                         shape_str = str(tuple(module.last_quant_input.shape[1:]))
-                    elif hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
-                         shape_str = str(tuple(module.last_quant_input_unscaled.shape[1:]))
-                    elif hasattr(module, 'last_quant_output_unscaled') and module.last_quant_output_unscaled is not None:
-                         shape_str = str(tuple(module.last_quant_output_unscaled.shape[1:]))
+                    res = _compliance_check(module.last_quant_output_unscaled, output_fmt if strict else (getattr(module, 'q_type', 'N/A')))
+                    if res: input_str = format_status(res[0], res[1], _CHECK_W, res[2])
 
+                shape_str = str(tuple(self.ref_activations[name].shape[1:])) if name in self.ref_activations else "N/A"
                 report_lines.append(
                     f"{name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {shape_str:<{_SHAPE_W}} | "
                     f"{weight_fmt:<{_FMT_W}} | {input_quantized:<{_IQ_W}} | {pre_quant_fmt:<{_FMT_W}} | "
                     f"{input_fmt:<{_FMT_W}} | {output_fmt:<{_FMT_W}} | "
                     f"{weight_str} | {input_str}"
                 )
-                # Remember this layer's output fmt so the next pass-through row
-                # can inherit it.
                 prev_output_fmt = output_fmt
-        report_lines.append("-" * _SEP_W)
-        report_lines.append("-" * _SEP_W)
-        report_lines.append("\n")
+        report_lines.append("-" * _SEP_W + "\n")
         
-        # Detailed Parameter Compliance Table
         if detailed_failures:
             report_lines.append("--- Detailed Parameter Compliance Failures ---")
             report_lines.append(f"{'Layer':<{_NAME_W}} | {'Param Name':<20} | {'Invalid Count':<15} | {'Examples'}")
-            report_lines.append("-" * (_NAME_W + 3 + 20 + 3 + 15 + 3 + 8))
-            for name, layer_type, param_name, count, examples in detailed_failures:
-                 report_lines.append(f"{name:<{_NAME_W}} | {param_name:<20} | {str(count):<15} | {examples}")
-            report_lines.append("-" * (_NAME_W + 3 + 20 + 3 + 15 + 3 + 8))
-            report_lines.append("\n")
+            report_lines.append("-" * (_NAME_W + 40))
+            for fn, fl, fp, fc, fe in detailed_failures:
+                report_lines.append(f"{fn:<{_NAME_W}} | {fp:<20} | {str(fc):<15} | {fe}")
+            report_lines.append("-" * (_NAME_W + 40) + "\n")
+
+        # Width definitions for tables
+        _NAME_W, _TYPE_W = 52, 28
+
 
         # 3. Quantization Coverage Verification
         if hasattr(self, 'coverage_report_lines'):
