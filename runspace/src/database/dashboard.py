@@ -714,9 +714,37 @@ def generate_live_model_graph_bundle(model_name, graph_depth=12):
         'graph_size_original': len(graph_json.encode('utf-8')),
         'num_nodes': num_nodes,
         'num_quantized_layers': num_quantized,
+        'graph_depth': graph_depth,
         'generated_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'status': 'LIVE',
     }
+
+
+@st.cache_data(show_spinner=False)
+def get_cached_model_graph_bundle(db_path, model_name):
+    db = RunDatabase(db_path=db_path)
+    graph_json, graph_meta = db.get_model_graph_json(model_name)
+    if graph_json and graph_meta is not None:
+        graph_meta = dict(graph_meta)
+        graph_meta['source'] = 'cache'
+    return graph_json, graph_meta
+
+
+def load_or_generate_model_graph_bundle(model_name, use_cache=True, force_regenerate=False):
+    if use_cache and not force_regenerate:
+        graph_json, graph_meta = get_cached_model_graph_bundle(DB_PATH, model_name)
+        if graph_json:
+            return graph_json, graph_meta, "cache"
+
+    graph_json, graph_meta = generate_live_model_graph_bundle(model_name)
+    graph_meta = dict(graph_meta or {})
+    graph_meta['source'] = 'live'
+    if use_cache:
+        # Avoid keeping an earlier cache miss around after this model is stored.
+        get_cached_model_graph_bundle.clear()
+        db = RunDatabase(db_path=DB_PATH)
+        db.store_model_graph(model_name, graph_json, graph_meta)
+    return graph_json, graph_meta, "live"
 
 
 def _render_win_rates(raw_map_json, title_prefix, empty_info):
@@ -944,6 +972,11 @@ load_graphs_on_demand = st.sidebar.checkbox(
     "Generate Graphs On Demand",
     value=True,
     help="Generates architecture graphs only when requested. Graphs are not cached.",
+)
+use_cached_graphs = st.sidebar.checkbox(
+    "Use Cached Architecture Graphs",
+    value=True,
+    help="Loads previously generated architecture graphs from the selected database. Use Regenerate Graph when code changes.",
 )
 st.sidebar.caption("Use `Refresh Data` after new experiments complete.")
 
@@ -1412,6 +1445,9 @@ else:
                 generated_at = graph_meta.get('generated_at')
                 if generated_at:
                     st.caption(f"Generated live at {generated_at}")
+                generated_date = graph_meta.get('generated_date')
+                if graph_meta.get('source') == 'cache' and generated_date:
+                    st.caption(f"Loaded cached graph generated at {generated_date}")
             
             st.markdown("**Green** = Quantized Layers ")
             st.info("💡 **Interactive**: Click on dashed boxes (compound nodes) to collapse/expand them! Use mouse wheel to zoom.")
@@ -2213,22 +2249,38 @@ else:
         graph_meta = None
 
         should_load_now = True
+        force_regenerate = False
         if load_graphs_on_demand:
-            if st.button("📊 Generate Selected Graph", key=f"load_graph_dialog_{table_index}", type="primary", use_container_width=True):
+            btn_col1, btn_col2 = st.columns(2)
+            if btn_col1.button("📊 Load Selected Graph", key=f"load_graph_dialog_{table_index}", type="primary", use_container_width=True):
                 should_load_now = True
+            elif btn_col2.button("🔁 Regenerate", key=f"regen_graph_dialog_{table_index}", use_container_width=True):
+                should_load_now = True
+                force_regenerate = True
             else:
                 should_load_now = False
 
         if should_load_now:
             try:
-                with st.spinner(f"Generating live architecture graph for {selected_model}..."):
-                    graph_json, graph_meta = generate_live_model_graph_bundle(selected_model)
+                spinner_label = (
+                    f"Regenerating architecture graph for {selected_model}..."
+                    if force_regenerate or not use_cached_graphs
+                    else f"Loading architecture graph for {selected_model}..."
+                )
+                with st.spinner(spinner_label):
+                    graph_json, graph_meta, graph_source = load_or_generate_model_graph_bundle(
+                        selected_model,
+                        use_cache=use_cached_graphs,
+                        force_regenerate=force_regenerate,
+                    )
+                    if graph_source == "cache":
+                        st.success("Loaded cached graph.")
             except Exception as exc:
-                st.error(f"Failed to generate live graph for `{selected_model}`: {exc}")
+                st.error(f"Failed to load graph for `{selected_model}`: {exc}")
                 return
 
         if load_graphs_on_demand and not should_load_now:
-            st.info("Select a model and click `Generate Selected Graph`. The viewer does not use cached graph JSON.")
+            st.info("Select a model and click `Load Selected Graph`. Use `Regenerate` when the model code changed.")
         elif graph_json:
             render_full_graph_viewer(
                 selected_model=selected_model,
@@ -3451,30 +3503,47 @@ with tab_graph:
         all_models_for_graph = sorted(cache_sim_df['model_name'].dropna().unique().tolist()) \
             if 'cache_sim_df' in dir() and not cache_sim_df.empty else []
 
-        col_gm, col_gg = st.columns([3, 1])
+        col_gm, col_gg, col_gr = st.columns([3, 1, 1])
         graph_model = col_gm.selectbox(
             "Model", all_models_for_graph or ["resnet18"],
             key="graph_tab_model_select",
         )
         generate_clicked = col_gg.button(
-            "Generate Graph", key="graph_tab_generate", type="primary", use_container_width=True
+            "Load Graph", key="graph_tab_generate", type="primary", use_container_width=True
+        )
+        regenerate_clicked = col_gr.button(
+            "Regenerate", key="graph_tab_regenerate", use_container_width=True
         )
 
-        if generate_clicked:
-            with st.spinner(f"Generating architecture graph for {graph_model}..."):
+        if generate_clicked or regenerate_clicked:
+            force_regenerate = bool(regenerate_clicked)
+            spinner_label = (
+                f"Regenerating architecture graph for {graph_model}..."
+                if force_regenerate or not use_cached_graphs
+                else f"Loading architecture graph for {graph_model}..."
+            )
+            with st.spinner(spinner_label):
                 try:
-                    graph_json, graph_meta = generate_live_model_graph_bundle(graph_model)
+                    graph_json, graph_meta, graph_source = load_or_generate_model_graph_bundle(
+                        graph_model,
+                        use_cache=use_cached_graphs,
+                        force_regenerate=force_regenerate,
+                    )
                     st.session_state['_graph_tab_json'] = graph_json
                     st.session_state['_graph_tab_meta'] = graph_meta
                     st.session_state['_graph_tab_model'] = graph_model
+                    st.session_state['_graph_tab_db'] = DB_PATH
+                    if graph_source == "cache":
+                        st.success("Loaded cached graph.")
                 except Exception as exc:
-                    st.error(f"Failed to generate graph for `{graph_model}`: {exc}")
+                    st.error(f"Failed to load graph for `{graph_model}`: {exc}")
 
         cached_json  = st.session_state.get('_graph_tab_json')
         cached_meta  = st.session_state.get('_graph_tab_meta')
         cached_model = st.session_state.get('_graph_tab_model')
+        cached_db = st.session_state.get('_graph_tab_db')
 
-        if cached_json and cached_model == graph_model:
+        if cached_json and cached_model == graph_model and cached_db == DB_PATH:
             _graph_renderer_fn(
                 selected_model=graph_model,
                 graph_json=cached_json,
@@ -3482,7 +3551,7 @@ with tab_graph:
                 download_key="graph_tab_dl",
             )
         else:
-            st.info("Select a model above and click **Generate Graph** to render its architecture.")
+            st.info("Select a model above and click **Load Graph**. Use **Regenerate** when the model code changed.")
 
 st.sidebar.markdown("---")
 st.sidebar.info("Managed via `src/database/handler.py`")
