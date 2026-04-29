@@ -1389,51 +1389,136 @@ else:
             st.rerun()
 
     @st.dialog("📈 Accuracy Comparison", width="large")
-    def show_large_chart(chart_df):
+    def show_large_chart(chart_df, selected_df):
         num_groups = chart_df['Label'].nunique()
         chart_width = max(1100, num_groups * 160)
-        
-        st.vega_lite_chart(chart_df, {
-            'mark': {'type': 'bar', 'tooltip': True, 'size': 35},
-            'config': {'view': {'stroke': 'transparent'}},
-            'encoding': {
-                'x': {
-                    'field': 'Label', 
-                    'type': 'nominal', 
-                    'axis': {
-                        'labelAngle': -45, 
-                        'title': '', 
-                        'labelFontSize': 10,
-                        'labelOverlap': False,
-                        'labelLimit': 0
+
+        overview_tab, grouped_tab = st.tabs(["Overview", "Acc1 by Datatype"])
+
+        with overview_tab:
+            st.vega_lite_chart(chart_df, {
+                'mark': {'type': 'bar', 'tooltip': True, 'size': 35},
+                'config': {'view': {'stroke': 'transparent'}},
+                'encoding': {
+                    'x': {
+                        'field': 'Label',
+                        'type': 'nominal',
+                        'axis': {
+                            'labelAngle': -35,
+                            'title': '',
+                            'labelFontSize': 10,
+                            'labelLineHeight': 12,
+                            'labelOverlap': False,
+                            'labelLimit': 220,
+                            'labelExpr': "split(datum.label, '\\n')"
+                        },
+                        'sort': None
                     },
-                    'sort': None 
-                },
-                'y': {
-                    'field': 'Accuracy (%)', 
-                    'type': 'quantitative', 
-                    'aggregate': 'mean', 
-                    'scale': {'zero': False, 'padding': 5, 'nice': True},
-                    'title': 'Accuracy (%)'
-                },
-                'color': {
-                    'field': 'MetricType', 
-                    'type': 'nominal',
-                    'scale': {
-                        'domain': ['Reference (Acc1)', 'Reference (Acc5)', 'Quantized (Acc1)', 'Quantized (Acc5)'],
-                        'range': ['#00008b', '#add8e6', '#ff4500', '#ffa07a'] 
+                    'y': {
+                        'field': 'Accuracy (%)',
+                        'type': 'quantitative',
+                        'aggregate': 'mean',
+                        'scale': {'zero': False, 'padding': 5, 'nice': True},
+                        'title': 'Accuracy (%)'
                     },
-                    'legend': {'orient': 'top', 'align': 'left', 'padding': 10}
+                    'color': {
+                        'field': 'MetricType',
+                        'type': 'nominal',
+                        'scale': {
+                            'domain': ['Reference (Acc1)', 'Reference (Acc5)', 'Quantized (Acc1)', 'Quantized (Acc5)'],
+                            'range': ['#00008b', '#add8e6', '#ff4500', '#ffa07a']
+                        },
+                        'legend': {'orient': 'top', 'align': 'left', 'padding': 10}
+                    },
+                    'xOffset': {
+                        'field': 'MetricName',
+                        'scale': {'paddingInner': 0}
+                    }
                 },
-                'xOffset': {
-                    'field': 'MetricName',
-                    'scale': {'paddingInner': 0}
-                }
-            },
-            'height': 600,
-            'width': chart_width
-        }, use_container_width=False)
-        st.info("💡 Tip: Use the horizontal scrollbar above to see all models. Click '...' to save.")
+                'height': 600,
+                'width': chart_width
+            }, use_container_width=False)
+            st.info("💡 Tip: Use the horizontal scrollbar above to see all models. Click '...' to save.")
+
+        with grouped_tab:
+            grouped_df = selected_df.copy()
+            grouped_df['acc1'] = pd.to_numeric(grouped_df['acc1'], errors='coerce')
+            grouped_df = grouped_df.dropna(subset=['acc1'])
+            if grouped_df.empty:
+                st.info("No Acc1 values are available for the selected rows.")
+            else:
+                grouped_df['Datatype'] = (
+                    grouped_df['weight_dt'].astype(str) + "/" +
+                    grouped_df['activation_dt'].astype(str)
+                )
+                if grouped_df['model_name'].nunique() > 1:
+                    grouped_df['Group'] = grouped_df['model_name'].astype(str) + "\n" + grouped_df['Datatype']
+                else:
+                    grouped_df['Group'] = grouped_df['Datatype']
+                grouped_df['Experiment Type'] = grouped_df['experiment_type'].fillna('unknown').astype(str)
+                grouped_df['Acc1 (%)'] = grouped_df['acc1']
+
+                grouped_width = max(
+                    700,
+                    grouped_df['Group'].nunique() * max(80, grouped_df['Experiment Type'].nunique() * 30),
+                )
+                st.vega_lite_chart(grouped_df, {
+                    'mark': {'type': 'bar', 'tooltip': True, 'width': {'band': 1}},
+                    'config': {'view': {'stroke': 'transparent'}},
+                    'encoding': {
+                        'x': {
+                            'field': 'Group',
+                            'type': 'nominal',
+                            'scale': {'paddingInner': 0.35, 'paddingOuter': 0.08},
+                            'axis': {
+                                'labelAngle': -35,
+                                'title': 'Datatype',
+                                'labelFontSize': 10,
+                                'labelLineHeight': 12,
+                                'labelOverlap': False,
+                                'labelLimit': 220,
+                                'labelExpr': "split(datum.label, '\\n')",
+                            },
+                            'sort': None,
+                        },
+                        'xOffset': {
+                            'field': 'Experiment Type',
+                            'sort': None,
+                            'scale': {'paddingInner': 0.0, 'paddingOuter': 0.0},
+                        },
+                        'y': {
+                            'field': 'Acc1 (%)',
+                            'type': 'quantitative',
+                            'scale': {'zero': False, 'padding': 5, 'nice': True},
+                            'title': 'Acc1 (%)',
+                        },
+                        'color': {
+                            'field': 'Experiment Type',
+                            'type': 'nominal',
+                            'legend': {
+                                'orient': 'top',
+                                'align': 'left',
+                                'padding': 10,
+                                'labelLimit': 0,
+                                'symbolLimit': 0,
+                                'columns': 1,
+                            },
+                        },
+                        'tooltip': [
+                            {'field': 'model_name', 'title': 'Model'},
+                            {'field': 'Experiment Type', 'title': 'Experiment'},
+                            {'field': 'Datatype', 'title': 'Datatype'},
+                            {'field': 'Acc1 (%)', 'title': 'Acc1 (%)', 'format': '.3f'},
+                        ],
+                    },
+                    'height': 600,
+                    'width': grouped_width,
+                }, use_container_width=False)
+                st.dataframe(
+                    grouped_df[['Experiment Type']].drop_duplicates().sort_values('Experiment Type'),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
     def render_full_graph_viewer(selected_model, graph_json, graph_meta, download_key):
             # Display metadata
@@ -2849,12 +2934,16 @@ else:
 
                 if run_comparison:
                     with st.spinner(f"Building comparison chart for {num_runs} runs..."):
-                        selected_df = display_df.iloc[selected_indices].copy()
+                        orig_indices = [display_df.index[j] for j in selected_indices]
+                        selected_df = filtered_df.loc[orig_indices].copy()
 
                         # Create labels
-                        selected_df['run_label'] = selected_df['model_name'] + " (" + \
-                                                  selected_df['weight_dt'].astype(str) + "/" + \
-                                                  selected_df['activation_dt'].astype(str) + ")"
+                        selected_df['run_label'] = (
+                            selected_df['model_name'].astype(str) + "\n" +
+                            selected_df['experiment_type'].astype(str) + "\n" +
+                            selected_df['weight_dt'].astype(str) + "/" +
+                            selected_df['activation_dt'].astype(str)
+                        )
 
                         # Prepare flattened data
                         chart_data = []
@@ -2867,18 +2956,22 @@ else:
 
                             # 1. Add Reference Entry (ONCE)
                             first_row = model_rows.iloc[0]
-                            ref_label = f"REF: {model}"
+                            ref_label = f"{model}\nREF\nfp32/fp32"
                             chart_data.append({'Label': ref_label, 'MetricName': 'Acc1', 'MetricType': 'Reference (Acc1)', 'Accuracy (%)': first_row['ref_acc1_effective'] if 'ref_acc1_effective' in first_row else 0})
                             chart_data.append({'Label': ref_label, 'MetricName': 'Acc5', 'MetricType': 'Reference (Acc5)', 'Accuracy (%)': first_row['ref_acc5_effective'] if 'ref_acc5_effective' in first_row else 0})
 
                             # 2. Add Quantized Entries
                             for _, row in model_rows.iterrows():
-                                quant_label = f"{row['weight_dt']}/{row['activation_dt']} ({model})"
+                                quant_label = (
+                                    f"{model}\n"
+                                    f"{row.get('experiment_type', '')}\n"
+                                    f"{row['weight_dt']}/{row['activation_dt']}"
+                                )
                                 chart_data.append({'Label': quant_label, 'MetricName': 'Acc1', 'MetricType': 'Quantized (Acc1)', 'Accuracy (%)': row['acc1']})
                                 chart_data.append({'Label': quant_label, 'MetricName': 'Acc5', 'MetricType': 'Quantized (Acc5)', 'Accuracy (%)': row['acc5']})
 
                         chart_df = pd.DataFrame(chart_data)
-                    show_large_chart(chart_df)
+                    show_large_chart(chart_df, selected_df)
             else:
                 st.caption("Pick rows above to enable the action buttons.")
         else:
