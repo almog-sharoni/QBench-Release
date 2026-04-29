@@ -19,6 +19,18 @@ if PROJECT_ROOT not in sys.path:
 
 from runspace.src.registry.op_registry import OpRegistry
 from runspace.core.runner import Runner
+from runspace.experiments.utils.common import (
+    build_dynamic_input_quant_cfg as _build_dynamic_input_quant_cfg,
+    build_loader as _build_loader,
+    build_runtime_config as _base_runtime_config,
+    build_uniform_input_quant_cfg as _build_uniform_input_quant_cfg,
+    build_weight_map_json as _build_weight_map_json,
+    get_or_run_fp32_ref as _get_or_run_fp32_ref_common,
+    layer_types_from_model as _layer_types_from_model,
+    load_fp32_model as _load_fp32_model,
+    run_exists as _run_exists,
+    run_inference as _run_inference,
+)
 
 # Import weight-quant helpers
 from runspace.experiments.find_optimal_weight_quant.find_optimal_weight_quant import (
@@ -28,7 +40,7 @@ from runspace.experiments.find_optimal_weight_quant.find_optimal_weight_quant im
     baseline_formats as weight_baseline_formats,
 )
 
-# Import input-quant helpers
+# Import input-quant defaults
 from runspace.experiments.find_optimal_input_quant.find_optimal_input_quant import (
     candidate_formats as input_candidate_formats,
 )
@@ -115,24 +127,6 @@ def _make_weight_args(args):
         [m.strip() for m in args.weight_metrics.split(',')]
     )
     return wa
-
-
-def _base_runtime_config(args, model_name=None, weights=None):
-    return {
-        'model': {'name': model_name or args.model_name, 'weights': weights or args.weights},
-        'adapter': {'type': 'generic', 'quantized_ops': []},
-        'dataset': {
-            'name': args.dataset_name,
-            'path': args.dataset_path,
-            'batch_size': args.batch_size,
-            'num_workers': args.num_workers,
-        },
-        'experiment': {
-            'materialize_weights': {
-                'force_rebuild': bool(getattr(args, 'force_rerun', False)),
-            },
-        },
-    }
 
 
 def run_weight_phase(runner, args, device, model_dir):
@@ -228,36 +222,6 @@ def run_weight_phase(runner, args, device, model_dir):
     return quant_weights_paths, quant_maps, layer_results_map, layer_types
 
 
-# ---------------------------------------------------------------------------
-# Inference helpers
-# ---------------------------------------------------------------------------
-
-def _build_loader(args, device, runner):
-    config = _base_runtime_config(args)
-    return runner.setup_data_loader(config)
-
-
-def _run_inference(runner, model, adapter, loader, args, input_quant_cfg=None, desc=""):
-    """
-    Run one inference pass.  Returns (acc1, acc5, certainty, input_stats).
-    input_stats is from input_quantizer.get_final_stats() if provided, else None.
-    """
-    eval_results = runner.evaluate_model(
-        model=model,
-        data_loader=loader,
-        adapter=adapter,
-        max_batches=args.limit_batches,
-        desc=desc,
-        input_quant_cfg=input_quant_cfg,
-    )
-    return (
-        eval_results.get('acc1', 0.0),
-        eval_results.get('acc5', 0.0),
-        eval_results.get('certainty', 0.0),
-        eval_results.get('input_quant')
-    )
-
-
 def _load_quantized_model(runner, args, device, quant_weights_path):
     """Load model and replace state dict with quantized weights."""
     config = _base_runtime_config(args)
@@ -267,44 +231,6 @@ def _load_quantized_model(runner, args, device, quant_weights_path):
         skip_calibration=True
     )
     return model, adapter
-
-
-def _load_fp32_model(runner, args, device):
-    """Load model with original fp32 weights."""
-    config = _base_runtime_config(args)
-    fp32_dir = os.path.join(args.output_dir, args.model_name, "fp32_ref")
-    model, adapter, _ = runner.prepare_model_with_materialized_weights(
-        config=config,
-        output_dir=fp32_dir
-    )
-    return model, adapter
-
-
-# ---------------------------------------------------------------------------
-# Summarise quant map for DB field
-# ---------------------------------------------------------------------------
-
-def _layer_types_from_model(model):
-    """Return {layer_name: class_name} for every named sub-module."""
-    return {
-        name: type(module).__name__
-        for name, module in model.named_modules()
-        if name
-    }
-
-
-def _build_weight_map_json(quant_map, layer_types):
-    """
-    Build enriched weight quant map JSON: {layer: {format, type}}.
-    Falls back to "unknown" type for layers not in layer_types.
-    """
-    enriched = {}
-    for layer, fmt in quant_map.items():
-        enriched[layer] = {
-            "format": fmt,
-            "type": layer_types.get(layer, "unknown"),
-        }
-    return json.dumps(enriched)
 
 
 def _summarise_quant_map(quant_map, w_metric=None):
@@ -418,97 +344,6 @@ def _parse_input_metric(activation_dt):
     return m.group(1) if m else None
 
 
-# ---------------------------------------------------------------------------
-# FP32 reference: fetch from DB or run inference
-# ---------------------------------------------------------------------------
-
-def _get_or_run_fp32_ref(runner, args, device, db, model_name):
-    """
-    Return (ref_acc1, ref_acc5, ref_certainty).
-
-    Strategy:
-      1. Look in the DB for any successful fp32/fp32 run for this model.
-      2. If found, reuse those numbers (no inference needed).
-      3. If not found, run a full fp32 inference pass, log it to the DB,
-         and return the results.
-    """
-    # --- 1. Check DB first ---
-    all_runs = db.get_runs()
-    if not all_runs.empty:
-        fp32_rows = all_runs[
-            (all_runs['model_name'] == model_name) &
-            (all_runs['weight_dt'] == 'fp32') &
-            (all_runs['activation_dt'] == 'fp32') &
-            (all_runs['status'] == 'SUCCESS') &
-            (all_runs['acc1'].notna())
-        ]
-        if not fp32_rows.empty:
-            row = fp32_rows.iloc[0]  # newest first (get_runs ORDER BY id DESC)
-            ref_acc1      = float(row['acc1'])
-            ref_acc5      = float(row['acc5'])
-            ref_certainty = float(row['certainty']) if row['certainty'] is not None else 0.0
-            print(
-                f"[FP32 ref] Found in DB (id={row['id']}): "
-                f"Top1={ref_acc1:.2f}%, Top5={ref_acc5:.2f}%, "
-                f"Certainty={ref_certainty:.4f}"
-            )
-            return ref_acc1, ref_acc5, ref_certainty
-
-    # --- 2. Not in DB — run inference ---
-    print("[FP32 ref] Not found in DB. Running fp32 inference ...")
-    model, adapter = _load_fp32_model(runner, args, device)
-    loader = _build_loader(args, device, runner)
-    acc1, acc5, certainty, _ = _run_inference(
-        runner, model, adapter, loader, args, desc="FP32 ref"
-    )
-    del model, adapter
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    print(f"[FP32 ref] Top1={acc1:.2f}%, Top5={acc5:.2f}%, Certainty={certainty:.4f}")
-    log_cfg = _base_runtime_config(args, model_name=model_name, weights=args.weights)
-    log_cfg['experiment'] = {
-        'name': 'find_optimal_hybrid_quant',
-        'type': 'fp32_ref',
-        'weight_dt': 'fp32',
-        'activation_dt': 'fp32',
-        'ref_acc1': acc1,
-        'ref_acc5': acc5,
-        'ref_certainty': certainty,
-        'metrics': {'certainty': certainty},
-    }
-    runner.log_experiment_result(
-        config=log_cfg,
-        result={
-            'model_name': model_name,
-            'status': 'SUCCESS',
-            'acc1': acc1,
-            'acc5': acc5,
-            'certainty': certainty,
-        },
-    )
-    return acc1, acc5, certainty
-
-
-# ---------------------------------------------------------------------------
-# DB existence check
-# ---------------------------------------------------------------------------
-
-def _run_exists(db, model_name, experiment_type, weight_dt, activation_dt):
-    """Return True if a successful run already exists in the DB for this combo."""
-    runs = db.get_runs()
-    if runs.empty:
-        return False
-    match = runs[
-        (runs['model_name']      == model_name) &
-        (runs['experiment_type'] == experiment_type) &
-        (runs['weight_dt']       == weight_dt) &
-        (runs['activation_dt']   == activation_dt) &
-        (runs['status']          == 'SUCCESS')
-    ]
-    return not match.empty
-
-
 def _log_hybrid_run(
     runner,
     base_config,
@@ -590,8 +425,13 @@ def process_single_model(args, device):
     # -----------------------------------------------------------------------
     # FP32 reference — always resolved (from DB or fresh run)
     # -----------------------------------------------------------------------
-    ref_acc1, ref_acc5, ref_certainty = _get_or_run_fp32_ref(
-        runner, args, device, db, model_name
+    ref_acc1, ref_acc5, ref_certainty = _get_or_run_fp32_ref_common(
+        runner,
+        args,
+        device,
+        db,
+        model_name,
+        experiment_name='find_optimal_hybrid_quant',
     )
 
     # -----------------------------------------------------------------------
@@ -649,13 +489,11 @@ def process_single_model(args, device):
             loader = _build_loader(args, device, runner)
             acc1, acc5, certainty, input_stats = _run_inference(
                 runner, model, adapter, loader, args,
-                input_quant_cfg={
-                    'enabled': True,
-                    'mode': 'dynamic',
-                    'metric': i_metric,
-                    'chunk_size': args.input_chunk_size,
-                    'candidate_formats': input_candidate_formats,
-                },
+                input_quant_cfg=_build_dynamic_input_quant_cfg(
+                    i_metric,
+                    args.input_chunk_size,
+                    input_candidate_formats,
+                ),
                 desc=f"I-only({i_metric})"
             )
 
@@ -711,13 +549,11 @@ def process_single_model(args, device):
                 try:
                     acc1, acc5, certainty, input_stats = _run_inference(
                         runner, model, adapter, loader, args,
-                        input_quant_cfg={
-                            'enabled': True,
-                            'mode': 'dynamic',
-                            'metric': i_metric,
-                            'chunk_size': args.input_chunk_size,
-                            'candidate_formats': input_candidate_formats,
-                        },
+                        input_quant_cfg=_build_dynamic_input_quant_cfg(
+                            i_metric,
+                            args.input_chunk_size,
+                            input_candidate_formats,
+                        ),
                         desc=f"Hybrid w={w_metric} i={i_metric}"
                     )
                 except Exception as e:
@@ -861,20 +697,16 @@ def process_single_model(args, device):
                     if model is not None:
                         loader = _build_loader(args, device, runner)
                         if is_uniform_input:
-                            input_quant_cfg = {
-                                'enabled': True,
-                                'mode': 'uniform',
-                                'format': best_input_dt,
-                                'chunk_size': args.input_chunk_size,
-                            }
+                            input_quant_cfg = _build_uniform_input_quant_cfg(
+                                best_input_dt,
+                                args.input_chunk_size,
+                            )
                         else:
-                            input_quant_cfg = {
-                                'enabled': True,
-                                'mode': 'dynamic',
-                                'metric': i_metric,
-                                'chunk_size': args.input_chunk_size,
-                                'candidate_formats': input_candidate_formats,
-                            }
+                            input_quant_cfg = _build_dynamic_input_quant_cfg(
+                                i_metric,
+                                args.input_chunk_size,
+                                input_candidate_formats,
+                            )
 
                         try:
                             acc1, acc5, certainty, input_stats = _run_inference(

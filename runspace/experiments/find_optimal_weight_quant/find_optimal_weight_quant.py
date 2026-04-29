@@ -30,16 +30,23 @@ from runspace.src.quantization.constants import get_quantization_bias
 from runspace.core.runner import Runner
 from runspace.core.report_aggregator import ReportAggregator
 from runspace.src.registry.op_registry import OpRegistry
+from runspace.experiments.utils.common import (
+    build_fp32_runtime_config,
+    build_prequantized_weight_runtime_config,
+    build_runtime_weight_quant_config,
+    build_weight_map_json as _build_weight_map_json,
+    layer_types_from_model as _layer_types_from_model,
+)
 
 baseline_formats = [
-    # 'fp4_e1m2' , 'fp4_e2m1' ,'fp4_e3m0' ,
-    # 'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3',
-    # 'efp4_e3m0' , 'efp4_e2m1' , 'efp4_e1m2' ,
-    # 'fp8_e1m6' , 'fp8_e4m3','fp8_e5m2','fp8_e3m4','fp8_e6m1','fp8_e7m0','fp8_e2m5'
-    #  'fp5_e1m3' , 'fp5_e2m2', 'fp5_e3m1', 'fp5_e4m0'
-    'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
-    'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
-    # 'fp6_e1m4', 'fp6_e2m3', 'fp6_e3m2', 'fp6_e4m1', 'fp6_e5m0'
+    'fp32',
+    'fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
+    'fp7_e1m5','fp7_e2m4','fp7_e3m3','fp7_e4m2','fp7_e5m1','fp7_e6m0',
+    'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
+    'fp5_e1m3','fp5_e2m2','fp5_e3m1','fp5_e4m0',
+    'fp4_e1m2','fp4_e2m1','fp4_e3m0',
+    'fp3_e1m1','fp3_e2m0',
+    'fp2_e1m0'
 ]
 
 
@@ -125,30 +132,6 @@ def _get_ref_from_db(existing_runs, model_name):
     return float(r.get('acc1', 0.0) or 0.0), float(r.get('acc5', 0.0) or 0.0), float(r.get('certainty', 0.0) or 0.0)
 
 
-def _runtime_base_config(args):
-    return {
-        'model': {'name': args.model_name, 'weights': args.weights},
-        'adapter': {
-            'type': 'generic',
-            'quantized_ops': [],
-            'build_quantized': False,
-            'weight_quantization': False,
-            'input_quantization': False,
-        },
-        'dataset': {
-            'name': args.dataset_name,
-            'path': args.dataset_path,
-            'batch_size': args.batch_size,
-            'num_workers': args.num_workers,
-        },
-        'experiment': {
-            'materialize_weights': {
-                'force_rebuild': bool(getattr(args, 'force_rerun', False)),
-            },
-        },
-    }
-
-
 def _log_weight_quant_run(
     runner,
     args,
@@ -167,11 +150,19 @@ def _log_weight_quant_run(
     l1=None,
     quant_map_json=None,
     config_json=None,
+    weight_source='prequantized_state_dict',
 ):
-    cfg = _runtime_base_config(args)
+    if weight_source == 'fp32':
+        cfg = build_fp32_runtime_config(args)
+    elif weight_source == 'runtime_quantized':
+        cfg = build_runtime_weight_quant_config(args, weight_dt, args.weight_chunk_size)
+    else:
+        cfg = build_prequantized_weight_runtime_config(args)
     if model_weights:
         cfg.setdefault('model', {})
         cfg['model']['weights'] = model_weights
+    cfg.setdefault('quantization', {})
+    cfg['quantization']['weight_source'] = weight_source
     cfg['experiment'] = {
         'name': 'find_optimal_weight_quant',
         'type': experiment_type,
@@ -196,54 +187,6 @@ def _log_weight_quant_run(
         'certainty': certainty if certainty is not None else 0.0,
     }
     runner.log_experiment_result(cfg, result)
-
-
-def _layer_types_from_model(model):
-    """Return {layer_name: class_name} for each named module."""
-    return {
-        name: type(module).__name__
-        for name, module in model.named_modules()
-        if name
-    }
-
-
-def _build_weight_map_json(quant_map, layer_types):
-    """
-    Build enriched weight quant map JSON:
-    {
-      "<layer>": {
-        "format": <fmt or [fmt...]>,
-        "type": "<module class>",
-        "format_counts": {fmt: count, ...},
-        "total_chunks": N,
-        "dominant_format": "<fmt>"
-      }
-    }
-    """
-    enriched = {}
-    for layer, fmt_spec in quant_map.items():
-        counts = {}
-        if isinstance(fmt_spec, list):
-            for fmt in fmt_spec:
-                key = str(fmt)
-                counts[key] = counts.get(key, 0) + 1
-        elif fmt_spec is not None:
-            key = str(fmt_spec)
-            counts[key] = counts.get(key, 0) + 1
-
-        dominant = None
-        if counts:
-            dominant = sorted(counts.items(), key=lambda x: (-x[1], x[0]))[0][0]
-
-        enriched[layer] = {
-            "format": fmt_spec,
-            "type": layer_types.get(layer, "unknown"),
-            "format_counts": counts,
-            "total_chunks": int(sum(counts.values())),
-            "dominant_format": dominant,
-        }
-
-    return json.dumps(enriched)
 
 
 def get_quantized_tensor_sim(tensor, q_type, chunk_size=None, chunk_formats=None, mode=None):
@@ -716,7 +659,7 @@ def process_single_model(args, device, metrics, base_root):
     
     # Load Model
     print(f"Loading model {args.model_name}...")
-    config = _runtime_base_config(args)
+    config = build_fp32_runtime_config(args)
     
     try:
         analysis_dir = os.path.join(model_dir, "analysis_fp32")
@@ -827,19 +770,9 @@ def process_single_model(args, device, metrics, base_root):
         if cached_ref is not None:
             print(f"[DB] Skipping ref_fp32 — already in DB (acc1={cached_ref[0]:.2f}%)")
         else:
-            ref_config = {
-                'model': {'name': args.model_name, 'weights': args.weights},
-                'adapter': {
-                    'type': 'generic',
-                    'quantized_ops': [],
-                    'build_quantized': False,
-                    'weight_quantization': False,
-                    'input_quantization': False,
-                },
-                'evaluation': eval_config,
-                'dataset': dataset_base,
-                'output_name': "ref_fp32"
-            }
+            ref_config = build_fp32_runtime_config(args)
+            ref_config['evaluation'] = eval_config
+            ref_config['output_name'] = "ref_fp32"
             configs_to_run.append(ref_config)
 
         if args.skip_baselines:
@@ -853,24 +786,9 @@ def process_single_model(args, device, metrics, base_root):
                     print(f"[DB] Skipping baseline_{fmt} — already in DB")
                     continue
 
-                b_cfg = {
-                    'model': {'name': args.model_name, 'weights': args.weights},
-                    'adapter': {
-                        'type': 'generic',
-                        'quantized_ops': ['all'],
-                        'build_quantized': True,
-                        'weight_quantization': True,
-                        'input_quantization': False,
-                    },
-                    'quantization': {
-                        'format': fmt,
-                        'weight_mode': 'chunk',
-                        'weight_chunk_size': args.weight_chunk_size
-                    },
-                    'evaluation': eval_config,
-                    'dataset': dataset_base,
-                    'output_name': f"baseline_{fmt}"
-                }
+                b_cfg = build_runtime_weight_quant_config(args, fmt, args.weight_chunk_size)
+                b_cfg['evaluation'] = eval_config
+                b_cfg['output_name'] = f"baseline_{fmt}"
                 configs_to_run.append(b_cfg)
 
     # Map run output_name -> enriched quant map JSON (for DB logging / dashboard)
@@ -1070,17 +988,6 @@ def process_single_model(args, device, metrics, base_root):
         # --- Generate Configs ---
         
         # Common Config Parts
-        base_adapter_config = {
-            'type': 'generic', 
-            'input_quantization': False,
-            'weight_quantization': False,
-            'quantized_ops': [],
-            'build_quantized': False,
-            'quantize_first_layer': False,
-        }
-        
-
-        
         dataset_cfg = dataset_base if args.run_eval else {
              'name': args.dataset_name, 'path': args.dataset_path, 
              'batch_size': args.batch_size, 'num_workers': args.num_workers
@@ -1116,16 +1023,16 @@ def process_single_model(args, device, metrics, base_root):
             print(f"Saved quantization map to {q_map_path}")
 
             # Use layer_config_m (best format per layer)
-            layer_opt_config = {
-                'model': {'name': args.model_name, 'weights': os.path.abspath(q_weights_path)},
-                'adapter': base_adapter_config.copy(),
-                'quantization': {
-                    'format': 'fp8_e4m3', # Default dummy
-                    'layers': {} # Empty layers config
-                },
-                'evaluation': eval_config,
-                'dataset': dataset_cfg
-            }
+            layer_opt_config = build_prequantized_weight_runtime_config(
+                args,
+                weights=os.path.abspath(q_weights_path),
+            )
+            layer_opt_config['quantization'].update({
+                'format': 'fp8_e4m3', # Default dummy
+                'layers': {}, # Empty layers config
+            })
+            layer_opt_config['evaluation'] = eval_config
+            layer_opt_config['dataset'] = dataset_cfg
             
 
 
@@ -1174,16 +1081,16 @@ def process_single_model(args, device, metrics, base_root):
                 json.dump(q_map_chunk, f, indent=4)
             print(f"Saved chunk quantization map to {q_map_chunk_path}")
 
-            chunk_opt_config = {
-                'model': {'name': args.model_name, 'weights': os.path.abspath(q_weights_path_chunk)},
-                'adapter': base_adapter_config.copy(),
-                'quantization': {
-                    'format': 'fp8_e4m3',
-                    'layers': {}
-                },
-                'evaluation': eval_config,
-                'dataset': dataset_cfg
-            }
+            chunk_opt_config = build_prequantized_weight_runtime_config(
+                args,
+                weights=os.path.abspath(q_weights_path_chunk),
+            )
+            chunk_opt_config['quantization'].update({
+                'format': 'fp8_e4m3',
+                'layers': {},
+            })
+            chunk_opt_config['evaluation'] = eval_config
+            chunk_opt_config['dataset'] = dataset_cfg
             
 
             chunk_cfg_path = os.path.join(metric_dir, "optimized_chunk_config.yaml")
@@ -1283,6 +1190,7 @@ def process_single_model(args, device, metrics, base_root):
                     ref_certainty=ref_certainty,
                     certainty=float(res.get('certainty', 0.0) or 0.0),
                     quant_map_json=None,
+                    weight_source='fp32',
                     config_json={
                         'model': {'name': args.model_name, 'weights': args.weights},
                         'dataset': {
@@ -1291,6 +1199,7 @@ def process_single_model(args, device, metrics, base_root):
                             'batch_size': args.batch_size,
                             'num_workers': args.num_workers,
                         },
+                        'quantization': {'weight_source': 'fp32'},
                         'evaluation': {'output_name': 'ref_fp32'},
                     },
                 )
@@ -1328,6 +1237,11 @@ def process_single_model(args, device, metrics, base_root):
                 l1=l1,
                 certainty=float(res.get('certainty', 0.0) or 0.0),
                 quant_map_json=weight_quant_map_json_by_output.get(out_name),
+                weight_source=(
+                    'runtime_quantized'
+                    if out_name.startswith('baseline_')
+                    else 'prequantized_state_dict'
+                ),
                 config_json={
                     'model': {'name': args.model_name, 'weights': args.weights},
                     'dataset': {
@@ -1340,6 +1254,11 @@ def process_single_model(args, device, metrics, base_root):
                         'weight_format': weight_dt,
                         'weight_mode': 'chunk',
                         'weight_chunk_size': args.weight_chunk_size,
+                        'weight_source': (
+                            'runtime_quantized'
+                            if out_name.startswith('baseline_')
+                            else 'prequantized_state_dict'
+                        ),
                     },
                     'evaluation': {'output_name': out_name},
                 },

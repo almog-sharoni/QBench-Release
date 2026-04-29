@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import sys
+import sqlite3
 
 # Add project root to sys.path
 # runspace/src/database/dashboard.py -> runspace/src/database -> runspace/src -> runspace -> root
@@ -56,6 +57,40 @@ def list_database_files():
     if not db_files:
         return [os.path.basename(DEFAULT_DB_PATH)]
     return sorted(db_files)
+
+
+def _table_row_count(db_path, table_name):
+    if not os.path.exists(db_path):
+        return 0
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,),
+            )
+            if cursor.fetchone() is None:
+                return 0
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            return int(cursor.fetchone()[0] or 0)
+    except sqlite3.Error:
+        return 0
+
+
+def list_database_files_for_run_kind(run_kind):
+    db_files = list_database_files()
+    if run_kind == "feature_matching":
+        fm_files = [
+            name for name in db_files
+            if name.startswith("fm") or _table_row_count(os.path.join(DB_FOLDER, name), "fm_runs") > 0
+        ]
+        return fm_files or [os.path.basename(FM_DB_PATH)]
+
+    cls_files = [
+        name for name in db_files
+        if not name.startswith("fm") or _table_row_count(os.path.join(DB_FOLDER, name), "runs") > 0
+    ]
+    return cls_files or [os.path.basename(DEFAULT_DB_PATH)]
 
 
 def make_safe_db_filename(name):
@@ -135,5 +170,4 @@ def load_presets():
 def save_presets(presets):
     with open(PRESETS_FILE, 'w') as f:
         json.dump(presets, f, indent=4, cls=NpEncoder)
-
 

@@ -2,7 +2,6 @@
 import os
 import sys
 import gc
-import json
 import copy
 import yaml
 import argparse
@@ -18,6 +17,16 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from runspace.core.runner import Runner
+from runspace.experiments.utils.common import (
+    build_loader as _build_loader,
+    build_runtime_config as _make_config,
+    build_uniform_input_quant_cfg as _build_uniform_input_quant_cfg,
+    get_or_run_fp32_ref as _get_or_run_fp32_ref_common,
+    load_fp32_model as _load_fp32_model,
+    run_exists as _run_exists,
+    run_inference as _run_inference,
+    serialize_config as _serialize_config,
+)
 
 
 
@@ -165,157 +174,6 @@ def _load_model_with_uniform_weights(runner, args, device, fmt, chunk_size, weig
     return model, adapter
 
 
-def _load_fp32_model(runner, args, device):
-    """Load model with original fp32 weights."""
-    config = _make_config(args)
-    fp32_dir = os.path.join(args.output_dir, args.model_name, "fp32_ref")
-    model, adapter, _ = runner.prepare_model_with_materialized_weights(
-        config=config,
-        output_dir=fp32_dir
-    )
-    return model, adapter
-
-
-# ---------------------------------------------------------------------------
-# Inference
-# ---------------------------------------------------------------------------
-
-def _make_config(args):
-    return {
-        'model': {'name': args.model_name, 'weights': args.weights, 'source': args.model_source},
-        'adapter': {'type': 'generic', 'quantized_ops': []},
-        'dataset': {
-            'name': args.dataset_name, 'path': args.dataset_path,
-            'batch_size': args.batch_size, 'num_workers': args.num_workers,
-        },
-        'experiment': {
-            'materialize_weights': {
-                'force_rebuild': bool(getattr(args, 'force_rerun', False)),
-            },
-        },
-    }
-
-
-def _build_loader(args, device, runner):
-    loader = runner.setup_data_loader(_make_config(args))
-    return loader
-
-
-def _run_inference(runner, model, adapter, loader, args, input_quant_cfg=None, desc=""):
-    """
-    Run inference. Two quantization modes (mutually exclusive):
-      - input_fmt: quantize only the input image batch chunk-wise before the forward
-        pass (matches input_quant_baseline behaviour).
-      - act_quantizer: hook-based quantization at every layer input (Phase C).
-    """
-    eval_results = runner.evaluate_model(
-        model=model,
-        data_loader=loader,
-        adapter=adapter,
-        max_batches=args.limit_batches,
-        desc=desc,
-        input_quant_cfg=input_quant_cfg,
-    )
-    return (
-        eval_results.get('acc1', 0.0),
-        eval_results.get('acc5', 0.0),
-        eval_results.get('certainty', 0.0),
-        eval_results.get('input_quant')
-    )
-
-
-# ---------------------------------------------------------------------------
-# DB helpers
-# ---------------------------------------------------------------------------
-
-def _run_exists(db, model_name, experiment_type, weight_dt, activation_dt):
-    runs = db.get_runs()
-    if runs.empty:
-        return False
-    match = runs[
-        (runs['model_name']      == model_name) &
-        (runs['experiment_type'] == experiment_type) &
-        (runs['weight_dt']       == weight_dt) &
-        (runs['activation_dt']   == activation_dt) &
-        (runs['status']          == 'SUCCESS')
-    ]
-    return not match.empty
-
-
-def _get_or_run_fp32_ref(runner, args, device, db, model_name):
-    runs = db.get_runs()
-    if not args.force_rerun and not runs.empty:
-        fp32_rows = runs[
-            (runs['model_name']    == model_name) &
-            (runs['weight_dt']     == 'fp32') &
-            (runs['activation_dt'] == 'fp32') &
-            (runs['status']        == 'SUCCESS') &
-            (runs['acc1'].notna())
-        ]
-        if not fp32_rows.empty:
-            row = fp32_rows.iloc[0]
-            ref_acc1 = float(row['acc1'])
-            ref_acc5 = float(row['acc5'])
-            ref_cert = float(row['certainty']) if row['certainty'] is not None else 0.0
-            print(f"[FP32 ref] Found in DB: Top1={ref_acc1:.2f}%, Top5={ref_acc5:.2f}%")
-            return ref_acc1, ref_acc5, ref_cert
-
-    print("[FP32 ref] Not in DB — running inference ...")
-    model, adapter = _load_fp32_model(runner, args, device)
-    loader = _build_loader(args, device, runner)
-    acc1, acc5, cert, _ = _run_inference(
-        runner, model, adapter, loader, args, desc="FP32 ref"
-    )
-    del model, adapter
-    gc.collect(); torch.cuda.empty_cache()
-    print(f"[FP32 ref] Top1={acc1:.2f}%, Top5={acc5:.2f}%")
-    log_cfg = _make_config(args)
-    log_cfg['experiment'] = {
-        'name': 'find_optimal_w6a4',
-        'type': 'fp32_ref',
-        'weight_dt': 'fp32',
-        'activation_dt': 'fp32',
-        'ref_acc1': acc1,
-        'ref_acc5': acc5,
-        'ref_certainty': cert,
-        'metrics': {'certainty': cert},
-        'config_json': _serialize_config(_make_config(args)),
-    }
-    runner.log_experiment_result(
-        config=log_cfg,
-        result={
-            'model_name': model_name,
-            'status': 'SUCCESS',
-            'acc1': acc1,
-            'acc5': acc5,
-            'certainty': cert,
-        },
-    )
-    return acc1, acc5, cert
-
-
-def _serialize_config(cfg, activation_fmt=None, chunk_size=128, weights_source=None):
-    """
-    Serialize a full adapter config dict to JSON for DB storage.
-    Optionally merges activation quantization fields (Phase B/C).
-    weights_source: human-readable string describing where weights came from.
-    """
-    import copy
-    cfg = copy.deepcopy(cfg)
-    # Remove runtime-only flag — not meaningful as a stored config field
-    cfg.get('adapter', {}).pop('skip_calibration', None)
-    if weights_source is not None:
-        cfg.setdefault('quantization', {})
-        cfg['quantization']['weights_source'] = weights_source
-    if activation_fmt is not None:
-        cfg.setdefault('quantization', {})
-        cfg['quantization']['input_quantization'] = True
-        cfg['quantization']['activation_format'] = activation_fmt
-        cfg['quantization']['activation_mode'] = 'chunk'
-        cfg['quantization']['activation_chunk_size'] = chunk_size
-    return json.dumps(cfg)
-
-
 def _best_from_phase(db, model_name, experiment_type):
     """Return (weight_dt, activation_dt, acc1) of the top run in the given experiment phase."""
     runs = db.get_runs()
@@ -400,7 +258,16 @@ def process_single_model(args, device):
     print(f"{'='*60}")
 
     # FP32 reference
-    ref_acc1, ref_acc5, ref_cert = _get_or_run_fp32_ref(runner, args, device, db, model_name)
+    ref_acc1, ref_acc5, ref_cert = _get_or_run_fp32_ref_common(
+        runner,
+        args,
+        device,
+        db,
+        model_name,
+        experiment_name='find_optimal_w6a4',
+        config_json_builder=_serialize_config,
+        respect_force_rerun=True,
+    )
 
     # -----------------------------------------------------------------------
     # Phase A — weight-only sweep (quantized weights × fp32 activations)
@@ -447,7 +314,7 @@ def process_single_model(args, device):
                     ref_certainty=ref_cert,
                     config_json=_serialize_config(
                         phase_cfg,
-                        weights_source="cached_pre_quantized",
+                        weight_source="cached_pre_quantized",
                     ),
                 )
                 del model, adapter; gc.collect(); torch.cuda.empty_cache()
@@ -471,7 +338,7 @@ def process_single_model(args, device):
                 certainty=cert,
                 config_json=_serialize_config(
                     phase_cfg,
-                    weights_source="cached_pre_quantized",
+                    weight_source="cached_pre_quantized",
                 ),
             )
             del model, adapter; gc.collect(); torch.cuda.empty_cache()
@@ -498,12 +365,7 @@ def process_single_model(args, device):
             try:
                 acc1, acc5, cert, act_stats = _run_inference(
                     runner, model, adapter, loader, args,
-                    input_quant_cfg={
-                        'enabled': True,
-                        'mode': 'input_only',
-                        'format': a_fmt,
-                        'chunk_size': args.chunk_size,
-                    },
+                    input_quant_cfg=_build_uniform_input_quant_cfg(a_fmt, args.chunk_size),
                     desc=f"B: {a_fmt}"
                 )
             except Exception as e:
@@ -591,12 +453,7 @@ def process_single_model(args, device):
                 try:
                     acc1, acc5, cert, act_stats = _run_inference(
                         runner, model, adapter, loader, args,
-                        input_quant_cfg={
-                            'enabled': True,
-                            'mode': 'uniform',
-                            'format': a_fmt,
-                            'chunk_size': args.chunk_size,
-                        },
+                        input_quant_cfg=_build_uniform_input_quant_cfg(a_fmt, args.chunk_size),
                         desc=f"C: {w_fmt}×{a_fmt}"
                     )
                 except Exception as e:
@@ -619,7 +476,7 @@ def process_single_model(args, device):
                             phase_cfg,
                             activation_fmt=a_fmt,
                             chunk_size=args.chunk_size,
-                            weights_source="cached_pre_quantized",
+                            weight_source="cached_pre_quantized",
                         ),
                     )
                     del model, adapter; gc.collect(); torch.cuda.empty_cache()
@@ -652,7 +509,7 @@ def process_single_model(args, device):
                         phase_cfg,
                         activation_fmt=a_fmt,
                         chunk_size=args.chunk_size,
-                        weights_source="cached_pre_quantized",
+                        weight_source="cached_pre_quantized",
                     ),
                     input_quant_stats=act_stats,
                 )

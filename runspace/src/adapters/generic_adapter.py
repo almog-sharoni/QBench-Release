@@ -1028,6 +1028,7 @@ class GenericAdapter(BaseAdapter):
             "timm.models.vision_transformer",
             "timm.layers.attention",
             "timm.layers.mlp",
+            "torchvision.models.vision_transformer",
         )
         return module_name.startswith(safe_prefixes)
 

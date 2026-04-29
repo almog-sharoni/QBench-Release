@@ -1,5 +1,42 @@
-st.set_page_config(page_title="QBench Experiment Dashboard", layout="wide")
+st.set_page_config(
+    page_title="QBench Experiment Dashboard",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 inject_global_styles()
+import streamlit.components.v1 as _dashboard_components
+_dashboard_components.html(
+    """
+    <script>
+    (() => {
+      const doc = window.parent.document;
+      const key = "qbench-dashboard-sidebar-initial-collapse";
+      if (window.sessionStorage.getItem(key) === "1") return;
+      window.sessionStorage.setItem(key, "1");
+
+      function isSidebarOpen() {
+        const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+        if (!sidebar) return false;
+        const rect = sidebar.getBoundingClientRect();
+        return rect.width > 80 && rect.left > -rect.width + 20;
+      }
+
+      function collapseOnce() {
+        if (!isSidebarOpen()) return;
+        const button = doc.querySelector('[data-testid="stSidebarCollapseButton"] button')
+          || doc.querySelector('[data-testid="stSidebarCollapseButton"]')
+          || doc.querySelector('button[title*="Close sidebar"]')
+          || doc.querySelector('button[aria-label*="Close sidebar"]');
+        if (button) button.click();
+      }
+
+      setTimeout(collapseOnce, 120);
+      setTimeout(collapseOnce, 500);
+    })();
+    </script>
+    """,
+    height=0,
+)
 flash_message = st.session_state.pop("dashboard_flash_message", None)
 if flash_message:
     st.success(flash_message)
@@ -29,21 +66,67 @@ if 'presets' not in st.session_state:
     st.session_state.presets = load_presets()
 
 st.sidebar.header("Database")
-db_options = list_database_files()
-default_db_name = os.path.basename(DEFAULT_DB_PATH)
+run_kind_options = {
+    "Classification": "classification",
+    "Feature Matching": "feature_matching",
+}
+run_kind_labels_by_value = {value: label for label, value in run_kind_options.items()}
+
+def _selected_run_kind_from_query():
+    try:
+        raw_kind = st.query_params.get("run_type", "classification")
+    except Exception:
+        raw_kind = "classification"
+    return raw_kind if raw_kind in run_kind_labels_by_value else "classification"
+
+def _sync_run_kind_to_query():
+    selected_label = st.session_state.get("selected_dashboard_run_kind_label", "Classification")
+    selected_kind = run_kind_options.get(selected_label, "classification")
+    try:
+        st.query_params["run_type"] = selected_kind
+    except Exception:
+        pass
+    reset_filters_for_db_change()
+
+selected_run_kind_from_query = _selected_run_kind_from_query()
+default_run_kind_label = run_kind_labels_by_value[selected_run_kind_from_query]
+if (
+    "selected_dashboard_run_kind_label" not in st.session_state
+    or run_kind_options.get(st.session_state.get("selected_dashboard_run_kind_label")) != selected_run_kind_from_query
+):
+    st.session_state["selected_dashboard_run_kind_label"] = default_run_kind_label
+selected_run_kind_label = st.sidebar.radio(
+    "Run type",
+    options=list(run_kind_options.keys()),
+    index=list(run_kind_options.keys()).index(default_run_kind_label),
+    key="selected_dashboard_run_kind_label",
+    on_change=_sync_run_kind_to_query,
+)
+DASHBOARD_RUN_KIND = run_kind_options[selected_run_kind_label]
+try:
+    st.query_params["run_type"] = DASHBOARD_RUN_KIND
+except Exception:
+    pass
+db_options = list_database_files_for_run_kind(DASHBOARD_RUN_KIND)
+default_db_name = (
+    os.path.basename(FM_DB_PATH)
+    if DASHBOARD_RUN_KIND == "feature_matching"
+    else os.path.basename(DEFAULT_DB_PATH)
+)
 pending_db_selection = st.session_state.pop("pending_selected_experiment_db", None)
 if pending_db_selection in db_options:
-    st.session_state["selected_experiment_db"] = pending_db_selection
+    st.session_state[f"selected_experiment_db_{DASHBOARD_RUN_KIND}"] = pending_db_selection
 default_db_index = db_options.index(default_db_name) if default_db_name in db_options else 0
 selected_db_name = st.sidebar.selectbox(
     "Experiment DB",
     options=db_options,
     index=default_db_index,
-    key="selected_experiment_db",
+    key=f"selected_experiment_db_{DASHBOARD_RUN_KIND}",
     on_change=reset_filters_for_db_change,
-    help="Choose a SQLite database from runspace/database for the experiments table.",
+    help="Choose a SQLite database from runspace/database for the selected run type.",
 )
 DB_PATH = os.path.join(DB_FOLDER, selected_db_name)
+FM_DB_PATH = DB_PATH if DASHBOARD_RUN_KIND == "feature_matching" else os.path.join(DB_FOLDER, "fm_runs.db")
 st.sidebar.caption(f"Using `{selected_db_name}`")
 
 with st.sidebar.expander("Manage DB", expanded=False):
@@ -99,53 +182,74 @@ use_cached_graphs = st.sidebar.checkbox(
     value=True,
     help="Loads previously generated architecture graphs from the selected database. Use Regenerate Graph when code changes.",
 )
-st.sidebar.caption("Use `Refresh Data` after new experiments complete.")
+dashboard_auto_refresh_enabled = st.sidebar.checkbox(
+    "Auto-refresh dashboard",
+    value=True,
+    key="dashboard_auto_refresh_enabled",
+    help="Automatically reloads dashboard data on a timer.",
+)
+dashboard_auto_refresh_interval = st.sidebar.number_input(
+    "Refresh interval (seconds)",
+    min_value=10,
+    max_value=300,
+    value=30,
+    step=5,
+    key="dashboard_auto_refresh_interval",
+    disabled=not dashboard_auto_refresh_enabled,
+)
 
 st.markdown("---")
-
-with st.expander(f"🔍 Feature Matching Runs (`fm_runs.db`)", expanded=False):
-    fm_df = get_fm_runs(selected_run_limit)
-    if fm_df.empty:
-        st.info(f"No feature-matching runs found at `{FM_DB_PATH}`.")
-    else:
-        st.caption(f"Showing {len(fm_df)} FM runs from {FM_DB_PATH}.")
-
-        fm_models = sorted(fm_df['model_name'].dropna().unique().tolist())
-        fm_formats = _sort_quant_formats(fm_df['weight_dt'].dropna().unique().tolist())
-        c1, c2 = st.columns(2)
-        sel_models = c1.multiselect("Model", fm_models, default=fm_models, key="fm_model_filter")
-        sel_formats = c2.multiselect("Weight format", fm_formats, default=fm_formats, key="fm_fmt_filter")
-        fm_view = fm_df[fm_df['model_name'].isin(sel_models) & fm_df['weight_dt'].isin(sel_formats)].copy()
-
-        # Δ vs reference for the matching metrics that have a ref_* counterpart.
-        for metric in ['matching_precision', 'matching_score', 'mean_num_matches',
-                       'pose_auc_5', 'pose_auc_10', 'pose_auc_20']:
-            ref_col = f'ref_{metric}'
-            if metric in fm_view.columns and ref_col in fm_view.columns:
-                fm_view[f'Δ_{metric}'] = pd.to_numeric(fm_view[metric], errors='coerce') \
-                    - pd.to_numeric(fm_view[ref_col], errors='coerce')
-
-        display_cols = [c for c in [
-            'id', 'model_name', 'weight_dt', 'activation_dt', 'experiment_type',
-            'status', 'run_date',
-            'matching_precision', 'ref_matching_precision', 'Δ_matching_precision',
-            'matching_score', 'ref_matching_score', 'Δ_matching_score',
-            'mean_num_matches', 'ref_mean_num_matches', 'Δ_mean_num_matches',
-            'pose_auc_5', 'ref_pose_auc_5', 'Δ_pose_auc_5',
-            'pose_auc_10', 'ref_pose_auc_10', 'Δ_pose_auc_10',
-            'pose_auc_20', 'ref_pose_auc_20', 'Δ_pose_auc_20',
-            'fm_num_keypoints', 'fm_mean_score', 'fm_desc_norm', 'fm_repeatability',
-        ] if c in fm_view.columns]
-        st.dataframe(fm_view[display_cols], width='stretch', hide_index=True)
-
-        with st.expander("Show config_json for selected rows", expanded=False):
-            for _, row in fm_view.iterrows():
-                st.markdown(f"**[{row['id']}] {row['model_name']} — {row['weight_dt']}/{row['activation_dt']}**")
-                st.json(_safe_json_load(row.get('config_json')))
 
 st.markdown("---")
 
 tab_exp, tab_cache, tab_runner, tab_graph = st.tabs(["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph"])
+
+import streamlit.components.v1 as _dashboard_components
+_dashboard_components.html(
+    """
+    <script>
+    (() => {
+      const labels = ["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph"];
+      const storageKey = "qbench-dashboard-active-tab";
+      const doc = window.parent.document;
+
+      function textOf(el) {
+        return (el && el.innerText || "").replace(/\\s+/g, " ").trim();
+      }
+
+      function mainTabs() {
+        return Array.from(doc.querySelectorAll('[role="tab"]'))
+          .filter(tab => labels.includes(textOf(tab)));
+      }
+
+      function restore() {
+        const wanted = window.localStorage.getItem(storageKey);
+        if (!wanted) return;
+        const tab = mainTabs().find(t => textOf(t) === wanted);
+        if (tab && tab.getAttribute("aria-selected") !== "true") {
+          tab.click();
+        }
+      }
+
+      function install() {
+        mainTabs().forEach(tab => {
+          if (tab.dataset.qbenchRememberTab === "1") return;
+          tab.dataset.qbenchRememberTab = "1";
+          tab.addEventListener("click", () => {
+            window.localStorage.setItem(storageKey, textOf(tab));
+          });
+        });
+      }
+
+      setTimeout(restore, 120);
+      setTimeout(restore, 500);
+      install();
+      new MutationObserver(install).observe(doc.body, {childList: true, subtree: true});
+    })();
+    </script>
+    """,
+    height=0,
+)
 
 # Renderer exposed by the else: block below; None if db is empty.
 _graph_renderer_fn = None
@@ -154,10 +258,60 @@ _graph_renderer_fn = None
 tab_exp.__enter__()
 
 with st.spinner("Loading experiment runs..."):
-    df = get_runs(selected_run_limit)
+    df = get_fm_runs(selected_run_limit) if DASHBOARD_RUN_KIND == "feature_matching" else get_runs(selected_run_limit)
 
 if df.empty:
     st.warning("No runs found in the database yet. Run an experiment first!")
+elif DASHBOARD_RUN_KIND == "feature_matching":
+    st.markdown("""
+    <div class="dashboard-hero">
+        <div class="dashboard-hero__eyebrow">Feature Matching · Runs</div>
+        <h1>Feature Matching Experiments</h1>
+        <p>Scan matching metrics, pose AUC, and reference deltas from the selected feature-matching database.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.caption(f"Showing {len(df)} feature-matching runs from `{os.path.basename(DB_PATH)}`.")
+
+    fm_models = sorted(df['model_name'].dropna().unique().tolist()) if 'model_name' in df.columns else []
+    fm_formats = _sort_quant_formats(df['weight_dt'].dropna().unique().tolist()) if 'weight_dt' in df.columns else []
+    fm_statuses = sorted(df['status'].dropna().unique().tolist()) if 'status' in df.columns else []
+    c1, c2, c3 = st.columns(3)
+    sel_models = c1.multiselect("Model", fm_models, default=fm_models, key="fm_main_model_filter")
+    sel_formats = c2.multiselect("Weight format", fm_formats, default=fm_formats, key="fm_main_fmt_filter")
+    sel_statuses = c3.multiselect("Status", fm_statuses, default=fm_statuses, key="fm_main_status_filter")
+
+    fm_view = df.copy()
+    if sel_models and 'model_name' in fm_view.columns:
+        fm_view = fm_view[fm_view['model_name'].isin(sel_models)]
+    if sel_formats and 'weight_dt' in fm_view.columns:
+        fm_view = fm_view[fm_view['weight_dt'].isin(sel_formats)]
+    if sel_statuses and 'status' in fm_view.columns:
+        fm_view = fm_view[fm_view['status'].isin(sel_statuses)]
+
+    for metric in ['matching_precision', 'matching_score', 'mean_num_matches',
+                   'pose_auc_5', 'pose_auc_10', 'pose_auc_20']:
+        ref_col = f'ref_{metric}'
+        if metric in fm_view.columns and ref_col in fm_view.columns:
+            fm_view[f'Δ_{metric}'] = pd.to_numeric(fm_view[metric], errors='coerce') \
+                - pd.to_numeric(fm_view[ref_col], errors='coerce')
+
+    display_cols = [c for c in [
+        'id', 'model_name', 'weight_dt', 'activation_dt', 'experiment_type',
+        'status', 'run_date',
+        'matching_precision', 'ref_matching_precision', 'Δ_matching_precision',
+        'matching_score', 'ref_matching_score', 'Δ_matching_score',
+        'mean_num_matches', 'ref_mean_num_matches', 'Δ_mean_num_matches',
+        'pose_auc_5', 'ref_pose_auc_5', 'Δ_pose_auc_5',
+        'pose_auc_10', 'ref_pose_auc_10', 'Δ_pose_auc_10',
+        'pose_auc_20', 'ref_pose_auc_20', 'Δ_pose_auc_20',
+        'fm_num_keypoints', 'fm_mean_score', 'fm_desc_norm', 'fm_repeatability',
+    ] if c in fm_view.columns]
+    st.dataframe(fm_view[display_cols], width='stretch', hide_index=True)
+
+    with st.expander("Show config_json for filtered rows", expanded=False):
+        for _, row in fm_view.iterrows():
+            st.markdown(f"**[{row['id']}] {row['model_name']} - {row['weight_dt']}/{row['activation_dt']}**")
+            st.json(_safe_json_load(row.get('config_json')))
 else:
     with st.spinner("Preparing dashboard data..."):
         df = preprocess_runs_df(df)
@@ -1690,9 +1844,6 @@ else:
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ⚙️ Controls")
-    if st.sidebar.button("🔄 Refresh Data", type="primary", width='stretch'):
-        st.rerun()
-    
     if st.sidebar.button("🧹 Reset All Filters", width='stretch'):
         # Clear all filter-related keys from session state
         for key in list(st.session_state.keys()):
