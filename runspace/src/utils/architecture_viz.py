@@ -17,6 +17,29 @@ from ..ops.quant_mha import (
 metadata_registry = {}
 
 
+class ViTEncoderBlockWrapper(nn.Module):
+    """Replaces torchvision EncoderBlock for arch-graph visualization.
+
+    Exposes the two residual skip-connections as explicit QuantAdd submodules
+    so torchview can see them as named nodes instead of bare 'add' ops.
+    """
+    def __init__(self, block, q_type='fp8_e4m3', quantization_bias=None):
+        super().__init__()
+        for name, child in block.named_children():
+            setattr(self, name, child)
+        self.residual_add_1 = QuantAdd(q_type=q_type, quantization_bias=quantization_bias)
+        self.residual_add_2 = QuantAdd(q_type=q_type, quantization_bias=quantization_bias)
+
+    def forward(self, input):
+        x = self.ln_1(input)
+        attn_out, _ = self.self_attention(x, x, x, need_weights=False)
+        x = self.dropout(attn_out)
+        x = self.residual_add_1(x, input)
+        y = self.ln_2(x)
+        y = self.mlp(y)
+        return self.residual_add_2(x, y)
+
+
 class TransposeLastTwo(nn.Module):
     def forward(self, x):
         return x.transpose(-2, -1)
@@ -179,6 +202,15 @@ def _replace_attention_helpers_for_graph(model):
                     q_type=parent_q_type,
                     quantization_bias=parent_quant_bias,
                 )
+            elif (type(child).__name__ == 'EncoderBlock'
+                  and 'torchvision.models' in type(child).__module__
+                  and hasattr(child, 'self_attention')
+                  and hasattr(child, 'mlp')):
+                replacement = ViTEncoderBlockWrapper(
+                    child,
+                    q_type=parent_q_type,
+                    quantization_bias=parent_quant_bias,
+                )
 
             if replacement is not None:
                 setattr(module, name, replacement)
@@ -240,7 +272,7 @@ def generate_hierarchical_json(model, input_size, model_name="Root", depth=3):
     Instead of tracing low-level operations, this relies on torchview's module tracing.
     """
     model.eval()
-    
+
     # --- Hack to expose variable names to TorchView ---
     restoration_list = []
     graph_module_restorations = _replace_attention_helpers_for_graph(model)

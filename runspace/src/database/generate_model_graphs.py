@@ -90,8 +90,8 @@ def get_model_from_name(model_name, quantized=True):
             adapter = GenericAdapter(
                 model_name=model_name,
                 quantized_ops=["all"],
-                input_quantization=False,
-                enable_fx_quantization=False,
+                input_quantization=True,
+                enable_fx_quantization=False,  # keep module hierarchy intact for torchview
             )
             model = adapter.build_model(quantized=True)
             return model
