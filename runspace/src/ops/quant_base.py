@@ -816,26 +816,42 @@ class QuantizedLayerMixin:
         except ImportError:
              pass
 
-        input_fp8, input_fp8_unscaled, max_val, scale_b, scale_p = quantize_tensor(input, q_type=q_type, return_unscaled=True, return_scale=True, mode=mode, chunk_size=chunk_size, rounding=rounding, chunk_formats=chunk_formats)
-        
+        # Hot path: when capture_activations is off, only `input_fp8` is
+        # actually consumed — the unscaled / scale_b / scale_p / max_val
+        # outputs would be thrown away.  In chunk mode this matters: scale_b
+        # is an input-sized expand+contiguous+slice allocation per layer per
+        # batch.  Gate the flags on `capture` so we skip that work in eval.
+        if capture:
+            input_fp8, input_fp8_unscaled, max_val, scale_b, scale_p = quantize_tensor(
+                input, q_type=q_type, return_unscaled=True, return_scale=True,
+                mode=mode, chunk_size=chunk_size, rounding=rounding,
+                chunk_formats=chunk_formats,
+            )
+        else:
+            input_fp8, _ = quantize_tensor(
+                input, q_type=q_type,
+                mode=mode, chunk_size=chunk_size, rounding=rounding,
+                chunk_formats=chunk_formats,
+            )
+
         # --- Tracker Cleanup ---
         if tracker_active:
             tracker.clear_context()
-        
+
         if capture:
             self.last_quant_input_unscaled = input_fp8_unscaled.detach()
             self.last_quant_input = input_fp8.detach()
             self.last_quant_input_max = max_val.detach()
             self.last_quant_input_scale = scale_b.detach()
             self.last_quant_input_scale_packed = scale_p.detach()
-            
+
             # Calculate dequantized max
             # We need to re-calculate max from the quantized-then-dequantized tensor
             # But input_fp8 is already scaled back! So we just take max of it.
             # However, we need to use the same reduction dims.
             reduce_dims = _get_reduce_dims(input_fp8)
             self.last_quant_input_dequant_max = input_fp8.abs().amax(dim=reduce_dims, keepdim=True).detach()
-            
+
         return input_fp8
 
 

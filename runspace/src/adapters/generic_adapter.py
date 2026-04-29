@@ -996,8 +996,14 @@ class GenericAdapter(BaseAdapter):
         return gm, modified
 
     def _validate_fx_model(self, fx_model: nn.Module, reference_model: nn.Module):
+        # The CUDA codec is the only supported backend for the standard
+        # `quantize_tensor` path, so the validation forward must run on CUDA
+        # even when the model is still on CPU at build time (the runner
+        # moves it to self.device after build_model() returns).
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         try:
-            dummy = self._get_dummy_input(reference_model)
+            fx_model.to(device)
+            dummy = self._get_dummy_input(fx_model).to(device)
             with torch.no_grad():
                 fx_model.eval()(dummy)
             return True, None
