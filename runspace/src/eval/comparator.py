@@ -123,7 +123,7 @@ class LayerComparator:
                     self.quant_activations[name] = inp
             return hook
 
-        from runspace.src.ops.quant_base import QuantizedLayerMixin
+        from src.ops.quant_base import QuantizedLayerMixin
         from src.ops.quant_mha import DecomposedMultiheadAttention
 
         quantized_ops = tuple(OpRegistry.get_supported_ops().values())
@@ -136,7 +136,11 @@ class LayerComparator:
                 
                 # Enable internal capture for Quant layers (including QuantizedLayerMixin-only
                 # ops like Observed* modules that aren't registered with original_cls).
-                if isinstance(module, quantized_ops) or isinstance(module, QuantizedLayerMixin):
+                if (
+                    isinstance(module, quantized_ops)
+                    or isinstance(module, QuantizedLayerMixin)
+                    or hasattr(module, 'quantize_input')
+                ):
                     module.capture_activations = True
 
     def compare(self, data_loader, num_batches=1, global_metrics=None):
@@ -656,11 +660,24 @@ class LayerComparator:
         def _fmt_strings(module):
             cls_name = module.__class__.__name__
             is_activation = OpRegistry.is_activation(cls_name)
+            input_quant_enabled = bool(getattr(
+                module,
+                'input_quantization',
+                getattr(self.adapter, 'input_quantization', False),
+            ))
+            if (
+                getattr(module, 'is_first_layer', False)
+                and getattr(module, 'quantize_first_layer', True) is False
+            ):
+                input_quant_enabled = False
             if hasattr(module, 'weight') and module.weight is not None:
-                w = getattr(module, 'q_type', None) or 'N/A'
+                if getattr(module, 'weight_quantization', True):
+                    w = getattr(module, 'q_type', None) or 'N/A'
+                else:
+                    w = 'FP32'
             else:
                 w = 'N/A'
-            if getattr(module, 'input_quantization', False):
+            if input_quant_enabled:
                 iq = 'Yes'; pq = 'FP32'
                 i1 = getattr(module, 'input1_q_type', None)
                 i2 = getattr(module, 'input2_q_type', None)
@@ -679,15 +696,18 @@ class LayerComparator:
                         i = f"{shorten(i1_str)}|{shorten(i2_str)}"
                 else:
                     i = getattr(module, 'input_q_type', None) or getattr(module, 'q_type', None) or 'N/A'
-            elif is_activation and (hasattr(module, 'q_type') or hasattr(module, 'uq_type')):
+            elif is_activation and input_quant_enabled and (hasattr(module, 'q_type') or hasattr(module, 'uq_type')):
                 iq = 'Yes'; pq = 'FP32'
                 i = getattr(module, 'input_q_type', getattr(module, 'q_type', 'N/A'))
             else:
-                iq = 'No'; pq = 'N/A'; i = 'N/A'
+                iq = 'No'; pq = 'FP32'; i = 'FP32'
 
             if is_activation:
-                # Use uq_type if available (e.g. for Softmax), otherwise q_type
-                o = getattr(module, 'uq_type', getattr(module, 'q_type', 'N/A'))
+                if input_quant_enabled:
+                    # Use uq_type if available (e.g. for Softmax), otherwise q_type
+                    o = getattr(module, 'uq_type', getattr(module, 'q_type', 'N/A'))
+                else:
+                    o = 'FP32'
             elif hasattr(module, 'q_type') and module.q_type is not None:
                 o = 'FP32'
             else:
@@ -703,6 +723,43 @@ class LayerComparator:
             if mb is not None:
                 return _check_mantissa_precision(tensor, mb)
             return check_fp8_compliance(tensor, q_type=q_type)
+
+        def _multi_input_compliance_check(module, fallback_q_type):
+            tensors = getattr(module, 'last_quant_inputs_unscaled', None)
+            if not tensors:
+                return None
+
+            formats = getattr(module, 'last_quant_input_formats', None) or []
+            passed = True
+            invalid_count = 0
+            examples = []
+
+            for idx, tensor in enumerate(tensors):
+                q_type = formats[idx] if idx < len(formats) else fallback_q_type
+                res = _compliance_check(tensor, q_type)
+                if not res:
+                    continue
+                ok, count, sample = res
+                passed = passed and ok
+                if not ok:
+                    invalid_count += count
+                    if not examples and sample:
+                        examples = sample
+
+            return passed, invalid_count, examples
+
+        def _input_compliance_status(module, input_fmt, output_fmt):
+            if getattr(module, 'last_quant_inputs_unscaled', None):
+                return _multi_input_compliance_check(
+                    module,
+                    input_fmt if strict else (getattr(module, 'q_type', 'N/A')),
+                )
+            if hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
+                return _compliance_check(
+                    module.last_quant_input_unscaled,
+                    input_fmt if strict else (getattr(module, 'q_type', 'N/A')),
+                )
+            return None
         
         detailed_failures = []
         modules_to_process = []
@@ -726,20 +783,34 @@ class LayerComparator:
                 if OpRegistry.is_passthrough(layer_type):
                     passthrough_str = f"{BLUE}{_wpad('↪ PASS-THROUGH', _CHECK_W)}{RESET}"
                     shape_str = str(tuple(self.ref_activations[name].shape[1:])) if name in self.ref_activations else "N/A"
-                    flow_fmt = prev_output_fmt if prev_output_fmt not in ('N/A', None) else 'FP32'
-                    input_check_str = passthrough_str
-                    if strict and flow_fmt != 'FP32' and name in self.quant_activations:
-                        captured = self.quant_activations[name]
-                        if isinstance(captured, torch.Tensor):
-                            res = _compliance_check(captured, flow_fmt)
-                            if res: input_check_str = format_status(res[0], res[1], _CHECK_W, res[2])
-                    
-                    na_fmt = f"{'N/A':<{_FMT_W}}"; no_iq = f"{'No':<{_IQ_W}}"; flow_cell = f"{flow_fmt:<{_FMT_W}}"
-                    report_lines.append(
-                        f"{name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {shape_str:<{_SHAPE_W}} | "
-                        f"{na_fmt} | {no_iq} | {flow_cell} | {flow_cell} | {flow_cell} | "
-                        f"{passthrough_str} | {input_check_str}"
-                    )
+                    if hasattr(module, 'quantize_input'):
+                        weight_fmt, input_quantized, pre_quant_fmt, input_fmt, output_fmt = _fmt_strings(module)
+                        input_check_str = passthrough_str
+                        if input_quantized == 'Yes':
+                            res = _input_compliance_status(module, input_fmt, output_fmt)
+                            if res:
+                                input_check_str = format_status(res[0], res[1], _CHECK_W, res[2])
+                        report_lines.append(
+                            f"{name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {shape_str:<{_SHAPE_W}} | "
+                            f"{weight_fmt:<{_FMT_W}} | {input_quantized:<{_IQ_W}} | {pre_quant_fmt:<{_FMT_W}} | "
+                            f"{input_fmt:<{_FMT_W}} | {output_fmt:<{_FMT_W}} | "
+                            f"{passthrough_str} | {input_check_str}"
+                        )
+                    else:
+                        flow_fmt = prev_output_fmt if prev_output_fmt not in ('N/A', None) else 'FP32'
+                        input_check_str = passthrough_str
+                        if strict and flow_fmt != 'FP32' and name in self.quant_activations:
+                            captured = self.quant_activations[name]
+                            if isinstance(captured, torch.Tensor):
+                                res = _compliance_check(captured, flow_fmt)
+                                if res: input_check_str = format_status(res[0], res[1], _CHECK_W, res[2])
+
+                        na_fmt = f"{'N/A':<{_FMT_W}}"; no_iq = f"{'No':<{_IQ_W}}"; flow_cell = f"{flow_fmt:<{_FMT_W}}"
+                        report_lines.append(
+                            f"{name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {shape_str:<{_SHAPE_W}} | "
+                            f"{na_fmt} | {no_iq} | {flow_cell} | {flow_cell} | {flow_cell} | "
+                            f"{passthrough_str} | {input_check_str}"
+                        )
                     continue
 
                 weight_fmt, input_quantized, pre_quant_fmt, input_fmt, output_fmt = _fmt_strings(module)
@@ -766,14 +837,13 @@ class LayerComparator:
 
                 input_str = f"{'N/A':<{_CHECK_W}}"
                 custom_status = OpRegistry.get_compliance_status(layer_type)
-                if custom_status:
+                if input_quantized == 'Yes':
+                    res = _input_compliance_status(module, input_fmt, output_fmt)
+                    if res: input_str = format_status(res[0], res[1], _CHECK_W, res[2])
+                    elif custom_status:
+                        input_str = f"{ORANGE}{_wpad(custom_status, _CHECK_W)}{RESET}"
+                elif custom_status:
                     input_str = f"{ORANGE}{_wpad(custom_status, _CHECK_W)}{RESET}"
-                elif hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
-                    res = _compliance_check(module.last_quant_input_unscaled, input_fmt if strict else (getattr(module, 'q_type', 'N/A')))
-                    if res: input_str = format_status(res[0], res[1], _CHECK_W, res[2])
-                elif hasattr(module, 'last_quant_output_unscaled') and module.last_quant_output_unscaled is not None:
-                    res = _compliance_check(module.last_quant_output_unscaled, output_fmt if strict else (getattr(module, 'q_type', 'N/A')))
-                    if res: input_str = format_status(res[0], res[1], _CHECK_W, res[2])
 
                 shape_str = str(tuple(self.ref_activations[name].shape[1:])) if name in self.ref_activations else "N/A"
                 report_lines.append(

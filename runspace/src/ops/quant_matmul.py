@@ -2,11 +2,11 @@ import torch
 import torch.nn as nn
 
 from ..registry.op_registry import OpRegistry
-from .quant_base import QuantizedLayerMixin
+from .quant_arithmetic import _QuantArithmeticBase
 
 
 @OpRegistry.register("QuantMatMul", is_activation=False, compliance_status="FP8 MatMul")
-class QuantMatMul(nn.Module, QuantizedLayerMixin):
+class QuantMatMul(_QuantArithmeticBase):
     q_type: str
     quantization_bias: int | None
     quant_mode: str
@@ -25,13 +25,12 @@ class QuantMatMul(nn.Module, QuantizedLayerMixin):
     def forward(self, input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
         q1_type = getattr(self, 'input1_q_type', None)
         q2_type = getattr(self, 'input2_q_type', None)
-        q1 = self.quantize_input(input1, override_q_type=q1_type)
-        q2 = self.quantize_input(input2, override_q_type=q2_type)
+        q1, q2 = self._quantize_operands([input1, input2], [q1_type, q2_type])
         return torch.matmul(q1, q2)
 
 
 @OpRegistry.register("QuantBMM", is_activation=False, compliance_status="FP8 Batch MatMul")
-class QuantBMM(nn.Module, QuantizedLayerMixin):
+class QuantBMM(_QuantArithmeticBase):
     q_type: str
     quantization_bias: int | None
     quant_mode: str
@@ -50,8 +49,7 @@ class QuantBMM(nn.Module, QuantizedLayerMixin):
     def forward(self, input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
         q1_type = getattr(self, 'input1_q_type', None)
         q2_type = getattr(self, 'input2_q_type', None)
-        q1 = self.quantize_input(input1, override_q_type=q1_type)
-        q2 = self.quantize_input(input2, override_q_type=q2_type)
+        q1, q2 = self._quantize_operands([input1, input2], [q1_type, q2_type])
         return torch.bmm(q1, q2)
 
 
