@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from ..registry.op_registry import OpRegistry
 from .quant_base import QuantizedLayerMixin
+from .quant_arithmetic import _QuantArithmeticBase
 
 
 def _simple_nms(scores, nms_radius: int):
@@ -191,7 +192,7 @@ class ObservedKeypointNormalize(nn.Module):
 
 
 @OpRegistry.register("ObservedConcat", is_activation=False)
-class ObservedConcat(nn.Module, QuantizedLayerMixin):
+class ObservedConcat(_QuantArithmeticBase):
     """torch.cat wrapped as a module; quantizes each operand (mirrors QuantCat)."""
     def __init__(self, dim: int = 1, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="chunk", chunk_size=None):
         super().__init__()
@@ -205,12 +206,12 @@ class ObservedConcat(nn.Module, QuantizedLayerMixin):
     def forward(self, *tensors):
         if len(tensors) == 1 and isinstance(tensors[0], (list, tuple)):
             tensors = tensors[0]
-        quantized = [self.quantize_input(t) for t in tensors]
+        quantized = self._quantize_operands(tensors)
         return torch.cat(quantized, dim=self.dim)
 
 
 @OpRegistry.register("ObservedAdd", is_activation=False)
-class ObservedAdd(nn.Module, QuantizedLayerMixin):
+class ObservedAdd(_QuantArithmeticBase):
     """Element-wise add (residual connections); quantizes each operand (mirrors QuantAdd)."""
     def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode="chunk", chunk_size=None):
         super().__init__()
@@ -221,15 +222,14 @@ class ObservedAdd(nn.Module, QuantizedLayerMixin):
         self.input_quantization = False
 
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        q1 = self.quantize_input(x)
-        q2 = self.quantize_input(y)
+        q1, q2 = self._quantize_operands([x, y])
         return torch.add(q1, q2)
 
 
 # --- Attention matmul / similarity ops --------------------------------------
 
 @OpRegistry.register("ObservedAttentionScores", is_activation=False)
-class ObservedAttentionScores(nn.Module, QuantizedLayerMixin):
+class ObservedAttentionScores(_QuantArithmeticBase):
     """Q·K^T scaled-dot-product (multi-head einsum + √d post-scale).
 
     Quantizes both operands to FP8 before the einsum, mirroring QuantMatMul.
@@ -243,14 +243,13 @@ class ObservedAttentionScores(nn.Module, QuantizedLayerMixin):
         self.input_quantization = False
 
     def forward(self, query: torch.Tensor, key: torch.Tensor) -> torch.Tensor:
-        q = self.quantize_input(query)
-        k = self.quantize_input(key)
+        q, k = self._quantize_operands([query, key])
         dim = q.shape[1]
         return torch.einsum('bdhn,bdhm->bhnm', q, k) / dim**0.5
 
 
 @OpRegistry.register("ObservedAttentionApply", is_activation=False)
-class ObservedAttentionApply(nn.Module, QuantizedLayerMixin):
+class ObservedAttentionApply(_QuantArithmeticBase):
     """Score·V einsum (multi-head).
 
     Quantizes both operands to FP8 before the einsum, mirroring QuantMatMul.
@@ -264,13 +263,12 @@ class ObservedAttentionApply(nn.Module, QuantizedLayerMixin):
         self.input_quantization = False
 
     def forward(self, prob: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
-        p = self.quantize_input(prob)
-        v = self.quantize_input(value)
+        p, v = self._quantize_operands([prob, value])
         return torch.einsum('bhnm,bdhm->bdhn', p, v)
 
 
 @OpRegistry.register("ObservedDescMatmul", is_activation=False)
-class ObservedDescMatmul(nn.Module, QuantizedLayerMixin):
+class ObservedDescMatmul(_QuantArithmeticBase):
     """Descriptor similarity einsum (desc0 · desc1ᵀ / √d).
 
     Quantizes both operands to FP8 before the einsum, mirroring QuantMatMul.
@@ -285,8 +283,7 @@ class ObservedDescMatmul(nn.Module, QuantizedLayerMixin):
         self.input_quantization = False
 
     def forward(self, mdesc0: torch.Tensor, mdesc1: torch.Tensor) -> torch.Tensor:
-        q0 = self.quantize_input(mdesc0)
-        q1 = self.quantize_input(mdesc1)
+        q0, q1 = self._quantize_operands([mdesc0, mdesc1])
         return torch.einsum('bdn,bdm->bnm', q0, q1) / self.scale
 
 

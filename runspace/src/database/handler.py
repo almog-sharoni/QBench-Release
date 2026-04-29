@@ -560,15 +560,17 @@ class RunDatabase:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT graph_json_compressed, metadata FROM model_graphs 
+                SELECT graph_json_compressed, metadata, generated_date, status FROM model_graphs 
                 WHERE model_name = ?
             ''', (model_name,))
             result = cursor.fetchone()
             
             if result:
-                compressed, metadata_json = result
+                compressed, metadata_json, generated_date, status = result
                 graph_json_content = gzip.decompress(compressed).decode('utf-8')
                 metadata = json.loads(metadata_json) if metadata_json else {}
+                metadata['generated_date'] = generated_date
+                metadata['status'] = status
                 return graph_json_content, metadata
             return None, None
     
