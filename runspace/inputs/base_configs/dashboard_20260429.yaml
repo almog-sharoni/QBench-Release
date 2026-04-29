@@ -1,0 +1,33 @@
+adapter:
+  type: generic
+  quantize_first_layer: false
+  quantized_ops:
+  - all
+  excluded_ops:
+  - ''
+  weight_quantization: false
+  input_quantization: true
+quantization:
+  format: fp8_e4m3
+  calib_method: max
+  rounding: nearest
+  mode: chunk
+  chunk_size: 128
+  input_format: fp8_e4m3
+  weight_mode: tensor
+  weight_chunk_size: 128
+dataset:
+  name: imagenet
+  path: /data/imagenet/val
+  batch_size: 128
+  num_workers: 32
+evaluation:
+  mode: compare
+  compare_batches: -1
+  generate_graph_svg: false
+  save_histograms: false
+  max_batches: -1
+meta:
+  created_by: dashboard
+  dashboard_config_name: dashboard_20260429
+  template_config: advanced_full_config_fp8e4m3.yaml

@@ -6,6 +6,7 @@ import copy
 
 from ..registry.op_registry import OpRegistry
 from .quant_base import QuantizedLayerMixin
+from .quant_arithmetic import _QuantArithmeticBase
 
 
 class ScaledDotProduct(nn.Module):
@@ -37,7 +38,7 @@ class AttentionWeightedValues(nn.Module):
         return attn_output
 
 @OpRegistry.register("DecomposedMultiheadAttention", original_cls=nn.MultiheadAttention) 
-class DecomposedMultiheadAttention(nn.Module, QuantizedLayerMixin):
+class DecomposedMultiheadAttention(_QuantArithmeticBase):
     """
     A decomposed MultiheadAttention module that uses nn.Linear for projections
     to allow for quantization of internal layers.
@@ -75,9 +76,7 @@ class DecomposedMultiheadAttention(nn.Module, QuantizedLayerMixin):
         src_len = key.shape[1]
 
         # Quantize inputs
-        query = self.quantize_input(query)
-        key = self.quantize_input(key)
-        value = self.quantize_input(value)
+        query, key, value = self._quantize_operands([query, key, value])
         
         # Project Q, K, V
         q = self.q_proj(query)

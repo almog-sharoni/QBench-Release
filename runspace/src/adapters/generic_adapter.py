@@ -578,7 +578,11 @@ class GenericAdapter(BaseAdapter):
         if hasattr(module, 'dim'):
             kwargs['dim'] = module.dim
             
-        return QuantClass(**kwargs)
+        created = QuantClass(**kwargs)
+        created.input_quantization = self.input_quantization
+        created.input_q_type = self._effective_input_q_type(settings)
+        created.rounding = settings['rounding']
+        return created
 
     def _recursive_replace(self, model: nn.Module, prefix: str = ""):
         """Recursively traverse and replace layers using the registry."""
