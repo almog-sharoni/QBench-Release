@@ -20,10 +20,11 @@ class UniformInputQuantizer:
         "QuantCat",
     )
 
-    def __init__(self, model, fmt, chunk_size=128):
+    def __init__(self, model, fmt, chunk_size=128, quant_mode='chunk'):
         self.model = model
         self.fmt = fmt
         self.chunk_size = chunk_size
+        self.quant_mode = quant_mode
         self.hooks = []
         self.layer_stats = {}
         self.supported_ops = tuple(OpRegistry.get_supported_ops().values())
@@ -46,8 +47,8 @@ class UniformInputQuantizer:
         x_q, _ = quantize_tensor(
             x,
             q_type=self.fmt,
-            mode='chunk',
-            chunk_size=self.chunk_size,
+            mode=self.quant_mode,
+            chunk_size=self.chunk_size if self.quant_mode == 'chunk' else None,
             rounding='nearest',
         )
         return x_q
@@ -67,8 +68,8 @@ class UniformInputQuantizer:
         x_q, _ = quantize_tensor(
             x,
             q_type=fmt,
-            mode='chunk',
-            chunk_size=self.chunk_size,
+            mode=self.quant_mode,
+            chunk_size=self.chunk_size if self.quant_mode == 'chunk' else None,
             rounding='nearest',
         )
         return x_q
@@ -89,17 +90,18 @@ class UniformInputQuantizer:
                 flat = x.flatten(0).unsqueeze(0)
                 batch_size = 1
 
-            num_elements = flat.shape[-1]
-            pad_len = 0
-            if num_elements % self.chunk_size != 0:
-                pad_len = self.chunk_size - (num_elements % self.chunk_size)
-                num_elements += pad_len
-            num_chunks = num_elements // self.chunk_size
-            total_chunks = batch_size * num_chunks
+            if self.quant_mode == 'chunk':
+                num_elements = flat.shape[-1]
+                if num_elements % self.chunk_size != 0:
+                    num_elements += self.chunk_size - (num_elements % self.chunk_size)
+                num_chunks = num_elements // self.chunk_size
+                total_chunks = batch_size * num_chunks
+            else:
+                total_chunks = batch_size
 
             module.input_quantization = True
-            module.input_mode = 'chunk'
-            module.input_chunk_size = self.chunk_size
+            module.input_mode = self.quant_mode
+            module.input_chunk_size = self.chunk_size if self.quant_mode == 'chunk' else None
             module.input_q_type = fmt
             module.input_chunk_formats = None
             module.rounding = 'nearest'

@@ -1242,6 +1242,7 @@ class Runner:
             'mode': 'uniform',
             'format': fmt,
             'chunk_size': int(quant_cfg.get('chunk_size', 128) or 128),
+            'quant_mode': str(quant_cfg.get('mode', 'chunk') or 'chunk'),
         }
 
     def _build_layer_input_quantizer(self, model, input_quant_cfg: Dict[str, Any]):
@@ -1272,13 +1273,15 @@ class Runner:
             fmt = input_quant_cfg.get('format')
             if not fmt:
                 raise ValueError("input_quant.mode=uniform requires input_quant.format")
+            quant_mode = str(input_quant_cfg.get('quant_mode', 'chunk') or 'chunk')
             quantizer = UniformInputQuantizer(
                 model=model,
                 fmt=fmt,
                 chunk_size=chunk_size,
+                quant_mode=quant_mode,
             )
             quantizer.register_hooks()
-            print(f"Input quantization enabled: mode=uniform format={fmt} chunk_size={chunk_size}")
+            print(f"Input quantization enabled: mode=uniform format={fmt} quant_mode={quant_mode} chunk_size={chunk_size}")
             return quantizer
 
         # input_only is handled in the evaluation loop
