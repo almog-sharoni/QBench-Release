@@ -93,7 +93,7 @@ FORMATS_DEFAULT = _SIGNED # dict union; fallback to _SIGNED for Python < 3.9
 FORMATS_DEFAULT.update(_UNSIGNED)
 
 SHAPES_TENSOR  = [(32,),     (8, 16),  (256, 512)]
-SHAPES_CHUNK   = [(128,),    (8, 128), (256, 512)]
+SHAPES_CHUNK   = [(128,),    (8, 128), (256, 512), (1, 12, 197, 197), (4, 197, 197)]
 SHAPES_CHANNEL = [(8, 128),  (4, 16, 8, 8), (256, 256)]
 CHANNEL_DIM    = 1
 
@@ -135,7 +135,7 @@ def _run_chunk(formats, shapes):
             x = torch.randn(*shape, device="cuda", dtype=torch.float32).contiguous()
             y_ref  = ref_chunk(x, q_type, chunk_size=128)
             data, scales = encode_chunk(x, e, m, is_signed)
-            y_cuda = decode_chunk(data, scales, x.numel(), e, m, is_signed).reshape(shape)
+            y_cuda = decode_chunk(data, scales, list(x.shape), e, m, is_signed)
             err = (y_cuda - y_ref).abs().max().item()
             ok  = (err == 0.0)
             print(f"  {'PASS' if ok else 'FAIL':4s}  {q_type:10s} shape={str(shape):28s} "

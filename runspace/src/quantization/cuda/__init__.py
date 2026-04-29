@@ -38,6 +38,10 @@ decode_chunk   = _ext.decode_chunk
 encode_channel = _ext.encode_channel
 decode_channel = _ext.decode_channel
 
+roundtrip_tensor  = _ext.roundtrip_tensor
+roundtrip_chunk   = _ext.roundtrip_chunk
+roundtrip_channel = _ext.roundtrip_channel
+
 n_per_word     = _ext.n_per_word
 element_width  = _ext.element_width
 
@@ -87,6 +91,7 @@ __all__ = [
     "encode_tensor", "decode_tensor",
     "encode_chunk",  "decode_chunk",
     "encode_channel", "decode_channel",
+    "roundtrip_tensor", "roundtrip_chunk", "roundtrip_channel",
     "resolve_format",
     "n_per_word", "element_width",
 ]

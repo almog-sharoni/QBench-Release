@@ -21,15 +21,11 @@ def _cuda_codec():
     global _CUDA_CODEC
     if _CUDA_CODEC is None:
         from ..quantization.cuda import (
-            encode_tensor, decode_tensor,
-            encode_chunk,  decode_chunk,
-            encode_channel, decode_channel,
+            roundtrip_tensor, roundtrip_chunk, roundtrip_channel,
             resolve_format,
         )
         _CUDA_CODEC = (
-            encode_tensor, decode_tensor,
-            encode_chunk,  decode_chunk,
-            encode_channel, decode_channel,
+            roundtrip_tensor, roundtrip_chunk, roundtrip_channel,
             resolve_format,
         )
     return _CUDA_CODEC
@@ -56,7 +52,7 @@ def _can_use_cuda(input: torch.Tensor, q_type: str, mode: str, chunk_size):
         raise RuntimeError(
             f"quantize_tensor: mode must be tensor/chunk/channel (got {mode!r})."
         )
-    _, _, _, _, _, _, resolve_format = _cuda_codec()
+    _, _, _, resolve_format = _cuda_codec()
     try:
         e, m, is_signed = resolve_format(q_type)
     except ValueError as exc:
@@ -70,14 +66,6 @@ def _can_use_cuda(input: torch.Tensor, q_type: str, mode: str, chunk_size):
             raise RuntimeError(
                 f"quantize_tensor: chunk mode requires chunk_size=128 "
                 f"(CUDA codec hardcodes 128); got chunk_size={chunk_size}."
-            )
-        batch_size = input.shape[0] if input.dim() > 1 else 1
-        elems_per_batch = input.numel() // batch_size if batch_size else 0
-        if elems_per_batch == 0 or elems_per_batch % chunk_size != 0:
-            raise RuntimeError(
-                f"quantize_tensor: chunk mode requires per-batch element "
-                f"count divisible by chunk_size=128; got elems_per_batch="
-                f"{elems_per_batch} for shape {tuple(input.shape)}."
             )
     if mode == "channel" and input.dim() < 2:
         raise RuntimeError(
@@ -108,62 +96,28 @@ def _quantize_tensor_cuda(
     inputs with 0 < amax < 1e-5; for natural inputs (amax ~ 1) results
     are bit-exact.
     """
-    encode_tensor, decode_tensor, encode_chunk, decode_chunk, \
-        encode_channel, decode_channel, _ = _cuda_codec()
+    roundtrip_tensor, roundtrip_chunk, roundtrip_channel, _ = _cuda_codec()
 
     x = input.contiguous()
-
-    # Note on `max_val`: legacy `quantize_tensor` returned `input.abs().amax(...)`
-    # before applying `clamp(min=1e-5)` and deriving the scale via
-    # `pow2_floor`.  The codec already computes amax internally to derive
-    # `scale = pow2_floor(amax)`; recomputing amax in PyTorch would be a
-    # redundant full reduction (dominant wrapper overhead at ~70µs per
-    # 4096² call).  Instead we report `max_val = scale_b` — by definition
-    # `pow2_floor(max_val) == scale_b == pow2_floor(amax)`, so consumers
-    # that recompute the scale from `max_val` (e.g. comparator.py:1009)
-    # get exactly the same value as before.  Stats consumers see the
-    # power-of-2 floor instead of the exact peak — close enough for
-    # visualisation, with no functional change downstream.
 
     # `scale_b` (the input-shape broadcast scale) is only materialised
     # if a caller actually needs it (return_unscaled or return_scale).
     # For chunk mode this avoids an input-sized tensor allocation per
     # call (~64MB for 4096²); the codec's per-chunk scale is sufficient
-    # everywhere else.
+    # everywhere else.  For tensor/channel modes scale_b is a view of the
+    # codec's scale tensor (no allocation).
     needs_scale_b = return_unscaled or return_scale
 
     if mode == "tensor":
-        data, scale = encode_tensor(x, e, m, is_signed)
-        input_fp8 = decode_tensor(
-            data, scale, x.numel(), e, m, is_signed
-        ).reshape_as(x)
-        view_shape = [1] * x.dim()
-        scale_b = scale.view(*view_shape) if x.dim() > 0 else scale
-        scale_p = scale_b
-        max_val = scale_b
+        input_fp8, scale_b, scale_p, max_val = roundtrip_tensor(x, e, m, is_signed)
     elif mode == "chunk":
-        batch_size = x.shape[0] if x.dim() > 1 else 1
-        n_chunks_per_batch = (x.numel() // batch_size) // chunk_size
-        data, scales = encode_chunk(x, e, m, is_signed)
-        input_fp8 = decode_chunk(
-            data, scales, x.numel(), e, m, is_signed
-        ).reshape_as(x)
-        scale_p = scales.view(batch_size, n_chunks_per_batch, 1)
-        scale_b = (
-            scale_p.expand(-1, -1, chunk_size).contiguous().reshape_as(x)
-            if needs_scale_b else scale_p
+        input_fp8, scale_b, scale_p, max_val = roundtrip_chunk(
+            x, e, m, is_signed, needs_scale_b
         )
-        max_val = scale_p.max()
     else:  # channel, dim>=2, channel_dim=1
-        data, scales = encode_channel(x, 1, e, m, is_signed)
-        input_fp8 = decode_channel(
-            data, scales, list(x.shape), 1, e, m, is_signed
+        input_fp8, scale_b, scale_p, max_val = roundtrip_channel(
+            x, 1, e, m, is_signed
         )
-        view_shape = [1] * x.dim()
-        view_shape[1] = x.shape[1]
-        scale_b = scales.view(*view_shape)
-        scale_p = scale_b
-        max_val = scale_b
 
     if validate:
         from ..quantization.quantizer import assert_fp8_valid

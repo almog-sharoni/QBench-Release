@@ -956,11 +956,23 @@ class GenericAdapter(BaseAdapter):
                     kwargs['inplace'] = node.kwargs['inplace']
                 
                 new_mod = QuantClass(**kwargs)
-                new_mod.input_quantization = self.input_quantization
 
                 # Add module to GraphModule
                 new_mod_name = f"{node.name}_quant_{op_name.lower()}"
                 gm.add_module(new_mod_name, new_mod)
+
+                # Propagate runtime config (mirrors _create_quantized_module for
+                # in-place class swaps).  Without these, mode='chunk' layers hit
+                # input_chunk_size=None at the codec entry guard.
+                fx_settings = self._layer_quant_settings(new_mod_name)
+                new_mod.input_q_type = self._effective_input_q_type(fx_settings)
+                new_mod.input_quantization = self.input_quantization
+                new_mod.weight_quantization = self.weight_quantization
+                new_mod.input_mode = fx_settings['input_mode']
+                new_mod.input_chunk_size = fx_settings['input_chunk_size']
+                new_mod.weight_mode = fx_settings['weight_mode']
+                new_mod.weight_chunk_size = fx_settings['weight_chunk_size']
+                new_mod.rounding = fx_settings['rounding']
                 
                 # Replace node
                 with graph.inserting_after(node):
