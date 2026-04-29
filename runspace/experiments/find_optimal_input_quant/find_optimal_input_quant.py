@@ -17,6 +17,9 @@ if PROJECT_ROOT not in sys.path:
 
 from runspace.src.registry.op_registry import OpRegistry
 from runspace.core.runner import Runner
+from runspace.experiments.utils.common import (
+    build_uniform_input_quant_cfg as _build_uniform_input_quant_cfg,
+)
 # from runspace.src.quantization.constants import get_quantization_bias
 
 # Fix for container permission issues
@@ -28,38 +31,26 @@ os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib'
 #     'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
 # ]
 baseline_formats = [
-    # 'fp32',
+    'fp32',
     'fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
     'fp7_e1m5','fp7_e2m4','fp7_e3m3','fp7_e4m2','fp7_e5m1','fp7_e6m0',
     'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
-    # 'fp5_e1m3','fp5_e2m2','fp5_e3m1','fp5_e4m0',
-    # 'fp4_e1m2','fp4_e2m1','fp4_e3m0',
-    # 'fp3_e1m1','fp3_e2m0',
-    # 'fp2_e1m0'
+    'fp5_e1m3','fp5_e2m2','fp5_e3m1','fp5_e4m0',
+    'fp4_e1m2','fp4_e2m1','fp4_e3m0',
+    'fp3_e1m1','fp3_e2m0',
+    'fp2_e1m0'
 ]
 
-candidate_formats = ['fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0']
-# [
-            # Signed FP8 (1 sign bit + 7 bits E/M)
-            #'fp8_e1m6'   ,'fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
-            #'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
-            # 'fp4_e3m0' , 'fp4_e2m1' , 'fp4_e1m2' ,
-            
-            # Unsigned FP8 (0 sign bit + 8 bits E/M) - Fully utilizes 8 bits
-            # 'ufp4_e4m0', 'ufp4_e3m1', 'ufp4_e2m2', 'ufp4_e1m3',             # 'ufp8_e8m0','ufp8_e7m1','ufp8_e6m2','ufp8_e5m3','ufp8_e4m4','ufp8_e3m5','ufp8_e2m6','ufp8_e1m7'
-
-            # Expended FP8 (Moved to top to test tie-breaking)
-            # 'efp8_e1m6','efp8_e2m5','efp8_e3m4','efp8_e4m3','efp8_e5m2','efp8_e6m1','efp8_e7m0'
-
-            # 'fp5_e4m0', 'fp5_e3m1', 'fp5_e2m2', 'fp5_e1m3',
-            # 'ufp5_e5m0', 'ufp5_e4m1', 'ufp5_e3m2', 'ufp5_e2m3', 'ufp5_e1m4'
-
-            # 'efp4_e3m0','efp4_e2m1','efp4_e1m2',
-            # 'fp4_e3m0','fp4_e2m1','fp4_e1m2'
-            # 'ufp4_e4m0','ufp4_e3m1','ufp4_e2m2','ufp4_e1m3',
-            # 'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
-            # 'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
-        # ]
+candidate_formats = [
+    'fp32',
+    'fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
+    'fp7_e1m5','fp7_e2m4','fp7_e3m3','fp7_e4m2','fp7_e5m1','fp7_e6m0',
+    'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
+    'fp5_e1m3','fp5_e2m2','fp5_e3m1','fp5_e4m0',
+    'fp4_e1m2','fp4_e2m1','fp4_e3m0',
+    'fp3_e1m1','fp3_e2m0',
+    'fp2_e1m0'
+]
 
 
 def _parse_csv_arg(value, fallback):
@@ -110,6 +101,7 @@ def _build_input_quant_config(args, model_name, weights, default_format, quantiz
             'rounding': 'nearest',
             'calib_method': 'max',
             'unsigned_input_sources': unsigned_input_sources,
+            'weight_source': 'fp32',
         },
         'experiment': {
             'materialize_weights': {
@@ -286,14 +278,7 @@ def run_baselines(args, device, formats, on_result=None):
                 adapter=adapter,
                 max_batches=args.limit_batches,
                 desc=f"Baseline ({fmt})",
-                input_quant_cfg=(
-                    None if fmt == 'fp32' else {
-                        'enabled': True,
-                        'mode': 'uniform',
-                        'format': fmt,
-                        'chunk_size': args.chunk_size,
-                    }
-                ),
+                input_quant_cfg=_build_uniform_input_quant_cfg(fmt, args.chunk_size),
             )
             acc1 = eval_results.get('acc1', 0.0)
             acc5 = eval_results.get('acc5', 0.0)

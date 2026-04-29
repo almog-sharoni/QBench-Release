@@ -18,6 +18,7 @@ _DASHBOARD_PARTS = [
     "cache_tab.py",
     "run_models_tab.py",
     "graph_tab.py",
+    "auto_refresh.py",
 ]
 
 

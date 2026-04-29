@@ -42,12 +42,49 @@ def inject_global_styles():
         background-color: var(--dashboard-app-bg-color);
     }
 
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+        height: 3rem !important;
+        pointer-events: auto !important;
+    }
+
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"],
+    [data-testid="stDeployButton"],
+    .stDeployButton,
+    #MainMenu,
+    footer {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+    }
+
+    [data-testid="stToolbar"] {
+        visibility: visible !important;
+        pointer-events: auto !important;
+    }
+
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="collapsedControl"],
+    [data-testid="baseButton-headerNoPadding"],
+    button[title*="sidebar"],
+    button[aria-label*="sidebar"],
+    button[title*="Sidebar"],
+    button[aria-label*="Sidebar"],
+    button[kind="header"] {
+        display: flex !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+        z-index: 999999 !important;
+    }
+
     .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
         background: var(--dashboard-app-bg);
     }
 
     .block-container {
-        padding-top: 2rem;
+        padding-top: 1rem;
         padding-bottom: 2.5rem;
     }
 
@@ -221,4 +258,3 @@ def inject_global_styles():
     }
     </style>
     """, unsafe_allow_html=True)
-
