@@ -1,44 +1,92 @@
 # runspace/src/quantization/cuda/__init__.py
-"""JIT loader for QBench FP8 CUDA kernels."""
+#
+# JIT-loaded CUDA extension exposing the QBench low-precision codec.
+#
+# Element width is w = signed_bit + e + m bits, with signed_bit = 1 for
+# signed formats and 0 for unsigned formats.  Supported range 2 <= w <= 16.
+# Each uint32 storage word packs n_per_word(w) = floor(32 / w) consecutive
+# elements; remaining low bits are zero padding.
+#
+# Format keys follow the conventions:
+#   * Signed   formats begin with 'fp':   fp4_e2m1, fp8_e4m3, ...
+#   * Unsigned formats begin with 'ufp':  ufp4_e2m2, ufp8_e4m4, ...
 
+from __future__ import annotations
 import os
 from torch.utils.cpp_extension import load
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
+_THIS = os.path.dirname(os.path.abspath(__file__))
 
-_module = load(
-    name='qbench_fp8_cuda',
+_ext = load(
+    name="qbench_lp_codec",
     sources=[
-        os.path.join(_HERE, 'fp8_encode.cu'),
-        os.path.join(_HERE, 'fp8_decode.cu'),
+        os.path.join(_THIS, "ops_host.cpp"),
+        os.path.join(_THIS, "ops_tensor.cu"),
+        os.path.join(_THIS, "ops_chunk.cu"),
+        os.path.join(_THIS, "ops_channel.cu"),
     ],
-    extra_cuda_cflags=['-O3', '-lineinfo'],
+    extra_include_paths=[_THIS],
+    extra_cflags=["-O3"],
+    extra_cuda_cflags=["-O3", "--use_fast_math"],
     verbose=True,
 )
 
-# Per-chunk codec.
-encode_fp8_chunk = _module.encode_fp8_chunk
-decode_fp8_chunk = _module.decode_fp8_chunk
+encode_tensor  = _ext.encode_tensor
+decode_tensor  = _ext.decode_tensor
+encode_chunk   = _ext.encode_chunk
+decode_chunk   = _ext.decode_chunk
+encode_channel = _ext.encode_channel
+decode_channel = _ext.decode_channel
 
-# Per-tensor codec (scalar scale).
-encode_fp8_tensor    = _module.encode_fp8_tensor
-decode_fp8_tensor    = _module.decode_fp8_tensor
+n_per_word     = _ext.n_per_word
+element_width  = _ext.element_width
 
-# Per-channel codec (one scale per channel of [C, K] input).
-encode_fp8_channel   = _module.encode_fp8_channel
-decode_fp8_channel   = _module.decode_fp8_channel
 
-# ARU variants (Always Round Up — round-half-up, no sticky bit).
-encode_fp8_chunk_ARU    = _module.encode_fp8_chunk_ARU
-encode_fp8_tensor_ARU   = _module.encode_fp8_tensor_ARU
-encode_fp8_channel_ARU  = _module.encode_fp8_channel_ARU
+# ----------------------------------------------------------------------------
+# Format tables (generated)
+# ----------------------------------------------------------------------------
+#
+# Width range: 2 <= w <= 16.  Signed widths satisfy 1 + e + m in [2, 16];
+# unsigned widths satisfy e + m in [2, 16].  In both tables we require
+# e >= 1 (an exponent field of width 0 is degenerate) and m >= 0.
 
-# nf variants (No subnormal Flush — RNTE rounding).
-encode_fp8_chunk_nf     = _module.encode_fp8_chunk_nf
-encode_fp8_tensor_nf    = _module.encode_fp8_tensor_nf
-encode_fp8_channel_nf   = _module.encode_fp8_channel_nf
+_E_MAX = 16
+_M_MAX = 16
+_W_MIN = 2
+_W_MAX = 16
 
-# ARU_nf variants (Always Round Up + No subnormal Flush).
-encode_fp8_chunk_ARU_nf    = _module.encode_fp8_chunk_ARU_nf
-encode_fp8_tensor_ARU_nf   = _module.encode_fp8_tensor_ARU_nf
-encode_fp8_channel_ARU_nf  = _module.encode_fp8_channel_ARU_nf
+_SIGNED: dict[str, tuple[int, int]] = {
+    f"fp{1 + e + m}_e{e}m{m}": (e, m)
+    for e in range(1, _E_MAX + 1)
+    for m in range(0, _M_MAX + 1)
+    if _W_MIN <= 1 + e + m <= _W_MAX
+}
+
+_UNSIGNED: dict[str, tuple[int, int]] = {
+    f"ufp{e + m}_e{e}m{m}": (e, m)
+    for e in range(1, _E_MAX + 1)
+    for m in range(0, _M_MAX + 1)
+    if _W_MIN <= e + m <= _W_MAX
+}
+
+def resolve_format(q_type: str) -> tuple[int, int, bool]:
+    """Return (e, m, is_signed) for a q_type string."""
+    if q_type in _SIGNED:
+        e, m = _SIGNED[q_type]
+        return e, m, True
+    if q_type in _UNSIGNED:
+        e, m = _UNSIGNED[q_type]
+        return e, m, False
+    raise ValueError(
+        f"unknown q_type {q_type!r}; valid keys: "
+        f"{sorted(_SIGNED) + sorted(_UNSIGNED)}"
+    )
+
+
+__all__ = [
+    "encode_tensor", "decode_tensor",
+    "encode_chunk",  "decode_chunk",
+    "encode_channel", "decode_channel",
+    "resolve_format",
+    "n_per_word", "element_width",
+]
