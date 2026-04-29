@@ -8,7 +8,6 @@ This ensures the entire dataflow through the network stays in FP8 and is optimiz
 import torch
 import torch.nn as nn
 from ..registry.op_registry import OpRegistry
-from ..quantization.quantizer import quantize
 from .quant_base import quantize_tensor
 
 
@@ -60,8 +59,11 @@ class LUTActivation:
         # 3. Apply activation function (in FP32)
         output_values = activation_fn(input_values)
         
-        # 4. Quantize output to FP8
-        output_quant = quantize(output_values, q_type=q_type, bias=bias)
+        # 4. Quantize output to FP8 via the CUDA codec. 
+        output_quant = quantize_tensor(
+            output_values.contiguous(), q_type=q_type,
+            mode='tensor', return_unscaled=True,
+        )[1]
         
         # Register as buffer so it's saved with state_dict but not trained
         self.register_buffer('lut', output_quant)

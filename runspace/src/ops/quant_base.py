@@ -9,6 +9,175 @@ from ..quantization.constants import get_format_params
 def _get_reduce_dims(input: torch.Tensor):
     return tuple(range(input.dim()))
 
+
+# ----------------------------------------------------------------------------
+# CUDA fast path for quantize_tensor's standard mode={tensor,chunk,channel}.
+# Lazy-imported because the codec extension is JIT-built on first import.
+# ----------------------------------------------------------------------------
+
+_CUDA_CODEC = None
+
+def _cuda_codec():
+    global _CUDA_CODEC
+    if _CUDA_CODEC is None:
+        from ..quantization.cuda import (
+            encode_tensor, decode_tensor,
+            encode_chunk,  decode_chunk,
+            encode_channel, decode_channel,
+            resolve_format,
+        )
+        _CUDA_CODEC = (
+            encode_tensor, decode_tensor,
+            encode_chunk,  decode_chunk,
+            encode_channel, decode_channel,
+            resolve_format,
+        )
+    return _CUDA_CODEC
+
+
+def _can_use_cuda(input: torch.Tensor, q_type: str, mode: str, chunk_size):
+    """Validate the standard-path preconditions for the CUDA codec.
+
+    Returns (e, m, is_signed) on success; raises RuntimeError on any
+    unsupported attribute.  The orthogonal special q_type paths (fp32,
+    tf32, dynamic_oracle*, chunk_formats != None) are filtered out by the
+    caller before this function is invoked.
+    """
+    if not input.is_cuda:
+        raise RuntimeError(
+            f"quantize_tensor: input must be on CUDA (got device {input.device}); "
+            f"the CUDA codec is the only supported backend for the standard path."
+        )
+    if input.dtype != torch.float32:
+        raise RuntimeError(
+            f"quantize_tensor: input must be float32 (got {input.dtype})."
+        )
+    if mode not in ("tensor", "chunk", "channel"):
+        raise RuntimeError(
+            f"quantize_tensor: mode must be tensor/chunk/channel (got {mode!r})."
+        )
+    _, _, _, _, _, _, resolve_format = _cuda_codec()
+    try:
+        e, m, is_signed = resolve_format(q_type)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"quantize_tensor: q_type {q_type!r} is not supported by the CUDA "
+            f"codec (efp/uefp formats and unknown q_types fall here): {exc}"
+        ) from exc
+
+    if mode == "chunk":
+        if chunk_size != 128:
+            raise RuntimeError(
+                f"quantize_tensor: chunk mode requires chunk_size=128 "
+                f"(CUDA codec hardcodes 128); got chunk_size={chunk_size}."
+            )
+        batch_size = input.shape[0] if input.dim() > 1 else 1
+        elems_per_batch = input.numel() // batch_size if batch_size else 0
+        if elems_per_batch == 0 or elems_per_batch % chunk_size != 0:
+            raise RuntimeError(
+                f"quantize_tensor: chunk mode requires per-batch element "
+                f"count divisible by chunk_size=128; got elems_per_batch="
+                f"{elems_per_batch} for shape {tuple(input.shape)}."
+            )
+    if mode == "channel" and input.dim() < 2:
+        raise RuntimeError(
+            f"quantize_tensor: channel mode requires input.dim() >= 2; "
+            f"got shape {tuple(input.shape)}."
+        )
+    return e, m, is_signed
+
+
+def _quantize_tensor_cuda(
+    input: torch.Tensor,
+    q_type: str,
+    e: int, m: int, is_signed: bool,
+    return_unscaled: bool,
+    return_scale: bool,
+    mode: str,
+    chunk_size,
+    validate: bool,
+):
+    """Codec-backed implementation of quantize_tensor's standard path.
+
+    Returns the same variable-length tuple shape as the Python tail
+    (lines below quantize_tensor's special-q_type branches).
+
+    Behavioural note: the codec does not clamp non-zero amax (only
+    amax==0 -> 1.0).  The Python tail clamps to min=1e-5 (tensor/channel)
+    or min=1e-9 (chunk).  The two paths therefore diverge for tiny
+    inputs with 0 < amax < 1e-5; for natural inputs (amax ~ 1) results
+    are bit-exact.
+    """
+    encode_tensor, decode_tensor, encode_chunk, decode_chunk, \
+        encode_channel, decode_channel, _ = _cuda_codec()
+
+    x = input.contiguous()
+
+    # Note on `max_val`: legacy `quantize_tensor` returned `input.abs().amax(...)`
+    # before applying `clamp(min=1e-5)` and deriving the scale via
+    # `pow2_floor`.  The codec already computes amax internally to derive
+    # `scale = pow2_floor(amax)`; recomputing amax in PyTorch would be a
+    # redundant full reduction (dominant wrapper overhead at ~70µs per
+    # 4096² call).  Instead we report `max_val = scale_b` — by definition
+    # `pow2_floor(max_val) == scale_b == pow2_floor(amax)`, so consumers
+    # that recompute the scale from `max_val` (e.g. comparator.py:1009)
+    # get exactly the same value as before.  Stats consumers see the
+    # power-of-2 floor instead of the exact peak — close enough for
+    # visualisation, with no functional change downstream.
+
+    # `scale_b` (the input-shape broadcast scale) is only materialised
+    # if a caller actually needs it (return_unscaled or return_scale).
+    # For chunk mode this avoids an input-sized tensor allocation per
+    # call (~64MB for 4096²); the codec's per-chunk scale is sufficient
+    # everywhere else.
+    needs_scale_b = return_unscaled or return_scale
+
+    if mode == "tensor":
+        data, scale = encode_tensor(x, e, m, is_signed)
+        input_fp8 = decode_tensor(
+            data, scale, x.numel(), e, m, is_signed
+        ).reshape_as(x)
+        view_shape = [1] * x.dim()
+        scale_b = scale.view(*view_shape) if x.dim() > 0 else scale
+        scale_p = scale_b
+        max_val = scale_b
+    elif mode == "chunk":
+        batch_size = x.shape[0] if x.dim() > 1 else 1
+        n_chunks_per_batch = (x.numel() // batch_size) // chunk_size
+        data, scales = encode_chunk(x, e, m, is_signed)
+        input_fp8 = decode_chunk(
+            data, scales, x.numel(), e, m, is_signed
+        ).reshape_as(x)
+        scale_p = scales.view(batch_size, n_chunks_per_batch, 1)
+        scale_b = (
+            scale_p.expand(-1, -1, chunk_size).contiguous().reshape_as(x)
+            if needs_scale_b else scale_p
+        )
+        max_val = scale_p.max()
+    else:  # channel, dim>=2, channel_dim=1
+        data, scales = encode_channel(x, 1, e, m, is_signed)
+        input_fp8 = decode_channel(
+            data, scales, list(x.shape), 1, e, m, is_signed
+        )
+        view_shape = [1] * x.dim()
+        view_shape[1] = x.shape[1]
+        scale_b = scales.view(*view_shape)
+        scale_p = scale_b
+        max_val = scale_b
+
+    if validate:
+        from ..quantization.quantizer import assert_fp8_valid
+        assert_fp8_valid(input_fp8, q_type=q_type)
+
+    if return_unscaled:
+        input_fp8_unscaled = input_fp8 / scale_b
+        if return_scale:
+            return input_fp8, input_fp8_unscaled, max_val, scale_b, scale_p
+        return input_fp8, input_fp8_unscaled, max_val
+    if return_scale:
+        return input_fp8, scale_b, scale_p
+    return input_fp8, max_val
+
   
 
 def calculate_scale(max_val: torch.Tensor, q_type: str):
@@ -130,7 +299,13 @@ def quantize_tensor(
              
              # Quant/Dequant
              scaled = chunked / s_c
-             q = quantize(scaled, q_type=fmt, rounding=rounding, validate=validate)
+             # Per-element FP rounding via the CUDA codec.  amax(|scaled|) ∈
+             # [1, 2) by construction (s_c = pow2_floor(amax)), so the codec's
+             # internal scale is 1.0 and the unscaled return == quantize(scaled).
+             q = quantize_tensor(
+                 scaled.contiguous(), q_type=fmt, mode='tensor',
+                 return_unscaled=True, rounding=rounding, validate=validate,
+             )[1]
              deq = q * s_c
              
              # Error
@@ -193,9 +368,23 @@ def quantize_tensor(
             return output_fp8, s, scale_flat_packed
         return output_fp8, max_val
 
+    # Standard path (mode ∈ {tensor, chunk, channel}, single q_type, no
+    # chunk_formats list): the CUDA codec is mandatory.  The chunk_formats
+    # branch below is a Python-only orthogonal algorithm that picks formats
+    # per chunk and stays Python; its inner quantize() call is swapped to
+    # the CUDA-routed quantize_tensor in Step 2.
+    if mode in ('tensor', 'chunk', 'channel') and not (
+        mode == 'chunk' and chunk_formats is not None
+    ):
+        e, m, is_signed = _can_use_cuda(input, q_type, mode, chunk_size)
+        return _quantize_tensor_cuda(
+            input, q_type, e, m, is_signed,
+            return_unscaled, return_scale, mode, chunk_size, validate,
+        )
+
     s = None
 
-    
+
     if mode == 'chunk':
         if chunk_size is None:
             raise ValueError("chunk_size must be provided for mode='chunk'")
@@ -257,7 +446,12 @@ def quantize_tensor(
                 bias_v = None
                 scale = calculate_scale(max_v, fmt)
                 
-                q = quantize(sub_chunks / scale, q_type=fmt, rounding=rounding, validate=validate)
+                # Per-element FP rounding via the CUDA codec; sub_chunks/scale
+                # has per-row amax ∈ [1, 2) so the codec's internal scale is 1.0.
+                q = quantize_tensor(
+                    (sub_chunks / scale).contiguous(), q_type=fmt, mode='tensor',
+                    return_unscaled=True, rounding=rounding, validate=validate,
+                )[1]
                 quantized_chunks_flat[idx_tensor] = q
                 scale_chunks_flat[idx_tensor] = scale
                 
@@ -470,7 +664,12 @@ class QuantizedLayerMixin:
                 # Quantize
                 scaled = sub_chunks / scale
                 # Note: quantize returns floats for fp8/int8 simulation
-                quant = quantize(scaled, q_type=fmt, rounding=rounding).to(chunked_flat.dtype)
+                # Codec-routed: scaled has per-row amax ∈ [1, 2) so the codec's
+                # internal scale is 1.0 and unscaled == quantize(scaled).
+                quant = quantize_tensor(
+                    scaled.contiguous(), q_type=fmt, mode='tensor',
+                    return_unscaled=True, rounding=rounding,
+                )[1].to(chunked_flat.dtype)
                 
                 # Store back
                 quantized_flat[indices_tensor] = quant
@@ -598,7 +797,12 @@ class QuantizedLayerMixin:
             self.weight_fp8 = self.weight
             self.weight_scale = torch.tensor(1.0, device=self.weight.device)
         else:
-              self.weight_fp8 = quantize(w_scaled, q_type=q_type, rounding=rounding)
+              # Codec-routed: w_scaled has amax ∈ [1, 2), so the codec's
+              # internal scale is 1.0 and unscaled == quantize(w_scaled).
+              self.weight_fp8 = quantize_tensor(
+                  w_scaled.contiguous(), q_type=q_type, mode='tensor',
+                  return_unscaled=True, rounding=rounding,
+              )[1]
 
         # Capture weight and weight_scale if capture_activations is enabled
         if getattr(self, 'capture_activations', False):

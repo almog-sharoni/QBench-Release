@@ -44,6 +44,8 @@ constexpr std::int64_t packed_words_em(std::int64_t N, int e, int m, int is_sign
 // Tensor mode
 // ----------------------------------------------------------------------------
 
+// partial must hold one float per pass-1 block; see encode_tensor in
+// ops_host.cpp for the host-side sizing.
 void launch_compute_scale_tensor(
     const float* x,
     float*       partial,

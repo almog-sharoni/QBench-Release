@@ -6,7 +6,7 @@ import os
 import sys
 from src.ops.quant_conv import QuantConv2d
 from src.registry.op_registry import OpRegistry
-from src.quantization.quantizer import quantize
+from src.ops.quant_base import quantize_tensor
 from src.ops.quant_base import calculate_scale
 from src.utils.fx_trace_utils import trace_quant_aware
 
@@ -1011,7 +1011,10 @@ class LayerComparator:
                     # Scale Reference to Format Range (e.g., 0-448)
                     ref_input_scaled = ref_input / input_scale
                     # Quantize (Unscaled)
-                    quant_input_unscaled = quantize(ref_input_scaled, q_type=input_q_type, rounding=rounding)
+                    quant_input_unscaled = quantize_tensor(
+                        ref_input_scaled.contiguous(), q_type=input_q_type,
+                        mode='tensor', return_unscaled=True, rounding=rounding,
+                    )[1]
                 else:
                     # Fallback
                     if hasattr(module, 'last_quant_input_unscaled') and module.last_quant_input_unscaled is not None:
@@ -1027,7 +1030,10 @@ class LayerComparator:
                     # Scale Reference to Format Range
                     ref_weight_scaled = ref_weight / weight_scale
                     # Quantize (Unscaled)
-                    quant_weight_unscaled = quantize(ref_weight_scaled, q_type=weight_q_type, rounding=rounding)
+                    quant_weight_unscaled = quantize_tensor(
+                        ref_weight_scaled.contiguous(), q_type=weight_q_type,
+                        mode='tensor', return_unscaled=True, rounding=rounding,
+                    )[1]
                 else:
                     # Fallback
                     if hasattr(module, 'weight_fp8') and module.weight_fp8 is not None:

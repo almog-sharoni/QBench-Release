@@ -65,8 +65,10 @@ encode_tensor(torch::Tensor x, int e, int m, bool is_signed)
 
     void* stream = current_stream_ptr();
 
-    constexpr int AMAX_BLK_HOST = 256;
-    const int grid1 = (N + AMAX_BLK_HOST - 1) / AMAX_BLK_HOST;
+    // pass-1 emits one float per block; sized to match AMAX_BLK*AMAX_VPT
+    // (1024 elements/block) in ops_tensor.cu.
+    constexpr int PASS1_PER_BLOCK = 256 * 4;
+    const int grid1 = (N + PASS1_PER_BLOCK - 1) / PASS1_PER_BLOCK;
     auto partial = torch::empty({grid1}, opts.dtype(torch::kFloat32));
 
     qbench_lp::launch_compute_scale_tensor(
