@@ -67,6 +67,7 @@ class QuantSoftmax(nn.Softmax):
         self.quantization_bias = None
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
+        self.input_quantization = True
         self.capture_activations = False
         self.last_quant_input = None
         self.last_quant_output_unscaled = None
@@ -75,12 +76,24 @@ class QuantSoftmax(nn.Softmax):
         # self.mant_bits = get_mant_bits(q_type)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if not getattr(self, 'input_quantization', True):
+            prob = super().forward(input)
+            if self.capture_activations:
+                self.last_quant_input = input.detach()
+                self.last_quant_input_unscaled = None
+                self.last_quant_inputs_unscaled = []
+                self.last_quant_input_formats = []
+                self.last_quant_output_unscaled = None
+            return prob
+
         # Quantization of the Input
-        input_dequant, _ = quantize_tensor(
+        input_dequant, input_unscaled, _, _, _ = quantize_tensor(
             input,
             q_type=self.q_type,
             mode=self.quant_mode,
-            chunk_size=self.chunk_size
+            chunk_size=self.chunk_size,
+            return_unscaled=True,
+            return_scale=True
         )
         # Numerically Stable Softmax (Max Subtraction)
         dim = self.dim if self.dim is not None else -1
@@ -109,11 +122,13 @@ class QuantSoftmax(nn.Softmax):
         # Use ufp if softmax is in unsigned_input_sources
         q_type_x = self.uq_type if any(s in self.unsigned_input_sources for s in ["softmax", "quantsoftmax"]) else self.q_type
         
-        x_val, _ = quantize_tensor(
+        x_val, x_val_unscaled, _, _, _ = quantize_tensor(
             x_val,
             q_type=q_type_x,
             mode=self.quant_mode,
-            chunk_size=self.chunk_size
+            chunk_size=self.chunk_size,
+            return_unscaled=True,
+            return_scale=True
         )
 
         
@@ -130,6 +145,12 @@ class QuantSoftmax(nn.Softmax):
 
         if self.capture_activations:
             self.last_quant_input = input.detach()
+            self.last_quant_input_unscaled = input_unscaled.detach()
+            self.last_quant_inputs_unscaled = [
+                input_unscaled.detach(),
+                x_val_unscaled.detach(),
+            ]
+            self.last_quant_input_formats = [self.q_type, q_type_x]
             self.last_quant_output_unscaled = prob.detach()
             
         return prob
