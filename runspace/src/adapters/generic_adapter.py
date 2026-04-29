@@ -960,11 +960,23 @@ class GenericAdapter(BaseAdapter):
                     kwargs['inplace'] = node.kwargs['inplace']
                 
                 new_mod = QuantClass(**kwargs)
-                new_mod.input_quantization = self.input_quantization
 
                 # Add module to GraphModule
                 new_mod_name = f"{node.name}_quant_{op_name.lower()}"
                 gm.add_module(new_mod_name, new_mod)
+
+                # Propagate runtime config (mirrors _create_quantized_module for
+                # in-place class swaps).  Without these, mode='chunk' layers hit
+                # input_chunk_size=None at the codec entry guard.
+                fx_settings = self._layer_quant_settings(new_mod_name)
+                new_mod.input_q_type = self._effective_input_q_type(fx_settings)
+                new_mod.input_quantization = self.input_quantization
+                new_mod.weight_quantization = self.weight_quantization
+                new_mod.input_mode = fx_settings['input_mode']
+                new_mod.input_chunk_size = fx_settings['input_chunk_size']
+                new_mod.weight_mode = fx_settings['weight_mode']
+                new_mod.weight_chunk_size = fx_settings['weight_chunk_size']
+                new_mod.rounding = fx_settings['rounding']
                 
                 # Replace node
                 with graph.inserting_after(node):
@@ -984,8 +996,14 @@ class GenericAdapter(BaseAdapter):
         return gm, modified
 
     def _validate_fx_model(self, fx_model: nn.Module, reference_model: nn.Module):
+        # The CUDA codec is the only supported backend for the standard
+        # `quantize_tensor` path, so the validation forward must run on CUDA
+        # even when the model is still on CPU at build time (the runner
+        # moves it to self.device after build_model() returns).
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         try:
-            dummy = self._get_dummy_input(reference_model)
+            fx_model.to(device)
+            dummy = self._get_dummy_input(fx_model).to(device)
             with torch.no_grad():
                 fx_model.eval()(dummy)
             return True, None

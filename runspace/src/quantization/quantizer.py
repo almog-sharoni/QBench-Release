@@ -229,7 +229,11 @@ def quantize_fp_generic(tensor: torch.Tensor, exp_bits: int, mant_bits: int, rou
     # Extract the exponent (8 bits at position 23)
     exp32 = (f32 >> 23) & 0xFF
     # Extract the mantissa (23 bits) and restore the implicit leading 1
-    mant32 = f32 & 0x7FFFFF | (1 << 23)
+    # mant32 = f32 & 0x7FFFFF | (1 << 23)
+    
+    # # Subnormals (exp32 == 0) have no implicit 1 — only OR it in for normals.
+    is_normal = (exp32 != 0).to(torch.int32)
+    mant32 = (f32 & 0x7FFFFF) | (is_normal << 23)
     
     # Calculate shift amount for subnormal numbers relative to target exponent bits.
     # 127 is the FP32 bias, 2**exp_bits - 2 is the target format bias.
