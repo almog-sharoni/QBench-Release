@@ -36,10 +36,26 @@ class DynamicInputQuantizer:
         "QuantCat",
     )
 
-    def __init__(self, model, metric='mse', chunk_size=128, candidate_formats=None):
+    def __init__(
+        self,
+        model,
+        metric='mse',
+        chunk_size=128,
+        candidate_formats=None,
+        restrict_post_relu_ufp=False,
+        unsigned_input_sources=None,
+        use_unsigned_input_candidates=True,
+    ):
         self.model = model
         self.metric = metric
         self.chunk_size = chunk_size
+        self.restrict_post_relu_ufp = bool(restrict_post_relu_ufp)
+        self.use_unsigned_input_candidates = bool(use_unsigned_input_candidates)
+        self.unsigned_input_sources = {
+            str(source).lower()
+            for source in (unsigned_input_sources or [])
+            if str(source).strip()
+        }
         self.hooks = []
         self.hooked_modules = []
         self.layer_stats = {}
@@ -67,9 +83,74 @@ class DynamicInputQuantizer:
         self.functional_ops = tuple(functional_ops)
         self.hookable_ops = tuple(dict.fromkeys(self.supported_ops + self.functional_ops))
         self.post_relu_layers = self._find_post_relu_layers()
+        self.unsigned_passthrough_layers = set()
+        self.post_unsigned_layers = self._find_post_unsigned_layers()
 
         self.ufp_candidates = [f for f in self.candidate_formats if f.startswith('ufp')]
         self.non_ufp_candidates = [f for f in self.candidate_formats if not f.startswith('ufp')]
+        self.unsigned_candidate_formats = self._make_unsigned_candidates(self.candidate_formats)
+
+    @staticmethod
+    def _dedupe_formats(formats):
+        seen = set()
+        deduped = []
+        for fmt in formats:
+            if fmt in seen:
+                continue
+            seen.add(fmt)
+            deduped.append(fmt)
+        return deduped
+
+    @staticmethod
+    def _to_unsigned_format(fmt):
+        if not isinstance(fmt, str) or fmt == 'fp32' or fmt.startswith(('ufp', 'uefp')):
+            return fmt
+
+        try:
+            from src.ops.quant_softmax import qtype_to_unsigned_qtype
+        except ImportError:
+            from ..ops.quant_softmax import qtype_to_unsigned_qtype
+
+        return qtype_to_unsigned_qtype(fmt, add_to_mant=True)
+
+    @classmethod
+    def _make_unsigned_candidates(cls, candidates):
+        return cls._dedupe_formats([cls._to_unsigned_format(fmt) for fmt in candidates])
+
+    @staticmethod
+    def _is_unsigned_format(fmt):
+        return isinstance(fmt, str) and fmt.startswith(('ufp', 'uefp'))
+
+    def _module_uses_unsigned_input(self, module):
+        if not self.use_unsigned_input_candidates:
+            return False
+
+        input_q_type = getattr(module, 'input_q_type', None)
+        if self._is_unsigned_format(input_q_type):
+            return True
+
+        for attr_name in dir(module):
+            if not attr_name.startswith('input') or not attr_name.endswith('_q_type'):
+                continue
+            if self._is_unsigned_format(getattr(module, attr_name, None)):
+                return True
+
+        return False
+
+    def _is_unsigned_source_module(self, module):
+        if not self.use_unsigned_input_candidates or not self.unsigned_input_sources:
+            return False
+
+        class_name = module.__class__.__name__.lower()
+        unquantized_name = class_name.replace('quant', '')
+        aliases = {class_name, unquantized_name}
+        if unquantized_name.endswith('6'):
+            aliases.add(unquantized_name[:-1])
+        return bool(aliases & self.unsigned_input_sources)
+
+    @staticmethod
+    def _is_passthrough_module(module):
+        return isinstance(module, (nn.Dropout, nn.Dropout2d, nn.Dropout3d, nn.Identity))
 
     def _find_post_relu_layers(self):
         post_relu = set()
@@ -104,29 +185,218 @@ class DynamicInputQuantizer:
 
         return post_relu
 
+    @staticmethod
+    def _node_inputs(node):
+        all_input_nodes = getattr(node, 'all_input_nodes', None)
+        if all_input_nodes is not None:
+            return list(all_input_nodes)
+
+        inputs = []
+
+        def collect(value):
+            if isinstance(value, torch.fx.Node):
+                inputs.append(value)
+            elif isinstance(value, (tuple, list)):
+                for item in value:
+                    collect(item)
+            elif isinstance(value, dict):
+                for item in value.values():
+                    collect(item)
+
+        collect(node.args)
+        collect(node.kwargs)
+        return inputs
+
+    def _find_post_unsigned_layers_fx(self):
+        try:
+            from src.utils.fx_trace_utils import trace_quant_aware
+        except ImportError:
+            from ..utils.fx_trace_utils import trace_quant_aware
+
+        post_unsigned = set()
+
+        def process_graph_module(gm, prefix=""):
+            modified = False
+            unsigned_nodes = set()
+            modules = dict(gm.named_modules())
+
+            for node in gm.graph.nodes:
+                is_unsigned_source = False
+                is_passthrough = False
+                uses_unsigned_input = False
+
+                if node.op == 'call_module':
+                    module = modules.get(node.target)
+                    if module is not None:
+                        is_unsigned_source = self._is_unsigned_source_module(module)
+                        is_passthrough = self._is_passthrough_module(module)
+                        uses_unsigned_input = self._module_uses_unsigned_input(module)
+
+                if is_unsigned_source or (is_passthrough and uses_unsigned_input):
+                    unsigned_nodes.add(node.name)
+                    if is_passthrough:
+                        layer_name = f"{prefix}.{node.target}" if prefix else str(node.target)
+                        self.unsigned_passthrough_layers.add(layer_name)
+                elif is_passthrough:
+                    node_inputs = self._node_inputs(node)
+                    if node_inputs and any(inp.name in unsigned_nodes for inp in node_inputs):
+                        unsigned_nodes.add(node.name)
+                        layer_name = f"{prefix}.{node.target}" if prefix else str(node.target)
+                        self.unsigned_passthrough_layers.add(layer_name)
+
+            for node in gm.graph.nodes:
+                if node.op != 'call_module':
+                    continue
+
+                module = modules.get(node.target)
+                if module is None or self._is_passthrough_module(module):
+                    continue
+
+                is_compute = isinstance(module, self._COMPUTE_TYPES) or isinstance(module, self.hookable_ops)
+                if not is_compute:
+                    continue
+
+                node_inputs = self._node_inputs(node)
+                if self._module_uses_unsigned_input(module) or any(inp.name in unsigned_nodes for inp in node_inputs):
+                    layer_name = f"{prefix}.{node.target}" if prefix else str(node.target)
+                    post_unsigned.add(layer_name)
+                    modified = True
+
+            return modified
+
+        try:
+            if isinstance(self.model, torch.fx.GraphModule):
+                process_graph_module(self.model)
+                return post_unsigned, bool(post_unsigned)
+
+            _, _, gm = trace_quant_aware(self.model)
+            process_graph_module(gm)
+            return post_unsigned, bool(post_unsigned)
+        except Exception:
+            pass
+
+        traced_any = False
+        for child_name, child in self.model.named_children():
+            try:
+                _, _, gm = trace_quant_aware(child)
+                if process_graph_module(gm, child_name):
+                    traced_any = True
+            except Exception:
+                continue
+
+        return post_unsigned, traced_any
+
+    def _find_post_unsigned_layers(self):
+        post_unsigned, traced = self._find_post_unsigned_layers_fx()
+        if traced:
+            return post_unsigned
+
+        post_unsigned = set()
+        prev_was_unsigned = False
+
+        for name, module in self.model.named_modules():
+            is_compute = isinstance(module, self._COMPUTE_TYPES) or isinstance(module, self.hookable_ops)
+            is_unsigned_source = self._is_unsigned_source_module(module)
+            uses_unsigned_input = self._module_uses_unsigned_input(module)
+
+            if is_unsigned_source or (uses_unsigned_input and self._is_passthrough_module(module)):
+                prev_was_unsigned = True
+                if self._is_passthrough_module(module):
+                    self.unsigned_passthrough_layers.add(name)
+                continue
+
+            if self._is_passthrough_module(module):
+                if prev_was_unsigned:
+                    self.unsigned_passthrough_layers.add(name)
+                continue
+            elif is_compute:
+                if prev_was_unsigned or uses_unsigned_input:
+                    post_unsigned.add(name)
+                prev_was_unsigned = False
+            elif not isinstance(
+                module,
+                (
+                    nn.Sequential,
+                    nn.ModuleList,
+                    nn.BatchNorm2d,
+                    nn.BatchNorm1d,
+                    nn.AdaptiveAvgPool2d,
+                    nn.AvgPool2d,
+                    nn.MaxPool2d,
+                    nn.Flatten,
+                ),
+            ):
+                prev_was_unsigned = False
+
+        return post_unsigned
+
     def register_hooks(self):
         count_dynamic = 0
         count_ufp = 0
+        count_unsigned_candidate_layers = 0
 
         for name, module in self.model.named_modules():
             if isinstance(module, self.hookable_ops):
                 hook = self._get_hook(name)
                 self.hooks.append(module.register_forward_pre_hook(hook))
                 self.hooked_modules.append(module)
-                if name in self.post_relu_layers:
+                uses_unsigned_candidates = (
+                    self.use_unsigned_input_candidates
+                    and (
+                        name in self.post_unsigned_layers
+                        or name in self.unsigned_passthrough_layers
+                    )
+                ) or (
+                    self._module_uses_unsigned_input(module)
+                )
+                if uses_unsigned_candidates:
+                    count_unsigned_candidate_layers += 1
+                if uses_unsigned_candidates or name in self.post_relu_layers:
                     count_ufp += 1
                 else:
                     count_dynamic += 1
 
-        print(
-            f"Registered hooks on {count_dynamic + count_ufp} layers: "
-            f"{count_ufp} post-ReLU (UFP candidates), "
-            f"{count_dynamic} other (non-UFP candidates, metric={self.metric.upper()})."
-        )
-        if not self.ufp_candidates:
-            print("  WARNING: no UFP formats in candidates; post-ReLU layers use non-UFP.")
-        if not self.non_ufp_candidates:
-            print("  WARNING: no non-UFP formats in candidates; other layers use UFP.")
+        if self.restrict_post_relu_ufp:
+            print(
+                f"Registered hooks on {count_dynamic + count_ufp} layers: "
+                f"{count_ufp} post-ReLU (UFP candidates), "
+                f"{count_dynamic} other (non-UFP candidates, metric={self.metric.upper()})."
+            )
+            if not self.ufp_candidates:
+                print("  WARNING: no UFP formats in candidates; post-ReLU layers use non-UFP.")
+            if not self.non_ufp_candidates:
+                print("  WARNING: no non-UFP formats in candidates; other layers use UFP.")
+        else:
+            print(
+                f"Registered hooks on {count_dynamic + count_ufp} layers: "
+                f"all layers use all {len(self.candidate_formats)} candidates "
+                f"(metric={self.metric.upper()})."
+            )
+        if self.use_unsigned_input_candidates:
+            print(f"{count_unsigned_candidate_layers} layers are using UFP candidates.")
+
+    def _candidates_for_layer(self, layer_name, module=None):
+        if (
+            (
+                self.use_unsigned_input_candidates
+                and (
+                    layer_name in self.post_unsigned_layers
+                    or layer_name in self.unsigned_passthrough_layers
+                )
+            )
+            or (
+                module is not None
+                and self._module_uses_unsigned_input(module)
+            )
+        ):
+            return self.unsigned_candidate_formats
+
+        if self.restrict_post_relu_ufp:
+            if layer_name in self.post_relu_layers:
+                return self.ufp_candidates or self._make_unsigned_candidates(self.non_ufp_candidates)
+            return self.non_ufp_candidates or self.ufp_candidates
+
+        return self.candidate_formats
 
     def _get_hook(self, layer_name):
         def hook_fn(module, args):
@@ -134,10 +404,7 @@ class DynamicInputQuantizer:
             if not isinstance(x, torch.Tensor):
                 return None
 
-            if layer_name in self.post_relu_layers:
-                candidates = self.ufp_candidates or self.non_ufp_candidates
-            else:
-                candidates = self.non_ufp_candidates or self.ufp_candidates
+            candidates = self._candidates_for_layer(layer_name, module)
 
             # 1. Perform dynamic quantization selection
             x_quantized, best_indices = self._select_best_format(x, layer_name, candidates)
