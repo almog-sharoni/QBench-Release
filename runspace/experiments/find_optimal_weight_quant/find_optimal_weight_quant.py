@@ -257,7 +257,6 @@ def calculate_error(original, dequantized, metric):
 from runspace.experiments.utils.plotting import (
     plot_error_histograms,
     plot_error_boxplot,
-    plot_oracle_heatmap,
     plot_accuracy_comparison,
     plot_chunk_format_distribution,
     plot_chunk_win_rate,
@@ -1143,17 +1142,6 @@ def process_single_model(args, device, metrics, base_root):
                     filtered_configs.append(c)
             final_configs = filtered_configs
 
-        # Enable Oracle Tracker
-        tracker = None
-        try:
-            from runspace.src.tracking.oracle_tracker import OracleTracker
-            tracker = OracleTracker()
-            tracker.reset()
-            tracker.enable()
-        except ImportError:
-            print("Warning: Could not import OracleTracker. Oracle visualization disabled.")
-            tracker = None
-
         results = []
         # Keep reference metrics available while logging each run immediately.
         if cached_ref is not None:
@@ -1284,21 +1272,6 @@ def process_single_model(args, device, metrics, base_root):
                     f"status={r.get('status')} error={r.get('exec_error')}"
                 )
         
-        # Plot Oracle Heatmaps
-        if tracker:
-            oracle_stats, candidates = tracker.get_stats()
-            tracker.disable()
-            
-            # If candidates were never set (e.g. no oracle runs), we skip
-            if candidates:
-                for run_id, layer_stats in oracle_stats.items():
-                     out_path = os.path.join(model_dir, run_id)
-                     if os.path.exists(out_path):
-                          plot_oracle_heatmap(out_path, layer_stats, candidates, title_suffix=run_id)
-                     else:
-                          # Fallback: try looking in subdirs (e.g. if run_id uses slashes - unlikely here)
-                          pass
-
         # Aggregate
         aggregator = ReportAggregator()
         summary_path = os.path.join(model_dir, "evaluation_summary.csv")

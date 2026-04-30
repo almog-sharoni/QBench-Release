@@ -36,8 +36,8 @@ def _can_use_cuda(input: torch.Tensor, q_type: str, mode: str, chunk_size):
 
     Returns (e, m, is_signed) on success; raises RuntimeError on any
     unsupported attribute.  The orthogonal special q_type paths (fp32,
-    tf32, dynamic_oracle*, chunk_formats != None) are filtered out by the
-    caller before this function is invoked.
+    tf32, chunk_formats != None) are filtered out by the caller before
+    this function is invoked.
     """
     if not input.is_cuda:
         raise RuntimeError(
@@ -177,7 +177,7 @@ def quantize_tensor(
         return_scale: If True, returns (quantized_tensor, scale) or (quantized_tensor, unscaled, scale)
         mode: Quantization mode ('tensor', 'channel', 'chunk')
         chunk_size: Size of chunk for 'chunk' mode
-        rounding: Rounding mode ('nearest' or 'truncate')
+        rounding: Rounding mode ('nearest')
         validate: If True, perform expensive FP8 validation checks
         chunk_formats: Optional list of formats per chunk. If provided, overrides q_type for chunk mode.
     Returns:
@@ -200,128 +200,6 @@ def quantize_tensor(
             return input, scale, scale
         return input, max_val
     
-    if q_type.startswith('dynamic_oracle'):
-        # Dynamic Oracle Mode: specific for evaluation of upper bound
-        # Format: dynamic_oracle_{metric} (e.g. dynamic_oracle_l1)
-        if chunk_size is None:
-             raise ValueError("chunk_size must be provided for dynamic_oracle mode")
-             
-        # Parse metric
-        parts = q_type.split('_')
-        metric = parts[-1] if len(parts) > 2 else 'l1'
-        
-        # Candidate formats (Standard set)
-        candidates = [
-            'fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6', 
-            'fp8_e6m1', 'fp8_e7m0',
-            'fp7_e3m3', 'fp7_e4m2', 'fp7_e2m4', 'fp7_e5m1', 'fp7_e1m5', 
-            'fp7_e6m0'
-        ]
-        
-
-        # Flatten and chunk
-        if input.dim() > 1:
-            flat_input = input.flatten(1)
-            batch_size = input.shape[0]
-        else:
-            flat_input = input.flatten(0)
-            batch_size = 1
-            
-        num_elements = flat_input.shape[-1]
-        pad_len = 0
-        if num_elements % chunk_size != 0:
-            pad_len = chunk_size - (num_elements % chunk_size)
-            flat_input = torch.nn.functional.pad(flat_input, (0, pad_len))
-            
-        num_chunks = flat_input.shape[-1] // chunk_size
-        chunked = flat_input.reshape(batch_size, num_chunks, chunk_size) # [B, N, C]
-        
-        best_error = torch.full((batch_size, num_chunks), float('inf'), device=input.device)
-        best_dequant = torch.zeros_like(chunked)
-        best_scale = torch.zeros((batch_size, num_chunks, 1), device=input.device)
-        best_fmt_idx = torch.zeros((batch_size, num_chunks), dtype=torch.long, device=input.device)
-        
-        # Naive implementation: Try all, keep best
-        for idx, fmt in enumerate(candidates):
-             # Quantize using existing logic (recursive call? or reimplement simplified)
-             # Reimplement simplified to avoid redundant padding/checks
-             
-             # Scale
-             max_val_c = chunked.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5)
-             bias_val = None
-             s_c = calculate_scale(max_val_c, fmt)
-             
-             # Quant/Dequant
-             scaled = chunked / s_c
-             # Per-element FP rounding via the CUDA codec.  amax(|scaled|) ∈
-             # [1, 2) by construction (s_c = pow2_floor(amax)), so the codec's
-             # internal scale is 1.0 and the unscaled return == quantize(scaled).
-             q = quantize_tensor(
-                 scaled.contiguous(), q_type=fmt, mode='tensor',
-                 return_unscaled=True, rounding=rounding, validate=validate,
-             )[1]
-             deq = q * s_c
-             
-             # Error
-             diff = chunked - deq
-             if metric == 'l1':
-                 err = diff.abs().sum(dim=-1) # [B, N]
-             elif metric == 'mse':
-                 err = diff.pow(2).mean(dim=-1)
-             elif metric == 'cosine':
-                  # Cosine per chunk
-                  sim = torch.nn.functional.cosine_similarity(chunked, deq, dim=-1)
-                  err = 1.0 - sim
-             else: # Default l1
-                 err = diff.abs().sum(dim=-1)
-             
-             # Update best
-             mask = err < best_error
-             best_error = torch.where(mask, err, best_error)
-             best_dequant = torch.where(mask.unsqueeze(-1), deq, best_dequant)
-             best_scale = torch.where(mask.unsqueeze(-1), s_c, best_scale)
-             best_fmt_idx = torch.where(mask, torch.tensor(idx, device=input.device), best_fmt_idx)
-
-        # --- Log to Tracker ---
-        try:
-             from runspace.src.tracking.oracle_tracker import OracleTracker
-             tracker = OracleTracker()
-             if tracker.enabled and tracker.current_context:
-                 # Ensure candidates are set at least once per run or globally
-                 if not tracker.candidates:
-                     tracker.set_candidates(candidates)
-                 tracker.log_selection(best_fmt_idx)
-        except ImportError:
-             pass
-             
-        # Reconstruct
-        # Flatten chunks
-        dequant_flat = best_dequant.reshape(batch_size, -1)
-        scale_flat_packed = best_scale.reshape(batch_size, -1) # This is [B, Nchunks] -> we need [B, Nchunks*1]? No, packed scale.
-        
-        # Expand scale for return if needed
-        scale_expanded = best_scale.expand(-1, -1, chunk_size).contiguous().reshape(batch_size, -1)
-        
-        # Remove pad
-        if pad_len > 0:
-            dequant_flat = dequant_flat[:, :num_elements]
-            scale_expanded = scale_expanded[:, :num_elements]
-            # scale_flat_packed is per chunk, so we keep it as is (ignoring partial chunk logic for packed?)
-            
-        output_fp8 = dequant_flat.reshape_as(input)
-        s = scale_expanded.reshape_as(input)
-        
-        # For return values
-        max_val = output_fp8.abs().max() # Approx
-        
-        if return_unscaled and return_scale:
-             return output_fp8, output_fp8, max_val, s, scale_flat_packed
-        if return_unscaled:
-             return output_fp8, output_fp8, max_val
-        if return_scale:
-            return output_fp8, s, scale_flat_packed
-        return output_fp8, max_val
-
     # Standard path (mode ∈ {tensor, chunk, channel}, single q_type, no
     # chunk_formats list): the CUDA codec is mandatory.  The chunk_formats
     # branch below is a Python-only orthogonal algorithm that picks formats
@@ -802,20 +680,6 @@ class QuantizedLayerMixin:
             
             return input
             
-        # --- Tracker Context Setup ---
-        tracker_active = False
-        try:
-             if 'dynamic_oracle' in str(q_type) and hasattr(self, 'layer_name'):
-                 from runspace.src.tracking.oracle_tracker import OracleTracker
-                 tracker = OracleTracker()
-                 if tracker.enabled:
-                     # Use run_id if available, else default
-                     run_id = getattr(self, 'run_id', 'default')
-                     tracker.set_context(run_id, self.layer_name)
-                     tracker_active = True
-        except ImportError:
-             pass
-
         # Hot path: when capture_activations is off, only `input_fp8` is
         # actually consumed — the unscaled / scale_b / scale_p / max_val
         # outputs would be thrown away.  In chunk mode this matters: scale_b
@@ -833,10 +697,6 @@ class QuantizedLayerMixin:
                 mode=mode, chunk_size=chunk_size, rounding=rounding,
                 chunk_formats=chunk_formats,
             )
-
-        # --- Tracker Cleanup ---
-        if tracker_active:
-            tracker.clear_context()
 
         if capture:
             self.last_quant_input_unscaled = input_fp8_unscaled.detach()

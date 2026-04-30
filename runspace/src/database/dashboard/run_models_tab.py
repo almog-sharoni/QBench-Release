@@ -1025,8 +1025,8 @@ with tab_runner:
                     )
                     rounding = ops3.selectbox(
                         "Rounding",
-                        options=["nearest", "truncate"],
-                        index=0 if str(template_quant.get("rounding", "nearest")) == "nearest" else 1,
+                        options=["nearest"],
+                        index=0,
                         key=_builder_key("rounding"),
                     )
     
