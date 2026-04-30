@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
-from ..registry.op_registry import OpRegistry
-from ..quantization.quantizer import quantize
-from .quant_base import QuantizedLayerMixin
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.quantization.quantizer import quantize
+from runspace.src.ops.quant_base import QuantizedLayerMixin
 
 @OpRegistry.register("QuantConv2d", original_cls=nn.Conv2d)
 class QuantConv2d(nn.Conv2d, QuantizedLayerMixin):
@@ -55,7 +55,7 @@ class QuantConv2d(nn.Conv2d, QuantizedLayerMixin):
         # The Patcher will check if the result tensor meets the width > 128 criteria.
         
         if self.simulate_tf32_accum:
-            from ..utils.tf32_patcher import TF32Patcher
+            from runspace.src.utils.tf32_patcher import TF32Patcher
             
             with TF32Patcher():
                 # Perform convolution WITHOUT bias

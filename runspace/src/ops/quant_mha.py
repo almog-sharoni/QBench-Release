@@ -4,9 +4,9 @@ import torch.nn.functional as F
 import math
 import copy
 
-from ..registry.op_registry import OpRegistry
-from .quant_base import QuantizedLayerMixin
-from .quant_arithmetic import _QuantArithmeticBase
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.ops.quant_base import QuantizedLayerMixin
+from runspace.src.ops.quant_arithmetic import _QuantArithmeticBase
 
 
 class ScaledDotProduct(nn.Module):

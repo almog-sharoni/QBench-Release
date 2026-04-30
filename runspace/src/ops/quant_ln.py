@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from ..registry.op_registry import OpRegistry
-from .quant_base import QuantizedLayerMixin
-from ..quantization.quantizer import quantize
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.ops.quant_base import QuantizedLayerMixin
+from runspace.src.quantization.quantizer import quantize
 
 # @OpRegistry.register("QuantLayerNorm", original_cls=nn.LayerNorm, under_construction=True)
 class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):

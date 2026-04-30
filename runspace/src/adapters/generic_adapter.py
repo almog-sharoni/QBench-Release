@@ -498,6 +498,11 @@ class GenericAdapter(BaseAdapter):
     def _create_quantized_module(self, module: nn.Module, QuantClass: type, name: str = "") -> nn.Module:
         """Creates a quantized module from the original module."""
         from ..ops.quant_base import QuantizedLayerMixin
+        try:
+            from runspace.src.ops.quant_base import QuantizedLayerMixin as RunspaceQuantizedLayerMixin
+        except ImportError:
+            RunspaceQuantizedLayerMixin = QuantizedLayerMixin
+        quantized_mixin_types = tuple(dict.fromkeys((QuantizedLayerMixin, RunspaceQuantizedLayerMixin)))
         settings = self._layer_quant_settings(name)
         q_type = settings['q_type']
         bias = settings['bias']
@@ -506,7 +511,7 @@ class GenericAdapter(BaseAdapter):
         # Case 1: Custom from_native factory (e.g. MHA, BasicConv2d)
         if hasattr(QuantClass, 'from_native'):
              created = QuantClass.from_native(module, q_type=q_type, quantization_bias=bias)
-             if isinstance(created, QuantizedLayerMixin):
+             if isinstance(created, quantized_mixin_types):
                  created.q_type = q_type
                  created.quantization_bias = bias
                  created.input_q_type = self._effective_input_q_type(settings)
@@ -521,7 +526,7 @@ class GenericAdapter(BaseAdapter):
 
         # Case 2: Layer with weights (Conv, Linear, BN) - In-place class swap
         # We check if the QuantClass is a subclass of QuantizedLayerMixin
-        if issubclass(QuantClass, QuantizedLayerMixin):
+        if issubclass(QuantClass, quantized_mixin_types):
             # Perform in-place class swap to preserve weights
             module.__class__ = QuantClass
             
@@ -740,6 +745,7 @@ class GenericAdapter(BaseAdapter):
                     # Control-flow models (e.g. timm MobileViT) can't be FX-traced — that's fine,
                     # recursive replacement already handled all registered ops.
                     print(f"Note: FX quantization skipped ({type(e).__name__}: {e})")
+                    raise e # Do not remove
                     
             if self.unsigned_input_sources:
                 self._propagate_unsigned_inputs(model)
@@ -753,7 +759,7 @@ class GenericAdapter(BaseAdapter):
         unsigned_sources_lc = {s.lower() for s in self.unsigned_input_sources}
         if not unsigned_sources_lc:
             return model
-            
+        
         from ..ops.quant_softmax import qtype_to_unsigned_qtype
 
         def _process_graph_module(gm: torch.fx.GraphModule):
@@ -904,25 +910,35 @@ class GenericAdapter(BaseAdapter):
         quantized_ops_lc = {o.lower() for o in self.quantized_ops}
         excluded_ops_lc = {o.lower() for o in self.excluded_ops}
         target_funcs = {}
-        for func, op_name in func_map.items():
-            op_name_lc = op_name.lower()
-            bare_lc = op_name_lc[len("quant"):] if op_name_lc.startswith("quant") else op_name_lc
-            if "-1" in quantized_ops_lc or "all" in quantized_ops_lc or op_name_lc in quantized_ops_lc or bare_lc in quantized_ops_lc:
-                if op_name_lc not in excluded_ops_lc and bare_lc not in excluded_ops_lc:
-                    target_funcs[func] = op_name
-
+        try:
+            for func, op_name in func_map.items():
+                op_name_lc = op_name.lower()
+                bare_lc = op_name_lc[len("quant"):] if op_name_lc.startswith("quant") else op_name_lc
+                if "-1" in quantized_ops_lc or "all" in quantized_ops_lc or op_name_lc in quantized_ops_lc or bare_lc in quantized_ops_lc:
+                    if op_name_lc not in excluded_ops_lc and bare_lc not in excluded_ops_lc:
+                        target_funcs[func] = op_name
+        except Exception as e:
+            print(f"1.Error in FX quantization: {e}")
         if not target_funcs:
             return
 
-        fx_model, modified = self._fx_quantize_module_graph(model, target_funcs)
-        if modified and fx_model is not None:
-            valid, error = self._validate_fx_model(fx_model, model)
-            if valid:
-                return fx_model
-            print(
-                "Note: FX whole-model quantization produced an invalid runtime graph "
-                f"({type(error).__name__}: {error}). Falling back to submodule FX."
-            )
+        try:
+            try:
+                fx_model, modified = self._fx_quantize_module_graph(model, target_funcs)
+            except Exception as e:
+                print(f"3.Error in FX quantization: {e}")
+                return None
+            if modified and fx_model is not None:
+                valid, error = self._validate_fx_model(fx_model, model)
+                if valid:
+                    return fx_model
+                print(
+                    "Note: FX whole-model quantization produced an invalid runtime graph "
+                    f"({type(error).__name__}: {error}). Falling back to submodule FX."
+                )
+        except Exception as e:
+            print(f"2.Error in FX quantization: {e}") 
+            return None
 
         submodule_modified = self._fx_quantize_submodules(model, target_funcs)
         if submodule_modified:

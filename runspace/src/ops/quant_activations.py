@@ -7,8 +7,8 @@ This ensures the entire dataflow through the network stays in FP8 and is optimiz
 
 import torch
 import torch.nn as nn
-from ..registry.op_registry import OpRegistry
-from .quant_base import quantize_tensor
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.ops.quant_base import quantize_tensor
 
 
 class LUTActivation:

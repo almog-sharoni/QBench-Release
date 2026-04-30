@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from ..registry.op_registry import OpRegistry
-from .quant_base import QuantizedLayerMixin
-from .quant_arithmetic import _QuantArithmeticBase
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.ops.quant_base import QuantizedLayerMixin
+from runspace.src.ops.quant_arithmetic import _QuantArithmeticBase
 
 
 def _simple_nms(scores, nms_radius: int):
