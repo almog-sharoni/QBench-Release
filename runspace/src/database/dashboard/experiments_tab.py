@@ -794,12 +794,12 @@ else:
                 generated_date = graph_meta.get('generated_date')
                 if graph_meta.get('source') == 'cache' and generated_date:
                     st.caption(f"Loaded cached graph generated at {generated_date}")
-            
+        
             st.markdown("**Green** = Quantized Layers ")
             st.info("💡 **Interactive**: Click on dashed boxes (compound nodes) to collapse/expand them! Use mouse wheel to zoom.")
-            
+        
             import streamlit.components.v1 as components
-            
+        
             html_template = f"""
             <!DOCTYPE html>
             <html>
@@ -1565,7 +1565,7 @@ else:
             </html>
             """
             components.html(html_template, height=820)
-            
+        
             # Download button
             st.download_button(
                 label="⬇️ Download Graph JSON",
@@ -1709,7 +1709,7 @@ else:
         st.session_state[session_key] = selected_values
         info_col.caption(f"{len(selected_values)} of {len(options)} selected")
         return selected_values
-        
+    
     def add_table():
         st.session_state.num_tables += 1
 
@@ -1735,7 +1735,7 @@ else:
                         if key.startswith(old_choice_prefix):
                             suffix = key[len(old_choice_prefix):]
                             st.session_state[f"{prefix}_{i}_choice_{suffix}"] = st.session_state[key]
-            
+        
             # Delete the last table's keys
             last_idx = st.session_state.num_tables - 1
             for prefix in ['filter_m', 'filter_e', 'filter_wb', 'filter_we', 'filter_wm', 'filter_ab', 'filter_ae', 'filter_am', 'name_input']:
@@ -1746,13 +1746,13 @@ else:
                 for key in list(st.session_state.keys()):
                     if key.startswith(f"{prefix}_{last_idx}_choice_"):
                         del st.session_state[key]
-                    
+                
             st.session_state.num_tables -= 1
             st.rerun()
 
     # --- Global Filters & Settings ---
     st.sidebar.header("Global Filters & Settings")
-    
+
     # Date Filter
     df['run_date_dt'] = pd.to_datetime(df['run_date'], errors='coerce')
     valid_run_dates = df['run_date_dt'].dropna()
@@ -1777,23 +1777,23 @@ else:
             (df['run_date_dt'].dt.date >= start_date) & 
             (df['run_date_dt'].dt.date <= end_date)
         ]
-        
+    
     # Define options early for preset validation
     df['experiment_type'] = df['experiment_type'].fillna('unknown')
     df['model_name'] = df['model_name'].fillna('unknown')
     models = sorted(df['model_name'].unique())
     expr_types = sorted(df['experiment_type'].unique())
-        
+    
     # Sidebar Controls
     st.sidebar.markdown("### 🏷️ Filter Presets")
     st.sidebar.caption("Load saved slices into a fresh comparison table so you can keep the current view intact.")
-    
+
     preset_options = ["None"] + sorted(list(st.session_state.presets.keys()))
     selected_preset = st.sidebar.selectbox("Load Preset", options=preset_options)
-    
+
     if selected_preset != "None":
         st.sidebar.info(f"Preset '{selected_preset}' will create a NEW table.")
-        
+    
         if st.sidebar.button("📂 Load Preset as New Table", key="load_preset_btn", width='stretch'):
             # 1. Create new table
             st.session_state.num_tables += 1
@@ -1810,7 +1810,7 @@ else:
                 'a_exp': (f"filter_ae_{target_table}", df['a_exp'].dropna().unique()),
                 'a_mant': (f"filter_am_{target_table}", df['a_mant'].dropna().unique())
             }
-            
+        
             for preset_key, (session_key, options) in mapping.items():
                 if preset_key in preset_data:
                     st.session_state[session_key] = normalize_filter_selection(
@@ -1818,7 +1818,7 @@ else:
                         options,
                     )
                     st.session_state[f"{session_key}_sync_required"] = True
-            
+        
             st.sidebar.success(f"Loaded '{selected_preset}'")
             st.rerun()
 
@@ -1836,7 +1836,7 @@ else:
             if key.startswith("filter_"):
                 del st.session_state[key]
         st.rerun()
-        
+    
     st.sidebar.markdown("---")
 
     # Deduplication Toggle
@@ -1861,399 +1861,423 @@ else:
     - **Drop**: Accuracy loss relative to FP32 reference
     """)
     st.sidebar.markdown("---")
-    render_dashboard_intro()
-    st.markdown("---")
-
-    # Render Tables
-    for i in range(st.session_state.num_tables):
-        col_header, col_rm = st.columns([8, 1])
-        with col_header:
-            st.markdown(
-                f"""
-                <div class="dashboard-section-title">
-                    <div>
-                        <h3>Comparison Table {i+1}</h3>
-                        <p>Mix broad model filters with datatype constraints, then select rows to inspect or compare.</p>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
+    @st.fragment(run_every=10)
+    def _render_experiment_result_tables():
+        with st.spinner("Refreshing experiment runs..."):
+            df = get_runs(selected_run_limit)
+            df = preprocess_runs_df(df)
+        if df is None or df.empty:
+            st.warning("No runs found in the database yet. Run an experiment first!")
+            return
+        df['run_date_dt'] = pd.to_datetime(df['run_date'], errors='coerce')
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+            df = df[(df['run_date_dt'].dt.date >= start_date) & (df['run_date_dt'].dt.date <= end_date)]
+        df['experiment_type'] = df['experiment_type'].fillna('unknown')
+        df['model_name'] = df['model_name'].fillna('unknown')
+        if show_newest:
+            df = df.drop_duplicates(
+                subset=['model_name', 'experiment_type', 'weight_dt', 'activation_dt'],
+                keep='first'
             )
-        if st.session_state.num_tables > 1:
-            if col_rm.button("🗑️", key=f"rm_table_{i}", help=f"Remove Table {i+1}"):
-                remove_table(i)
+        models = sorted(df['model_name'].unique())
+        expr_types = sorted(df['experiment_type'].unique())
+        render_dashboard_intro()
+        st.markdown("---")
 
-        # Local filters for each table
-        st.markdown("<div class='dashboard-filter-note'>Core filters stay visible here; deeper datatype filters and preset saving live just below.</div>", unsafe_allow_html=True)
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            selected_models = render_filter_checklist(
-                f"Models (T{i+1})", 
-                options=models, 
-                session_key=f"filter_m_{i}",
-                help_text="Tick the models you want included."
-            )
-        with col_f2:
-            selected_exprs = render_filter_checklist(
-                f"Experiment Types (T{i+1})", 
-                options=expr_types, 
-                session_key=f"filter_e_{i}",
-                help_text="Tick the experiment families you want included."
-            )
-        
-        # Advanced DT Filtering
-        with st.expander(f"Advanced Datatype Filters (T{i+1})"):
-            st.caption("Use these only when you want to narrow by datatype internals such as bit-width, exponent, or mantissa.")
-            weight_col, activation_col = st.columns(2)
-            with weight_col:
-                st.markdown("**Weight Filters**")
-                w_bits_options = sorted(df['w_bits'].dropna().unique())
-                selected_w_bits = render_filter_checklist(
-                    "Weight Bits", 
-                    options=w_bits_options, 
-                    session_key=f"filter_wb_{i}",
-                    format_func=lambda x: "Dynamic" if x == 0 else f"{int(x)} Bits",
-                )
-            
-                w_exp_options = sorted(df['w_exp'].dropna().unique())
-                selected_w_exp = render_filter_checklist(
-                    "Weight Exponent", 
-                    options=w_exp_options, 
-                    session_key=f"filter_we_{i}",
-                )
-                
-                w_mant_options = sorted(df['w_mant'].dropna().unique())
-                selected_w_mant = render_filter_checklist(
-                    "Weight Mantissa", 
-                    options=w_mant_options, 
-                    session_key=f"filter_wm_{i}",
-                )
-
-            with activation_col:
-                st.markdown("**Activation Filters**")
-                a_bits_options = sorted(df['a_bits'].dropna().unique())
-                selected_a_bits = render_filter_checklist(
-                    "Activation Bits", 
-                    options=a_bits_options, 
-                    session_key=f"filter_ab_{i}",
-                    format_func=lambda x: "Dynamic" if x == 0 else f"{int(x)} Bits",
-                )
-                
-                a_exp_options = sorted(df['a_exp'].dropna().unique())
-                selected_a_exp = render_filter_checklist(
-                    "Activation Exponent", 
-                    options=a_exp_options, 
-                    session_key=f"filter_ae_{i}",
-                )
-                
-                a_mant_options = sorted(df['a_mant'].dropna().unique())
-                selected_a_mant = render_filter_checklist(
-                    "Activation Mantissa", 
-                    options=a_mant_options, 
-                    session_key=f"filter_am_{i}",
-                )
-
-            # Save Preset UI under each table's filters
-            with st.expander(f"💾 Save current filters as Preset (T{i+1})"):
-                p_col1, p_col2 = st.columns([3, 1])
-                preset_name = p_col1.text_input("Preset Name", key=f"name_input_{i}", placeholder="e.g. My Optimal ResNet")
-                if p_col2.button("Save", key=f"save_btn_{i}", type="primary", width='stretch'):
-                    if preset_name:
-                        st.session_state.presets[preset_name] = {
-                            'target_table': i,
-                            'models': selected_models,
-                            'expr_types': selected_exprs,
-                            'w_bits': selected_w_bits,
-                            'w_exp': selected_w_exp,
-                            'w_mant': selected_w_mant,
-                            'a_bits': selected_a_bits,
-                            'a_exp': selected_a_exp,
-                            'a_mant': selected_a_mant
-                        }
-                        save_presets(st.session_state.presets)
-                        st.success(f"Saved '{preset_name}'!")
-                        st.rerun()
-                    else:
-                        st.error("Enter a name")
-
-        # Apply local filters
-        filtered_df = df[
-            (df['model_name'].isin(selected_models)) & 
-            (df['experiment_type'].isin(selected_exprs))
-        ].copy()
-
-        # Helper to apply optional filters (only if user changed them)
-        def apply_opt_filter(curr_df, col, selected, all_options):
-            if len(selected) < len(all_options):
-                return curr_df[curr_df[col].isin(selected)]
-            return curr_df
-
-        # Bits are mandatory filters (all selected by default).
-        # When all options are selected (no user narrowing), also keep rows whose
-        # bits value is NaN — this happens for formats that parse_dt can't decode
-        # (e.g. the hybrid "opt_layer[...]" weight_dt strings).
-        w_bits_all = len(selected_w_bits) == len(w_bits_options)
-        a_bits_all = len(selected_a_bits) == len(a_bits_options)
-        filtered_df = filtered_df[
-            filtered_df['w_bits'].isin(selected_w_bits) | (w_bits_all & filtered_df['w_bits'].isna())
-        ]
-        filtered_df = filtered_df[
-            filtered_df['a_bits'].isin(selected_a_bits) | (a_bits_all & filtered_df['a_bits'].isna())
-        ]
-
-        # Exp/Mant are optional filters
-        filtered_df = apply_opt_filter(filtered_df, 'w_exp', selected_w_exp, w_exp_options)
-        filtered_df = apply_opt_filter(filtered_df, 'w_mant', selected_w_mant, w_mant_options)
-        filtered_df = apply_opt_filter(filtered_df, 'a_exp', selected_a_exp, a_exp_options)
-        filtered_df = apply_opt_filter(filtered_df, 'a_mant', selected_a_mant, a_mant_options)
-        
-        if not filtered_df.empty:
-            filtered_df = _attach_effective_references(filtered_df)
-            # Calculate Accuracy Drop relative to reference
-            if 'ref_acc1_effective' in filtered_df.columns:
-                filtered_df['acc1_drop'] = filtered_df['ref_acc1_effective'] - filtered_df['acc1']
-                filtered_df['acc5_drop'] = filtered_df['ref_acc5_effective'] - filtered_df['acc5']
-            if 'ref_certainty_effective' in filtered_df.columns and 'certainty' in filtered_df.columns:
-                filtered_df['cert_drop'] = filtered_df['ref_certainty_effective'] - filtered_df['certainty']
-            
-            # Clean up and reorder columns for display
-            cols_to_drop = [
-                'run_date_dt', 'id', 'quant_map_json', 'input_map_json', 'config_json',
-                'ref_acc1_effective', 'ref_acc5_effective', 'ref_certainty_effective'
-            ]
-            display_df = filtered_df.drop(columns=[c for c in cols_to_drop if c in filtered_df.columns])
-            
-            # Reorder columns to put metrics and targets front and center
-            main_cols = ['model_name', 'experiment_type', 'weight_dt', 'activation_dt', 'acc1', 'acc1_drop', 'acc5', 'acc5_drop', 'mse', 'l1', 'certainty', 'cert_drop', 'status', 'run_date']
-            existing_main_cols = [c for c in main_cols if c in display_df.columns]
-            other_cols = [c for c in display_df.columns if c not in existing_main_cols]
-            display_df = display_df[existing_main_cols + other_cols]
-            
-            # Render Interactive Dataframe with modern Selection
-            event = st.dataframe(
-                display_df, 
-                width='stretch',
-                hide_index=True,
-                selection_mode="multi-row",
-                on_select="rerun",
-                key=f"table_{i}",
-                column_config={
-                    "model_name": "Model",
-                    "experiment_type": "Exp. Type",
-                    "weight_dt": "Weight DT",
-                    "activation_dt": "Activation DT",
-                    "acc1": st.column_config.NumberColumn("Acc1 (%)", format="%.2f"),
-                    "acc5": st.column_config.NumberColumn("Acc5 (%)", format="%.2f"),
-                    "acc1_drop": st.column_config.NumberColumn("Drop1 (%)", format="%.2f", help="Ref Acc1 - Acc1"),
-                    "acc5_drop": st.column_config.NumberColumn("Drop5 (%)", format="%.2f", help="Ref Acc5 - Acc5"),
-                    "mse": st.column_config.NumberColumn("MSE", format="%.2e"),
-                    "l1": st.column_config.NumberColumn("L1", format="%.2e"),
-                    "certainty": st.column_config.NumberColumn("Cert.", format="%.4f", help="Model prediction confidence (softmax max prob)"),
-                    "cert_drop": st.column_config.NumberColumn("Cert. Drop", format="%.4f", help="Ref Certainty - Certainty"),
-                    "status": "Status",
-                    "run_date": "Date"
-                }
-            )
-
-            # --- Visualization Section ---
-            selected_indices = event.selection.rows
-
-            # Action buttons — appear based on what's available in selected rows.
-            selected_run_rows = []
-            if len(selected_indices) >= 1:
-                orig_indices = [display_df.index[j] for j in selected_indices]
-                selected_run_rows = [filtered_df.loc[idx].to_dict() for idx in orig_indices]
-
-            selected_count = len(selected_indices)
-            if selected_count:
+        # Render Tables
+        for i in range(st.session_state.num_tables):
+            col_header, col_rm = st.columns([8, 1])
+            with col_header:
                 st.markdown(
                     f"""
-                    <div class="dashboard-selection-banner">
-                        <strong>{selected_count} row{'s' if selected_count != 1 else ''} selected.</strong>
-                        <span> Use the actions below to open configs, inspect layer formats, compare accuracy, rename experiments, export rows, or remove rows.</span>
+                    <div class="dashboard-section-title">
+                        <div>
+                            <h3>Comparison Table {i+1}</h3>
+                            <p>Mix broad model filters with datatype constraints, then select rows to inspect or compare.</p>
+                        </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
-            else:
-                st.info("Select one or more rows to unlock run details, comparison charts, and deletion tools.")
+            if st.session_state.num_tables > 1:
+                if col_rm.button("🗑️", key=f"rm_table_{i}", help=f"Remove Table {i+1}"):
+                    remove_table(i)
 
-            st.markdown("#### Actions")
-            if len(selected_indices) == 1:
-                orig_idx = display_df.index[selected_indices[0]]
-                run_row = filtered_df.loc[orig_idx].to_dict()
-                weight_map_json, input_map_json, _ = _resolve_maps_for_display(run_row)
-                has_weight_map = (
-                    _safe_json_load(weight_map_json) is not None
+            # Local filters for each table
+            st.markdown("<div class='dashboard-filter-note'>Core filters stay visible here; deeper datatype filters and preset saving live just below.</div>", unsafe_allow_html=True)
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                selected_models = render_filter_checklist(
+                    f"Models (T{i+1})", 
+                    options=models, 
+                    session_key=f"filter_m_{i}",
+                    help_text="Tick the models you want included."
                 )
-                has_input_map = (
-                    _safe_json_load(input_map_json) is not None
+            with col_f2:
+                selected_exprs = render_filter_checklist(
+                    f"Experiment Types (T{i+1})", 
+                    options=expr_types, 
+                    session_key=f"filter_e_{i}",
+                    help_text="Tick the experiment families you want included."
                 )
-            else:
-                run_row = None
-                has_weight_map = False
-                has_input_map = False
-
-            if len(selected_indices) >= 1:
-                rows_with_details = [
-                    row for row in selected_run_rows
-                    if (
-                        (
-                            'config_json' in row and
-                            pd.notna(row.get('config_json')) and
-                            row.get('config_json')
-                        ) or (
-                            'quant_map_json' in row and
-                            pd.notna(row.get('quant_map_json')) and
-                            row.get('quant_map_json')
-                        ) or (
-                            'input_map_json' in row and
-                            pd.notna(row.get('input_map_json')) and
-                            row.get('input_map_json')
-                        )
+    
+            # Advanced DT Filtering
+            with st.expander(f"Advanced Datatype Filters (T{i+1})"):
+                st.caption("Use these only when you want to narrow by datatype internals such as bit-width, exponent, or mantissa.")
+                weight_col, activation_col = st.columns(2)
+                with weight_col:
+                    st.markdown("**Weight Filters**")
+                    w_bits_options = sorted(df['w_bits'].dropna().unique())
+                    selected_w_bits = render_filter_checklist(
+                        "Weight Bits", 
+                        options=w_bits_options, 
+                        session_key=f"filter_wb_{i}",
+                        format_func=lambda x: "Dynamic" if x == 0 else f"{int(x)} Bits",
                     )
+        
+                    w_exp_options = sorted(df['w_exp'].dropna().unique())
+                    selected_w_exp = render_filter_checklist(
+                        "Weight Exponent", 
+                        options=w_exp_options, 
+                        session_key=f"filter_we_{i}",
+                    )
+            
+                    w_mant_options = sorted(df['w_mant'].dropna().unique())
+                    selected_w_mant = render_filter_checklist(
+                        "Weight Mantissa", 
+                        options=w_mant_options, 
+                        session_key=f"filter_wm_{i}",
+                    )
+
+                with activation_col:
+                    st.markdown("**Activation Filters**")
+                    a_bits_options = sorted(df['a_bits'].dropna().unique())
+                    selected_a_bits = render_filter_checklist(
+                        "Activation Bits", 
+                        options=a_bits_options, 
+                        session_key=f"filter_ab_{i}",
+                        format_func=lambda x: "Dynamic" if x == 0 else f"{int(x)} Bits",
+                    )
+            
+                    a_exp_options = sorted(df['a_exp'].dropna().unique())
+                    selected_a_exp = render_filter_checklist(
+                        "Activation Exponent", 
+                        options=a_exp_options, 
+                        session_key=f"filter_ae_{i}",
+                    )
+            
+                    a_mant_options = sorted(df['a_mant'].dropna().unique())
+                    selected_a_mant = render_filter_checklist(
+                        "Activation Mantissa", 
+                        options=a_mant_options, 
+                        session_key=f"filter_am_{i}",
+                    )
+
+                # Save Preset UI under each table's filters
+                with st.expander(f"💾 Save current filters as Preset (T{i+1})"):
+                    p_col1, p_col2 = st.columns([3, 1])
+                    preset_name = p_col1.text_input("Preset Name", key=f"name_input_{i}", placeholder="e.g. My Optimal ResNet")
+                    if p_col2.button("Save", key=f"save_btn_{i}", type="primary", width='stretch'):
+                        if preset_name:
+                            st.session_state.presets[preset_name] = {
+                                'target_table': i,
+                                'models': selected_models,
+                                'expr_types': selected_exprs,
+                                'w_bits': selected_w_bits,
+                                'w_exp': selected_w_exp,
+                                'w_mant': selected_w_mant,
+                                'a_bits': selected_a_bits,
+                                'a_exp': selected_a_exp,
+                                'a_mant': selected_a_mant
+                            }
+                            save_presets(st.session_state.presets)
+                            st.success(f"Saved '{preset_name}'!")
+                            st.rerun()
+                        else:
+                            st.error("Enter a name")
+
+            # Apply local filters
+            filtered_df = df[
+                (df['model_name'].isin(selected_models)) & 
+                (df['experiment_type'].isin(selected_exprs))
+            ].copy()
+
+            # Helper to apply optional filters (only if user changed them)
+            def apply_opt_filter(curr_df, col, selected, all_options):
+                if len(selected) < len(all_options):
+                    return curr_df[curr_df[col].isin(selected)]
+                return curr_df
+
+            # Bits are mandatory filters (all selected by default).
+            # When all options are selected (no user narrowing), also keep rows whose
+            # bits value is NaN — this happens for formats that parse_dt can't decode
+            # (e.g. the hybrid "opt_layer[...]" weight_dt strings).
+            w_bits_all = len(selected_w_bits) == len(w_bits_options)
+            a_bits_all = len(selected_a_bits) == len(a_bits_options)
+            filtered_df = filtered_df[
+                filtered_df['w_bits'].isin(selected_w_bits) | (w_bits_all & filtered_df['w_bits'].isna())
+            ]
+            filtered_df = filtered_df[
+                filtered_df['a_bits'].isin(selected_a_bits) | (a_bits_all & filtered_df['a_bits'].isna())
+            ]
+
+            # Exp/Mant are optional filters
+            filtered_df = apply_opt_filter(filtered_df, 'w_exp', selected_w_exp, w_exp_options)
+            filtered_df = apply_opt_filter(filtered_df, 'w_mant', selected_w_mant, w_mant_options)
+            filtered_df = apply_opt_filter(filtered_df, 'a_exp', selected_a_exp, a_exp_options)
+            filtered_df = apply_opt_filter(filtered_df, 'a_mant', selected_a_mant, a_mant_options)
+    
+            if not filtered_df.empty:
+                filtered_df = _attach_effective_references(filtered_df)
+                # Calculate Accuracy Drop relative to reference
+                if 'ref_acc1_effective' in filtered_df.columns:
+                    filtered_df['acc1_drop'] = filtered_df['ref_acc1_effective'] - filtered_df['acc1']
+                    filtered_df['acc5_drop'] = filtered_df['ref_acc5_effective'] - filtered_df['acc5']
+                if 'ref_certainty_effective' in filtered_df.columns and 'certainty' in filtered_df.columns:
+                    filtered_df['cert_drop'] = filtered_df['ref_certainty_effective'] - filtered_df['certainty']
+        
+                # Clean up and reorder columns for display
+                cols_to_drop = [
+                    'run_date_dt', 'id', 'quant_map_json', 'input_map_json', 'config_json',
+                    'ref_acc1_effective', 'ref_acc5_effective', 'ref_certainty_effective'
                 ]
-                num_runs = len(selected_indices)
-                if rows_with_details:
-                    label = (
-                        f"⚙️ View Config + Win Rates ({len(rows_with_details)})"
-                        if len(rows_with_details) > 1 else "⚙️ View Config + Win Rates"
-                    )
+                display_df = filtered_df.drop(columns=[c for c in cols_to_drop if c in filtered_df.columns])
+        
+                # Reorder columns to put metrics and targets front and center
+                main_cols = ['model_name', 'experiment_type', 'weight_dt', 'activation_dt', 'acc1', 'acc1_drop', 'acc5', 'acc5_drop', 'mse', 'l1', 'certainty', 'cert_drop', 'status', 'run_date']
+                existing_main_cols = [c for c in main_cols if c in display_df.columns]
+                other_cols = [c for c in display_df.columns if c not in existing_main_cols]
+                display_df = display_df[existing_main_cols + other_cols]
+        
+                # Render Interactive Dataframe with modern Selection
+                event = st.dataframe(
+                    display_df, 
+                    width='stretch',
+                    hide_index=True,
+                    selection_mode="multi-row",
+                    on_select="rerun",
+                    key=f"table_{i}",
+                    column_config={
+                        "model_name": "Model",
+                        "experiment_type": "Exp. Type",
+                        "weight_dt": "Weight DT",
+                        "activation_dt": "Activation DT",
+                        "acc1": st.column_config.NumberColumn("Acc1 (%)", format="%.2f"),
+                        "acc5": st.column_config.NumberColumn("Acc5 (%)", format="%.2f"),
+                        "acc1_drop": st.column_config.NumberColumn("Drop1 (%)", format="%.2f", help="Ref Acc1 - Acc1"),
+                        "acc5_drop": st.column_config.NumberColumn("Drop5 (%)", format="%.2f", help="Ref Acc5 - Acc5"),
+                        "mse": st.column_config.NumberColumn("MSE", format="%.2e"),
+                        "l1": st.column_config.NumberColumn("L1", format="%.2e"),
+                        "certainty": st.column_config.NumberColumn("Cert.", format="%.4f", help="Model prediction confidence (softmax max prob)"),
+                        "cert_drop": st.column_config.NumberColumn("Cert. Drop", format="%.4f", help="Ref Certainty - Certainty"),
+                        "status": "Status",
+                        "run_date": "Date"
+                    }
+                )
 
-                selected_run_ids = []
-                for row in selected_run_rows:
-                    run_id = row.get('id')
-                    if pd.notna(run_id):
-                        selected_run_ids.append(int(run_id))
-                selected_run_ids = sorted(set(selected_run_ids))
+                # --- Visualization Section ---
+                selected_indices = event.selection.rows
 
+                # Action buttons — appear based on what's available in selected rows.
+                selected_run_rows = []
+                if len(selected_indices) >= 1:
+                    orig_indices = [display_df.index[j] for j in selected_indices]
+                    selected_run_rows = [filtered_df.loc[idx].to_dict() for idx in orig_indices]
+
+                selected_count = len(selected_indices)
                 if selected_count:
-                    st.caption(f"Ready to work with {num_runs} selected run{'s' if num_runs != 1 else ''}.")
-
-                action_specs = []
-                if len(selected_indices) == 1 and (has_weight_map or has_input_map):
-                    action_specs.append({
-                        "label": "🔬 View Layer Formats",
-                        "key": f"btn_layers_{i}",
-                        "type": "secondary",
-                        "handler": lambda run_row=run_row: show_layer_breakdown(run_row),
-                    })
-                if rows_with_details:
-                    action_specs.append({
-                        "label": label,
-                        "key": f"btn_config_{i}",
-                        "type": "secondary",
-                        "handler": lambda rows_with_details=rows_with_details: show_run_config(rows_with_details),
-                    })
-                action_specs.append({
-                    "label": f"📈 Generate Comparison ({num_runs})",
-                    "key": f"btn_plot_{i}",
-                    "type": "primary",
-                    "handler": None,
-                })
-                if selected_run_ids:
-                    action_specs.append({
-                        "label": f"✏️ Rename Experiment ({len(selected_run_ids)})",
-                        "key": f"btn_edit_experiment_{i}",
-                        "type": "secondary",
-                        "handler": lambda selected_run_rows=selected_run_rows, table_index=i: show_edit_experiment_dialog(selected_run_rows, table_index),
-                    })
-                    action_specs.append({
-                        "label": f"💾 Create DB ({len(selected_run_ids)})",
-                        "key": f"btn_create_db_{i}",
-                        "type": "secondary",
-                        "handler": lambda selected_run_rows=selected_run_rows, table_index=i: show_create_db_dialog(selected_run_rows, table_index),
-                    })
-                if selected_run_ids:
-                    delete_label = (
-                        f"🗑️ Delete Selected Rows ({len(selected_run_ids)})"
-                        if len(selected_run_ids) > 1 else "🗑️ Delete Selected Row"
+                    st.markdown(
+                        f"""
+                        <div class="dashboard-selection-banner">
+                            <strong>{selected_count} row{'s' if selected_count != 1 else ''} selected.</strong>
+                            <span> Use the actions below to open configs, inspect layer formats, compare accuracy, rename experiments, export rows, or remove rows.</span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
                     )
-                    action_specs.append({
-                        "label": delete_label,
-                        "key": f"btn_delete_rows_{i}",
-                        "type": "secondary",
-                        "handler": lambda selected_run_rows=selected_run_rows, table_index=i: show_delete_runs_dialog(selected_run_rows, table_index),
-                    })
+                else:
+                    st.info("Select one or more rows to unlock run details, comparison charts, and deletion tools.")
 
-                action_cols = st.columns(len(action_specs))
-                run_comparison = False
-                for col, spec in zip(action_cols, action_specs):
-                    if col.button(
-                        spec["label"],
-                        key=spec["key"],
-                        type=spec["type"],
-                        width='stretch',
-                    ):
-                        if spec["key"] == f"btn_plot_{i}":
-                            run_comparison = True
-                        elif spec["handler"] is not None:
-                            spec["handler"]()
+                st.markdown("#### Actions")
+                if len(selected_indices) == 1:
+                    orig_idx = display_df.index[selected_indices[0]]
+                    run_row = filtered_df.loc[orig_idx].to_dict()
+                    weight_map_json, input_map_json, _ = _resolve_maps_for_display(run_row)
+                    has_weight_map = (
+                        _safe_json_load(weight_map_json) is not None
+                    )
+                    has_input_map = (
+                        _safe_json_load(input_map_json) is not None
+                    )
+                else:
+                    run_row = None
+                    has_weight_map = False
+                    has_input_map = False
 
-                if run_comparison:
-                    with st.spinner(f"Building comparison chart for {num_runs} runs..."):
-                        orig_indices = [display_df.index[j] for j in selected_indices]
-                        selected_df = filtered_df.loc[orig_indices].copy()
-
-                        # Create labels
-                        selected_df['run_label'] = (
-                            selected_df['model_name'].astype(str) + "\n" +
-                            selected_df['experiment_type'].astype(str) + "\n" +
-                            selected_df['weight_dt'].astype(str) + "/" +
-                            selected_df['activation_dt'].astype(str)
+                if len(selected_indices) >= 1:
+                    rows_with_details = [
+                        row for row in selected_run_rows
+                        if (
+                            (
+                                'config_json' in row and
+                                pd.notna(row.get('config_json')) and
+                                row.get('config_json')
+                            ) or (
+                                'quant_map_json' in row and
+                                pd.notna(row.get('quant_map_json')) and
+                                row.get('quant_map_json')
+                            ) or (
+                                'input_map_json' in row and
+                                pd.notna(row.get('input_map_json')) and
+                                row.get('input_map_json')
+                            )
+                        )
+                    ]
+                    num_runs = len(selected_indices)
+                    if rows_with_details:
+                        label = (
+                            f"⚙️ View Config + Win Rates ({len(rows_with_details)})"
+                            if len(rows_with_details) > 1 else "⚙️ View Config + Win Rates"
                         )
 
-                        # Prepare flattened data
-                        chart_data = []
+                    selected_run_ids = []
+                    for row in selected_run_rows:
+                        run_id = row.get('id')
+                        if pd.notna(run_id):
+                            selected_run_ids.append(int(run_id))
+                    selected_run_ids = sorted(set(selected_run_ids))
 
-                        # Group by model to show ref once per model
-                        models_in_selection = selected_df['model_name'].unique()
+                    if selected_count:
+                        st.caption(f"Ready to work with {num_runs} selected run{'s' if num_runs != 1 else ''}.")
 
-                        for model in models_in_selection:
-                            model_rows = selected_df[selected_df['model_name'] == model]
+                    action_specs = []
+                    if len(selected_indices) == 1 and (has_weight_map or has_input_map):
+                        action_specs.append({
+                            "label": "🔬 View Layer Formats",
+                            "key": f"btn_layers_{i}",
+                            "type": "secondary",
+                            "handler": lambda run_row=run_row: show_layer_breakdown(run_row),
+                        })
+                    if rows_with_details:
+                        action_specs.append({
+                            "label": label,
+                            "key": f"btn_config_{i}",
+                            "type": "secondary",
+                            "handler": lambda rows_with_details=rows_with_details: show_run_config(rows_with_details),
+                        })
+                    action_specs.append({
+                        "label": f"📈 Generate Comparison ({num_runs})",
+                        "key": f"btn_plot_{i}",
+                        "type": "primary",
+                        "handler": None,
+                    })
+                    if selected_run_ids:
+                        action_specs.append({
+                            "label": f"✏️ Rename Experiment ({len(selected_run_ids)})",
+                            "key": f"btn_edit_experiment_{i}",
+                            "type": "secondary",
+                            "handler": lambda selected_run_rows=selected_run_rows, table_index=i: show_edit_experiment_dialog(selected_run_rows, table_index),
+                        })
+                        action_specs.append({
+                            "label": f"💾 Create DB ({len(selected_run_ids)})",
+                            "key": f"btn_create_db_{i}",
+                            "type": "secondary",
+                            "handler": lambda selected_run_rows=selected_run_rows, table_index=i: show_create_db_dialog(selected_run_rows, table_index),
+                        })
+                    if selected_run_ids:
+                        delete_label = (
+                            f"🗑️ Delete Selected Rows ({len(selected_run_ids)})"
+                            if len(selected_run_ids) > 1 else "🗑️ Delete Selected Row"
+                        )
+                        action_specs.append({
+                            "label": delete_label,
+                            "key": f"btn_delete_rows_{i}",
+                            "type": "secondary",
+                            "handler": lambda selected_run_rows=selected_run_rows, table_index=i: show_delete_runs_dialog(selected_run_rows, table_index),
+                        })
 
-                            # 1. Add Reference Entry (ONCE)
-                            first_row = model_rows.iloc[0]
-                            ref_label = f"{model}\nREF\nfp32/fp32"
-                            chart_data.append({'Label': ref_label, 'MetricName': 'Acc1', 'MetricType': 'Reference (Acc1)', 'Accuracy (%)': first_row['ref_acc1_effective'] if 'ref_acc1_effective' in first_row else 0})
-                            chart_data.append({'Label': ref_label, 'MetricName': 'Acc5', 'MetricType': 'Reference (Acc5)', 'Accuracy (%)': first_row['ref_acc5_effective'] if 'ref_acc5_effective' in first_row else 0})
+                    action_cols = st.columns(len(action_specs))
+                    run_comparison = False
+                    for col, spec in zip(action_cols, action_specs):
+                        if col.button(
+                            spec["label"],
+                            key=spec["key"],
+                            type=spec["type"],
+                            width='stretch',
+                        ):
+                            if spec["key"] == f"btn_plot_{i}":
+                                run_comparison = True
+                            elif spec["handler"] is not None:
+                                spec["handler"]()
 
-                            # 2. Add Quantized Entries
-                            for _, row in model_rows.iterrows():
-                                quant_label = (
-                                    f"{model}\n"
-                                    f"{row.get('experiment_type', '')}\n"
-                                    f"{row['weight_dt']}/{row['activation_dt']}"
-                                )
-                                chart_data.append({'Label': quant_label, 'MetricName': 'Acc1', 'MetricType': 'Quantized (Acc1)', 'Accuracy (%)': row['acc1']})
-                                chart_data.append({'Label': quant_label, 'MetricName': 'Acc5', 'MetricType': 'Quantized (Acc5)', 'Accuracy (%)': row['acc5']})
+                    if run_comparison:
+                        with st.spinner(f"Building comparison chart for {num_runs} runs..."):
+                            orig_indices = [display_df.index[j] for j in selected_indices]
+                            selected_df = filtered_df.loc[orig_indices].copy()
 
-                        chart_df = pd.DataFrame(chart_data)
-                    show_large_chart(chart_df, selected_df)
+                            # Create labels
+                            selected_df['run_label'] = (
+                                selected_df['model_name'].astype(str) + "\n" +
+                                selected_df['experiment_type'].astype(str) + "\n" +
+                                selected_df['weight_dt'].astype(str) + "/" +
+                                selected_df['activation_dt'].astype(str)
+                            )
+
+                            # Prepare flattened data
+                            chart_data = []
+
+                            # Group by model to show ref once per model
+                            models_in_selection = selected_df['model_name'].unique()
+
+                            for model in models_in_selection:
+                                model_rows = selected_df[selected_df['model_name'] == model]
+
+                                # 1. Add Reference Entry (ONCE)
+                                first_row = model_rows.iloc[0]
+                                ref_label = f"{model}\nREF\nfp32/fp32"
+                                chart_data.append({'Label': ref_label, 'MetricName': 'Acc1', 'MetricType': 'Reference (Acc1)', 'Accuracy (%)': first_row['ref_acc1_effective'] if 'ref_acc1_effective' in first_row else 0})
+                                chart_data.append({'Label': ref_label, 'MetricName': 'Acc5', 'MetricType': 'Reference (Acc5)', 'Accuracy (%)': first_row['ref_acc5_effective'] if 'ref_acc5_effective' in first_row else 0})
+
+                                # 2. Add Quantized Entries
+                                for _, row in model_rows.iterrows():
+                                    quant_label = (
+                                        f"{model}\n"
+                                        f"{row.get('experiment_type', '')}\n"
+                                        f"{row['weight_dt']}/{row['activation_dt']}"
+                                    )
+                                    chart_data.append({'Label': quant_label, 'MetricName': 'Acc1', 'MetricType': 'Quantized (Acc1)', 'Accuracy (%)': row['acc1']})
+                                    chart_data.append({'Label': quant_label, 'MetricName': 'Acc5', 'MetricType': 'Quantized (Acc5)', 'Accuracy (%)': row['acc5']})
+
+                            chart_df = pd.DataFrame(chart_data)
+                        show_large_chart(chart_df, selected_df)
+                else:
+                    st.caption("Pick rows above to enable the action buttons.")
             else:
-                st.caption("Pick rows above to enable the action buttons.")
-        else:
-            st.warning("No rows match the current filter set. Relax a model, experiment type, or datatype filter to repopulate the table.")
-        
-        st.markdown("---")
-        
-        # # --- Model Architecture Graph Visualization ---
-        # st.markdown(f"#### 🏗️ Model Architecture & Quantization")
-        # if not filtered_df.empty:
-        #     available_models = sorted(filtered_df['model_name'].unique())
-        #     graph_status_col, graph_action_col = st.columns([3, 2])
-        #     graph_status_col.caption(
-        #         "Open the dedicated graph viewer to generate a fresh architecture graph from the current code."
-        #     )
-        #     if graph_action_col.button("🏗️ Open Graph Viewer", key=f"open_graph_viewer_{i}", type="primary", width='stretch'):
-        #         show_graph_viewer(i, available_models)
-        # else:
-        #     st.info("No data to display. Apply filters above to see models.")
-        
-        # st.markdown("---")
+                st.warning("No rows match the current filter set. Relax a model, experiment type, or datatype filter to repopulate the table.")
+    
+            st.markdown("---")
+    
+            # # --- Model Architecture Graph Visualization ---
+            # st.markdown(f"#### 🏗️ Model Architecture & Quantization")
+            # if not filtered_df.empty:
+            #     available_models = sorted(filtered_df['model_name'].unique())
+            #     graph_status_col, graph_action_col = st.columns([3, 2])
+            #     graph_status_col.caption(
+            #         "Open the dedicated graph viewer to generate a fresh architecture graph from the current code."
+            #     )
+            #     if graph_action_col.button("🏗️ Open Graph Viewer", key=f"open_graph_viewer_{i}", type="primary", width='stretch'):
+            #         show_graph_viewer(i, available_models)
+            # else:
+            #     st.info("No data to display. Apply filters above to see models.")
+    
+            # st.markdown("---")
 
-    # Add Table Button
-    st.button("➕ Add Table", on_click=add_table)
+        # Add Table Button
+        st.button("➕ Add Table", on_click=add_table)
+
+    _render_experiment_result_tables()
+
 
 # Close the Experiments tab context.
 tab_exp.__exit__(None, None, None)

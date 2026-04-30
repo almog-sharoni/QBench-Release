@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from ..registry.op_registry import OpRegistry
-from .quant_arithmetic import _QuantArithmeticBase
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.ops.quant_arithmetic import _QuantArithmeticBase
 
 
 @OpRegistry.register("QuantMatMul", is_activation=False, compliance_status="FP8 MatMul")

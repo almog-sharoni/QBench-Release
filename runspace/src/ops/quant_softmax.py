@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
-from ..registry.op_registry import OpRegistry
-from .quant_base import quantize_tensor
-from ..quantization.quantizer import round_fractional_part
-from .quant_base import QuantizedLayerMixin
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.ops.quant_base import quantize_tensor
+from runspace.src.quantization.quantizer import round_fractional_part
+from runspace.src.ops.quant_base import QuantizedLayerMixin
 
 def qtype_to_unsigned_qtype(
     q_type: str,
@@ -121,6 +121,7 @@ class QuantSoftmax(nn.Softmax):
         # input quant again for second pipeline trough ipu
         # Use ufp if softmax is in unsigned_input_sources
         q_type_x = self.uq_type if any(s in self.unsigned_input_sources for s in ["softmax", "quantsoftmax"]) else self.q_type
+        # q_type_x = self.q_type
         
         x_val, x_val_unscaled, _, _, _ = quantize_tensor(
             x_val,

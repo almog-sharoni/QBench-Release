@@ -1,7 +1,7 @@
 #not supported yet
 import torch.nn as nn
-from ..registry.op_registry import OpRegistry
-from .quant_base import QuantizedLayerMixin
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.ops.quant_base import QuantizedLayerMixin
 
 
 @OpRegistry.register("QuantMaxPool2d", original_cls=nn.MaxPool2d, passthrough=True)

@@ -23,12 +23,49 @@ with tab_runner:
     RUNNER_REGISTRY_PATH = os.path.join(RUNNER_OUTPUT_DIR, 'registry.json')
 
     def _dashboard_runner_pid_running(pid):
-        if not pid: return False
+        if not pid:
+            return False
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return False
+        proc_stat_path = f"/proc/{pid}/stat"
+        if os.path.exists(proc_stat_path):
+            try:
+                with open(proc_stat_path, "r") as f:
+                    parts = f.read().split()
+                if len(parts) > 2 and parts[2] == "Z":
+                    return False
+            except Exception:
+                pass
         try:
             os.kill(pid, 0)
             return True
-        except (ProcessLookupError, PermissionError): return False
-        except Exception: return False
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except Exception:
+            return False
+
+    def _dashboard_runner_log_finished(log_path):
+        if not log_path or not os.path.exists(log_path):
+            return False
+        try:
+            size = os.path.getsize(log_path)
+            with open(log_path, "rb") as f:
+                f.seek(max(0, size - 131072))
+                tail = f.read().decode("utf-8", errors="replace").lower()
+        except Exception:
+            return False
+        completion_markers = (
+            "=== execution completed ===",
+            "execution completed",
+            "run completed",
+            "dashboard run completed",
+            "graph generation completed",
+        )
+        return any(marker in tail for marker in completion_markers)
 
     def _dashboard_runner_load_registry():
         if not os.path.exists(RUNNER_REGISTRY_PATH): return []
@@ -52,8 +89,9 @@ with tab_runner:
         changed = False
         for run in registry:
             if run.get("status") == "running":
-                if not _dashboard_runner_pid_running(run.get("pid")):
+                if _dashboard_runner_log_finished(run.get("log_path")) or not _dashboard_runner_pid_running(run.get("pid")):
                     run["status"] = "finished"
+                    run.setdefault("finished_time", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                     changed = True
         if changed: _dashboard_runner_save_registry(registry)
         return registry
@@ -616,6 +654,8 @@ with tab_runner:
 
     def _dashboard_runner_add_experiment_arg(kind, command, name, value):
         flag = _dashboard_runner_experiment_meta(kind)["args"].get(name, {}).get("flag", f"--{name}")
+        if kind == "input" and name in ("excluded_ops", "unsigned_input_sources") and not str(value or "").strip():
+            value = "none"
         _dashboard_runner_add_arg(command, flag, value)
 
     def _dashboard_runner_add_experiment_bool(kind, command, name, enabled):
@@ -638,6 +678,10 @@ with tab_runner:
                 "unsigned_input_sources",
             ):
                 _dashboard_runner_add_experiment_arg(kind, command, name, values.get(name))
+            if values.get("dynamic_unsigned_input_candidates", True):
+                command.append("--dynamic_unsigned_input_candidates")
+            else:
+                command.append("--no_dynamic_unsigned_input_candidates")
             for name in ("only_dynamic", "only_baselines", "force_rerun", "force_rebuild_weights"):
                 _dashboard_runner_add_experiment_bool(kind, command, name, values.get(name))
         elif kind == "weight":
@@ -698,8 +742,7 @@ with tab_runner:
             command_preview = shlex.join(command)
             st.markdown("##### Command Preview")
             st.code(command_preview, language="bash")
-            disabled = is_running
-            if st.button(f"Run {label}", key=f"runner_experiment_start_{kind}", type="primary", width='stretch', disabled=disabled):
+            if st.button(f"Run {label}", key=f"runner_experiment_start_{kind}", type="primary", width='stretch'):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 log_path = os.path.join(RUNNER_OUTPUT_DIR, f"dashboard_experiment_{kind}_{timestamp}.log")
                 env = os.environ.copy()
@@ -759,30 +802,6 @@ with tab_runner:
             with st.expander("Last command", expanded=False):
                 st.code(last_command, language="bash")
     
-        if last_log_path:
-            st.markdown("#### Running Status")
-            _dashboard_runner_render_loading(parsed_progress, is_running, last_returncode)
-            total_configs = parsed_progress["total_configs"]
-            current_config = parsed_progress["current_config"]
-            if total_configs:
-                config_ratio = current_config / total_configs if total_configs else 0.0
-                config_label = f"Configs: {current_config}/{total_configs}"
-                if parsed_progress["current_name"] and not parsed_progress["completed"]:
-                    config_label += f" - {parsed_progress['current_name']}"
-                if parsed_progress["completed"]:
-                    config_label += " - completed"
-                st.progress(min(1.0, max(0.0, config_ratio)), text=config_label)
-            elif is_running:
-                st.info("Run started. Waiting for configuration progress to appear in the log...")
-    
-            if parsed_progress["tqdm_percent"] is not None:
-                tqdm_ratio = parsed_progress["tqdm_percent"] / 100.0
-                tqdm_label = (
-                    f"Current step: {parsed_progress['tqdm_percent']}%"
-                    f" ({parsed_progress['tqdm_current']}/{parsed_progress['tqdm_total']})"
-                )
-                st.progress(min(1.0, max(0.0, tqdm_ratio)), text=tqdm_label)
-                st.caption(parsed_progress["tqdm_line"])
     
         st.markdown("#### Experiment Runs")
         input_tab, weight_tab, hybrid_tab = st.tabs(["Input Quant", "Weight Quant", "Hybrid Quant"])
@@ -814,6 +833,11 @@ with tab_runner:
             i7, i8 = st.columns(2)
             input_values["excluded_ops"] = i7.text_input("Excluded ops", value=str(_dashboard_runner_arg_default("input", "excluded_ops", "LayerNorm")), key="runner_exp_input_excluded")
             input_values["unsigned_input_sources"] = i8.text_input("Unsigned input sources", value=str(_dashboard_runner_arg_default("input", "unsigned_input_sources", "") or ""), key="runner_exp_input_unsigned")
+            input_values["dynamic_unsigned_input_candidates"] = st.checkbox(
+                "Dynamic UFP after unsigned sources",
+                value=bool(_dashboard_runner_arg_default("input", "dynamic_unsigned_input_candidates", True)),
+                key="runner_exp_input_dynamic_unsigned_candidates",
+            )
             f1, f2, f3, f4 = st.columns(4)
             input_values["only_dynamic"] = f1.checkbox("Only dynamic", value=bool(_dashboard_runner_arg_default("input", "only_dynamic", False)), key="runner_exp_input_only_dynamic")
             input_values["only_baselines"] = f2.checkbox("Only baselines", value=bool(_dashboard_runner_arg_default("input", "only_baselines", False)), key="runner_exp_input_only_baselines")
@@ -1258,7 +1282,7 @@ with tab_runner:
                 key="runner_start_btn",
                 type="primary",
                 width='stretch',
-                disabled=is_running or not can_build,
+                disabled=not can_build,
             ):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 log_path = os.path.join(RUNNER_OUTPUT_DIR, f"dashboard_run_{timestamp}.log")
@@ -1290,6 +1314,15 @@ with tab_runner:
                         env=env,
                         start_new_session=True,
                     )
+                registry = _dashboard_runner_load_registry()
+                registry.append({
+                    "pid": started_process.pid,
+                    "status": "running",
+                    "command": command_preview,
+                    "log_path": log_path,
+                    "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                })
+                _dashboard_runner_save_registry(registry)
                 st.session_state["dashboard_runner_process"] = started_process
                 st.session_state["dashboard_runner_command"] = command_preview
                 st.session_state["dashboard_runner_log_path"] = log_path
