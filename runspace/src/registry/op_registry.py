@@ -1,4 +1,10 @@
 import torch.nn as nn
+import sys
+
+if __name__ == "src.registry.op_registry":
+    sys.modules.setdefault("runspace.src.registry.op_registry", sys.modules[__name__])
+elif __name__ == "runspace.src.registry.op_registry":
+    sys.modules.setdefault("src.registry.op_registry", sys.modules[__name__])
 
 class OpRegistry:
     """

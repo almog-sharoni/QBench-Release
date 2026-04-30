@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from ..registry.op_registry import OpRegistry
-from .quant_base import QuantizedLayerMixin
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.ops.quant_base import QuantizedLayerMixin
 
 
 @OpRegistry.register("QuantConv1d", original_cls=nn.Conv1d)
@@ -35,7 +35,7 @@ class QuantConv1d(nn.Conv1d, QuantizedLayerMixin):
             self.last_quant_weight = w_decomp.detach()
 
         if self.simulate_tf32_accum:
-            from ..utils.tf32_patcher import TF32Patcher
+            from runspace.src.utils.tf32_patcher import TF32Patcher
             with TF32Patcher():
                 output = nn.functional.conv1d(
                     input_q, w_decomp, None,

@@ -3,8 +3,8 @@ try:
     import torch.fx
 except ImportError:
     pass
-from ..quantization.quantizer import quantize
-from ..quantization.constants import get_format_params
+from runspace.src.quantization.quantizer import quantize
+from runspace.src.quantization.constants import get_format_params
 
 def _get_reduce_dims(input: torch.Tensor):
     return tuple(range(input.dim()))
@@ -20,7 +20,7 @@ _CUDA_CODEC = None
 def _cuda_codec():
     global _CUDA_CODEC
     if _CUDA_CODEC is None:
-        from ..quantization.cuda import (
+        from runspace.src.quantization.cuda import (
             roundtrip_tensor, roundtrip_chunk, roundtrip_channel,
             resolve_format,
         )
@@ -120,7 +120,7 @@ def _quantize_tensor_cuda(
         )
 
     if validate:
-        from ..quantization.quantizer import assert_fp8_valid
+        from runspace.src.quantization.quantizer import assert_fp8_valid
         assert_fp8_valid(input_fp8, q_type=q_type)
 
     if return_unscaled:
@@ -918,7 +918,13 @@ if hasattr(torch, 'fx') and hasattr(torch.fx, 'wrap'):
     torch.fx.wrap('quantize_tensor')
 
 if __name__ == "__main__":
-    tensor = torch.randn()
-    cuda_quant = _quantize_tensor_cuda(tensor, 'fp4_e1m2', 128, 'nearest', None)
-    ref_quant = quantize_tensor(tensor, 'fp4_e1m2', 128, 'nearest', None)
-    print(f"CUDA Quantization Error: {torch.norm(cuda_quant - ref_quant).item()}")
+    # Corrected main block for basic testing
+    tensor = torch.randn(1, 1, 128, 128).cuda()
+    # Note: _quantize_tensor_cuda expects e, m, is_signed from resolve_format
+    from runspace.src.quantization.cuda import resolve_format
+    e, m, is_signed = resolve_format('fp8_e4m3')
+    
+    cuda_quant, _ = _quantize_tensor_cuda(tensor, 'fp8_e4m3', e, m, is_signed, False, False, 'tensor', 128, False)
+    ref_quant, _ = quantize_tensor(tensor, 'fp8_e4m3', mode='tensor')
+    
+    print(f"CUDA Quantization Difference Norm: {torch.norm(cuda_quant - ref_quant).item()}")

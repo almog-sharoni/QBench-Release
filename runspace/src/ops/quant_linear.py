@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from ..registry.op_registry import OpRegistry
-from ..quantization.quantizer import quantize
-from .quant_base import QuantizedLayerMixin
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.quantization.quantizer import quantize
+from runspace.src.ops.quant_base import QuantizedLayerMixin
 
 @OpRegistry.register("QuantLinear", original_cls=nn.Linear)
 class QuantLinear(nn.Linear, QuantizedLayerMixin):

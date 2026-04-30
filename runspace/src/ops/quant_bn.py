@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import copy
-from ..registry.op_registry import OpRegistry
-from ..quantization.quantizer import quantize
-from .quant_base import QuantizedLayerMixin, quantize_tensor
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.quantization.quantizer import quantize
+from runspace.src.ops.quant_base import QuantizedLayerMixin, quantize_tensor
 
 @OpRegistry.register("QuantBatchNorm2d", original_cls=nn.BatchNorm2d, compliance_status="match leo ng")
 class QuantBatchNorm2d(nn.BatchNorm2d, QuantizedLayerMixin):

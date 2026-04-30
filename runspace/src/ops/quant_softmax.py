@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
-from ..registry.op_registry import OpRegistry
-from .quant_base import quantize_tensor
-from ..quantization.quantizer import round_fractional_part
-from .quant_base import QuantizedLayerMixin
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.ops.quant_base import quantize_tensor
+from runspace.src.quantization.quantizer import round_fractional_part
+from runspace.src.ops.quant_base import QuantizedLayerMixin
 
 def qtype_to_unsigned_qtype(
     q_type: str,
