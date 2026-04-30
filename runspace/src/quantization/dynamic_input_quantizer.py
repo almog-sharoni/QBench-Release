@@ -4,9 +4,11 @@ import torch.nn as nn
 try:
     from ..registry.op_registry import OpRegistry
     from ..ops.quant_base import quantize_tensor
+    from ..ops.quant_base import _quantize_tensor_cuda
 except ImportError:
     from src.registry.op_registry import OpRegistry
     from src.ops.quant_base import quantize_tensor
+    from src.ops.quant_base import _quantize_tensor_cuda
 
 
 DEFAULT_DYNAMIC_INPUT_CANDIDATES = [
@@ -137,34 +139,49 @@ class DynamicInputQuantizer:
             else:
                 candidates = self.non_ufp_candidates or self.ufp_candidates
 
-            x_quantized, chunk_formats = self._select_best_format(x, layer_name, candidates)
+            # 1. Perform dynamic quantization selection
+            x_quantized, best_indices = self._select_best_format(x, layer_name, candidates)
 
-            module.input_quantization = True
+            # 2. Update module state to skip its own quantization path (redundant work)
+            module.input_quantization = False 
             module.input_mode = 'chunk'
             module.input_chunk_size = self.chunk_size
-            module.input_chunk_formats = chunk_formats
-            if chunk_formats:
-                module.input_q_type = chunk_formats[0]
+            
+            # Store the candidates list and the indices tensor on the module for later logging.
+            # We avoid building the list of strings here to prevent GPU-CPU sync.
+            module.input_chunk_candidates = candidates
+            module.input_chunk_format_indices = best_indices
+            
+            # For compatibility with any code that still expects a single q_type string
+            if len(candidates) > 0:
+                # We can't easily pick the "first" chosen format without a sync, 
+                # so we just use the first candidate as a placeholder.
+                module.input_q_type = candidates[0]
+            
             module.rounding = 'nearest'
 
+            # 3. Update stats (L1/MSE)
             with torch.no_grad():
                 diff = x - x_quantized
-                diff_flat = diff.reshape(-1)
-                x_flat = x.reshape(-1)
+                # We use sum() which stays on GPU; .item() is a small sync but acceptable
+                # compared to moving the entire tensor.
+                self.stats['sum_l1_err'] += diff.abs().sum().item()
+                self.stats['sum_mse_err'] += diff.pow(2).sum().item()
+                self.stats['sum_l1_norm'] += x.abs().sum().item()
+                self.stats['sum_l2_norm'] += x.pow(2).sum().item()
 
-                self.stats['sum_l1_err'] += diff_flat.abs().sum().item()
-                self.stats['sum_mse_err'] += diff_flat.pow(2).sum().item()
-                self.stats['sum_l1_norm'] += x_flat.abs().sum().item()
-                self.stats['sum_l2_norm'] += x_flat.pow(2).sum().item()
-
-            return None
+            # 4. Return the quantized tensor and all other original arguments to replace the input.
+            # This ensures multi-argument ops like QuantAdd(x, other) don't lose 'other'.
+            return (x_quantized, *args[1:])
 
         return hook_fn
 
     def _select_best_format(self, tensor, layer_name, candidates):
-        return self._dynamic_quantize_per_chunk(tensor, layer_name, candidates)
-
-    def _dynamic_quantize_per_chunk(self, tensor, layer_name, candidates):
+        """
+        Optimized format selection:
+        - Stacks all candidate quantizations and chooses the best per-chunk on GPU.
+        - Returns the quantized tensor and the TENSOR of best indices (no tolist()).
+        """
         chunk_size = self.chunk_size
         device = tensor.device
 
@@ -195,6 +212,8 @@ class DynamicInputQuantizer:
                 continue
 
             try:
+                # quantize_tensor is already CUDA-accelerated.
+                
                 q_tensor, _ = quantize_tensor(
                     tensor,
                     q_type=fmt,
@@ -222,6 +241,8 @@ class DynamicInputQuantizer:
         all_errors = torch.stack(candidate_errors, dim=0)
         best_indices = torch.argmin(all_errors, dim=0)
         all_qs = torch.stack(candidate_qs, dim=0)
+        
+        # Gather the best quantized chunks
         gather_indices = best_indices.view(1, total_chunks, 1).expand(1, total_chunks, chunk_size)
         best_qs = torch.gather(all_qs, 0, gather_indices).squeeze(0)
 
@@ -234,33 +255,52 @@ class DynamicInputQuantizer:
         else:
             quantized_tensor = q_flat.view(-1).view_as(tensor)
 
+        # Update layer-wise format selection statistics (stay on GPU)
         if layer_name not in self.layer_stats:
-            self.layer_stats[layer_name] = {'format_counts': {}}
-        counts_dict = self.layer_stats[layer_name]['format_counts']
-
+            # We initialize a tensor to hold counts on GPU
+            self.layer_stats[layer_name] = {
+                'format_counts_tensor': torch.zeros(len(candidates), dtype=torch.long, device=device),
+                'candidates': candidates
+            }
+        
+        stats = self.layer_stats[layer_name]
         counts = torch.bincount(best_indices, minlength=len(candidates))
-        for idx, count in enumerate(counts.cpu().tolist()):
-            if count > 0:
-                fmt = candidates[idx]
-                counts_dict[fmt] = counts_dict.get(fmt, 0) + count
+        stats['format_counts_tensor'] += counts
 
+        # Track running error for progress/debug
         best_errors = all_errors[best_indices, torch.arange(total_chunks, device=device)]
         self.running_error += best_errors.sum().item()
         self.total_chunks += total_chunks
 
-        best_indices_list = best_indices.detach().cpu().tolist()
-        selected_chunk_formats = [candidates[idx] for idx in best_indices_list]
-
-        return quantized_tensor, selected_chunk_formats
+        return quantized_tensor, best_indices
 
     def get_final_stats(self):
         norm_l1 = self.stats['sum_l1_err'] / self.stats['sum_l1_norm'] if self.stats['sum_l1_norm'] > 0 else 0.0
         norm_mse = self.stats['sum_mse_err'] / self.stats['sum_l2_norm'] if self.stats['sum_l2_norm'] > 0 else 0.0
+        
+        # Convert GPU stats to the expected dict format for logging/plotting
+        processed_layer_stats = {}
+        for layer_name, stats in self.layer_stats.items():
+            if 'format_counts_tensor' in stats:
+                counts_tensor = stats['format_counts_tensor'].cpu()
+                candidates = stats['candidates']
+                counts_dict = {}
+                for idx, count in enumerate(counts_tensor.tolist()):
+                    if count > 0:
+                        counts_dict[candidates[idx]] = count
+                processed_layer_stats[layer_name] = {
+                    'format_counts': counts_dict,
+                    'total_chunks': int(counts_tensor.sum().item())
+                }
+            else:
+                processed_layer_stats[layer_name] = stats
+
         return {
             'norm_l1': norm_l1,
             'norm_mse': norm_mse,
             'total_l1': self.stats['sum_l1_err'],
             'total_mse': self.stats['sum_mse_err'],
+            'layer_stats': processed_layer_stats
         }
 
     def cleanup(self):
@@ -269,6 +309,13 @@ class DynamicInputQuantizer:
         self.hooks = []
 
         for module in self.hooked_modules:
-            if hasattr(module, 'input_chunk_formats'):
-                module.input_chunk_formats = None
+            # Clear all optimization-related attributes
+            for attr in ('input_chunk_formats', 'input_chunk_candidates', 'input_chunk_format_indices'):
+                if hasattr(module, attr):
+                    setattr(module, attr, None)
+            
+            # Restore default quantization state if needed
+            # (though normally hooks are removed after the run anyway)
+            module.input_quantization = True 
+
         self.hooked_modules = []

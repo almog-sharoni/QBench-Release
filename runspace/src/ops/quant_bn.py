@@ -6,7 +6,7 @@ from ..registry.op_registry import OpRegistry
 from ..quantization.quantizer import quantize
 from .quant_base import QuantizedLayerMixin, quantize_tensor
 
-@OpRegistry.register("QuantBatchNorm2d", original_cls=nn.BatchNorm2d)
+@OpRegistry.register("QuantBatchNorm2d", original_cls=nn.BatchNorm2d, compliance_status="match leo ng")
 class QuantBatchNorm2d(nn.BatchNorm2d, QuantizedLayerMixin):
     q_type: str
     weight_scale: torch.Tensor | None
@@ -30,7 +30,8 @@ class QuantBatchNorm2d(nn.BatchNorm2d, QuantizedLayerMixin):
              raise RuntimeError("FP8 support (torch.float8_e4m3fn) is required but not available.")
 
         # Use shared quantization logic
-        input_fp8 = self.quantize_input(input)
+        # input_fp8 = self.quantize_input(input)
+        input_fp8 = input
     
         # Dequantize weights (gamma)
         if self.weight_fp8 is not None and self.weight_scale is not None:
