@@ -1,8 +1,10 @@
 import os
 import sys
 import tempfile
+import json
 
 import torch
+import torch.nn as nn
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if PROJECT_ROOT not in sys.path:
@@ -85,10 +87,44 @@ def test_runner_synthesizes_uniform_input_quant_config():
         "mode": "uniform",
         "format": "fp8_e4m3",
         "chunk_size": 128,
+        "quant_mode": "chunk",
     }
+
+
+def test_runner_logs_dynamic_input_map_from_processed_layer_stats():
+    class FakeQuantizer:
+        def __init__(self):
+            self.model = nn.Sequential(nn.Conv2d(3, 4, 1))
+
+        def get_final_stats(self):
+            return {
+                "norm_l1": 0.25,
+                "norm_mse": 0.125,
+                "total_l1": 10.0,
+                "total_mse": 5.0,
+                "layer_stats": {
+                    "0": {
+                        "format_counts": {"fp8_e4m3": 3, "fp4_e1m2": 1},
+                        "total_chunks": 4,
+                    }
+                },
+            }
+
+    stats = Runner._collect_layer_input_quant_stats(
+        FakeQuantizer(),
+        {"enabled": True, "mode": "dynamic", "metric": "mse", "chunk_size": 128},
+    )
+    input_map_json = Runner._build_input_map_json(stats["layer_stats"])
+    input_map = json.loads(input_map_json)
+
+    assert stats["layer_stats"]["0"]["type"] == "Conv2d"
+    assert input_map["0"]["format_counts"] == {"fp8_e4m3": 3, "fp4_e1m2": 1}
+    assert input_map["0"]["total_chunks"] == 4
+    assert input_map["0"]["dominant_format"] == "fp8_e4m3"
 
 
 if __name__ == "__main__":
     test_runner_logs_fp32_weight_dt_when_weight_quantization_disabled()
     test_materialized_cache_detects_weight_quant_buffers()
     test_runner_synthesizes_uniform_input_quant_config()
+    test_runner_logs_dynamic_input_map_from_processed_layer_stats()

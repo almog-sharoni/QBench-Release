@@ -6,7 +6,7 @@ adapter:
   excluded_ops:
   - ''
   weight_quantization: false
-  input_quantization: true
+  input_quantization: false
 quantization:
   format: fp8_e4m3
   calib_method: max
@@ -22,7 +22,7 @@ dataset:
   batch_size: 128
   num_workers: 32
 evaluation:
-  mode: compare
+  mode: evaluate
   compare_batches: -1
   generate_graph_svg: false
   save_histograms: false
