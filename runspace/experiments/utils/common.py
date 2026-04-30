@@ -243,7 +243,15 @@ def build_uniform_input_quant_cfg(fmt, chunk_size, enabled=True):
     }
 
 
-def build_dynamic_input_quant_cfg(metric, chunk_size, candidate_formats, enabled=True):
+def build_dynamic_input_quant_cfg(
+    metric,
+    chunk_size,
+    candidate_formats,
+    enabled=True,
+    restrict_post_relu_ufp=False,
+    unsigned_input_sources=None,
+    dynamic_unsigned_input_candidates=True,
+):
     """Build the dynamic layer-input quantizer config used by input quant experiments."""
     if not enabled:
         return None
@@ -253,6 +261,9 @@ def build_dynamic_input_quant_cfg(metric, chunk_size, candidate_formats, enabled
         'metric': metric,
         'chunk_size': int(chunk_size),
         'candidate_formats': list(candidate_formats),
+        'restrict_post_relu_ufp': bool(restrict_post_relu_ufp),
+        'unsigned_input_sources': list(unsigned_input_sources or []),
+        'dynamic_unsigned_input_candidates': bool(dynamic_unsigned_input_candidates),
     }
 
 

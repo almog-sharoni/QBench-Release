@@ -41,7 +41,12 @@ class QuantAwareTracer(torch.fx.Tracer):
         if isinstance(m, (DecomposedMultiheadAttention, DecomposedQkvAttention, DecomposedMlpBlock)):
             return False
 
-        quantized_ops = tuple(OpRegistry.get_supported_ops().values())
+        quantized_ops = tuple(
+            dict.fromkeys(
+                list(OpRegistry.get_supported_ops().values())
+                + list(getattr(OpRegistry, "_registry", {}).values())
+            )
+        )
         if isinstance(m, quantized_ops):
             return True
 

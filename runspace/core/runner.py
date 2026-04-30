@@ -1277,6 +1277,9 @@ class Runner:
                 metric=metric,
                 chunk_size=chunk_size,
                 candidate_formats=candidate_formats,
+                restrict_post_relu_ufp=input_quant_cfg.get('restrict_post_relu_ufp', False),
+                unsigned_input_sources=input_quant_cfg.get('unsigned_input_sources', []),
+                use_unsigned_input_candidates=input_quant_cfg.get('dynamic_unsigned_input_candidates', True),
             )
             quantizer.register_hooks()
             print(f"Input quantization enabled: mode=dynamic metric={metric} chunk_size={chunk_size}")

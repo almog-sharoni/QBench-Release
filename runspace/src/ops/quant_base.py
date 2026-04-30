@@ -212,7 +212,7 @@ def quantize_tensor(
         
         # Candidate formats (Standard set)
         candidates = [
-            'fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6', 
+            'fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'ffp8_e1m6', 
             'fp8_e6m1', 'fp8_e7m0',
             'fp7_e3m3', 'fp7_e4m2', 'fp7_e2m4', 'fp7_e5m1', 'fp7_e1m5', 
             'fp7_e6m0'
@@ -916,3 +916,9 @@ class QuantizedLayerMixin:
 # Prevent tracing into quantize_tensor to avoid Proxy errors with dynamic shapes
 if hasattr(torch, 'fx') and hasattr(torch.fx, 'wrap'):
     torch.fx.wrap('quantize_tensor')
+
+if __name__ == "__main__":
+    tensor = torch.randn()
+    cuda_quant = _quantize_tensor_cuda(tensor, 'fp4_e1m2', 128, 'nearest', None)
+    ref_quant = quantize_tensor(tensor, 'fp4_e1m2', 128, 'nearest', None)
+    print(f"CUDA Quantization Error: {torch.norm(cuda_quant - ref_quant).item()}")

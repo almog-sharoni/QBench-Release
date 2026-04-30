@@ -11,6 +11,9 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from runspace.core.runner import Runner
+from src.ops.quant_dropout import QuantDropout
+from src.ops.quant_matmul import QuantMatMul
+from src.quantization.dynamic_input_quantizer import DynamicInputQuantizer
 
 
 def test_runner_logs_fp32_weight_dt_when_weight_quantization_disabled():
@@ -123,8 +126,70 @@ def test_runner_logs_dynamic_input_map_from_processed_layer_stats():
     assert input_map["0"]["dominant_format"] == "fp8_e4m3"
 
 
+def test_dynamic_input_quantizer_uses_unsigned_candidates_after_source_dropout():
+    model = nn.Sequential(
+        nn.ReLU(),
+        QuantDropout(p=0.0),
+        nn.Linear(4, 4),
+    )
+    model[1].input_q_type = "ufp4_e1m3"
+    quantizer = DynamicInputQuantizer(
+        model,
+        candidate_formats=["fp4_e1m2", "fp4_e2m1"],
+        unsigned_input_sources=["relu"],
+    )
+
+    assert "2" in quantizer.post_unsigned_layers
+    assert "1" not in quantizer.post_unsigned_layers
+    assert "1" in quantizer.unsigned_passthrough_layers
+    assert quantizer._candidates_for_layer("1", model[1]) == ["ufp4_e1m3", "ufp4_e2m2"]
+    assert quantizer._candidates_for_layer("2", model[2]) == ["ufp4_e1m3", "ufp4_e2m2"]
+
+    disabled_quantizer = DynamicInputQuantizer(
+        model,
+        candidate_formats=["fp4_e1m2", "fp4_e2m1"],
+        unsigned_input_sources=["relu"],
+        use_unsigned_input_candidates=False,
+    )
+    assert "2" not in disabled_quantizer.post_unsigned_layers
+    assert disabled_quantizer._candidates_for_layer("2", model[2]) == ["fp4_e1m2", "fp4_e2m1"]
+
+
+def test_dynamic_input_quantizer_targets_actual_consumer_after_softmax_dropout():
+    class AttentionLike(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.softmax = nn.Softmax(dim=-1)
+            self.dropout_layer = QuantDropout(p=0.0)
+            self.out_proj = nn.Linear(4, 4)
+            self.quantmatmul = QuantMatMul()
+
+        def forward(self, scores, values):
+            attn = self.softmax(scores)
+            attn = self.dropout_layer(attn)
+            out = self.quantmatmul(attn, values)
+            return self.out_proj(out)
+
+    model = AttentionLike()
+    quantizer = DynamicInputQuantizer(
+        model,
+        candidate_formats=["fp4_e1m2", "fp4_e2m1"],
+        unsigned_input_sources=["softmax"],
+    )
+
+    assert "quantmatmul" in quantizer.post_unsigned_layers
+    assert "dropout_layer" not in quantizer.post_unsigned_layers
+    assert "dropout_layer" in quantizer.unsigned_passthrough_layers
+    assert "out_proj" not in quantizer.post_unsigned_layers
+    assert quantizer._candidates_for_layer("dropout_layer", model.dropout_layer) == ["ufp4_e1m3", "ufp4_e2m2"]
+    assert quantizer._candidates_for_layer("quantmatmul", model.quantmatmul) == ["ufp4_e1m3", "ufp4_e2m2"]
+    assert quantizer._candidates_for_layer("out_proj", model.out_proj) == ["fp4_e1m2", "fp4_e2m1"]
+
+
 if __name__ == "__main__":
     test_runner_logs_fp32_weight_dt_when_weight_quantization_disabled()
     test_materialized_cache_detects_weight_quant_buffers()
     test_runner_synthesizes_uniform_input_quant_config()
     test_runner_logs_dynamic_input_map_from_processed_layer_stats()
+    test_dynamic_input_quantizer_uses_unsigned_candidates_after_source_dropout()
+    test_dynamic_input_quantizer_targets_actual_consumer_after_softmax_dropout()
