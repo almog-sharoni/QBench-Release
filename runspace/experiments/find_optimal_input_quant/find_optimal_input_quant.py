@@ -189,7 +189,7 @@ def get_args():
     parser.add_argument(
         "--unsigned_input_sources",
         type=str,
-        default=None,
+        default="relu,softmax,quantrelu,quantsoftmax",
         help=(
             "Comma-separated activation sources that should use unsigned input/output "
             "formats. If omitted, experiment types containing 'ufp' enable "
@@ -201,18 +201,12 @@ def get_args():
     args.excluded_ops = [op.strip() for op in args.excluded_ops.split(',') if op.strip()]
     args.baseline_formats = _parse_csv_arg(args.baseline_formats, baseline_formats)
     args.candidate_formats = _parse_csv_arg(args.candidate_formats, candidate_formats)
-    if args.unsigned_input_sources is None:
-        args.unsigned_input_sources = (
-            ["relu", "softmax", "quantrelu", "quantsoftmax"]
-            if "ufp" in str(args.experiment_type).lower()
-            else []
-        )
-    else:
-        args.unsigned_input_sources = [
-            item.strip().lower()
-            for item in args.unsigned_input_sources.split(',')
-            if item.strip()
-        ]
+    
+    args.unsigned_input_sources = [
+        item.strip().lower()
+        for item in args.unsigned_input_sources.split(',')
+        if item.strip()
+    ]
     return args
 
 

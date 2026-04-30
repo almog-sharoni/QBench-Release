@@ -182,21 +182,7 @@ use_cached_graphs = st.sidebar.checkbox(
     value=True,
     help="Loads previously generated architecture graphs from the selected database. Use Regenerate Graph when code changes.",
 )
-dashboard_auto_refresh_enabled = st.sidebar.checkbox(
-    "Auto-refresh dashboard",
-    value=True,
-    key="dashboard_auto_refresh_enabled",
-    help="Automatically reloads dashboard data on a timer.",
-)
-dashboard_auto_refresh_interval = st.sidebar.number_input(
-    "Refresh interval (seconds)",
-    min_value=10,
-    max_value=300,
-    value=30,
-    step=5,
-    key="dashboard_auto_refresh_interval",
-    disabled=not dashboard_auto_refresh_enabled,
-)
+st.sidebar.caption("Data updates on Streamlit reruns. Active run logs refresh in the Run Models tab without reloading the whole page.")
 
 st.markdown("---")
 

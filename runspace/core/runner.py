@@ -465,14 +465,26 @@ class Runner:
         input_map = {}
         for name, module in model.named_modules():
             fmt = None
-            if getattr(module, 'input_chunk_formats', None):
-                fmt = getattr(module, 'input_chunk_formats')
-            elif hasattr(module, 'input_q_type'):
-                fmt = getattr(module, 'input_q_type')
-            elif hasattr(module, 'uq_type') and getattr(module, 'unsigned_input_sources', None):
-                sources = getattr(module, 'unsigned_input_sources', [])
-                if any(s in sources for s in ["softmax", "quantsoftmax"]):
-                    fmt = getattr(module, 'uq_type')
+            
+            # Optimized dynamic path: check for format indices from the last batch
+            indices = getattr(module, 'input_chunk_format_indices', None)
+            candidates = getattr(module, 'input_chunk_candidates', None)
+            if indices is not None and candidates is not None:
+                # Convert back to list of strings only for the final log/metadata export.
+                # This sync is fine here as it's outside the forward loop.
+                idx_list = indices.detach().cpu().tolist()
+                fmt = [candidates[i] for i in idx_list]
+            
+            # Legacy/Static path
+            if fmt is None:
+                if getattr(module, 'input_chunk_formats', None):
+                    fmt = getattr(module, 'input_chunk_formats')
+                elif hasattr(module, 'input_q_type'):
+                    fmt = getattr(module, 'input_q_type')
+                elif hasattr(module, 'uq_type') and getattr(module, 'unsigned_input_sources', None):
+                    sources = getattr(module, 'unsigned_input_sources', [])
+                    if any(s in sources for s in ["softmax", "quantsoftmax"]):
+                        fmt = getattr(module, 'uq_type')
 
             if fmt is None:
                 continue
@@ -1125,19 +1137,21 @@ class Runner:
         if l1 is None:
             l1 = input_quant.get('norm_l1', result.get('dyn_norm_l1'))
 
-        quant_map_json = self._to_json_string(exp_cfg.get('quant_map_json'))
-        if quant_map_json is None and result.get('weight_quant_map') is not None:
-            quant_map_json = self._to_json_string(result.get('weight_quant_map'))
-        if quant_map_json is None:
-            inferred_map = self._resolve_quant_map_for_run(
-                config=config,
-                materialized_weight_path=result.get('materialized_weight_path')
-            )
-            if inferred_map is not None:
-                quant_map_json = self._to_json_string(inferred_map)
+        quant_map_json = None
+        if not weights_are_fp32:
+            quant_map_json = self._to_json_string(exp_cfg.get('quant_map_json'))
+            if quant_map_json is None and result.get('weight_quant_map') is not None:
+                quant_map_json = self._to_json_string(result.get('weight_quant_map'))
+            if quant_map_json is None:
+                inferred_map = self._resolve_quant_map_for_run(
+                    config=config,
+                    materialized_weight_path=result.get('materialized_weight_path')
+                )
+                if inferred_map is not None:
+                    quant_map_json = self._to_json_string(inferred_map)
         input_map_json = self._to_json_string(exp_cfg.get('input_map_json'))
         if input_map_json is None and isinstance(input_quant.get('layer_stats'), dict):
-            input_map_json = self._build_input_map_json(input_quant.get('layer_stats'))
+            input_map_json = self._to_json_string(self._build_input_map_json(input_quant.get('layer_stats')))
         if input_map_json is None and result.get('input_quant_map') is not None:
             input_map_json = self._to_json_string(result.get('input_quant_map'))
 
@@ -1298,7 +1312,7 @@ class Runner:
     def _collect_layer_input_quant_stats(quantizer, input_quant_cfg: Dict[str, Any]):
         mode = input_quant_cfg.get('mode')
         final_stats = quantizer.get_final_stats()
-        raw_layer_stats = getattr(quantizer, 'layer_stats', {}) or {}
+        processed_layer_stats = final_stats.get('layer_stats', {}) or {}
         layer_type_map = {}
         model = getattr(quantizer, 'model', None)
         if model is not None:
@@ -1311,8 +1325,8 @@ class Runner:
                 layer_type_map = {}
 
         layer_stats = {}
-        if isinstance(raw_layer_stats, dict):
-            for layer_name, layer_entry in raw_layer_stats.items():
+        if isinstance(processed_layer_stats, dict):
+            for layer_name, layer_entry in processed_layer_stats.items():
                 if not isinstance(layer_entry, dict):
                     continue
                 normalized = dict(layer_entry)
