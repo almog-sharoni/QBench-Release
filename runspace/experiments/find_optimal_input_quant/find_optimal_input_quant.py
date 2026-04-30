@@ -52,6 +52,9 @@ candidate_formats = [
     'fp2_e1m0'
 ]
 
+DEFAULT_BASELINE_EXPERIMENT_TYPE = "input_quant_baseline"
+DEFAULT_DYNAMIC_EXPERIMENT_TYPE = "input_quant_dynamic"
+
 
 def _parse_csv_arg(value, fallback):
     if value is None:
@@ -167,6 +170,15 @@ def get_args():
         help="Comma-separated dynamic candidate formats. Defaults to the script's candidate_formats list.",
     )
     parser.add_argument(
+        "--post_relu_ufp_only",
+        action="store_true",
+        help=(
+            "Restrict dynamic candidate selection so post-ReLU layers use UFP "
+            "candidates and other layers use non-UFP candidates. By default, "
+            "every layer can choose from every --candidate_formats entry."
+        ),
+    )
+    parser.add_argument(
         "--excluded_ops",
         type=str,
         default="LayerNorm",
@@ -183,8 +195,18 @@ def get_args():
     parser.add_argument(
         "--experiment_type",
         type=str,
-        default="input_quant_baseline",
+        default=DEFAULT_BASELINE_EXPERIMENT_TYPE,
         help="Experiment type name for baseline runs (default: input_quant_baseline)"
+    )
+    parser.add_argument(
+        "--dynamic_experiment_type",
+        type=str,
+        default=None,
+        help=(
+            "Experiment type name for dynamic runs. Defaults to input_quant_dynamic, "
+            "or to --experiment_type when --only_dynamic is set and --experiment_type "
+            "was explicitly changed."
+        ),
     )
     parser.add_argument(
         "--unsigned_input_sources",
@@ -196,11 +218,35 @@ def get_args():
             "relu,softmax,quantrelu,quantsoftmax."
         ),
     )
+    parser.set_defaults(dynamic_unsigned_input_candidates=True)
+    parser.add_argument(
+        "--dynamic_unsigned_input_candidates",
+        dest="dynamic_unsigned_input_candidates",
+        action="store_true",
+        help=(
+            "Enable UFP-converted dynamic candidate formats on layers after "
+            "--unsigned_input_sources sources."
+        ),
+    )
+    parser.add_argument(
+        "--no_dynamic_unsigned_input_candidates",
+        dest="dynamic_unsigned_input_candidates",
+        action="store_false",
+        help=(
+            "Disable UFP-converted dynamic candidate formats after "
+            "--unsigned_input_sources sources."
+        ),
+    )
     # Add other args as needed
     args = parser.parse_args()
     args.excluded_ops = [op.strip() for op in args.excluded_ops.split(',') if op.strip()]
     args.baseline_formats = _parse_csv_arg(args.baseline_formats, baseline_formats)
     args.candidate_formats = _parse_csv_arg(args.candidate_formats, candidate_formats)
+    if args.dynamic_experiment_type is None:
+        if args.only_dynamic and args.experiment_type != DEFAULT_BASELINE_EXPERIMENT_TYPE:
+            args.dynamic_experiment_type = args.experiment_type
+        else:
+            args.dynamic_experiment_type = DEFAULT_DYNAMIC_EXPERIMENT_TYPE
     
     args.unsigned_input_sources = [
         item.strip().lower()
@@ -585,8 +631,11 @@ def process_single_model(args, model_config, device, metrics):
             
             for metric in metrics:
                 activation_dt = f"dyn_input_{metric}"
-                if not args.force_rerun and _input_quant_run_exists(db, model_name, 'input_quant_dynamic', activation_dt):
-                    print(f"[Dynamic] Skipping {metric} — already in DB for {model_name}")
+                if not args.force_rerun and _input_quant_run_exists(db, model_name, args.dynamic_experiment_type, activation_dt):
+                    print(
+                        f"[Dynamic] Skipping {metric} — already in DB for {model_name} "
+                        f"(experiment_type={args.dynamic_experiment_type})"
+                    )
                     continue
 
                 print(f"\n===========================================")
@@ -603,6 +652,9 @@ def process_single_model(args, model_config, device, metrics):
                         'metric': metric,
                         'chunk_size': args.chunk_size,
                         'candidate_formats': args.candidate_formats,
+                        'restrict_post_relu_ufp': args.post_relu_ufp_only,
+                        'unsigned_input_sources': args.unsigned_input_sources,
+                        'dynamic_unsigned_input_candidates': args.dynamic_unsigned_input_candidates,
                     }
                     eval_results = runner.evaluate_model(
                         model=model,
@@ -630,7 +682,7 @@ def process_single_model(args, model_config, device, metrics):
                     _cfg_dyn = _serialize_runtime_config(
                         config,
                         model=model,
-                        experiment_type="input_quant_dynamic",
+                        experiment_type=args.dynamic_experiment_type,
                         activation_dt=f"dyn_input_{metric}",
                         metric=metric,
                         limit_batches=args.limit_batches,
@@ -638,7 +690,7 @@ def process_single_model(args, model_config, device, metrics):
                     log_cfg = copy.deepcopy(config)
                     log_cfg['experiment'] = {
                         'name': 'find_optimal_input_quant',
-                        'type': 'input_quant_dynamic',
+                        'type': args.dynamic_experiment_type,
                         'weight_dt': 'fp32',
                         'activation_dt': f"dyn_input_{metric}",
                         'ref_acc1': ref_acc1,

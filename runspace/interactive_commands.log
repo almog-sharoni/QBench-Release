@@ -43,3 +43,5 @@
 {"command": "python runspace/run_interactive.py --base-config dashboard_20260429.yaml --models-file models_best_acc1.yaml --models vit_b_16 --batches -1 --no-histograms", "timestamp": "2026-04-29T19:45:15+00:00"}
 {"command": "python runspace/run_interactive.py --base-config advanced_full_config_fp8e4m3.yaml --models-file models_best_acc1.yaml --models resnet18 --batches 5 --no-histograms", "timestamp": "2026-04-29T19:52:26+00:00"}
 {"command": "python runspace/run_interactive.py --base-config advanced_full_config_fp8e4m3.yaml --models-file models_best_acc1.yaml --models resnet18 --batches 1 --no-histograms", "timestamp": "2026-04-30T06:20:41+00:00"}
+{"command": "python runspace/run_interactive.py --base-config advanced_full_config_fp8e4m3.yaml --models-file models_best_acc1.yaml --models resnet18 --batches 5 --no-histograms", "timestamp": "2026-04-30T10:50:56+00:00"}
+{"command": "python runspace/run_interactive.py --base-config advanced_full_config_fp8e4m3.yaml --models-file models_best_acc1.yaml --models resnet18 --batches 19 --no-histograms", "timestamp": "2026-04-30T12:43:09+00:00"}
