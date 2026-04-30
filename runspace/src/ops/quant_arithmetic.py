@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from ..registry.op_registry import OpRegistry
-from .quant_base import QuantizedLayerMixin
+from runspace.src.registry.op_registry import OpRegistry
+from runspace.src.ops.quant_base import QuantizedLayerMixin
 
 
 class _QuantArithmeticBase(nn.Module, QuantizedLayerMixin):
@@ -105,8 +105,12 @@ class QuantCat(_QuantArithmeticBase):
         self.quant_mode = quant_mode
         self.chunk_size = chunk_size
         self.input_quantization = False
-
+    
     def forward(self, tensors: list[torch.Tensor], dim: int = 0) -> torch.Tensor:
         # Quantize all inputs
-        quantized = self._quantize_operands(tensors)
-        return torch.cat(quantized, dim=dim)
+        try:
+            quantized = self._quantize_operands(tensors)
+            return torch.cat(quantized, dim=dim)
+        except Exception as e:
+            print(f"QuantCat: Error in forward pass: {e}")
+            raise e
