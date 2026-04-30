@@ -62,7 +62,7 @@ class LUTActivation:
         # 4. Quantize output to FP8 via the CUDA codec. 
         output_quant = quantize_tensor(
             output_values.contiguous(), q_type=q_type,
-            mode='tensor', return_unscaled=True,
+            mode='tensor', return_unscaled=True
         )[1]
         
         # Register as buffer so it's saved with state_dict but not trained

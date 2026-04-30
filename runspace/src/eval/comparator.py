@@ -1083,7 +1083,7 @@ class LayerComparator:
                     # Quantize (Unscaled)
                     quant_input_unscaled = quantize_tensor(
                         ref_input_scaled.contiguous(), q_type=input_q_type,
-                        mode='tensor', return_unscaled=True, rounding=rounding,
+                        mode='tensor', return_unscaled=True
                     )[1]
                 else:
                     # Fallback
@@ -1102,7 +1102,7 @@ class LayerComparator:
                     # Quantize (Unscaled)
                     quant_weight_unscaled = quantize_tensor(
                         ref_weight_scaled.contiguous(), q_type=weight_q_type,
-                        mode='tensor', return_unscaled=True, rounding=rounding,
+                        mode='tensor', return_unscaled=True, 
                     )[1]
                 else:
                     # Fallback

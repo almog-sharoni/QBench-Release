@@ -264,7 +264,7 @@ if __name__ == "__main__":
     # pass_rate, _ = verify_mantissa(vector, 3, 0)
     from runspace.src.ops.quant_base import quantize_tensor
     print(vector)
-    quantized_vector, _ = quantize_tensor(vector, q_type='efp4_e1m2', mode='tensor', rounding='nearest')
+    quantized_vector, _ = quantize_tensor(vector, q_type='efp4_e1m2', mode='tensor')
     print(quantized_vector)
 
     # print vecotrs side by side
