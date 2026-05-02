@@ -9,6 +9,8 @@ try:
         DecomposedMultiheadAttention,
         DecomposedQkvAttention,
         DecomposedMlpBlock,
+        ScaledDotProduct,
+        AttentionWeightedValues,
     )
 except ImportError:
     from src.registry.op_registry import OpRegistry
@@ -16,6 +18,8 @@ except ImportError:
         DecomposedMultiheadAttention,
         DecomposedQkvAttention,
         DecomposedMlpBlock,
+        ScaledDotProduct,
+        AttentionWeightedValues,
     )
 
 
@@ -38,7 +42,16 @@ class QuantAwareTracer(torch.fx.Tracer):
         return FalseBoolProxy(node, self)
 
     def is_leaf_module(self, m: torch.nn.Module, module_qualified_name: str) -> bool:
-        if isinstance(m, (DecomposedMultiheadAttention, DecomposedQkvAttention, DecomposedMlpBlock)):
+        # Use class names for comparison to avoid issues with multiple class definitions
+        # across different import paths (e.g. src.ops vs runspace.src.ops)
+        cls_name = m.__class__.__name__
+        if cls_name in (
+            "DecomposedMultiheadAttention", 
+            "DecomposedQkvAttention", 
+            "DecomposedMlpBlock",
+            "ScaledDotProduct",
+            "AttentionWeightedValues",
+        ):
             return False
 
         quantized_ops = tuple(

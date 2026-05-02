@@ -222,9 +222,11 @@ def _compute_weight_win_rate_views(raw_json):
         explicit_counts = None
         explicit_total_chunks = None
         dominant_format = None
+        stays_on_chip = None
 
         if isinstance(value, dict):
             layer_type = str(value.get("type", "?"))
+            stays_on_chip = value.get("stays_on_chip")
             fmt_spec = value.get("format")
             if isinstance(value.get("format_counts"), dict):
                 explicit_counts = {}
@@ -261,11 +263,17 @@ def _compute_weight_win_rate_views(raw_json):
         if total_chunks <= 0:
             total_chunks = int(sum(counts.values()))
 
+        layer_display = layer
+        if stays_on_chip is True:
+            layer_display = f"🟢 {layer}"
+        elif stays_on_chip is False:
+            layer_display = f"🔴 {layer}"
+
         layer_win_counts[dominant_format] = layer_win_counts.get(dominant_format, 0) + 1
         for fmt, cnt in counts.items():
             chunk_win_counts[fmt] = chunk_win_counts.get(fmt, 0) + int(cnt)
             layer_chunk_rows.append({
-                "Layer": layer,
+                "Layer": layer_display,
                 "Layer Index": int(layer_idx),
                 "Type": layer_type,
                 "Format": fmt,
@@ -273,7 +281,7 @@ def _compute_weight_win_rate_views(raw_json):
             })
 
         layer_rows.append({
-            "Layer": layer,
+            "Layer": layer_display,
             "Layer Index": int(layer_idx),
             "Type": layer_type,
             "Dominant Format": dominant_format,

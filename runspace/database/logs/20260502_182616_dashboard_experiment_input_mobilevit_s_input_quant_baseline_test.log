@@ -1,0 +1,268 @@
+
+
+# Dashboard date run: 20260502_182616_dashboard_experiment_input_mobilevit_s_input_quant_baseline_test
+# Started: 2026-05-02 18:26:16
+$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name mobilevit_s --weights DEFAULT --dataset_name imagenet --dataset_path /data/imagenet/val --batch_size 128 --num_workers 32 --limit_batches -1 --output_dir /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/results --metric mse --chunk_size 128 --input_size 224 --baseline_formats fp4_e1m2,fp4_e2m1,fp4_e3m0 --candidate_formats fp4_e1m2,fp4_e2m1,fp4_e3m0 --excluded_ops LayerNorm --experiment_type input_quant_baseline_test --unsigned_input_sources relu,softmax,quantrelu,quantsoftmax --dynamic_unsigned_input_candidates --only_dynamic --force_rerun --force_rebuild_weights
+
+Using device: cuda
+Metrics to process: ['mse']
+Baseline formats: ['fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0']
+Dynamic candidate formats: ['fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0']
+Found 1 models to process.
+Runner initialized on device: cuda
+/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+
+###########################################################
+ PROCESSING MODEL: mobilevit_s (Weights: DEFAULT)
+###########################################################
+
+Skipping Baselines (--only_dynamic set)
+
+[Optimization] Loading model and dataset once for all metrics...
+Using timm transforms for mobilevit_s: input_size=(3, 256, 256), mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Auto-detected model source: timm
+  [FX] Quantizing module graph: ByobNet
+  [FX] Trace successful for ByobNet, nodes=563
+prepare_model_with_materialized_weights(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/results/mobilevit_s/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=215/215, mismatched=0, max_abs_diff=0.000e+00)
+
+===========================================
+Processing Metric: MSE for mobilevit_s
+=============================================
+Registered hooks on 235 layers: all layers use all 3 candidates (metric=MSE).
+18 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=mse chunk_size=128
+Dynamic (mobilevit_s/mse):   0%|          | 0/391 [00:00<?, ?batch/s][DynamicInputQuantizer] Layer 'stem.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stem.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stem.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_1_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_1x1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_6_quant_quantmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_1_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_2_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_3_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_7_quant_quantmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_2_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_3_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_4_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_5_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_proj.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_proj.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_proj.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_fusion.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_fusion.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_fusion.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_1x1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_18_quant_quantmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_4_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_5_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_6_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_7_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_19_quant_quantmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_6_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_7_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_8_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_9_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_20_quant_quantmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_8_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_9_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_10_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_11_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_21_quant_quantmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_10_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_11_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_12_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_13_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_proj.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_proj.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_proj.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_fusion.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_fusion.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_fusion.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_1x1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_32_quant_quantmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_12_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_13_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_14_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_15_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_33_quant_quantmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_14_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_15_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_16_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_17_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_34_quant_quantmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_16_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_17_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_18_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_19_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_proj.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_proj.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_proj.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_fusion.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_fusion.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_fusion.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'final_conv.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'final_conv.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'final_conv.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'head.global_pool.pool' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'head.drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'head.fc' NOT found in cache sim map. Using standard candidates.
+Dynamic (mobilevit_s/mse):   0%|          | 1/391 [00:11<1:12:54, 11.22s/batch]Dynamic (mobilevit_s/mse):   0%|          | 1/391 [00:11<1:12:54, 11.22s/batch, acc1=0.00%, acc5=0.78%, remaining_batches=390]Dynamic (mobilevit_s/mse):   1%|          | 2/391 [00:14<41:59,  6.48s/batch, acc1=0.00%, acc5=0.78%, remaining_batches=390]  Dynamic (mobilevit_s/mse):   1%|          | 2/391 [00:14<41:59,  6.48s/batch, acc1=0.00%, acc5=0.39%, remaining_batches=389]Dynamic (mobilevit_s/mse):   1%|          | 3/391 [00:17<32:04,  4.96s/batch, acc1=0.00%, acc5=0.39%, remaining_batches=389]Dynamic (mobilevit_s/mse):   1%|          | 3/391 [00:17<32:04,  4.96s/batch, acc1=0.00%, acc5=0.78%, remaining_batches=388]Dynamic (mobilevit_s/mse):   1%|          | 4/391 [00:20<27:25,  4.25s/batch, acc1=0.00%, acc5=0.78%, remaining_batches=388]Dynamic (mobilevit_s/mse):   1%|          | 4/391 [00:20<27:25,  4.25s/batch, acc1=0.00%, acc5=1.17%, remaining_batches=387]Dynamic (mobilevit_s/mse):   1%|▏         | 5/391 [00:23<24:47,  3.85s/batch, acc1=0.00%, acc5=1.17%, remaining_batches=387]Dynamic (mobilevit_s/mse):   1%|▏         | 5/391 [00:23<24:47,  3.85s/batch, acc1=0.00%, acc5=1.09%, remaining_batches=386]Dynamic (mobilevit_s/mse):   2%|▏         | 6/391 [00:27<23:12,  3.62s/batch, acc1=0.00%, acc5=1.09%, remaining_batches=386]Dynamic (mobilevit_s/mse):   2%|▏         | 6/391 [00:27<23:12,  3.62s/batch, acc1=0.00%, acc5=1.04%, remaining_batches=385]Dynamic (mobilevit_s/mse):   2%|▏         | 7/391 [00:30<22:11,  3.47s/batch, acc1=0.00%, acc5=1.04%, remaining_batches=385]Dynamic (mobilevit_s/mse):   2%|▏         | 7/391 [00:30<22:11,  3.47s/batch, acc1=0.00%, acc5=0.89%, remaining_batches=384]Dynamic (mobilevit_s/mse):   2%|▏         | 8/391 [00:33<21:30,  3.37s/batch, acc1=0.00%, acc5=0.89%, remaining_batches=384]Dynamic (mobilevit_s/mse):   2%|▏         | 8/391 [00:33<21:30,  3.37s/batch, acc1=0.00%, acc5=0.78%, remaining_batches=383]Dynamic (mobilevit_s/mse):   2%|▏         | 9/391 [00:36<21:00,  3.30s/batch, acc1=0.00%, acc5=0.78%, remaining_batches=383]Dynamic (mobilevit_s/mse):   2%|▏         | 9/391 [00:36<21:00,  3.30s/batch, acc1=0.00%, acc5=0.69%, remaining_batches=382]Dynamic (mobilevit_s/mse):   3%|▎         | 10/391 [00:39<20:41,  3.26s/batch, acc1=0.00%, acc5=0.69%, remaining_batches=382]Dynamic (mobilevit_s/mse):   3%|▎         | 10/391 [00:39<20:41,  3.26s/batch, acc1=0.00%, acc5=0.70%, remaining_batches=381]Dynamic (mobilevit_s/mse):   3%|▎         | 11/391 [00:42<20:26,  3.23s/batch, acc1=0.00%, acc5=0.70%, remaining_batches=381]Dynamic (mobilevit_s/mse):   3%|▎         | 11/391 [00:42<20:26,  3.23s/batch, acc1=0.00%, acc5=0.64%, remaining_batches=380]Dynamic (mobilevit_s/mse):   3%|▎         | 12/391 [00:45<20:15,  3.21s/batch, acc1=0.00%, acc5=0.64%, remaining_batches=380]Dynamic (mobilevit_s/mse):   3%|▎         | 12/391 [00:45<20:15,  3.21s/batch, acc1=0.00%, acc5=0.65%, remaining_batches=379]Dynamic (mobilevit_s/mse):   3%|▎         | 13/391 [00:49<20:08,  3.20s/batch, acc1=0.00%, acc5=0.65%, remaining_batches=379]Dynamic (mobilevit_s/mse):   3%|▎         | 13/391 [00:49<20:08,  3.20s/batch, acc1=0.00%, acc5=0.66%, remaining_batches=378]Dynamic (mobilevit_s/mse):   4%|▎         | 14/391 [00:52<20:01,  3.19s/batch, acc1=0.00%, acc5=0.66%, remaining_batches=378]Dynamic (mobilevit_s/mse):   4%|▎         | 14/391 [00:52<20:01,  3.19s/batch, acc1=0.00%, acc5=0.67%, remaining_batches=377]Dynamic (mobilevit_s/mse):   4%|▍         | 15/391 [00:55<19:56,  3.18s/batch, acc1=0.00%, acc5=0.67%, remaining_batches=377]Dynamic (mobilevit_s/mse):   4%|▍         | 15/391 [00:55<19:56,  3.18s/batch, acc1=0.05%, acc5=0.68%, remaining_batches=376]Dynamic (mobilevit_s/mse):   4%|▍         | 16/391 [00:58<19:51,  3.18s/batch, acc1=0.05%, acc5=0.68%, remaining_batches=376]Dynamic (mobilevit_s/mse):   4%|▍         | 16/391 [00:58<19:51,  3.18s/batch, acc1=0.05%, acc5=0.63%, remaining_batches=375]Dynamic (mobilevit_s/mse):   4%|▍         | 17/391 [01:01<19:46,  3.17s/batch, acc1=0.05%, acc5=0.63%, remaining_batches=375]Dynamic (mobilevit_s/mse):   4%|▍         | 17/391 [01:01<19:46,  3.17s/batch, acc1=0.05%, acc5=0.60%, remaining_batches=374]Dynamic (mobilevit_s/mse):   5%|▍         | 18/391 [01:04<19:42,  3.17s/batch, acc1=0.05%, acc5=0.60%, remaining_batches=374]Dynamic (mobilevit_s/mse):   5%|▍         | 18/391 [01:04<19:42,  3.17s/batch, acc1=0.04%, acc5=0.56%, remaining_batches=373]Dynamic (mobilevit_s/mse):   5%|▍         | 19/391 [01:08<19:38,  3.17s/batch, acc1=0.04%, acc5=0.56%, remaining_batches=373]Dynamic (mobilevit_s/mse):   5%|▍         | 19/391 [01:08<19:38,  3.17s/batch, acc1=0.04%, acc5=0.53%, remaining_batches=372]Dynamic (mobilevit_s/mse):   5%|▌         | 20/391 [01:11<19:33,  3.16s/batch, acc1=0.04%, acc5=0.53%, remaining_batches=372]Dynamic (mobilevit_s/mse):   5%|▌         | 20/391 [01:11<19:33,  3.16s/batch, acc1=0.04%, acc5=0.51%, remaining_batches=371]Dynamic (mobilevit_s/mse):   5%|▌         | 21/391 [01:14<19:29,  3.16s/batch, acc1=0.04%, acc5=0.51%, remaining_batches=371]Dynamic (mobilevit_s/mse):   5%|▌         | 21/391 [01:14<19:29,  3.16s/batch, acc1=0.04%, acc5=0.48%, remaining_batches=370]Dynamic (mobilevit_s/mse):   6%|▌         | 22/391 [01:17<19:25,  3.16s/batch, acc1=0.04%, acc5=0.48%, remaining_batches=370]Dynamic (mobilevit_s/mse):   6%|▌         | 22/391 [01:17<19:25,  3.16s/batch, acc1=0.04%, acc5=0.46%, remaining_batches=369]Dynamic (mobilevit_s/mse):   6%|▌         | 23/391 [01:20<19:21,  3.16s/batch, acc1=0.04%, acc5=0.46%, remaining_batches=369]Dynamic (mobilevit_s/mse):   6%|▌         | 23/391 [01:20<19:21,  3.16s/batch, acc1=0.03%, acc5=0.48%, remaining_batches=368]Dynamic (mobilevit_s/mse):   6%|▌         | 24/391 [01:23<19:17,  3.16s/batch, acc1=0.03%, acc5=0.48%, remaining_batches=368]Dynamic (mobilevit_s/mse):   6%|▌         | 24/391 [01:23<19:17,  3.16s/batch, acc1=0.03%, acc5=0.52%, remaining_batches=367]Dynamic (mobilevit_s/mse):   6%|▋         | 25/391 [01:27<19:14,  3.15s/batch, acc1=0.03%, acc5=0.52%, remaining_batches=367]Dynamic (mobilevit_s/mse):   6%|▋         | 25/391 [01:27<19:14,  3.15s/batch, acc1=0.06%, acc5=0.53%, remaining_batches=366]Dynamic (mobilevit_s/mse):   7%|▋         | 26/391 [01:30<19:10,  3.15s/batch, acc1=0.06%, acc5=0.53%, remaining_batches=366]Dynamic (mobilevit_s/mse):   7%|▋         | 26/391 [01:30<19:10,  3.15s/batch, acc1=0.06%, acc5=0.57%, remaining_batches=365]Dynamic (mobilevit_s/mse):   7%|▋         | 27/391 [01:33<19:07,  3.15s/batch, acc1=0.06%, acc5=0.57%, remaining_batches=365]Dynamic (mobilevit_s/mse):   7%|▋         | 27/391 [01:33<19:07,  3.15s/batch, acc1=0.06%, acc5=0.58%, remaining_batches=364]Dynamic (mobilevit_s/mse):   7%|▋         | 28/391 [01:36<19:04,  3.15s/batch, acc1=0.06%, acc5=0.58%, remaining_batches=364]Dynamic (mobilevit_s/mse):   7%|▋         | 28/391 [01:36<19:04,  3.15s/batch, acc1=0.06%, acc5=0.59%, remaining_batches=363]Dynamic (mobilevit_s/mse):   7%|▋         | 29/391 [01:39<19:01,  3.15s/batch, acc1=0.06%, acc5=0.59%, remaining_batches=363]Dynamic (mobilevit_s/mse):   7%|▋         | 29/391 [01:39<19:01,  3.15s/batch, acc1=0.11%, acc5=1.83%, remaining_batches=362]Dynamic (mobilevit_s/mse):   8%|▊         | 30/391 [01:42<18:58,  3.15s/batch, acc1=0.11%, acc5=1.83%, remaining_batches=362]Dynamic (mobilevit_s/mse):   8%|▊         | 30/391 [01:42<18:58,  3.15s/batch, acc1=0.18%, acc5=2.50%, remaining_batches=361]Dynamic (mobilevit_s/mse):   8%|▊         | 31/391 [01:45<18:55,  3.15s/batch, acc1=0.18%, acc5=2.50%, remaining_batches=361]Dynamic (mobilevit_s/mse):   8%|▊         | 31/391 [01:45<18:55,  3.15s/batch, acc1=0.25%, acc5=2.77%, remaining_batches=360]Dynamic (mobilevit_s/mse):   8%|▊         | 32/391 [01:49<18:51,  3.15s/batch, acc1=0.25%, acc5=2.77%, remaining_batches=360]Dynamic (mobilevit_s/mse):   8%|▊         | 32/391 [01:49<18:51,  3.15s/batch, acc1=0.24%, acc5=2.69%, remaining_batches=359]Dynamic (mobilevit_s/mse):   8%|▊         | 33/391 [01:52<18:47,  3.15s/batch, acc1=0.24%, acc5=2.69%, remaining_batches=359]Dynamic (mobilevit_s/mse):   8%|▊         | 33/391 [01:52<18:47,  3.15s/batch, acc1=0.24%, acc5=2.68%, remaining_batches=358]Dynamic (mobilevit_s/mse):   9%|▊         | 34/391 [01:55<18:45,  3.15s/batch, acc1=0.24%, acc5=2.68%, remaining_batches=358]Dynamic (mobilevit_s/mse):   9%|▊         | 34/391 [01:55<18:45,  3.15s/batch, acc1=0.28%, acc5=2.67%, remaining_batches=357]Dynamic (mobilevit_s/mse):   9%|▉         | 35/391 [01:58<18:43,  3.16s/batch, acc1=0.28%, acc5=2.67%, remaining_batches=357]Dynamic (mobilevit_s/mse):   9%|▉         | 35/391 [01:58<18:43,  3.16s/batch, acc1=0.27%, acc5=2.66%, remaining_batches=356]Dynamic (mobilevit_s/mse):   9%|▉         | 36/391 [02:01<18:40,  3.16s/batch, acc1=0.27%, acc5=2.66%, remaining_batches=356]Dynamic (mobilevit_s/mse):   9%|▉         | 36/391 [02:01<18:40,  3.16s/batch, acc1=0.26%, acc5=2.65%, remaining_batches=355]Dynamic (mobilevit_s/mse):   9%|▉         | 37/391 [02:04<18:36,  3.16s/batch, acc1=0.26%, acc5=2.65%, remaining_batches=355]Dynamic (mobilevit_s/mse):   9%|▉         | 37/391 [02:04<18:36,  3.16s/batch, acc1=0.25%, acc5=2.60%, remaining_batches=354]Dynamic (mobilevit_s/mse):  10%|▉         | 38/391 [02:08<18:33,  3.15s/batch, acc1=0.25%, acc5=2.60%, remaining_batches=354]Dynamic (mobilevit_s/mse):  10%|▉         | 38/391 [02:08<18:33,  3.15s/batch, acc1=0.25%, acc5=2.57%, remaining_batches=353]Dynamic (mobilevit_s/mse):  10%|▉         | 39/391 [02:11<18:29,  3.15s/batch, acc1=0.25%, acc5=2.57%, remaining_batches=353]Dynamic (mobilevit_s/mse):  10%|▉         | 39/391 [02:11<18:29,  3.15s/batch, acc1=0.24%, acc5=2.60%, remaining_batches=352]Dynamic (mobilevit_s/mse):  10%|█         | 40/391 [02:14<18:26,  3.15s/batch, acc1=0.24%, acc5=2.60%, remaining_batches=352]Dynamic (mobilevit_s/mse):  10%|█         | 40/391 [02:14<18:26,  3.15s/batch, acc1=0.27%, acc5=2.62%, remaining_batches=351]Dynamic (mobilevit_s/mse):  10%|█         | 41/391 [02:17<18:23,  3.15s/batch, acc1=0.27%, acc5=2.62%, remaining_batches=351]Dynamic (mobilevit_s/mse):  10%|█         | 41/391 [02:17<18:23,  3.15s/batch, acc1=0.27%, acc5=2.55%, remaining_batches=350]Dynamic (mobilevit_s/mse):  11%|█         | 42/391 [02:20<18:19,  3.15s/batch, acc1=0.27%, acc5=2.55%, remaining_batches=350]Dynamic (mobilevit_s/mse):  11%|█         | 42/391 [02:20<18:19,  3.15s/batch, acc1=0.26%, acc5=2.49%, remaining_batches=349]Dynamic (mobilevit_s/mse):  11%|█         | 43/391 [02:23<18:16,  3.15s/batch, acc1=0.26%, acc5=2.49%, remaining_batches=349]Dynamic (mobilevit_s/mse):  11%|█         | 43/391 [02:23<18:16,  3.15s/batch, acc1=0.33%, acc5=2.63%, remaining_batches=348]Dynamic (mobilevit_s/mse):  11%|█▏        | 44/391 [02:26<18:13,  3.15s/batch, acc1=0.33%, acc5=2.63%, remaining_batches=348]Dynamic (mobilevit_s/mse):  11%|█▏        | 44/391 [02:26<18:13,  3.15s/batch, acc1=0.32%, acc5=2.57%, remaining_batches=347]Dynamic (mobilevit_s/mse):  12%|█▏        | 45/391 [02:30<18:10,  3.15s/batch, acc1=0.32%, acc5=2.57%, remaining_batches=347]Dynamic (mobilevit_s/mse):  12%|█▏        | 45/391 [02:30<18:10,  3.15s/batch, acc1=0.31%, acc5=2.52%, remaining_batches=346]Dynamic (mobilevit_s/mse):  12%|█▏        | 46/391 [02:33<18:07,  3.15s/batch, acc1=0.31%, acc5=2.52%, remaining_batches=346]Dynamic (mobilevit_s/mse):  12%|█▏        | 46/391 [02:33<18:07,  3.15s/batch, acc1=0.31%, acc5=2.56%, remaining_batches=345]Dynamic (mobilevit_s/mse):  12%|█▏        | 47/391 [02:36<18:04,  3.15s/batch, acc1=0.31%, acc5=2.56%, remaining_batches=345]Dynamic (mobilevit_s/mse):  12%|█▏        | 47/391 [02:36<18:04,  3.15s/batch, acc1=0.30%, acc5=2.53%, remaining_batches=344]Dynamic (mobilevit_s/mse):  12%|█▏        | 48/391 [02:39<18:01,  3.15s/batch, acc1=0.30%, acc5=2.53%, remaining_batches=344]Dynamic (mobilevit_s/mse):  12%|█▏        | 48/391 [02:39<18:01,  3.15s/batch, acc1=0.29%, acc5=2.47%, remaining_batches=343]Dynamic (mobilevit_s/mse):  13%|█▎        | 49/391 [02:42<17:57,  3.15s/batch, acc1=0.29%, acc5=2.47%, remaining_batches=343]Dynamic (mobilevit_s/mse):  13%|█▎        | 49/391 [02:42<17:57,  3.15s/batch, acc1=0.29%, acc5=2.42%, remaining_batches=342]
