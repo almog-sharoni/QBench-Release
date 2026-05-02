@@ -13,9 +13,25 @@
 
 from __future__ import annotations
 import os
+import sys
+import torch
 from torch.utils.cpp_extension import load
 
 _THIS = os.path.dirname(os.path.abspath(__file__))
+_RUNSPACE = os.path.abspath(os.path.join(_THIS, "../../.."))
+
+_CUDA_VERSION = (torch.version.cuda or "cpu").replace(".", "")
+_DEFAULT_BUILD_ROOT = os.path.join(_RUNSPACE, ".torch_extensions")
+_BUILD_ROOT = os.environ.get("TORCH_EXTENSIONS_DIR", _DEFAULT_BUILD_ROOT)
+_BUILD_DIR = os.environ.get(
+    "QBENCH_CUDA_BUILD_DIR",
+    os.path.join(
+        _BUILD_ROOT,
+        f"py{sys.version_info.major}{sys.version_info.minor}_cu{_CUDA_VERSION}",
+        "qbench_lp_codec",
+    ),
+)
+os.makedirs(_BUILD_DIR, exist_ok=True)
 
 _ext = load(
     name="qbench_lp_codec",
@@ -28,7 +44,8 @@ _ext = load(
     extra_include_paths=[_THIS],
     extra_cflags=["-O3"],
     extra_cuda_cflags=["-O3", "--use_fast_math"],
-    verbose=True,
+    build_directory=_BUILD_DIR,
+    verbose=os.environ.get("QBENCH_CUDA_VERBOSE", "0") == "1",
 )
 
 encode_tensor  = _ext.encode_tensor

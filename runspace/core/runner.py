@@ -1741,7 +1741,12 @@ class Runner:
             results['dyn_norm_l1'] = stats.get('norm_l1', 0.0)
             results['dyn_norm_mse'] = stats.get('norm_mse', 0.0)
 
-    def run_single(self, config: Dict[str, Any], output_root: str = "runspace/outputs") -> Dict[str, Any]:
+    def run_single(
+        self,
+        config: Dict[str, Any],
+        output_root: str = "runspace/outputs",
+        data_loader=None,
+    ) -> Dict[str, Any]:
         """Runs a single configuration and returns the results."""
         model_config = config.get('model', {})
         self._resolve_paths(model_config, ('weights', 'repo_path', 'root', 'path'))
@@ -1754,6 +1759,7 @@ class Runner:
 
         print(f"--- Running {model_name} with {quant_format} ---")
         results = self._base_result(config, model_name, quant_format)
+        owns_data_loader = data_loader is None
 
         try:
             output_dir = self._output_dir(config, output_root, model_name, quant_format)
@@ -1769,8 +1775,10 @@ class Runner:
             if config.get('evaluation', {}).get('graph_only', False):
                 print("Running in GRAPH ONLY mode. Skipping data loading.")
             else:
-                # Setup data
-                data_loader = self.setup_data_loader(config)
+                # Setup data unless the caller is deliberately reusing a loader
+                # across sequential configs with identical dataset settings.
+                if data_loader is None:
+                    data_loader = self.setup_data_loader(config)
                 if data_loader is None:
                     results['error'] = "Data loader failed"
                     return results
@@ -1975,7 +1983,7 @@ class Runner:
             if 'eval_results' in locals(): del eval_results
             if 'quant_metrics' in locals(): del quant_metrics
             if 'ref_metrics' in locals(): del ref_metrics
-            if 'data_loader' in locals():
+            if 'data_loader' in locals() and locals().get('owns_data_loader', True):
                 self._shutdown_dataloader_workers(data_loader)
                 del data_loader
             

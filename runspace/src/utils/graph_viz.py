@@ -26,6 +26,23 @@ def _get_model_dummy_input(model: torch.nn.Module) -> torch.Tensor:
     return torch.zeros(1, c, h, w, device=device)
 
 
+def _is_external_module(module: torch.nn.Module) -> bool:
+    """Return True for compound modules defined outside torch/this project."""
+    try:
+        source_file = inspect.getsourcefile(type(module)) or ""
+    except Exception:
+        return False
+
+    source_file = os.path.abspath(source_file)
+    project_root = os.path.abspath(PROJECT_ROOT)
+    torch_root = os.path.abspath(os.path.dirname(torch.__file__))
+    return (
+        bool(list(module.children()))
+        and not source_file.startswith(project_root)
+        and not source_file.startswith(torch_root)
+    )
+
+
 def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_name: str = "model"):
     """
     Generates an SVG graph of the model using torch.fx, highlighting quantized layers.

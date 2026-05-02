@@ -48,6 +48,18 @@ RUN_WINDOW_TO_LIMIT = {
 }
 
 
+def rerun_current_fragment():
+    """Refresh only the active Streamlit fragment when the runtime supports it."""
+    try:
+        st.rerun(scope="fragment")
+    except TypeError:
+        st.rerun()
+    except Exception as exc:
+        if exc.__class__.__name__ == "RerunException":
+            raise
+        st.rerun()
+
+
 def list_database_files():
     os.makedirs(DB_FOLDER, exist_ok=True)
     db_files = [
@@ -170,4 +182,3 @@ def load_presets():
 def save_presets(presets):
     with open(PRESETS_FILE, 'w') as f:
         json.dump(presets, f, indent=4, cls=NpEncoder)
-

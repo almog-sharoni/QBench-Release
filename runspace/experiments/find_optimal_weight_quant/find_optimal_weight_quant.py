@@ -254,6 +254,38 @@ def calculate_error(original, dequantized, metric):
     else:
         raise ValueError(f"Unknown metric: {metric}")
 
+
+def _is_optimization_format(fmt):
+    return str(fmt).strip().lower() != 'fp32'
+
+
+def _optimization_formats(formats):
+    return [fmt for fmt in formats if _is_optimization_format(fmt)]
+
+
+def _stable_eval_dataset_cfg(dataset_cfg):
+    """
+    Avoid keeping DataLoader workers alive across sequential model rebuilds.
+    Reusing persistent workers has triggered native UCX crashes in dashboard
+    weight sweeps after the first evaluation config.
+    """
+    stable_cfg = dict(dataset_cfg or {})
+    stable_cfg['persistent_workers'] = False
+    stable_cfg.setdefault('prefetch_factor', 2)
+    return stable_cfg
+
+
+def _build_eval_dataset_cfg(args, dataset_base=None):
+    if dataset_base is None:
+        dataset_base = {
+            'name': args.dataset_name,
+            'path': args.dataset_path,
+            'batch_size': args.batch_size,
+            'num_workers': args.num_workers,
+        }
+    return _stable_eval_dataset_cfg(dataset_base)
+
+
 from runspace.experiments.utils.plotting import (
     plot_error_histograms,
     plot_error_boxplot,
@@ -329,6 +361,8 @@ def load_cached_results(csv_path, metric, format_col_suffix="_error"):
                 for key, val in row.items():
                     if key.endswith(format_col_suffix):
                          fmt = key.replace(format_col_suffix, "")
+                         if not _is_optimization_format(fmt):
+                             continue
                          try:
                              if val and val != "":
                                  metrics_data[fmt] = float(val)
@@ -375,6 +409,8 @@ def create_quantized_state_dict(model, layer_results_map, args, metric, use_chun
         best_err = float('inf')
         best_type = None
         for qt, err in errs.items():
+            if not _is_optimization_format(qt):
+                continue
             if err < best_err:
                 best_err = err
                 best_type = qt
@@ -465,6 +501,61 @@ def create_quantized_state_dict(model, layer_results_map, args, metric, use_chun
     return state_dict, quant_map
 
 
+def create_uniform_quantized_state_dict(model, layer_results_map, args, fmt):
+    """
+    Create a state dict where every analyzed weight tensor uses the same format.
+    This materializes baseline_* configs so evaluation can load fixed weights from
+    disk instead of rebuilding runtime quantized wrappers for every baseline.
+    """
+    print(f"Creating uniform quantized state dict for baseline {fmt}...")
+    state_dict = model.state_dict()
+    quant_map = {}
+
+    def _quantize_weight(w):
+        if str(fmt).lower() == 'fp32':
+            return w.detach().clone()
+        w_dequant, _ = get_quantized_tensor_sim(w, fmt, chunk_size=args.weight_chunk_size)
+        return w_dequant
+
+    mha_parents = {}
+    for lname in layer_results_map:
+        for suffix in ('.q_proj', '.k_proj', '.v_proj'):
+            if lname.endswith(suffix):
+                parent = lname[: -len(suffix)]
+                mha_parents.setdefault(parent, {})[suffix[1:]] = lname
+
+    handled_names = set()
+    for mha_name, proj_map in mha_parents.items():
+        in_proj_key = f"{mha_name}.in_proj_weight"
+        if in_proj_key not in state_dict:
+            continue
+        w_in_proj = state_dict[in_proj_key]
+        embed_dim = w_in_proj.shape[0] // 3
+        slices = {
+            'q_proj': (0, embed_dim),
+            'k_proj': (embed_dim, 2 * embed_dim),
+            'v_proj': (2 * embed_dim, 3 * embed_dim),
+        }
+        new_in_proj = w_in_proj.clone()
+        for proj_key, (start, end) in slices.items():
+            vname = proj_map.get(proj_key)
+            if vname and vname in layer_results_map:
+                w_slice = w_in_proj[start:end].contiguous()
+                new_in_proj[start:end] = _quantize_weight(w_slice)
+                quant_map[vname] = fmt
+        state_dict[in_proj_key] = new_in_proj
+        handled_names.update(proj_map.values())
+
+    for name, module in model.named_modules():
+        if name in layer_results_map and name not in handled_names:
+            weight_key = f"{name}.weight"
+            if weight_key in state_dict:
+                state_dict[weight_key] = _quantize_weight(state_dict[weight_key])
+                quant_map[name] = fmt
+
+    return state_dict, quant_map
+
+
 def _resolve_weight_tensor_for_map_entry(state_dict, layer_name):
     """
     Resolve a quant-map layer key to the corresponding weight tensor in state_dict.
@@ -548,23 +639,27 @@ def verify_quantized_weights_file(weights_path, quant_map, args, atol=1e-7):
             failed.append((layer_name, "missing_weight", float('inf')))
             continue
 
-        tensor = tensor.detach().clone().contiguous()
+        tensor = tensor.detach().clone().contiguous().cpu()
         if not torch.isfinite(tensor).all():
             failed.append((layer_name, "non_finite_weights", float('inf')))
             continue
         try:
+            quant_tensor = tensor.cuda() if torch.cuda.is_available() else tensor
             if isinstance(fmt_spec, list):
                 expected = _apply_chunk_format_map(
-                    tensor=tensor,
+                    tensor=quant_tensor,
                     chunk_formats=fmt_spec,
                     chunk_size=args.weight_chunk_size,
                 )
+            elif str(fmt_spec).lower() == 'fp32':
+                expected = tensor
             else:
                 expected, _ = get_quantized_tensor_sim(
-                    tensor,
+                    quant_tensor,
                     str(fmt_spec),
                     chunk_size=args.weight_chunk_size
                 )
+            expected = expected.detach().cpu()
         except Exception as e:
             failed.append((layer_name, f"quantize_error:{e}", float('inf')))
             continue
@@ -644,6 +739,103 @@ def summarize_state_dict_delta(reference_state_dict, candidate_state_dict, eps=0
         'mean_abs_diff': mean_abs_diff,
     }
 
+
+def materialize_baseline_eval_configs(
+    configs_to_run,
+    model,
+    layer_results_map,
+    args,
+    model_dir,
+    layer_types,
+    eval_config,
+):
+    """
+    Rewrite baseline runtime-quantized eval configs to load prebuilt quantized
+    weight files. FP32 reference and optimized configs are already file-backed.
+    """
+    rewritten = []
+    baseline_cache = {}
+    baseline_quant_maps = {}
+
+    for cfg in configs_to_run:
+        out_name = cfg.get('output_name', '')
+        if not out_name.startswith('baseline_'):
+            rewritten.append(cfg)
+            continue
+
+        fmt = out_name.replace('baseline_', '', 1)
+
+        if fmt not in baseline_cache:
+            baseline_dir = os.path.join(model_dir, out_name)
+            os.makedirs(baseline_dir, exist_ok=True)
+            q_weights_path = os.path.join(baseline_dir, "quantized_weights.pt")
+            q_map_path = os.path.join(baseline_dir, "quantization_map.json")
+
+            should_rebuild = (
+                args.force_recalc
+                or args.force_rerun
+                or not os.path.exists(q_weights_path)
+                or not os.path.exists(q_map_path)
+            )
+            if should_rebuild:
+                q_state_dict, q_map = create_uniform_quantized_state_dict(
+                    model,
+                    layer_results_map,
+                    args,
+                    fmt,
+                )
+                delta = summarize_state_dict_delta(model.state_dict(), q_state_dict)
+                print(
+                    f"[Baseline {fmt} Delta] "
+                    f"changed_tensors={delta['tensors_changed']}/{delta['tensors_compared']}, "
+                    f"changed_elems={delta['pct_elems_changed']:.2f}%, "
+                    f"max_abs_diff={delta['max_abs_diff']:.3e}, "
+                    f"mean_abs_diff={delta['mean_abs_diff']:.3e}"
+                )
+                torch.save(q_state_dict, q_weights_path)
+                with open(q_map_path, 'w') as f:
+                    json.dump(q_map, f, indent=4)
+                print(f"Saved baseline quantized weights to {q_weights_path}")
+                print(f"Saved baseline quantization map to {q_map_path}")
+            else:
+                with open(q_map_path, 'r') as f:
+                    q_map = json.load(f)
+                print(f"Reusing baseline quantized weights from {q_weights_path}")
+
+            if args.verify_saved_weights:
+                verify_quantized_weights_file(
+                    weights_path=q_weights_path,
+                    quant_map=q_map,
+                    args=args,
+                    atol=args.verify_atol,
+                )
+
+            baseline_cache[fmt] = os.path.abspath(q_weights_path)
+            baseline_quant_maps[out_name] = _build_weight_map_json(
+                q_map,
+                layer_types=layer_types,
+            )
+
+        prebuilt_cfg = build_prequantized_weight_runtime_config(
+            args,
+            weights=baseline_cache[fmt],
+        )
+        prebuilt_cfg['evaluation'] = cfg.get('evaluation', eval_config)
+        prebuilt_cfg['dataset'] = _stable_eval_dataset_cfg(
+            cfg.get('dataset', prebuilt_cfg.get('dataset', {}))
+        )
+        prebuilt_cfg['output_name'] = out_name
+        prebuilt_cfg.setdefault('quantization', {})
+        prebuilt_cfg['quantization'].update({
+            'format': fmt,
+            'weight_mode': 'chunk',
+            'weight_chunk_size': args.weight_chunk_size,
+            'weight_source': 'prequantized_state_dict',
+        })
+        rewritten.append(prebuilt_cfg)
+
+    return rewritten, baseline_quant_maps
+
 def process_single_model(args, device, metrics, base_root):
     runner = Runner(device)
     db = runner._get_db()
@@ -671,11 +863,10 @@ def process_single_model(args, device, metrics, base_root):
         print(f"Failed to load model: {e}")
         return
     layer_types = _layer_types_from_model(model)
-
-    qt_options = baseline_formats.copy()
-        
+    baseline_formats = args.baseline_formats.split(',')
+    qt_options = _optimization_formats(baseline_formats)
     if args.include_fp32:
-        qt_options.insert(0, 'fp32')
+        print("Info: --include_fp32 affects baseline evaluation only; fp32 is excluded from optimized layer/chunk selection.")
 
     print(f"Testing types: {qt_options}")
     
@@ -758,7 +949,7 @@ def process_single_model(args, device, metrics, base_root):
     if args.limit_batches > 0:
         eval_config['max_batches'] = args.limit_batches
          
-    dataset_base = config['dataset']
+    dataset_base = _build_eval_dataset_cfg(args, config['dataset'])
 
     # Fetch DB state once — used for all skip checks below
     existing_runs = None if args.force_rerun else _load_existing_runs(db)
@@ -828,6 +1019,8 @@ def process_single_model(args, device, metrics, base_root):
             
             # Find best
             for q_type, val in errs.items():
+                 if not _is_optimization_format(q_type):
+                     continue
                  # Accumulate correctly for global normalization
                  # L1 is already a sum, MSE is a mean and needs to be scaled by numel
                  val_raw = (val if val == val else 0.0)
@@ -988,10 +1181,7 @@ def process_single_model(args, device, metrics, base_root):
         # --- Generate Configs ---
         
         # Common Config Parts
-        dataset_cfg = dataset_base if args.run_eval else {
-             'name': args.dataset_name, 'path': args.dataset_path, 
-             'batch_size': args.batch_size, 'num_workers': args.num_workers
-        }
+        dataset_cfg = _build_eval_dataset_cfg(args, dataset_base if args.run_eval else None)
 
         # 1. OPTIMIZED LAYERS CONFIG (Generate ONLY if NOT skipped)
         if not args.skip_layer_wise:
@@ -1143,6 +1333,17 @@ def process_single_model(args, device, metrics, base_root):
                     filtered_configs.append(c)
             final_configs = filtered_configs
 
+        final_configs, baseline_quant_maps = materialize_baseline_eval_configs(
+            configs_to_run=final_configs,
+            model=model,
+            layer_results_map=layer_results_map,
+            args=args,
+            model_dir=model_dir,
+            layer_types=layer_types,
+            eval_config=eval_config,
+        )
+        weight_quant_map_json_by_output.update(baseline_quant_maps)
+
         # Enable Oracle Tracker
         tracker = None
         try:
@@ -1237,11 +1438,7 @@ def process_single_model(args, device, metrics, base_root):
                 l1=l1,
                 certainty=float(res.get('certainty', 0.0) or 0.0),
                 quant_map_json=weight_quant_map_json_by_output.get(out_name),
-                weight_source=(
-                    'runtime_quantized'
-                    if out_name.startswith('baseline_')
-                    else 'prequantized_state_dict'
-                ),
+                weight_source='prequantized_state_dict',
                 config_json={
                     'model': {'name': args.model_name, 'weights': args.weights},
                     'dataset': {
@@ -1254,11 +1451,7 @@ def process_single_model(args, device, metrics, base_root):
                         'weight_format': weight_dt,
                         'weight_mode': 'chunk',
                         'weight_chunk_size': args.weight_chunk_size,
-                        'weight_source': (
-                            'runtime_quantized'
-                            if out_name.startswith('baseline_')
-                            else 'prequantized_state_dict'
-                        ),
+                        'weight_source': 'prequantized_state_dict',
                     },
                     'evaluation': {'output_name': out_name},
                 },
@@ -1267,6 +1460,7 @@ def process_single_model(args, device, metrics, base_root):
         total_eval_runs = len(final_configs)
         for idx, run_cfg in enumerate(final_configs, start=1):
             out_name = run_cfg.get('output_name', f'run_{idx}')
+            run_cfg['dataset'] = _stable_eval_dataset_cfg(run_cfg.get('dataset', dataset_base))
             print(f"[Eval] Running {idx}/{total_eval_runs}: {out_name}")
             res = runner.run_single(run_cfg, output_root=model_dir)
             results.append(res)
@@ -1373,7 +1567,10 @@ def _analyze_weight_tensor(w, layer_name, args, metrics_to_calc, qt_options, lay
     # Process Chunk Wins
     if args.weight_chunk_size:
         for m in metrics_to_calc:
-            valid_fmts = [qt for qt in qt_options if qt in metric_chunk_errors[m]]
+            valid_fmts = [
+                qt for qt in qt_options
+                if _is_optimization_format(qt) and qt in metric_chunk_errors[m]
+            ]
             if not valid_fmts:
                 continue
             valid_fmts_sorted = sorted(valid_fmts, key=get_format_bits)

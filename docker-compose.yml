@@ -18,6 +18,8 @@ services:
       PYTHONUNBUFFERED: "1"
       PYTHONNOUSERSITE: "1"
       TORCH_HOME: /app/.cache/torch
+      TORCH_CUDA_ARCH_LIST: "9.0"
+      TORCH_EXTENSIONS_DIR: /app/runspace/.torch_extensions
       PYTORCH_KERNEL_CACHE_PATH: /app/.cache/torch/kernels
     volumes:
       - ./:/app
