@@ -11,8 +11,17 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.registry.op_registry import OpRegistry
-from src.utils.fx_trace_utils import find_non_tensor_nodes, trace_quant_aware
+from src.utils.fx_trace_utils import find_non_tensor_nodes, trace_quant_aware, fx_trace_subtrees
 from src.utils.model_input_utils import resolve_model_input_size
+
+
+def _is_external_module(module: torch.nn.Module) -> bool:
+    """A module treated as an FX leaf (registered in OpRegistry) but with
+    internal submodules worth showing as a cluster — e.g. ObservedAttention
+    contains attn_scores/attn_apply submodules that are useful to expose."""
+    cls_name = type(module).__name__
+    in_registry = cls_name in getattr(OpRegistry, '_registry', {})
+    return in_registry and any(True for _ in module.children())
 
 
 def _get_model_dummy_input(model: torch.nn.Module) -> torch.Tensor:
@@ -36,31 +45,67 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
         model_name: Name of the model for the graph title.
     """
     try:
-        # 1. Trace the model with the shared quant-aware tracer.
+        # 1. Trace the model. Try whole-model first (cleanest output for
+        # fully-traceable models). On failure, descend via fx_trace_subtrees
+        # and render each child subtree as its own SVG — handles models
+        # like Matching whose orchestration blocks a full trace but whose
+        # children (SuperPoint, SuperGlue) trace fine.
         try:
             _, _, traced = trace_quant_aware(model)
-        except Exception as trace_err:
-            print(f"FX trace failed ({trace_err}); falling back to module-hierarchy graph.")
-            _generate_hierarchy_graph(model, output_path, model_name)
+            subtrees = [('', traced)]
+        except Exception as whole_err:
+            try:
+                subtrees = list(fx_trace_subtrees(model))
+                if not subtrees:
+                    raise RuntimeError('fx_trace_subtrees yielded nothing')
+                print(f"FX whole-model trace failed ({whole_err}); rendering {len(subtrees)} subtree(s) separately.")
+            except Exception as trace_err:
+                print(f"FX trace failed ({trace_err}); falling back to module-hierarchy graph.")
+                _generate_hierarchy_graph(model, output_path, model_name)
+                return
+
+        # Multi-subtree: each subtree traces cleanly on its own, but the
+        # whole model doesn't. Render each child as its own SVG by
+        # recursively calling generate_quantization_graph on the child
+        # module — its trace will succeed (we already verified above).
+        if len(subtrees) > 1:
+            base, ext = os.path.splitext(output_path)
+            sub_paths = []
+            for prefix, _ in subtrees:
+                try:
+                    child = model.get_submodule(prefix)
+                except AttributeError:
+                    continue
+                safe = prefix.replace('.', '_') or 'root'
+                sub_out = f"{base}.{safe}{ext}"
+                generate_quantization_graph(child, sub_out, model_name=f"{model_name}.{prefix}" if prefix else model_name)
+                sub_paths.append((prefix, sub_out))
+            # Write an index file at the original output_path location so
+            # callers that hardcode the path still get a useful pointer.
+            index_path = output_path.replace('.svg', '.index.txt')
+            with open(index_path, 'w') as f:
+                f.write(f"Model {model_name!r} could not be FX-traced as a whole.\n")
+                f.write(f"Per-subtree SVGs:\n")
+                for prefix, p in sub_paths:
+                    f.write(f"  - {prefix or '<root>'}: {os.path.basename(p)}\n")
+            print(f"Multi-subtree index saved to {index_path}")
             return
 
-        # Static analysis: identify nodes that produce integers rather than
-        # tensors (shape arithmetic like B*C*num_patch_h, rshift, lshift …).
-        # We forward-propagate a "non-tensor" label through the graph starting
-        # from known seeds, so we never need to run the model.
+        # Single-subtree (whole-model trace succeeded OR only one child traced).
+        prefix, traced = subtrees[0]
         _non_tensor_nodes = find_non_tensor_nodes(traced.graph)
-        
+
         # 2. Draw the graph
         drawer = FxGraphDrawer(traced, model_name)
         dot = drawer.get_dot_graph()
-        
+
         # 3. Style the nodes
         import pydot
         supported_modules = tuple(OpRegistry.get_supported_ops().keys())
         quantized_ops = tuple(OpRegistry.get_supported_ops().values())
         supported_functions = OpRegistry.get_supported_functions()
-        
-        legend_items = {} # Label -> Color
+
+        legend_items = {}  # Label -> Color
 
         for node in dot.get_nodes():
             node_name = node.get_name().strip('"') # pydot might add quotes
@@ -304,20 +349,34 @@ def _get_node_label(fx_node: torch.fx.Node, traced: torch.fx.GraphModule) -> str
     # Build structured record label
     # Format: { line1 | line2 | ... }
     # Using specific record separators | for fields
+    def _esc(s: str) -> str:
+        # Graphviz record labels treat {, }, |, < > as structural; any
+        # such chars from arg values (e.g. dict-shaped output args) must
+        # be escaped or they'll break the label parser.
+        return (
+            s.replace('\\', '\\\\')
+             .replace('{', '\\{')
+             .replace('}', '\\}')
+             .replace('|', '\\|')
+             .replace('<', '\\<')
+             .replace('>', '\\>')
+             .replace('"', '\\"')
+        )
+
     label_parts = []
-    label_parts.append(f"name=%{name}")
-    label_parts.append(f"op_code={op}")
-    
+    label_parts.append(f"name=%{_esc(name)}")
+    label_parts.append(f"op_code={_esc(op)}")
+
     if op in ['call_module', 'call_function', 'call_method']:
-        label_parts.append(target_name)
-        
+        label_parts.append(_esc(target_name))
+
     if formatted_args:
         arg_str = ", ".join(formatted_args)
         # Use newlines if the label gets too long
         if len(arg_str) > 30:
             arg_str = ",\\n".join(formatted_args)
-        label_parts.append(f"args=({arg_str})")
-        
+        label_parts.append(f"args=({_esc(arg_str)})")
+
     label_parts.append(f"num_users={num_users}")
     
     # Return Graphviz record label

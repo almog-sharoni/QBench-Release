@@ -1,5 +1,10 @@
+import contextlib
+
 import torch
 from tqdm import tqdm
+
+from runspace.src.registry.observer import quantized_dispatch
+
 
 class Evaluator:
     """
@@ -15,21 +20,25 @@ class Evaluator:
         Runs evaluation on the given model and data loader.
         """
         model.eval()
-        
+        quant_active = getattr(self.adapter, "build_quantized", False)
+        quant_cfg = getattr(self.adapter, "quant_config", None) if quant_active else None
+
         with torch.no_grad():
             for batch in tqdm(data_loader, desc="Evaluating", unit="batch"):
                 # Use adapter to prepare batch (e.g. move to device, unpack)
                 inputs, targets = self.adapter.prepare_batch(batch)
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
-                
+
                 # Forward pass
-                outputs = self.adapter.forward(model, (inputs, targets))
-                
+                ctx = quantized_dispatch(config=quant_cfg) if quant_active else contextlib.nullcontext()
+                with ctx:
+                    outputs = self.adapter.forward(model, (inputs, targets))
+
                 # Update metrics
                 self.metrics_engine.update(outputs, targets)
 
                 if max_batches > 0 and (self.metrics_engine.total / data_loader.batch_size) >= max_batches:
                     break
-        
+
         return self.metrics_engine.compute()

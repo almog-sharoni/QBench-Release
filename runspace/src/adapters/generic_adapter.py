@@ -96,6 +96,18 @@ class GenericAdapter(BaseAdapter):
             )
         self.model = self.build_model(quantized=self.build_quantized)
 
+    @property
+    def quant_config(self) -> dict:
+        """Resolved quantization config consumed by the @observer dispatch
+        path so cached Observed* singletons get configured with the same
+        format/mode/chunk_size as in-tree quantized modules."""
+        return {
+            "format": self.quantization_type,
+            "mode": self.quant_mode,
+            "chunk_size": self.input_chunk_size if self.input_chunk_size is not None else self.chunk_size,
+            "quantization_bias": self.quantization_bias,
+        }
+
     def _auto_detect_model_source(self) -> str:
         """Detect whether the model lives in torchvision or timm."""
         if hasattr(models, self.model_name):
@@ -411,9 +423,18 @@ class GenericAdapter(BaseAdapter):
             torch.quantization.fuse_modules(model, modules_to_fuse, inplace=True)
 
     def _replace_layers(self, model: nn.Module):
-        """Replace standard layers with quantized versions."""
+        """Replace standard layers with quantized versions, then FX-rewrite
+        inline functional ops (torch.cat / +/torch.einsum / F.softmax / ...)
+        inside any FX-traceable composite, then propagate config to all
+        QuantizedLayerMixin instances (in-tree class swaps and the FX-
+        attached submodules alike)."""
         self._first_layer_found = False
         self._recursive_replace(model)
+        if self.enable_fx_quantization:
+            try:
+                self._fx_quantize(model)
+            except Exception as e:
+                print(f"Note: FX quantization skipped ({type(e).__name__}: {e})")
         self._configure_remaining_mixin_ops(model)
 
     def _configure_remaining_mixin_ops(self, model: nn.Module):
@@ -732,7 +753,11 @@ class GenericAdapter(BaseAdapter):
                 self._calibrate_model(model)
             
             # FX-based Functional Quantization
-            # This handles functional calls like F.relu that are not modules
+            # This handles functional calls like F.relu that are not modules.
+            # Gated to custom-source models only — for stock torchvision/timm
+            # backbones it would attach QuantAdd/QuantCat/etc. submodules
+            # for inline `+` and `torch.cat` calls, which appear in the
+            # compliance report as non-original-module rows (e.g. `add_7`).
             if self.enable_fx_quantization:
                 try:
                     # _fx_quantize returns the modified model (GraphModule) if changes were made
@@ -977,8 +1002,16 @@ class GenericAdapter(BaseAdapter):
                 
                 new_mod = QuantClass(**kwargs)
 
-                # Add module to GraphModule
-                new_mod_name = f"{node.name}_quant_{op_name.lower()}"
+                # Add module to GraphModule. Use FX's auto-numbered node.name
+                # (e.g. "cat", "add", "add_1", "truediv") so the report path
+                # reads cleanly: backbone.superglue.gnn.cat instead of
+                # backbone.superglue.gnn.cat_quant_quantcat.
+                base = node.name
+                new_mod_name = base
+                _i = 0
+                while hasattr(gm, new_mod_name):
+                    _i += 1
+                    new_mod_name = f"{base}_{_i}"
                 gm.add_module(new_mod_name, new_mod)
 
                 # Propagate runtime config (mirrors _create_quantized_module for
@@ -1039,32 +1072,27 @@ class GenericAdapter(BaseAdapter):
         if isinstance(module, nn.Sequential):
             return True
 
-        cls_name = type(module).__name__
-        module_name = type(module).__module__
-        
-        safe_names = {
-            "Block",
-            "ResPostBlock",
-            "ParallelScalingBlock",
-            "Attention",
-            "AttentionRope",
-            "Mlp",
-            "SwiGLU",
-            "SwiGLUPacked",
-            "DecomposedMultiheadAttention",
-            "DecomposedQkvAttention",
-            "DecomposedMlpBlock",
-        }
-        if cls_name in safe_names:
-            return True
+        cls = type(module)
+        module_name = cls.__module__
 
-        safe_prefixes = (
-            "timm.models.vision_transformer",
-            "timm.layers.attention",
-            "timm.layers.mlp",
-            "torchvision.models.vision_transformer",
-        )
-        return module_name.startswith(safe_prefixes)
+        # Skip standard torch.nn.* leaves (Conv, Linear, BN, ReLU, MaxPool, ...)
+        # and already-quantized swaps — neither has inline ops to rewrite.
+        if module_name.startswith("torch.nn"):
+            return False
+        from runspace.src.ops.quant_base import QuantizedLayerMixin
+        if isinstance(module, QuantizedLayerMixin):
+            return False
+        if module_name == "runspace.src.ops.observed_ops":
+            return False
+        # Need children — leaf custom modules can't host inline ops to rewrite.
+        if next(iter(module.children()), None) is None:
+            return False
+
+        # Accept any remaining custom composite (timm Block/Attention/Mlp,
+        # SuperGlue's KeypointEncoder/MultiHeadedAttention/AttentionalPropagation,
+        # user models). Non-traceable forwards get filtered downstream when
+        # symbolic_trace raises.
+        return True
 
     def _fx_quantize_submodules(self, module: nn.Module, target_funcs: dict) -> bool:
         modified_any = False
