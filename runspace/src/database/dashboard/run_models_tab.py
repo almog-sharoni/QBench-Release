@@ -21,6 +21,10 @@ with tab_runner:
     from datetime import datetime
     RUNNER_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "runspace/outputs/dashboard_runs")
     RUNNER_REGISTRY_PATH = os.path.join(RUNNER_OUTPUT_DIR, 'registry.json')
+    RUNNER_LOG_DIR = os.path.join(PROJECT_ROOT, "runspace/database/logs")
+    DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), "dashboard")
+    EXPERIMENT_RUN_STATE_PATH = os.path.join(RUNNER_OUTPUT_DIR, "experiment_run_state.json")
+    EXPERIMENT_MODELS_CONFIG_PATH = os.path.join(DASHBOARD_DIR, "models.config")
 
     def _dashboard_runner_pid_running(pid):
         if not pid:
@@ -140,6 +144,90 @@ with tab_runner:
                     seen.add(name)
         return sorted(models)
 
+    def _dashboard_runner_load_experiment_run_state():
+        if not os.path.exists(EXPERIMENT_RUN_STATE_PATH):
+            return {}
+        try:
+            with open(EXPERIMENT_RUN_STATE_PATH, "r", encoding="utf-8") as f:
+                loaded = json.load(f) or {}
+            return loaded if isinstance(loaded, dict) else {}
+        except Exception:
+            return {}
+
+    def _dashboard_runner_save_experiment_run_state(kind, values):
+        state = _dashboard_runner_load_experiment_run_state()
+        clean_values = {}
+        for key, value in (values or {}).items():
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                clean_values[key] = value
+            elif isinstance(value, (list, tuple)):
+                clean_values[key] = [str(item) for item in value]
+            else:
+                clean_values[key] = str(value)
+        if state.get(kind) == clean_values:
+            return
+        state[kind] = clean_values
+        os.makedirs(os.path.dirname(EXPERIMENT_RUN_STATE_PATH), exist_ok=True)
+        tmp_path = f"{EXPERIMENT_RUN_STATE_PATH}.tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, sort_keys=True)
+            os.replace(tmp_path, EXPERIMENT_RUN_STATE_PATH)
+        except Exception as exc:
+            st.warning(f"Could not save Experiment Runs defaults: {exc}")
+
+    def _dashboard_runner_experiment_default(kind, name, fallback=None):
+        state = _dashboard_runner_load_experiment_run_state()
+        kind_state = state.get(kind, {}) if isinstance(state, dict) else {}
+        if isinstance(kind_state, dict) and name in kind_state:
+            return kind_state[name]
+        return _dashboard_runner_arg_default(kind, name, fallback)
+
+    def _dashboard_runner_model_entry_from_item(item):
+        if isinstance(item, str):
+            name = item.strip()
+            return {"name": name, "weights": "DEFAULT"} if name else None
+        if not isinstance(item, dict) or not item.get("name"):
+            return None
+        entry = {"name": str(item["name"]), "weights": str(item.get("weights", "DEFAULT"))}
+        if item.get("models_file"):
+            entry["models_file"] = str(item["models_file"])
+        return entry
+
+    def _dashboard_runner_load_experiment_model_entries():
+        fallback = [{"name": "resnet18", "weights": "DEFAULT"}]
+        if not os.path.exists(EXPERIMENT_MODELS_CONFIG_PATH):
+            return fallback
+        try:
+            with open(EXPERIMENT_MODELS_CONFIG_PATH, "r", encoding="utf-8") as f:
+                text = f.read()
+            loaded = yaml.safe_load(text)
+        except Exception as exc:
+            st.warning(f"Could not load `models.config`: {exc}")
+            loaded = None
+
+        if isinstance(loaded, dict):
+            loaded = loaded.get("models", [])
+        elif isinstance(loaded, str):
+            loaded = [part.strip() for part in re.split(r"[,\n]", loaded) if part.strip()]
+
+        if not isinstance(loaded, list):
+            loaded = [
+                line.strip()
+                for line in text.splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            ] if "text" in locals() else []
+
+        entries = []
+        seen = set()
+        for item in loaded:
+            entry = _dashboard_runner_model_entry_from_item(item)
+            if not entry or entry["name"] in seen:
+                continue
+            entries.append(entry)
+            seen.add(entry["name"])
+        return entries or fallback
+
     def _dashboard_runner_safe_name(name):
         safe = []
         for char in str(name or "").strip():
@@ -149,6 +237,35 @@ with tab_runner:
                 safe.append("_")
         safe_name = "".join(safe).strip("_")
         return safe_name or "dashboard_config"
+
+    def _dashboard_runner_date_run_name(run_name):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"{timestamp}_{run_name}"
+
+    def _dashboard_runner_log_path(date_run_name):
+        safe_name = _dashboard_runner_safe_name(date_run_name)[:180]
+        os.makedirs(RUNNER_LOG_DIR, exist_ok=True)
+        return os.path.join(RUNNER_LOG_DIR, f"{safe_name}.log")
+
+    def _dashboard_runner_experiment_run_name(kind, values):
+        name_parts = [
+            "dashboard_experiment",
+            kind,
+            values.get("model_name"),
+        ]
+        for optional_name in ("experiment_type", "target"):
+            if values.get(optional_name):
+                name_parts.append(values.get(optional_name))
+        return "_".join(str(part) for part in name_parts if part)
+
+    def _dashboard_runner_model_run_name(base_configs, models, graph_only=False):
+        config_names = [
+            os.path.splitext(os.path.basename(str(config)))[0]
+            for config in (base_configs or [])
+        ]
+        model_names = [str(model) for model in (models or [])]
+        mode = "graph" if graph_only else "run"
+        return "_".join(["dashboard", mode] + config_names + model_names)
 
     def _dashboard_runner_load_yaml(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -312,12 +429,20 @@ with tab_runner:
         all_format_keys = [f"{key_prefix}_{fmt}" for fmt in formats]
         all_group_keys = [f"{key_prefix}_{group_name}_all" for group_name in group_names]
         all_on_col, all_off_col, _ = st.columns([1, 1, 4])
-        if all_on_col.button("Turn all on", key=f"{key_prefix}_all_on", width='stretch'):
-            _dashboard_runner_set_all_formats(all_format_keys, all_group_keys, True)
-            st.rerun()
-        if all_off_col.button("Turn all off", key=f"{key_prefix}_all_off", width='stretch'):
-            _dashboard_runner_set_all_formats(all_format_keys, all_group_keys, False)
-            st.rerun()
+        all_on_col.button(
+            "Turn all on",
+            key=f"{key_prefix}_all_on",
+            width='stretch',
+            on_click=_dashboard_runner_set_all_formats,
+            args=(all_format_keys, all_group_keys, True),
+        )
+        all_off_col.button(
+            "Turn all off",
+            key=f"{key_prefix}_all_off",
+            width='stretch',
+            on_click=_dashboard_runner_set_all_formats,
+            args=(all_format_keys, all_group_keys, False),
+        )
         group_columns = st.columns(max(1, len(group_names)))
         for group_idx, group_name in enumerate(group_names):
             group_formats = groups[group_name]
@@ -694,30 +819,53 @@ with tab_runner:
             ):
                 _dashboard_runner_add_experiment_bool(kind, command, name, values.get(name))
         elif kind == "hybrid":
-            for name in ("weight_metrics", "weight_chunk_size", "input_metrics", "input_chunk_size"):
+            for name in (
+                "weight_mode", "weight_format", "weight_metric", "weight_candidate_formats", "weight_chunk_size",
+                "input_mode", "input_format", "input_metric", "input_candidate_formats", "input_chunk_size",
+            ):
                 _dashboard_runner_add_experiment_arg(kind, command, name, values.get(name))
             for name in (
                 "per_chunk_format", "force_recalc", "skip_weight_analysis",
-                "run_weight_only_baseline", "run_input_only_baseline",
-                "force_rerun", "run_all_combos",
             ):
                 _dashboard_runner_add_experiment_bool(kind, command, name, values.get(name))
         return command
 
     def _dashboard_runner_common_experiment_fields(kind, prefix):
-        batch_size = int(_dashboard_runner_arg_default(kind, "batch_size", 128) or 128)
-        workers = int(_dashboard_runner_arg_default(kind, "num_workers", 32) or 32)
-        limit_batches = int(_dashboard_runner_arg_default(kind, "limit_batches", -1) or -1)
-        output_dir = _dashboard_runner_arg_default(kind, "output_dir", "") or ""
+        model_entries = _dashboard_runner_load_experiment_model_entries()
+        model_options = [entry["name"] for entry in model_entries]
+        model_default = str(_dashboard_runner_experiment_default(kind, "model_name", "resnet18"))
+        if model_default not in model_options:
+            model_options.append(model_default)
+        selected_entry_by_name = {entry["name"]: entry for entry in model_entries}
+        batch_size = int(_dashboard_runner_experiment_default(kind, "batch_size", 128) or 128)
+        workers = int(_dashboard_runner_experiment_default(kind, "num_workers", 32) or 32)
+        limit_batches = int(_dashboard_runner_experiment_default(kind, "limit_batches", -1) or -1)
+        output_dir = _dashboard_runner_experiment_default(kind, "output_dir", "") or ""
         c1, c2, c3 = st.columns([1, 1, 1])
+        model_name = c1.selectbox(
+            "Model name",
+            options=model_options,
+            index=model_options.index(model_default) if model_default in model_options else 0,
+            key=f"{prefix}_model_name",
+            help="Loaded from dashboard/models.config.",
+        )
+        selected_model_entry = selected_entry_by_name.get(model_name, {})
         values = {
-            "model_name": c1.text_input("Model name", value=str(_dashboard_runner_arg_default(kind, "model_name", "resnet18")), key=f"{prefix}_model_name"),
-            "weights": c2.text_input("Weights", value=str(_dashboard_runner_arg_default(kind, "weights", "DEFAULT")), key=f"{prefix}_weights"),
-            "models_file": c3.text_input("Models file", value=str(_dashboard_runner_arg_default(kind, "models_file", "") or ""), key=f"{prefix}_models_file"),
+            "model_name": model_name,
+            "weights": c2.text_input(
+                "Weights",
+                value=str(_dashboard_runner_experiment_default(kind, "weights", selected_model_entry.get("weights", "DEFAULT"))),
+                key=f"{prefix}_weights",
+            ),
+            "models_file": c3.text_input(
+                "Models file",
+                value=str(_dashboard_runner_experiment_default(kind, "models_file", selected_model_entry.get("models_file", "")) or ""),
+                key=f"{prefix}_models_file",
+            ),
         }
         d1, d2 = st.columns([1, 2])
-        values["dataset_name"] = d1.text_input("Dataset name", value=str(_dashboard_runner_arg_default(kind, "dataset_name", "imagenet")), key=f"{prefix}_dataset_name")
-        values["dataset_path"] = d2.text_input("Dataset path", value=str(_dashboard_runner_arg_default(kind, "dataset_path", "/data/imagenet/val")), key=f"{prefix}_dataset_path")
+        values["dataset_name"] = d1.text_input("Dataset name", value=str(_dashboard_runner_experiment_default(kind, "dataset_name", "imagenet")), key=f"{prefix}_dataset_name")
+        values["dataset_path"] = d2.text_input("Dataset path", value=str(_dashboard_runner_experiment_default(kind, "dataset_path", "/data/imagenet/val")), key=f"{prefix}_dataset_path")
         r1, r2, r3, r4 = st.columns(4)
         values["batch_size"] = r1.number_input("Batch size", min_value=1, max_value=4096, value=batch_size, step=1, key=f"{prefix}_batch_size")
         values["num_workers"] = r2.number_input("Workers", min_value=0, max_value=256, value=workers, step=1, key=f"{prefix}_workers")
@@ -725,7 +873,7 @@ with tab_runner:
         values["output_dir"] = r4.text_input("Output dir", value=output_dir, key=f"{prefix}_output_dir")
         return values
 
-    @st.fragment(run_every=2 if st.session_state.get("runner_auto_refresh", True) else None)
+    @st.fragment(run_every=3 if st.session_state.get("runner_auto_refresh", True) else None)
     def render_run_models_tab_content():
         # Refresh current process and registry
         process = _dashboard_runner_current_process()
@@ -743,11 +891,14 @@ with tab_runner:
             st.markdown("##### Command Preview")
             st.code(command_preview, language="bash")
             if st.button(f"Run {label}", key=f"runner_experiment_start_{kind}", type="primary", width='stretch'):
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                log_path = os.path.join(RUNNER_OUTPUT_DIR, f"dashboard_experiment_{kind}_{timestamp}.log")
+                run_name = _dashboard_runner_experiment_run_name(kind, values)
+                date_run_name = _dashboard_runner_date_run_name(run_name)
+                log_path = _dashboard_runner_log_path(date_run_name)
                 env = os.environ.copy()
                 env["PYTHONUNBUFFERED"] = "1"
                 with open(log_path, "ab", buffering=0) as log_file:
+                    log_file.write((f"\n\n# Dashboard date run: {date_run_name}\n").encode("utf-8"))
+                    log_file.write((f"# Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n").encode("utf-8"))
                     log_file.write((f"$ {command_preview}\n\n").encode("utf-8"))
                     started_process = subprocess.Popen(
                         command,
@@ -764,6 +915,7 @@ with tab_runner:
                     "status": "running",
                     "command": command_preview,
                     "log_path": log_path,
+                    "date_run_name": date_run_name,
                     "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 })
                 _dashboard_runner_save_registry(registry)
@@ -774,7 +926,7 @@ with tab_runner:
                 st.session_state["dashboard_runner_returncode"] = None
                 st.success(f"Started {label} PID {started_process.pid}.")
                 time.sleep(0.2)
-                st.rerun()
+                rerun_current_fragment()
     
         os.makedirs(RUNNER_OUTPUT_DIR, exist_ok=True)
     
@@ -812,37 +964,38 @@ with tab_runner:
                 "runner_exp_input",
             )
             i1, i2, i3, i4 = st.columns(4)
-            input_values["metric"] = i1.text_input("Metrics", value=str(_dashboard_runner_arg_default("input", "metric", "mse,l1")), key="runner_exp_input_metric")
-            input_values["chunk_size"] = i2.number_input("Chunk size", min_value=1, max_value=100000, value=int(_dashboard_runner_arg_default("input", "chunk_size", 128) or 128), step=1, key="runner_exp_input_chunk")
-            input_values["input_size"] = i3.number_input("Input size", min_value=1, max_value=4096, value=int(_dashboard_runner_arg_default("input", "input_size", 224) or 224), step=1, key="runner_exp_input_size")
-            input_values["experiment_type"] = i4.text_input("Experiment type", value=str(_dashboard_runner_arg_default("input", "experiment_type", "input_quant_baseline")), key="runner_exp_input_type")
+            input_values["metric"] = i1.text_input("Metrics", value=str(_dashboard_runner_experiment_default("input", "metric", "mse,l1")), key="runner_exp_input_metric")
+            input_values["chunk_size"] = i2.number_input("Chunk size", min_value=1, max_value=100000, value=int(_dashboard_runner_experiment_default("input", "chunk_size", 128) or 128), step=1, key="runner_exp_input_chunk")
+            input_values["input_size"] = i3.number_input("Input size", min_value=1, max_value=4096, value=int(_dashboard_runner_experiment_default("input", "input_size", 224) or 224), step=1, key="runner_exp_input_size")
+            input_values["experiment_type"] = i4.text_input("Experiment type", value=str(_dashboard_runner_experiment_default("input", "experiment_type", "input_quant_baseline")), key="runner_exp_input_type")
             input_baseline_options = _dashboard_runner_format_options("input", "baseline_formats", "baseline_formats")
             input_candidate_options = _dashboard_runner_format_options("input", "candidate_formats", "candidate_formats")
             input_values["baseline_formats"] = _dashboard_runner_format_selector(
                 "Baseline formats",
                 input_baseline_options,
-                input_baseline_options,
+                _dashboard_runner_split_csv(_dashboard_runner_experiment_default("input", "baseline_formats", "")) or input_baseline_options,
                 "runner_exp_input_baseline_fmt",
             )
             input_values["candidate_formats"] = _dashboard_runner_format_selector(
                 "Candidate formats",
                 input_candidate_options,
-                input_candidate_options,
+                _dashboard_runner_split_csv(_dashboard_runner_experiment_default("input", "candidate_formats", "")) or input_candidate_options,
                 "runner_exp_input_candidate_fmt",
             )
             i7, i8 = st.columns(2)
-            input_values["excluded_ops"] = i7.text_input("Excluded ops", value=str(_dashboard_runner_arg_default("input", "excluded_ops", "LayerNorm")), key="runner_exp_input_excluded")
-            input_values["unsigned_input_sources"] = i8.text_input("Unsigned input sources", value=str(_dashboard_runner_arg_default("input", "unsigned_input_sources", "") or ""), key="runner_exp_input_unsigned")
+            input_values["excluded_ops"] = i7.text_input("Excluded ops", value=str(_dashboard_runner_experiment_default("input", "excluded_ops", "LayerNorm")), key="runner_exp_input_excluded")
+            input_values["unsigned_input_sources"] = i8.text_input("Unsigned input sources", value=str(_dashboard_runner_experiment_default("input", "unsigned_input_sources", "") or ""), key="runner_exp_input_unsigned")
             input_values["dynamic_unsigned_input_candidates"] = st.checkbox(
                 "Dynamic UFP after unsigned sources",
-                value=bool(_dashboard_runner_arg_default("input", "dynamic_unsigned_input_candidates", True)),
+                value=bool(_dashboard_runner_experiment_default("input", "dynamic_unsigned_input_candidates", True)),
                 key="runner_exp_input_dynamic_unsigned_candidates",
             )
             f1, f2, f3, f4 = st.columns(4)
-            input_values["only_dynamic"] = f1.checkbox("Only dynamic", value=bool(_dashboard_runner_arg_default("input", "only_dynamic", False)), key="runner_exp_input_only_dynamic")
-            input_values["only_baselines"] = f2.checkbox("Only baselines", value=bool(_dashboard_runner_arg_default("input", "only_baselines", False)), key="runner_exp_input_only_baselines")
-            input_values["force_rerun"] = f3.checkbox("Force rerun", value=bool(_dashboard_runner_arg_default("input", "force_rerun", False)), key="runner_exp_input_force_rerun")
-            input_values["force_rebuild_weights"] = f4.checkbox("Force rebuild weights", value=bool(_dashboard_runner_arg_default("input", "force_rebuild_weights", False)), key="runner_exp_input_force_rebuild")
+            input_values["only_dynamic"] = f1.checkbox("Only dynamic", value=bool(_dashboard_runner_experiment_default("input", "only_dynamic", False)), key="runner_exp_input_only_dynamic")
+            input_values["only_baselines"] = f2.checkbox("Only baselines", value=bool(_dashboard_runner_experiment_default("input", "only_baselines", False)), key="runner_exp_input_only_baselines")
+            input_values["force_rerun"] = f3.checkbox("Force rerun", value=bool(_dashboard_runner_experiment_default("input", "force_rerun", False)), key="runner_exp_input_force_rerun")
+            input_values["force_rebuild_weights"] = f4.checkbox("Force rebuild weights", value=bool(_dashboard_runner_experiment_default("input", "force_rebuild_weights", False)), key="runner_exp_input_force_rebuild")
+            _dashboard_runner_save_experiment_run_state("input", input_values)
             _dashboard_runner_render_experiment_launch("input", input_values, "Input Quant Experiment")
     
         with weight_tab:
@@ -851,30 +1004,31 @@ with tab_runner:
                 "runner_exp_weight",
             )
             w1, w2, w3, w4 = st.columns(4)
-            weight_values["metrics"] = w1.text_input("Metrics", value=str(_dashboard_runner_arg_default("weight", "metrics", "l1,mse")), key="runner_exp_weight_metrics")
+            weight_values["metrics"] = w1.text_input("Metrics", value=str(_dashboard_runner_experiment_default("weight", "metrics", "l1,mse")), key="runner_exp_weight_metrics")
             weight_target_choices = _dashboard_runner_experiment_meta("weight")["args"].get("target", {}).get("choices") or ["weights"]
-            weight_target_default = str(_dashboard_runner_arg_default("weight", "target", weight_target_choices[0]))
+            weight_target_default = str(_dashboard_runner_experiment_default("weight", "target", weight_target_choices[0]))
             weight_values["target"] = w2.selectbox("Target", options=weight_target_choices, index=weight_target_choices.index(weight_target_default) if weight_target_default in weight_target_choices else 0, key="runner_exp_weight_target")
-            weight_values["weight_chunk_size"] = w3.number_input("Weight chunk size", min_value=1, max_value=100000, value=int(_dashboard_runner_arg_default("weight", "weight_chunk_size", 128) or 128), step=1, key="runner_exp_weight_chunk")
-            weight_values["verify_atol"] = w4.number_input("Verify atol", min_value=0.0, value=float(_dashboard_runner_arg_default("weight", "verify_atol", 1e-7) or 1e-7), format="%.1e", key="runner_exp_weight_atol")
+            weight_values["weight_chunk_size"] = w3.number_input("Weight chunk size", min_value=1, max_value=100000, value=int(_dashboard_runner_experiment_default("weight", "weight_chunk_size", 128) or 128), step=1, key="runner_exp_weight_chunk")
+            weight_values["verify_atol"] = w4.number_input("Verify atol", min_value=0.0, value=float(_dashboard_runner_experiment_default("weight", "verify_atol", 1e-7) or 1e-7), format="%.1e", key="runner_exp_weight_atol")
             weight_baseline_options = _dashboard_runner_format_options("weight", "baseline_formats", "baseline_formats")
             weight_values["baseline_formats"] = _dashboard_runner_format_selector(
                 "Baseline formats",
                 weight_baseline_options,
-                _dashboard_runner_split_csv(_dashboard_runner_arg_default("weight", "baseline_formats", "")) or weight_baseline_options,
+                _dashboard_runner_split_csv(_dashboard_runner_experiment_default("weight", "baseline_formats", "")) or weight_baseline_options,
                 "runner_exp_weight_baseline_fmt",
             )
             wf1, wf2, wf3, wf4 = st.columns(4)
-            weight_values["include_fp32"] = wf1.checkbox("Include fp32", value=bool(_dashboard_runner_arg_default("weight", "include_fp32", False)), key="runner_exp_weight_include_fp32")
-            weight_values["run_eval"] = wf2.checkbox("Run eval", value=bool(_dashboard_runner_arg_default("weight", "run_eval", False)), key="runner_exp_weight_run_eval")
-            weight_values["per_chunk_format"] = wf3.checkbox("Per chunk format", value=bool(_dashboard_runner_arg_default("weight", "per_chunk_format", False)), key="runner_exp_weight_per_chunk")
-            weight_values["plot_layers"] = wf4.checkbox("Plot layers", value=bool(_dashboard_runner_arg_default("weight", "plot_layers", False)), key="runner_exp_weight_plot_layers")
+            weight_values["include_fp32"] = wf1.checkbox("Include fp32", value=bool(_dashboard_runner_experiment_default("weight", "include_fp32", False)), key="runner_exp_weight_include_fp32")
+            weight_values["run_eval"] = wf2.checkbox("Run eval", value=bool(_dashboard_runner_experiment_default("weight", "run_eval", False)), key="runner_exp_weight_run_eval")
+            weight_values["per_chunk_format"] = wf3.checkbox("Per chunk format", value=bool(_dashboard_runner_experiment_default("weight", "per_chunk_format", False)), key="runner_exp_weight_per_chunk")
+            weight_values["plot_layers"] = wf4.checkbox("Plot layers", value=bool(_dashboard_runner_experiment_default("weight", "plot_layers", False)), key="runner_exp_weight_plot_layers")
             wf5, wf6, wf7, wf8 = st.columns(4)
-            weight_values["skip_baselines"] = wf5.checkbox("Skip baselines", value=bool(_dashboard_runner_arg_default("weight", "skip_baselines", False)), key="runner_exp_weight_skip_baselines")
-            weight_values["skip_layer_wise"] = wf6.checkbox("Skip layer-wise", value=bool(_dashboard_runner_arg_default("weight", "skip_layer_wise", False)), key="runner_exp_weight_skip_layer")
-            weight_values["force_recalc"] = wf7.checkbox("Force recalc", value=bool(_dashboard_runner_arg_default("weight", "force_recalc", False)), key="runner_exp_weight_force_recalc")
-            weight_values["force_rerun"] = wf8.checkbox("Force rerun", value=bool(_dashboard_runner_arg_default("weight", "force_rerun", False)), key="runner_exp_weight_force_rerun")
-            weight_values["verify_saved_weights"] = st.checkbox("Verify saved weights", value=bool(_dashboard_runner_arg_default("weight", "verify_saved_weights", False)), key="runner_exp_weight_verify_saved")
+            weight_values["skip_baselines"] = wf5.checkbox("Skip baselines", value=bool(_dashboard_runner_experiment_default("weight", "skip_baselines", False)), key="runner_exp_weight_skip_baselines")
+            weight_values["skip_layer_wise"] = wf6.checkbox("Skip layer-wise", value=bool(_dashboard_runner_experiment_default("weight", "skip_layer_wise", False)), key="runner_exp_weight_skip_layer")
+            weight_values["force_recalc"] = wf7.checkbox("Force recalc", value=bool(_dashboard_runner_experiment_default("weight", "force_recalc", False)), key="runner_exp_weight_force_recalc")
+            weight_values["force_rerun"] = wf8.checkbox("Force rerun", value=bool(_dashboard_runner_experiment_default("weight", "force_rerun", False)), key="runner_exp_weight_force_rerun")
+            weight_values["verify_saved_weights"] = st.checkbox("Verify saved weights", value=bool(_dashboard_runner_experiment_default("weight", "verify_saved_weights", False)), key="runner_exp_weight_verify_saved")
+            _dashboard_runner_save_experiment_run_state("weight", weight_values)
             _dashboard_runner_render_experiment_launch("weight", weight_values, "Weight Quant Experiment")
     
         with hybrid_tab:
@@ -882,21 +1036,47 @@ with tab_runner:
                 "hybrid",
                 "runner_exp_hybrid",
             )
-            h1, h2, h3, h4 = st.columns(4)
-            hybrid_values["weight_metrics"] = h1.text_input("Weight metrics", value=str(_dashboard_runner_arg_default("hybrid", "weight_metrics", "l1,mse")), key="runner_exp_hybrid_weight_metrics")
-            hybrid_values["weight_chunk_size"] = h2.number_input("Weight chunk size", min_value=1, max_value=100000, value=int(_dashboard_runner_arg_default("hybrid", "weight_chunk_size", 128) or 128), step=1, key="runner_exp_hybrid_weight_chunk")
-            hybrid_values["input_metrics"] = h3.text_input("Input metrics", value=str(_dashboard_runner_arg_default("hybrid", "input_metrics", "mse,l1")), key="runner_exp_hybrid_input_metrics")
-            hybrid_values["input_chunk_size"] = h4.number_input("Input chunk size", min_value=1, max_value=100000, value=int(_dashboard_runner_arg_default("hybrid", "input_chunk_size", 128) or 128), step=1, key="runner_exp_hybrid_input_chunk")
-            hf1, hf2, hf3, hf4 = st.columns(4)
-            hybrid_values["per_chunk_format"] = hf1.checkbox("Per chunk format", value=bool(_dashboard_runner_arg_default("hybrid", "per_chunk_format", False)), key="runner_exp_hybrid_per_chunk")
-            hybrid_values["force_recalc"] = hf2.checkbox("Force recalc", value=bool(_dashboard_runner_arg_default("hybrid", "force_recalc", False)), key="runner_exp_hybrid_force_recalc")
-            hybrid_values["skip_weight_analysis"] = hf3.checkbox("Skip weight analysis", value=bool(_dashboard_runner_arg_default("hybrid", "skip_weight_analysis", False)), key="runner_exp_hybrid_skip_weight")
-            hybrid_values["force_rerun"] = hf4.checkbox("Force rerun", value=bool(_dashboard_runner_arg_default("hybrid", "force_rerun", False)), key="runner_exp_hybrid_force_rerun")
-            hf5, hf6, hf7 = st.columns(3)
-            hybrid_values["run_weight_only_baseline"] = hf5.checkbox("Weight-only baseline", value=bool(_dashboard_runner_arg_default("hybrid", "run_weight_only_baseline", False)), key="runner_exp_hybrid_weight_only")
-            hybrid_values["run_input_only_baseline"] = hf6.checkbox("Input-only baseline", value=bool(_dashboard_runner_arg_default("hybrid", "run_input_only_baseline", False)), key="runner_exp_hybrid_input_only")
-            hybrid_values["run_all_combos"] = hf7.checkbox("Run all combos", value=bool(_dashboard_runner_arg_default("hybrid", "run_all_combos", False)), key="runner_exp_hybrid_all_combos")
+            hm1, hm2 = st.columns(2)
+            hybrid_values["weight_mode"] = hm1.selectbox("Weight mode", options=["fixed", "optimized"], index=1 if str(_dashboard_runner_experiment_default("hybrid", "weight_mode", "optimized")) == "optimized" else 0, key="runner_exp_hybrid_weight_mode")
+            hybrid_values["input_mode"] = hm2.selectbox("Input mode", options=["fixed", "dynamic"], index=1 if str(_dashboard_runner_experiment_default("hybrid", "input_mode", "dynamic")) == "dynamic" else 0, key="runner_exp_hybrid_input_mode")
+            
+            w_col, i_col = st.columns(2)
+            with w_col:
+                st.markdown("##### Weight settings")
+                if hybrid_values["weight_mode"] == "fixed":
+                    hybrid_values["weight_format"] = st.text_input("Weight format", value=str(_dashboard_runner_experiment_default("hybrid", "weight_format", "fp8_e4m3")), key="runner_exp_hybrid_weight_format")
+                else:
+                    hybrid_values["weight_metric"] = st.text_input("Weight metric", value=str(_dashboard_runner_experiment_default("hybrid", "weight_metric", "mse")), key="runner_exp_hybrid_weight_metric")
+                    hybrid_weight_format_options = _dashboard_runner_format_options("weight", "baseline_formats", "baseline_formats")
+                    hybrid_values["weight_candidate_formats"] = _dashboard_runner_format_selector(
+                        "Weight candidate formats",
+                        hybrid_weight_format_options,
+                        _dashboard_runner_split_csv(_dashboard_runner_experiment_default("hybrid", "weight_candidate_formats", "")) or hybrid_weight_format_options,
+                        "runner_exp_hybrid_weight_fmt",
+                    )
+                    hybrid_values["per_chunk_format"] = st.checkbox("Per chunk format", value=bool(_dashboard_runner_experiment_default("hybrid", "per_chunk_format", False)), key="runner_exp_hybrid_per_chunk")
+                    hybrid_values["skip_weight_analysis"] = st.checkbox("Skip weight analysis", value=bool(_dashboard_runner_experiment_default("hybrid", "skip_weight_analysis", False)), key="runner_exp_hybrid_skip_weight")
+                    hybrid_values["force_recalc"] = st.checkbox("Force recalc", value=bool(_dashboard_runner_experiment_default("hybrid", "force_recalc", False)), key="runner_exp_hybrid_force_recalc")
+                hybrid_values["weight_chunk_size"] = st.number_input("Weight chunk size", min_value=1, max_value=100000, value=int(_dashboard_runner_experiment_default("hybrid", "weight_chunk_size", 128) or 128), step=1, key="runner_exp_hybrid_weight_chunk")
+            
+            with i_col:
+                st.markdown("##### Input settings")
+                if hybrid_values["input_mode"] == "fixed":
+                    hybrid_values["input_format"] = st.text_input("Input format", value=str(_dashboard_runner_experiment_default("hybrid", "input_format", "fp8_e4m3")), key="runner_exp_hybrid_input_format")
+                else:
+                    hybrid_values["input_metric"] = st.text_input("Input metric", value=str(_dashboard_runner_experiment_default("hybrid", "input_metric", "mse")), key="runner_exp_hybrid_input_metric")
+                    hybrid_input_format_options = _dashboard_runner_format_options("input", "candidate_formats", "candidate_formats")
+                    hybrid_values["input_candidate_formats"] = _dashboard_runner_format_selector(
+                        "Input dynamic candidate formats",
+                        hybrid_input_format_options,
+                        _dashboard_runner_split_csv(_dashboard_runner_experiment_default("hybrid", "input_candidate_formats", "")) or hybrid_input_format_options,
+                        "runner_exp_hybrid_input_fmt",
+                    )
+                hybrid_values["input_chunk_size"] = st.number_input("Input chunk size", min_value=1, max_value=100000, value=int(_dashboard_runner_experiment_default("hybrid", "input_chunk_size", 128) or 128), step=1, key="runner_exp_hybrid_input_chunk")
+            
+            _dashboard_runner_save_experiment_run_state("hybrid", hybrid_values)
             _dashboard_runner_render_experiment_launch("hybrid", hybrid_values, "Hybrid Quant Experiment")
+
     
         st.markdown("---")
         st.markdown("#### Model Runs")
@@ -1149,7 +1329,7 @@ with tab_runner:
                 if reset_yaml_col.button("Reset YAML From Form", key=_builder_key("yaml_reset"), width='stretch'):
                     st.session_state[yaml_editor_key] = generated_yaml
                     st.session_state[yaml_auto_key] = generated_yaml
-                    st.rerun()
+                    rerun_current_fragment()
                 if not yaml_is_manual:
                     st.session_state[yaml_editor_key] = generated_yaml
                 st.session_state[yaml_auto_key] = generated_yaml
@@ -1284,8 +1464,6 @@ with tab_runner:
                 width='stretch',
                 disabled=not can_build,
             ):
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                log_path = os.path.join(RUNNER_OUTPUT_DIR, f"dashboard_run_{timestamp}.log")
                 env = os.environ.copy()
                 env["PYTHONUNBUFFERED"] = "1"
                 if config_source == "Build config in dashboard":
@@ -1302,7 +1480,12 @@ with tab_runner:
                         graph_only,
                     )
                     command_preview = shlex.join(command)
+                run_name = _dashboard_runner_model_run_name(selected_base_configs, selected_models, graph_only)
+                date_run_name = _dashboard_runner_date_run_name(run_name)
+                log_path = _dashboard_runner_log_path(date_run_name)
                 with open(log_path, "ab", buffering=0) as log_file:
+                    log_file.write((f"\n\n# Dashboard date run: {date_run_name}\n").encode("utf-8"))
+                    log_file.write((f"# Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n").encode("utf-8"))
                     log_file.write((f"$ {command_preview}\n\n").encode("utf-8"))
                     if config_source == "Build config in dashboard":
                         log_file.write((f"# Saved dashboard config: {saved_path}\n\n").encode("utf-8"))
@@ -1320,6 +1503,7 @@ with tab_runner:
                     "status": "running",
                     "command": command_preview,
                     "log_path": log_path,
+                    "date_run_name": date_run_name,
                     "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 })
                 _dashboard_runner_save_registry(registry)
@@ -1329,10 +1513,10 @@ with tab_runner:
                 st.session_state["dashboard_runner_returncode"] = None
                 st.success(f"Started run PID {started_process.pid}.")
                 time.sleep(0.2)
-                st.rerun()
+                rerun_current_fragment()
     
             if refresh_col.button("🔄 Refresh Runner Status", key="runner_refresh_btn", width='stretch'):
-                st.rerun()
+                rerun_current_fragment()
     
         st.markdown("---")
         st.markdown("#### Run Log")
@@ -1360,10 +1544,10 @@ with tab_runner:
             nav_top, nav_prev, nav_page, nav_next, nav_bottom = st.columns([1, 1, 2, 1, 1])
             if nav_top.button("Top", key="runner_log_top", width='stretch'):
                 st.session_state["runner_log_page_number"] = 1
-                st.rerun()
+                rerun_current_fragment()
             if nav_prev.button("Prev", key="runner_log_prev", width='stretch', disabled=st.session_state["runner_log_page_number"] <= 1):
                 st.session_state["runner_log_page_number"] -= 1
-                st.rerun()
+                rerun_current_fragment()
             page_number = nav_page.number_input(
                 "Page",
                 min_value=1,
@@ -1374,10 +1558,10 @@ with tab_runner:
             st.session_state["runner_log_page_number"] = int(page_number)
             if nav_next.button("Next", key="runner_log_next", width='stretch', disabled=page_number >= page_count):
                 st.session_state["runner_log_page_number"] += 1
-                st.rerun()
+                rerun_current_fragment()
             if nav_bottom.button("Bottom", key="runner_log_bottom", width='stretch'):
                 st.session_state["runner_log_page_number"] = page_count
-                st.rerun()
+                rerun_current_fragment()
     
             start_idx = (int(page_number) - 1) * page_size
             end_idx = min(len(log_lines), start_idx + page_size)

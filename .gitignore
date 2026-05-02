@@ -6,6 +6,7 @@ outputs/
 .env
 tests/
 .cache/
+runspace/.torch_extensions/
 runspace/inputs/scannet/
 ./claude
 

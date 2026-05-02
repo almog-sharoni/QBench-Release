@@ -1,0 +1,29 @@
+
+
+# Dashboard date run: 20260502_153947_dashboard_experiment_input_mobilevit_s_input_quant_baseline
+# Started: 2026-05-02 15:39:47
+$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name mobilevit_s --weights DEFAULT --dataset_name imagenet --dataset_path /data/imagenet/val --batch_size 128 --num_workers 32 --limit_batches -1 --output_dir /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/results --metric mse --chunk_size 128 --input_size 224 --baseline_formats fp4_e1m2,fp4_e2m1,fp4_e3m0 --candidate_formats fp4_e1m2,fp4_e2m1,fp4_e3m0 --excluded_ops LayerNorm --experiment_type input_quant_baseline --unsigned_input_sources relu,softmax,quantrelu,quantsoftmax --dynamic_unsigned_input_candidates --only_dynamic --force_rebuild_weights
+
+Using device: cuda
+Metrics to process: ['mse']
+Baseline formats: ['fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0']
+Dynamic candidate formats: ['fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0']
+Found 1 models to process.
+Runner initialized on device: cuda
+/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+
+###########################################################
+ PROCESSING MODEL: mobilevit_s (Weights: DEFAULT)
+###########################################################
+
+Skipping Baselines (--only_dynamic set)
+
+[Optimization] Loading model and dataset once for all metrics...
+Using timm transforms for mobilevit_s: input_size=(3, 256, 256), mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Auto-detected model source: timm
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Propagated unsigned input formats using existing GraphModule.
+prepare_model_with_materialized_weights(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/results/mobilevit_s/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=215/215, mismatched=0, max_abs_diff=0.000e+00)
+[Dynamic] Skipping mse — already in DB for mobilevit_s (experiment_type=input_quant_dynamic)

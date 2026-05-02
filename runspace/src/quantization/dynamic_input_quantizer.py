@@ -26,6 +26,7 @@ class DynamicInputQuantizer:
     """
     _RELU_TYPES = (nn.ReLU, nn.ReLU6)
     _COMPUTE_TYPES = (nn.Conv2d, nn.Linear)
+    _ATTENTION_TYPES = (nn.MultiheadAttention,)
     _FUNCTIONAL_OP_NAMES = (
         "QuantMatMul",
         "QuantBMM",
@@ -82,6 +83,7 @@ class DynamicInputQuantizer:
                 continue
         self.functional_ops = tuple(functional_ops)
         self.hookable_ops = tuple(dict.fromkeys(self.supported_ops + self.functional_ops))
+        self.input_hook_ops = tuple(dict.fromkeys(self.hookable_ops + self._COMPUTE_TYPES + self._ATTENTION_TYPES))
         self.post_relu_layers = self._find_post_relu_layers()
         self.unsigned_passthrough_layers = set()
         self.post_unsigned_layers = self._find_post_unsigned_layers()
@@ -336,8 +338,8 @@ class DynamicInputQuantizer:
         count_unsigned_candidate_layers = 0
 
         for name, module in self.model.named_modules():
-            if isinstance(module, self.hookable_ops):
-                hook = self._get_hook(name)
+            if isinstance(module, self.input_hook_ops):
+                hook = self._get_attention_hook(name) if isinstance(module, self._ATTENTION_TYPES) else self._get_hook(name)
                 self.hooks.append(module.register_forward_pre_hook(hook))
                 self.hooked_modules.append(module)
                 uses_unsigned_candidates = (
@@ -406,42 +408,71 @@ class DynamicInputQuantizer:
 
             candidates = self._candidates_for_layer(layer_name, module)
 
-            # 1. Perform dynamic quantization selection
-            x_quantized, best_indices = self._select_best_format(x, layer_name, candidates)
+            x_quantized, best_indices = self._quantize_input_tensor(x, layer_name, candidates)
+            self._set_module_input_quant_state(module, candidates, best_indices)
 
-            # 2. Update module state to skip its own quantization path (redundant work)
-            module.input_quantization = False 
-            module.input_mode = 'chunk'
-            module.input_chunk_size = self.chunk_size
-            
-            # Store the candidates list and the indices tensor on the module for later logging.
-            # We avoid building the list of strings here to prevent GPU-CPU sync.
-            module.input_chunk_candidates = candidates
-            module.input_chunk_format_indices = best_indices
-            
-            # For compatibility with any code that still expects a single q_type string
-            if len(candidates) > 0:
-                # We can't easily pick the "first" chosen format without a sync, 
-                # so we just use the first candidate as a placeholder.
-                module.input_q_type = candidates[0]
-            
-            module.rounding = 'nearest'
-
-            # 3. Update stats (L1/MSE)
-            with torch.no_grad():
-                diff = x - x_quantized
-                # We use sum() which stays on GPU; .item() is a small sync but acceptable
-                # compared to moving the entire tensor.
-                self.stats['sum_l1_err'] += diff.abs().sum().item()
-                self.stats['sum_mse_err'] += diff.pow(2).sum().item()
-                self.stats['sum_l1_norm'] += x.abs().sum().item()
-                self.stats['sum_l2_norm'] += x.pow(2).sum().item()
-
-            # 4. Return the quantized tensor and all other original arguments to replace the input.
+            # Return the quantized tensor and all other original arguments to replace the input.
             # This ensures multi-argument ops like QuantAdd(x, other) don't lose 'other'.
             return (x_quantized, *args[1:])
 
         return hook_fn
+
+    def _get_attention_hook(self, layer_name):
+        def input_layer_name(suffix):
+            return f"{layer_name}.{suffix}" if layer_name else suffix
+
+        def hook_fn(module, args):
+            if len(args) < 3:
+                return None
+
+            query, key, value = args[:3]
+            if not all(isinstance(t, torch.Tensor) for t in (query, key, value)):
+                return None
+
+            candidates = self._candidates_for_layer(layer_name, module)
+            q_quantized, q_indices = self._quantize_input_tensor(
+                query, input_layer_name("query_input"), candidates
+            )
+            k_quantized, _ = self._quantize_input_tensor(
+                key, input_layer_name("key_input"), candidates
+            )
+            v_quantized, _ = self._quantize_input_tensor(
+                value, input_layer_name("value_input"), candidates
+            )
+            self._set_module_input_quant_state(module, candidates, q_indices)
+
+            return (q_quantized, k_quantized, v_quantized, *args[3:])
+
+        return hook_fn
+
+    def _set_module_input_quant_state(self, module, candidates, best_indices):
+        # Disable a quantized module's built-in input quantization path after the
+        # pre-hook has already supplied dynamically quantized inputs.
+        module.input_quantization = False
+        module.input_mode = 'chunk'
+        module.input_chunk_size = self.chunk_size
+
+        # Store candidates and indices without turning the full tensor into a
+        # Python list; that would force a large GPU-CPU sync.
+        module.input_chunk_candidates = candidates
+        module.input_chunk_format_indices = best_indices
+
+        if len(candidates) > 0:
+            module.input_q_type = candidates[0]
+
+        module.rounding = 'nearest'
+
+    def _quantize_input_tensor(self, tensor, layer_name, candidates):
+        quantized, best_indices = self._select_best_format(tensor, layer_name, candidates)
+
+        with torch.no_grad():
+            diff = tensor - quantized
+            self.stats['sum_l1_err'] += diff.abs().sum().item()
+            self.stats['sum_mse_err'] += diff.pow(2).sum().item()
+            self.stats['sum_l1_norm'] += tensor.abs().sum().item()
+            self.stats['sum_l2_norm'] += tensor.pow(2).sum().item()
+
+        return quantized, best_indices
 
     def _select_best_format(self, tensor, layer_name, candidates):
         """

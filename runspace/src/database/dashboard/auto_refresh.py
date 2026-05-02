@@ -162,7 +162,7 @@ def _dashboard_right_panel_css():
     """
 
 
-@st.fragment(run_every=2)
+@st.fragment(run_every=5)
 def _render_dashboard_right_active_runs():
     refresh_registry = globals().get("_dashboard_runner_refresh_registry")
     if refresh_registry is None:

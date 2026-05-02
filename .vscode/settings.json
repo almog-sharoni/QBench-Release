@@ -1,5 +1,5 @@
 {
-    "python.languageServer": "Pylance",
+    "python.languageServer": "Jedi",
     "python.analysis.extraPaths": [
         "${workspaceFolder}",
         "${workspaceFolder}/runspace",

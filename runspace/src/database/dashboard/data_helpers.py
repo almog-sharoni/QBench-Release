@@ -31,15 +31,17 @@ def parse_dt(dt_str):
     return bits, exp, mant
 
 
-def get_runs(limit):
-    db = RunDatabase(db_path=DB_PATH)
+@st.cache_data(ttl=30, show_spinner=False)
+def get_runs(db_path, limit):
+    db = RunDatabase(db_path=db_path)
     return db.get_runs(limit=limit)
 
 
-def get_fm_runs(limit):
-    if not os.path.exists(FM_DB_PATH):
+@st.cache_data(ttl=30, show_spinner=False)
+def get_fm_runs(fm_db_path, limit):
+    if not os.path.exists(fm_db_path):
         return pd.DataFrame()
-    db = RunDatabase(db_path=FM_DB_PATH)
+    db = RunDatabase(db_path=fm_db_path)
     return db.get_fm_runs(limit=limit)
 
 
