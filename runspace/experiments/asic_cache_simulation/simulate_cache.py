@@ -6,6 +6,7 @@ import torch.nn as nn
 import argparse
 import math
 from datetime import datetime
+from runspace.src.registry.op_registry import OpRegistry
 
 # Add project root to sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
@@ -203,24 +204,28 @@ RULES = {
 # Layer type → ordered list of rule keys to try (priority order).
 # Linear intentionally skips conv/pool-specific rules and falls through to fallback.
 LAYER_RULES = {
+    'QuantConv2d':       ['conv_output_dominated', 'conv_input_dominated', 'global_fit',
+                          'stream_xin_keep_xout', 'conv_stream_xin_out', 'fallback'],
     'Conv2d':            ['conv_output_dominated', 'conv_input_dominated', 'global_fit',
                           'stream_xin_keep_xout', 'conv_stream_xin_out', 'fallback'],
+    'QuantLinear':       ['global_fit', 'linear_stream_xout', 'fallback'],
     'Linear':            ['global_fit', 'linear_stream_xout', 'fallback'],
     'Residual':          ['residual', 'fallback'],
-    'MaxPool2d':         ['global_fit', 'pool', 'fallback'],
-    'AvgPool2d':         ['global_fit', 'pool', 'fallback'],
-    'AdaptiveAvgPool2d': ['global_fit', 'pool', 'fallback'],
-    'MaxPool1d':         ['global_fit', 'pool', 'fallback'],
-    'AvgPool1d':         ['global_fit', 'pool', 'fallback'],
-    # --- placeholder rules (edit to model actual hardware behaviour) ---
-    'Matmul':            ['global_fit', 'fallback'],
-    'BMM':               ['global_fit', 'fallback'],
-    'Softmax':           ['global_fit', 'fallback'],
+    'QuantAdd':          ['residual', 'global_fit', 'fallback'],
+    'QuantMaxPool2d':    ['global_fit', 'pool', 'fallback'],
+    'QuantAvgPool2d':    ['global_fit', 'pool', 'fallback'],
+    'QuantMaxPool1d':    ['global_fit', 'pool', 'fallback'],
+    'QuantAvgPool1d':    ['global_fit', 'pool', 'fallback'],
+    'QuantMatMul':       ['global_fit', 'fallback'],
+    'QuantSoftmax':      ['global_fit', 'fallback'],
     'LayerNorm':         ['global_fit', 'fallback'],
     'BatchNorm1d':       ['global_fit', 'fallback'],
     'BatchNorm2d':       ['global_fit', 'fallback'],
     'BatchNorm3d':       ['global_fit', 'fallback'],
     'GroupNorm':         ['global_fit', 'fallback'],
+    'QuantGELU':         ['global_fit', 'fallback'],
+    'QuantDropout':      ['global_fit', 'fallback'],
+    'DecomposedMultiheadAttention': ['global_fit', 'fallback'],
     '__default__':       ['global_fit', 'fallback'],
 }
 
@@ -292,7 +297,7 @@ def analyze_model(model_name: str, batch_size: int, device: str = "cpu"):
     from runspace.src.adapters.adapter_factory import create_adapter
     config = {
         'model': {'name': model_name, 'weights': None},
-        'adapter': {'type': 'generic', 'build_quantized': False}
+        'adapter': {'type': 'generic', 'build_quantized': True}
     }
     adapter = create_adapter(config)
     model = adapter.model
@@ -321,14 +326,35 @@ def analyze_model(model_name: str, batch_size: int, device: str = "cpu"):
     def _current_scope() -> str:
         return _scope_stack[-1] if _scope_stack else 'unknown'
 
+    # --- Op identification ---
+    # Register hooks on modules that match the DynamicInputQuantizer's hooking strategy.
+    # We want to hook "leaf" operations and exclude high-level containers like DecomposedMultiheadAttention.
+    supported_ops = set(OpRegistry.get_supported_ops().values())
+    functional_ops = []
+    # These match DynamicInputQuantizer._FUNCTIONAL_OP_NAMES
+    for op_name in ["QuantMatMul", "QuantBMM", "QuantAdd", "QuantSub", "QuantMul", "QuantDiv", "QuantCat"]:
+        try:
+            functional_ops.append(OpRegistry.get(op_name))
+        except Exception:
+            continue
+    
+    # Filter out decomposed containers that are NOT hooked by the quantizer.
+    # Note: We now exclude DecomposedMultiheadAttention as well, because we recurse into its 
+    # sub-blocks (ScaledDotProduct, etc.) to hook the individual matmuls.
+    EXCLUDED_CONTAINERS = ("DecomposedMlpBlock", "DecomposedQkvAttention", "DecomposedMultiheadAttention")
+    quantized_types = tuple(
+        cls for cls in set(list(supported_ops) + functional_ops)
+        if cls.__name__ not in EXCLUDED_CONTAINERS
+    )
+
     # --- module recording hooks ---
 
     def hook_fn(module, input, output):
-        if isinstance(module, (nn.Conv2d, nn.Linear)):
+        if isinstance(module, (nn.Conv2d, nn.Linear) + quantized_types):
             info = {
                 'name':         getattr(module, 'layer_name', 'unknown'),
                 'type':         module.__class__.__name__,
-                'weight_elems': module.weight.numel(),
+                'weight_elems': module.weight.numel() if getattr(module, 'weight', None) is not None else 0,
                 'input_elems':  input[0].numel() if isinstance(input[0], torch.Tensor) else 0,
                 'output_elems': output.numel()   if isinstance(output,   torch.Tensor) else 0,
             }
@@ -388,88 +414,8 @@ def analyze_model(model_name: str, batch_size: int, device: str = "cpu"):
 
     # --- recording hooks (registered after scope hooks so scope is still live during forward) ---
 
-    def mha_hook_fn(module, input, output):
-        # nn.MultiheadAttention uses a C++ fast path (F.multi_head_attention_forward) that
-        # calls torch.bmm and softmax at C++ level, bypassing Python-level patches.
-        # We decompose the 5 sub-ops explicitly from input shape + module params.
-        name  = getattr(module, 'layer_name', 'unknown')
-        query = input[0] if isinstance(input[0], torch.Tensor) else None
-        if query is None:
-            return
-        if module.batch_first:
-            batch_size, seq_len, _ = query.shape
-        else:
-            seq_len, batch_size, _ = query.shape
-        embed_dim = module.embed_dim
-        num_heads = module.num_heads
-        head_dim  = embed_dim // num_heads
-        bh        = batch_size * num_heads
-
-        # 1. In-projection  (fused QKV or separate Q/K/V weights)
-        if module.in_proj_weight is not None:
-            execution_order.append({
-                'name': f'{name}.in_proj', 'type': 'Linear',
-                'weight_elems': module.in_proj_weight.numel(),
-                'input_elems':  batch_size * seq_len * embed_dim,
-                'output_elems': batch_size * seq_len * embed_dim * 3,
-                'in_features': embed_dim, 'out_features': embed_dim * 3,
-            })
-        else:
-            for proj, attr in (('q_proj', 'q_proj_weight'),
-                               ('k_proj', 'k_proj_weight'),
-                               ('v_proj', 'v_proj_weight')):
-                wt = getattr(module, attr, None)
-                if wt is not None:
-                    execution_order.append({
-                        'name': f'{name}.{proj}', 'type': 'Linear',
-                        'weight_elems': wt.numel(),
-                        'input_elems':  batch_size * seq_len * embed_dim,
-                        'output_elems': batch_size * seq_len * embed_dim,
-                        'in_features': embed_dim, 'out_features': embed_dim,
-                    })
-
-        # 2. Q @ K^T
-        execution_order.append({
-            'name': f'{name}.attn_qk', 'type': 'BMM',
-            'weight_elems': 0,
-            'input_elems':  bh * seq_len * head_dim,
-            'output_elems': bh * seq_len * seq_len,
-        })
-        # 3. Softmax on attention weights
-        execution_order.append({
-            'name': f'{name}.attn_softmax', 'type': 'Softmax',
-            'weight_elems': 0,
-            'input_elems':  bh * seq_len * seq_len,
-            'output_elems': bh * seq_len * seq_len,
-        })
-        # 4. Attn @ V
-        execution_order.append({
-            'name': f'{name}.attn_av', 'type': 'BMM',
-            'weight_elems': 0,
-            'input_elems':  bh * seq_len * seq_len,
-            'output_elems': bh * seq_len * head_dim,
-        })
-        # 5. Output projection (NonDynamicallyQuantizableLinear, also bypassed in fast path)
-        out_wt = module.out_proj.weight.numel() if getattr(module, 'out_proj', None) is not None else 0
-        execution_order.append({
-            'name': f'{name}.out_proj', 'type': 'Linear',
-            'weight_elems': out_wt,
-            'input_elems':  batch_size * seq_len * embed_dim,
-            'output_elems': batch_size * seq_len * embed_dim,
-            'in_features': embed_dim, 'out_features': embed_dim,
-        })
-
     for name, module in model.named_modules():
-        if isinstance(module, nn.MultiheadAttention):
-            module.layer_name = name
-            hooks.append(module.register_forward_hook(mha_hook_fn))
-        elif isinstance(module, (nn.Conv2d, nn.Linear)):
-            module.layer_name = name
-            hooks.append(module.register_forward_hook(hook_fn))
-        elif isinstance(module, _POOL_TYPES):
-            module.layer_name = name
-            hooks.append(module.register_forward_hook(hook_fn))
-        elif isinstance(module, _NORM_TYPES):
+        if isinstance(module, (nn.Conv2d, nn.Linear, _POOL_TYPES, _NORM_TYPES) + quantized_types):
             module.layer_name = name
             hooks.append(module.register_forward_hook(hook_fn))
         elif _residual_block_types and isinstance(module, tuple(_residual_block_types)):
@@ -481,57 +427,6 @@ def analyze_model(model_name: str, batch_size: int, device: str = "cpu"):
     # Catches custom attention implementations (e.g. MobileViT) that use these directly.
     # nn.MultiheadAttention's C++ fast path is handled above by mha_hook_fn instead.
     # nn.Linear uses F.linear → torch.addmm (not matmul), so no double-counting.
-    _counters      = {}
-    _orig_matmul   = torch.matmul
-    _orig_bmm      = torch.bmm
-    _orig_softmax  = F.softmax
-    _orig_tsoftmax = getattr(torch, 'softmax', None)
-
-    def _patched_matmul(input, other, *args, **kwargs):
-        out = _orig_matmul(input, other, *args, **kwargs)
-        n   = _counters.get('matmul', 0); _counters['matmul'] = n + 1
-        scope = _current_scope()
-        execution_order.append({
-            'name':         f'{scope}.matmul_{n}' if scope != 'unknown' else f'matmul_{n}',
-            'type':         'Matmul',
-            'weight_elems': 0,
-            'input_elems':  input.numel() if isinstance(input, torch.Tensor) else 0,
-            'output_elems': out.numel()   if isinstance(out,   torch.Tensor) else 0,
-        })
-        return out
-
-    def _patched_bmm(input, mat2, *args, **kwargs):
-        out = _orig_bmm(input, mat2, *args, **kwargs)
-        n   = _counters.get('bmm', 0); _counters['bmm'] = n + 1
-        scope = _current_scope()
-        execution_order.append({
-            'name':         f'{scope}.bmm_{n}' if scope != 'unknown' else f'bmm_{n}',
-            'type':         'BMM',
-            'weight_elems': 0,
-            'input_elems':  input.numel() if isinstance(input, torch.Tensor) else 0,
-            'output_elems': out.numel()   if isinstance(out,   torch.Tensor) else 0,
-        })
-        return out
-
-    def _patched_softmax(input, dim=None, _stacklevel=3, dtype=None):
-        out   = _orig_softmax(input, dim=dim, dtype=dtype)
-        n     = _counters.get('softmax', 0); _counters['softmax'] = n + 1
-        scope = _current_scope()
-        execution_order.append({
-            'name':         f'{scope}.softmax_{n}' if scope != 'unknown' else f'softmax_{n}',
-            'type':         'Softmax',
-            'weight_elems': 0,
-            'input_elems':  input.numel() if isinstance(input, torch.Tensor) else 0,
-            'output_elems': out.numel()   if isinstance(out,   torch.Tensor) else 0,
-        })
-        return out
-
-    torch.matmul = _patched_matmul
-    torch.bmm    = _patched_bmm
-    F.softmax    = _patched_softmax
-    if _orig_tsoftmax is not None:
-        torch.softmax = _patched_softmax
-
     from runspace.src.utils.model_input_utils import resolve_model_input_size
     input_shape = resolve_model_input_size(model, batch_size=batch_size)
     dummy_input = torch.randn(*input_shape).to(device)
@@ -539,18 +434,17 @@ def analyze_model(model_name: str, batch_size: int, device: str = "cpu"):
     try:
         with torch.no_grad():
             try:
-                model((dummy_input, None))
-            except Exception:
+                # Try standard single tensor input first
+                model(dummy_input)
+            except Exception as e1:
                 try:
-                    model(dummy_input)
-                except Exception as e:
-                    print(f"Warning: Dummy forward failed: {e}.")
+                    # Fallback for models requiring (x, None) tuple
+                    model((dummy_input, None))
+                except Exception as e2:
+                    print(f"Warning: Dummy forward failed with both tensor and tuple.")
+                    print(f"  Tensor error: {e1}")
+                    print(f"  Tuple error: {e2}")
     finally:
-        torch.matmul = _orig_matmul
-        torch.bmm    = _orig_bmm
-        F.softmax    = _orig_softmax
-        if _orig_tsoftmax is not None:
-            torch.softmax = _orig_tsoftmax
         for h in hooks:
             h.remove()
 

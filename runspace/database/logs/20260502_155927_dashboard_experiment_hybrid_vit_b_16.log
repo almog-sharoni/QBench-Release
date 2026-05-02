@@ -1,0 +1,28 @@
+
+
+# Dashboard date run: 20260502_155927_dashboard_experiment_hybrid_vit_b_16
+# Started: 2026-05-02 15:59:27
+$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/find_optimal_hybrid_quant.py --model_name vit_b_16 --weights DEFAULT --dataset_name imagenet --dataset_path /data/imagenet/val --batch_size 256 --num_workers 32 --limit_batches -1 --output_dir /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results --weight_mode optimized --weight_metric mse --weight_candidate_formats fp6_e1m4,fp6_e2m3,fp6_e3m2,fp6_e4m1,fp6_e5m0 --weight_chunk_size 128 --input_mode dynamic --input_metric mse --input_candidate_formats fp4_e1m2,fp4_e2m1,fp4_e3m0 --input_chunk_size 128 --per_chunk_format --force_recalc --use_cache_sim_db
+
+usage: find_optimal_hybrid_quant.py [-h] [--model_name MODEL_NAME]
+                                    [--weights WEIGHTS]
+                                    [--models_file MODELS_FILE]
+                                    [--dataset_name DATASET_NAME]
+                                    [--dataset_path DATASET_PATH]
+                                    [--batch_size BATCH_SIZE]
+                                    [--num_workers NUM_WORKERS]
+                                    [--limit_batches LIMIT_BATCHES]
+                                    --weight_mode {fixed,optimized}
+                                    [--weight_format WEIGHT_FORMAT]
+                                    [--weight_metric WEIGHT_METRIC]
+                                    [--weight_candidate_formats WEIGHT_CANDIDATE_FORMATS]
+                                    [--weight_chunk_size WEIGHT_CHUNK_SIZE]
+                                    [--per_chunk_format] [--force_recalc]
+                                    [--skip_weight_analysis] --input_mode
+                                    {fixed,dynamic}
+                                    [--input_format INPUT_FORMAT]
+                                    [--input_metric INPUT_METRIC]
+                                    [--input_candidate_formats INPUT_CANDIDATE_FORMATS]
+                                    [--use_cache_sim_db]
+                                    [--output_dir OUTPUT_DIR]
+find_optimal_hybrid_quant.py: error: unrecognized arguments: --input_chunk_size 128

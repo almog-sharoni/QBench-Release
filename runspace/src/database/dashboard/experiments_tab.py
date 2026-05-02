@@ -489,10 +489,11 @@ else:
     @st.dialog("🗑️ Delete Runs From Database", width="large")
     def show_delete_runs_dialog(run_rows, table_index):
         done_key = f"_delete_runs_done_{table_index}"
-        if st.session_state.get(done_key):
-            deleted_count = st.session_state.pop(done_key)
+        if done_key in st.session_state:
+            deleted_count = st.session_state[done_key]
             st.success(f"Deleted {deleted_count} run{'s' if deleted_count != 1 else ''} from the database.")
             if st.button("Close", key=f"close_delete_done_{table_index}", type="primary", width='stretch'):
+                st.session_state.pop(done_key)
                 st.session_state["dashboard_flash_message"] = (
                     f"Deleted {deleted_count} run{'s' if deleted_count != 1 else ''} from the database."
                 )
@@ -552,10 +553,11 @@ else:
     @st.dialog("✏️ Edit Experiment Name", width="large")
     def show_edit_experiment_dialog(run_rows, table_index):
         done_key = f"_edit_exp_done_{table_index}"
-        if st.session_state.get(done_key):
-            updated_count, new_name = st.session_state.pop(done_key)
+        if done_key in st.session_state:
+            updated_count, new_name = st.session_state[done_key]
             st.success(f"Updated experiment name to '{new_name}' for {updated_count} row{'s' if updated_count != 1 else ''}.")
             if st.button("Close", key=f"close_edit_done_{table_index}", type="primary", width='stretch'):
+                st.session_state.pop(done_key)
                 st.session_state["dashboard_flash_message"] = (
                     f"Updated experiment name for {updated_count} row{'s' if updated_count != 1 else ''}."
                 )

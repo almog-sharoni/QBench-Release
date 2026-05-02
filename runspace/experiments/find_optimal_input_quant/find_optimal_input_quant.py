@@ -237,6 +237,11 @@ def get_args():
             "--unsigned_input_sources sources."
         ),
     )
+    parser.add_argument(
+        "--use_cache_sim_db",
+        action="store_true",
+        help="Fetch cache simulation results from the database instead of a file.",
+    )
     # Add other args as needed
     args = parser.parse_args()
     args.excluded_ops = [op.strip() for op in args.excluded_ops.split(',') if op.strip()]
@@ -655,6 +660,8 @@ def process_single_model(args, model_config, device, metrics):
                         'restrict_post_relu_ufp': args.post_relu_ufp_only,
                         'unsigned_input_sources': args.unsigned_input_sources,
                         'dynamic_unsigned_input_candidates': args.dynamic_unsigned_input_candidates,
+                        'use_cache_sim_db': args.use_cache_sim_db,
+                        'model_name': model_name,
                     }
                     eval_results = runner.evaluate_model(
                         model=model,

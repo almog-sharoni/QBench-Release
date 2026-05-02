@@ -779,7 +779,7 @@ with tab_runner:
 
     def _dashboard_runner_add_experiment_arg(kind, command, name, value):
         flag = _dashboard_runner_experiment_meta(kind)["args"].get(name, {}).get("flag", f"--{name}")
-        if kind == "input" and name in ("excluded_ops", "unsigned_input_sources") and not str(value or "").strip():
+        if kind in ("input", "hybrid") and name in ("excluded_ops", "unsigned_input_sources") and not str(value or "").strip():
             value = "none"
         _dashboard_runner_add_arg(command, flag, value)
 
@@ -800,14 +800,14 @@ with tab_runner:
             for name in (
                 "metric", "chunk_size", "input_size", "baseline_formats",
                 "candidate_formats", "excluded_ops", "experiment_type",
-                "unsigned_input_sources",
+                "unsigned_input_sources"
             ):
                 _dashboard_runner_add_experiment_arg(kind, command, name, values.get(name))
             if values.get("dynamic_unsigned_input_candidates", True):
                 command.append("--dynamic_unsigned_input_candidates")
             else:
                 command.append("--no_dynamic_unsigned_input_candidates")
-            for name in ("only_dynamic", "only_baselines", "force_rerun", "force_rebuild_weights"):
+            for name in ("only_dynamic", "only_baselines", "force_rerun", "force_rebuild_weights", "use_cache_sim_db"):
                 _dashboard_runner_add_experiment_bool(kind, command, name, values.get(name))
         elif kind == "weight":
             for name in ("metrics", "target", "weight_chunk_size", "baseline_formats", "verify_atol"):
@@ -822,10 +822,15 @@ with tab_runner:
             for name in (
                 "weight_mode", "weight_format", "weight_metric", "weight_candidate_formats", "weight_chunk_size",
                 "input_mode", "input_format", "input_metric", "input_candidate_formats", "input_chunk_size",
+                "unsigned_input_sources"
             ):
                 _dashboard_runner_add_experiment_arg(kind, command, name, values.get(name))
+            if values.get("dynamic_unsigned_input_candidates", True):
+                command.append("--dynamic_unsigned_input_candidates")
+            else:
+                command.append("--no_dynamic_unsigned_input_candidates")
             for name in (
-                "per_chunk_format", "force_recalc", "skip_weight_analysis",
+                "per_chunk_format", "force_recalc", "skip_weight_analysis", "use_cache_sim_db"
             ):
                 _dashboard_runner_add_experiment_bool(kind, command, name, values.get(name))
         return command
@@ -995,6 +1000,7 @@ with tab_runner:
             input_values["only_baselines"] = f2.checkbox("Only baselines", value=bool(_dashboard_runner_experiment_default("input", "only_baselines", False)), key="runner_exp_input_only_baselines")
             input_values["force_rerun"] = f3.checkbox("Force rerun", value=bool(_dashboard_runner_experiment_default("input", "force_rerun", False)), key="runner_exp_input_force_rerun")
             input_values["force_rebuild_weights"] = f4.checkbox("Force rebuild weights", value=bool(_dashboard_runner_experiment_default("input", "force_rebuild_weights", False)), key="runner_exp_input_force_rebuild")
+            input_values["use_cache_sim_db"] = st.checkbox("Use cache simulation from DB", value=bool(_dashboard_runner_experiment_default("input", "use_cache_sim_db", False)), key="runner_exp_input_use_cache_sim")
             _dashboard_runner_save_experiment_run_state("input", input_values)
             _dashboard_runner_render_experiment_launch("input", input_values, "Input Quant Experiment")
     
@@ -1073,6 +1079,21 @@ with tab_runner:
                         "runner_exp_hybrid_input_fmt",
                     )
                 hybrid_values["input_chunk_size"] = st.number_input("Input chunk size", min_value=1, max_value=100000, value=int(_dashboard_runner_experiment_default("hybrid", "input_chunk_size", 128) or 128), step=1, key="runner_exp_hybrid_input_chunk")
+                
+                # Unsigned sources for hybrid dynamic input
+                if hybrid_values["input_mode"] == "dynamic":
+                    hybrid_values["unsigned_input_sources"] = st.text_input(
+                        "Unsigned input sources", 
+                        value=str(_dashboard_runner_experiment_default("hybrid", "unsigned_input_sources", "") or ""), 
+                        key="runner_exp_hybrid_unsigned"
+                    )
+                    hybrid_values["dynamic_unsigned_input_candidates"] = st.checkbox(
+                        "Dynamic UFP after unsigned sources",
+                        value=bool(_dashboard_runner_experiment_default("hybrid", "dynamic_unsigned_input_candidates", True)),
+                        key="runner_exp_hybrid_dynamic_unsigned_candidates",
+                    )
+
+            hybrid_values["use_cache_sim_db"] = st.checkbox("Use cache simulation from DB", value=bool(_dashboard_runner_experiment_default("hybrid", "use_cache_sim_db", False)), key="runner_exp_hybrid_use_cache_sim")
             
             _dashboard_runner_save_experiment_run_state("hybrid", hybrid_values)
             _dashboard_runner_render_experiment_launch("hybrid", hybrid_values, "Hybrid Quant Experiment")

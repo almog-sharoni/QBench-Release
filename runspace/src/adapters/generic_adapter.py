@@ -839,14 +839,14 @@ class GenericAdapter(BaseAdapter):
         # If model is already a GraphModule (e.g. from _fx_quantize), use it directly
         if isinstance(model, torch.fx.GraphModule):
             if _process_graph_module(model):
-                print(f"Propagated unsigned input formats using existing GraphModule.")
+                pass
             return model
 
         # Try whole model trace
         try:
             _, _, gm = trace_quant_aware(model)
             if _process_graph_module(gm):
-                print(f"Propagated unsigned input formats using full-model FX trace.")
+                pass
             return model
         except Exception as e:
             pass
@@ -862,7 +862,7 @@ class GenericAdapter(BaseAdapter):
                 except Exception:
                     pass
         if modified:
-             print(f"Propagated unsigned input formats using submodule FX trace.")
+             pass
              
         return model
 
@@ -917,41 +917,36 @@ class GenericAdapter(BaseAdapter):
                 if "-1" in quantized_ops_lc or "all" in quantized_ops_lc or op_name_lc in quantized_ops_lc or bare_lc in quantized_ops_lc:
                     if op_name_lc not in excluded_ops_lc and bare_lc not in excluded_ops_lc:
                         target_funcs[func] = op_name
-        except Exception as e:
-            print(f"1.Error in FX quantization: {e}")
+        except Exception:
+            pass
         if not target_funcs:
             return
 
         try:
             try:
                 fx_model, modified = self._fx_quantize_module_graph(model, target_funcs)
-            except Exception as e:
-                print(f"3.Error in FX quantization: {e}")
+            except Exception:
                 return None
             if modified and fx_model is not None:
                 valid, error = self._validate_fx_model(fx_model, model)
                 if valid:
                     return fx_model
-                print(
-                    "Note: FX whole-model quantization produced an invalid runtime graph "
-                    f"({type(error).__name__}: {error}). Falling back to submodule FX."
-                )
-        except Exception as e:
-            print(f"2.Error in FX quantization: {e}") 
+        except Exception:
             return None
 
         submodule_modified = self._fx_quantize_submodules(model, target_funcs)
         if submodule_modified:
             return model
 
-        if modified and fx_model is not None:
-            print("Note: submodule FX fallback did not find any safe traceable children.")
         return model
 
     def _fx_quantize_module_graph(self, module: nn.Module, target_funcs: dict):
+        print(f"  [FX] Quantizing module graph: {module.__class__.__name__}")
         try:
             _, graph, gm = trace_quant_aware(module)
+            print(f"  [FX] Trace successful for {module.__class__.__name__}, nodes={len(graph.nodes)}")
         except Exception as e:
+            print(f"  [FX] Trace failed for {module.__class__.__name__}: {e}")
             return None, False
         non_tensor_nodes = find_non_tensor_nodes(graph)
         modified = False
@@ -1036,11 +1031,13 @@ class GenericAdapter(BaseAdapter):
         return torch.zeros(1, c, h, w, device=device)
 
     def _is_safe_fx_submodule(self, module: nn.Module) -> bool:
-        if isinstance(module, nn.Sequential):
-            return True
-
         cls_name = type(module).__name__
-        module_name = type(module).__module__
+        res = self._is_safe_fx_submodule_impl(module)
+        print(f"  [FX] Safe check: {cls_name} -> {res}")
+        return res
+
+    def _is_safe_fx_submodule_impl(self, module: nn.Module) -> bool:
+        cls_name = type(module).__name__
         
         safe_names = {
             "Block",
@@ -1054,33 +1051,37 @@ class GenericAdapter(BaseAdapter):
             "DecomposedMultiheadAttention",
             "DecomposedQkvAttention",
             "DecomposedMlpBlock",
+            "ScaledDotProduct",
+            "AttentionWeightedValues",
+            "ConvBnAct",
+            "Stem",
         }
         if cls_name in safe_names:
             return True
 
+        module_name = type(module).__module__
         safe_prefixes = (
             "timm.models.vision_transformer",
-            "timm.layers.attention",
-            "timm.layers.mlp",
+            "timm.layers",
             "torchvision.models.vision_transformer",
         )
         return module_name.startswith(safe_prefixes)
 
     def _fx_quantize_submodules(self, module: nn.Module, target_funcs: dict) -> bool:
-        modified_any = False
+        submodule_modified = False
 
-        for child_name, child in list(module.named_children()):
+        for child_name, child in module.named_children():
             if self._is_safe_fx_submodule(child):
                 quantized_child, modified = self._fx_quantize_module_graph(child, target_funcs)
                 if modified and quantized_child is not None:
                     setattr(module, child_name, quantized_child)
-                    modified_any = True
-                    continue
+                    submodule_modified = True
+                
+                # Recurse
+                if self._fx_quantize_submodules(child, target_funcs):
+                    submodule_modified = True
 
-            if self._fx_quantize_submodules(child, target_funcs):
-                modified_any = True
-
-        return modified_any
+        return submodule_modified
 
     def prepare_batch(self, batch):
         """Prepare a batch for model input."""

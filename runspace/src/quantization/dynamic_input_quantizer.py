@@ -10,6 +10,9 @@ except ImportError:
     from src.ops.quant_base import quantize_tensor
     from src.ops.quant_base import _quantize_tensor_cuda
 
+import os
+import json
+
 
 DEFAULT_DYNAMIC_INPUT_CANDIDATES = [
     'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
@@ -46,6 +49,8 @@ class DynamicInputQuantizer:
         restrict_post_relu_ufp=False,
         unsigned_input_sources=None,
         use_unsigned_input_candidates=True,
+        use_cache_sim_db=False,
+        model_name=None,
     ):
         self.model = model
         self.metric = metric
@@ -91,6 +96,32 @@ class DynamicInputQuantizer:
         self.ufp_candidates = [f for f in self.candidate_formats if f.startswith('ufp')]
         self.non_ufp_candidates = [f for f in self.candidate_formats if not f.startswith('ufp')]
         self.unsigned_candidate_formats = self._make_unsigned_candidates(self.candidate_formats)
+
+        self.cache_sim_map = {}
+        if use_cache_sim_db and model_name:
+            print(f"Loading cache simulation results from DB for {model_name}")
+            try:
+                try:
+                    from src.database.handler import RunDatabase
+                except ImportError:
+                    from ..database.handler import RunDatabase
+                db = RunDatabase()
+                sim = db.get_latest_cache_simulation(model_name)
+                if sim:
+                    for layer in sim.get('layers', []):
+                        self.cache_sim_map[layer['name']] = layer.get('stay_on_chip', True)
+                    print(f"Loaded {len(self.cache_sim_map)} layer statuses from cache sim DB.")
+                    if self.cache_sim_map:
+                        sample_keys = list(self.cache_sim_map.keys())[:10]
+                        print(f"Sample keys in cache sim map: {sample_keys}")
+                else:
+                    print(f"No cache simulation found in DB for {model_name}.")
+            except Exception as e:
+                print(f"Failed to fetch cache sim from DB: {e}")
+                
+        self.all_fp8_formats = ['fp8_e4m3', 'fp8_e5m2', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e1m6', 'fp8_e6m1', 'fp8_e7m0']
+        self.unsigned_all_fp8_formats = self._make_unsigned_candidates(self.all_fp8_formats)
+        self._reported_missing_layers = set()
 
     @staticmethod
     def _dedupe_formats(formats):
@@ -378,19 +409,27 @@ class DynamicInputQuantizer:
             print(f"{count_unsigned_candidate_layers} layers are using UFP candidates.")
 
     def _candidates_for_layer(self, layer_name, module=None):
-        if (
-            (
-                self.use_unsigned_input_candidates
-                and (
-                    layer_name in self.post_unsigned_layers
-                    or layer_name in self.unsigned_passthrough_layers
-                )
+        is_unsigned = (
+            self.use_unsigned_input_candidates
+            and (
+                layer_name in self.post_unsigned_layers
+                or layer_name in self.unsigned_passthrough_layers
             )
-            or (
-                module is not None
-                and self._module_uses_unsigned_input(module)
-            )
-        ):
+        ) or (
+            module is not None
+            and self._module_uses_unsigned_input(module)
+        )
+
+        stays_on_chip = self.cache_sim_map.get(layer_name)
+        if stays_on_chip is None:
+            if layer_name not in self._reported_missing_layers:
+                print(f"[DynamicInputQuantizer] Layer '{layer_name}' NOT found in cache sim map. Using standard candidates.")
+                self._reported_missing_layers.add(layer_name)
+            
+        if stays_on_chip:
+            return self.unsigned_all_fp8_formats if is_unsigned else self.all_fp8_formats
+
+        if is_unsigned:
             return self.unsigned_candidate_formats
 
         if self.restrict_post_relu_ufp:
@@ -588,10 +627,13 @@ class DynamicInputQuantizer:
                         counts_dict[candidates[idx]] = count
                 processed_layer_stats[layer_name] = {
                     'format_counts': counts_dict,
-                    'total_chunks': int(counts_tensor.sum().item())
+                    'total_chunks': int(counts_tensor.sum().item()),
+                    'stays_on_chip': self.cache_sim_map.get(layer_name, True)
                 }
             else:
-                processed_layer_stats[layer_name] = stats
+                stats_copy = dict(stats)
+                stats_copy['stays_on_chip'] = self.cache_sim_map.get(layer_name, True)
+                processed_layer_stats[layer_name] = stats_copy
 
         return {
             'norm_l1': norm_l1,

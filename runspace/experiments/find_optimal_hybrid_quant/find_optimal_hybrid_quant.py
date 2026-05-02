@@ -101,6 +101,14 @@ def get_args():
                         help="Comma-separated input candidate formats for dynamic input selection.")
     parser.add_argument("--input_chunk_size", type=int, default=128,
                         help="Chunk size for dynamic input quantization")
+    parser.add_argument("--use_cache_sim_db", action="store_true",
+                        help="Use cache simulation results from DB for residency-aware quantization")
+    parser.add_argument("--unsigned_input_sources", type=str, default=None,
+                        help="Comma-separated list of ops whose output is always unsigned (e.g. 'relu,softmax')")
+    parser.add_argument("--dynamic_unsigned_input_candidates", action="store_true", default=True,
+                        help="Allow using unsigned formats (UFP) for layers with unsigned inputs")
+    parser.add_argument("--no_dynamic_unsigned_input_candidates", action="store_false", dest="dynamic_unsigned_input_candidates",
+                        help="Disable using unsigned formats (UFP) for layers with unsigned inputs")
 
     # Output
     parser.add_argument("--output_dir", type=str,
@@ -109,6 +117,9 @@ def get_args():
     args = parser.parse_args()
     args.weight_candidate_formats = _parse_csv_arg(args.weight_candidate_formats, HYBRID_WEIGHT_FORMATS)
     args.input_candidate_formats = _parse_csv_arg(args.input_candidate_formats, HYBRID_INPUT_CANDIDATE_FORMATS)
+    # Unsigned sources
+    args.unsigned_input_sources = _parse_csv_arg(args.unsigned_input_sources, [])
+    
     return args
 
 
@@ -368,9 +379,13 @@ def process_single_model(args, device):
     else:
         activation_dt_str = f"dyn_input_{args.input_metric}"
         input_quant_cfg = _build_dynamic_input_quant_cfg(
-            args.input_metric,
-            args.input_chunk_size,
-            args.input_candidate_formats,
+            metric=args.input_metric,
+            chunk_size=args.input_chunk_size,
+            candidate_formats=args.input_candidate_formats,
+            use_cache_sim_db=args.use_cache_sim_db,
+            model_name=args.model_name,
+            unsigned_input_sources=args.unsigned_input_sources,
+            dynamic_unsigned_input_candidates=args.dynamic_unsigned_input_candidates,
         )
 
     loader = _build_loader(args, device, runner)

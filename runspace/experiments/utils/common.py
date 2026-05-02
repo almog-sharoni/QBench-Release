@@ -251,6 +251,8 @@ def build_dynamic_input_quant_cfg(
     restrict_post_relu_ufp=False,
     unsigned_input_sources=None,
     dynamic_unsigned_input_candidates=True,
+    use_cache_sim_db=False,
+    model_name=None,
 ):
     """Build the dynamic layer-input quantizer config used by input quant experiments."""
     if not enabled:
@@ -260,10 +262,20 @@ def build_dynamic_input_quant_cfg(
         'mode': 'dynamic',
         'metric': metric,
         'chunk_size': int(chunk_size),
-        'candidate_formats': list(candidate_formats),
+        'candidate_formats': (
+            [f.strip() for f in candidate_formats.split(',') if f.strip()]
+            if isinstance(candidate_formats, str)
+            else list(candidate_formats or [])
+        ),
         'restrict_post_relu_ufp': bool(restrict_post_relu_ufp),
-        'unsigned_input_sources': list(unsigned_input_sources or []),
+        'unsigned_input_sources': (
+            [s.strip() for s in unsigned_input_sources.split(',') if s.strip()]
+            if isinstance(unsigned_input_sources, str)
+            else list(unsigned_input_sources or [])
+        ),
         'dynamic_unsigned_input_candidates': bool(dynamic_unsigned_input_candidates),
+        'use_cache_sim_db': use_cache_sim_db,
+        'model_name': model_name,
     }
 
 
