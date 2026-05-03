@@ -950,8 +950,6 @@ def process_single_model(args, device, metrics, base_root):
          
     dataset_base = _build_eval_dataset_cfg(args, config['dataset'])
 
-    # Fetch DB state once — used for all skip checks below
-    existing_runs = None if args.force_rerun else _load_existing_runs(db)
 
     # Fetch DB state once — used for all skip checks below
     existing_runs = None if args.force_rerun else _load_existing_runs(db)
