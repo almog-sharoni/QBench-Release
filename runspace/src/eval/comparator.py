@@ -6,9 +6,12 @@ import os
 import sys
 from src.ops.quant_conv import QuantConv2d
 from src.registry.op_registry import OpRegistry
+from src.registry.observer import quantized_dispatch, push_module_path, pop_module_path, freeze_call_log
+from src.registry import observer as _observer_state_mod
 from src.ops.quant_base import quantize_tensor
 from src.ops.quant_base import calculate_scale
-from src.utils.fx_trace_utils import trace_quant_aware
+from src.utils.fx_trace_utils import trace_quant_aware, fx_trace_subtrees
+
 
 class LayerComparator:
     def __init__(self, ref_model, quant_model, model_name="model", quant_type="quant", adapter=None, device=None, output_dir=None, save_histograms=False, save_visualizations=False, num_viz_samples=5):
@@ -107,6 +110,7 @@ class LayerComparator:
         Registers forward hooks on all leaf modules to capture inputs.
         """
         self.quant_activations = {}
+        self.call_log = []  # list of (name, module) in forward-execution order
 
         def get_hook(name):
             def hook(module, input, output):
@@ -115,12 +119,14 @@ class LayerComparator:
                     inp = input[0]
                 else:
                     inp = input
-                
+
                 # Store detached clone to avoid memory issues or in-place modifications
                 if isinstance(inp, torch.Tensor):
                     self.quant_activations[name] = inp.detach()
                 else:
                     self.quant_activations[name] = inp
+                if not getattr(_observer_state_mod._state, "call_log_frozen", False):
+                    self.call_log.append((name, module))
             return hook
 
         from src.ops.quant_base import QuantizedLayerMixin
@@ -128,12 +134,38 @@ class LayerComparator:
 
         quantized_ops = tuple(OpRegistry.get_supported_ops().values())
 
+        def make_path_pre(path):
+            def pre(m, inp):
+                push_module_path(path)
+            return pre
+        def make_path_post(path):
+            def post(m, inp, out):
+                pop_module_path()
+            return post
+
+        # If the model has a top-level "pair processor" submodule that runs
+        # once per input pair (e.g. SuperGlue inside a Matching wrapper),
+        # freeze the call_log after its first complete forward so the report
+        # shows one pair's worth of events instead of B copies for batch_size B.
+        for candidate_path in ("backbone.superglue", "superglue"):
+            try:
+                pair_proc = self.quant_model.get_submodule(candidate_path)
+            except AttributeError:
+                continue
+            def _freeze_hook(m, inp, out):
+                freeze_call_log()
+            pair_proc.register_forward_hook(_freeze_hook)
+            break
+
         for name, module in self.quant_model.named_modules():
+            # Maintain a parent-path stack so @observer-cached singletons can label
+            # their events as "<parent_path>.<fn_name>" instead of class names.
+            module.register_forward_pre_hook(make_path_pre(name))
+            module.register_forward_hook(make_path_post(name))
             # Hook leaf modules (modules with no children)
             # For DecomposedMHA, it has children, but we want to capture its output too
             if len(list(module.children())) == 0 or isinstance(module, DecomposedMultiheadAttention):
                 module.register_forward_hook(get_hook(name))
-                
                 # Enable internal capture for Quant layers (including QuantizedLayerMixin-only
                 # ops like Observed* modules that aren't registered with original_cls).
                 if (
@@ -217,10 +249,14 @@ class LayerComparator:
                     ref_outputs = self.ref_model(ref_inputs)
 
                 # Run Quant Model
-                if self.adapter is not None:
-                    quant_outputs = self.adapter.forward(self.quant_model, (quant_inputs, targets))
-                else:
-                    quant_outputs = self.quant_model(quant_inputs)
+                self.call_log = []
+                self.quant_activations = {}
+                quant_cfg = getattr(self.adapter, "quant_config", None) if self.adapter is not None else None
+                with quantized_dispatch(config=quant_cfg, call_log=self.call_log):
+                    if self.adapter is not None:
+                        quant_outputs = self.adapter.forward(self.quant_model, (quant_inputs, targets))
+                    else:
+                        quant_outputs = self.quant_model(quant_inputs)
 
                 # Extract logits if necessary (for SLMs)
                 if hasattr(ref_outputs, 'logits'):
@@ -275,43 +311,94 @@ class LayerComparator:
         report_lines = []
         report_lines.append("--- Quantization Coverage Verification ---")
         
-        try:
-            # We don't need to disable capture here because the subsequent comparison loop
-            # will overwrite any Proxies captured during this trace.
+        is_custom_source = bool(
+            self.adapter is not None
+            and getattr(self.adapter, 'model_source', None) == 'custom'
+        )
 
-            _, _, traced = trace_quant_aware(self.quant_model)
-            
+        try:
+            # Custom-source models use fx_trace_subtrees (descends per
+            # subtree on whole-model trace failure) and the new
+            # is_quantized / replacement-aware classification. Non-custom
+            # models use the legacy whole-model trace + module-iteration
+            # fallback so their coverage section matches pre-edb818f
+            # behavior — single trace attempt, fallback to named_modules
+            # leaf walk on failure.
+            if is_custom_source:
+                subtrees = list(fx_trace_subtrees(self.quant_model))
+            else:
+                _, _, _legacy_traced = trace_quant_aware(self.quant_model)
+                subtrees = [('', _legacy_traced)]
+
             quantized_nodes = []
             unquantized_supported_nodes = []
             unquantized_unsupported_nodes = []
-            
+
             # Define unquantized targets to look for
             supported_modules = tuple(OpRegistry.get_supported_ops().keys())
-            quantized_ops = tuple(OpRegistry.get_supported_ops().values())
-            
+            # Any class registered with @OpRegistry.register(...) counts as
+            # "quantized" — this includes both _supported_ops (which require
+            # an original_cls= swap rule) and standalone Quant*/Observed*
+            # classes (e.g. QuantCat, QuantAdd) whose registration declares
+            # no original_cls because torch.cat/torch.add are functions, not
+            # modules with a swappable class.
+            registered_class_names = set(getattr(OpRegistry, '_registry', {}).keys())
+
             supported_functions = OpRegistry.get_supported_functions()
-            
-            for node in traced.graph.nodes:
-                if node.op == 'call_module':
-                    module = self.quant_model.get_submodule(node.target)
-                    if isinstance(module, quantized_ops):
-                        quantized_nodes.append(f"{node.name} ({module.__class__.__name__})")
-                    elif OpRegistry.is_passthrough(module.__class__.__name__):
-                        # Non-quantized pass-through op (e.g. ObservedSimpleNMS); out of scope for coverage.
-                        continue
-                    elif isinstance(module, supported_modules):
-                        unquantized_supported_nodes.append(f"{node.name} ({module.__class__.__name__})")
-                    else:
-                        # Unsupported module (e.g. Identity, or custom layer not in registry)
-                        unquantized_unsupported_nodes.append(f"{node.name} ({module.__class__.__name__})")
-                        
-                elif node.op == 'call_function':
-                    if node.target in supported_functions:
-                        unquantized_supported_nodes.append(f"{node.name} ({node.target.__name__})")
-                    else:
-                         # We generally ignore other functions unless they are clearly layers (like add/mul)
-                         # For now, let's stick to modules + supported functions to avoid noise
-                         pass
+            ignored_fx_ops = set(self.compliance_config.get('ignored_fx_ops', []))
+
+            for prefix, traced in subtrees:
+                for node in traced.graph.nodes:
+                    if node.op == 'call_module':
+                        target_path = node.target if isinstance(node.target, str) else node.name
+                        full_name = f'{prefix}.{target_path}' if prefix else target_path
+                        try:
+                            module = self.quant_model.get_submodule(full_name)
+                        except AttributeError:
+                            continue
+                        cls_name = module.__class__.__name__
+                        # Passthrough ops (e.g. QuantReLU, QuantMaxPool2d) are
+                        # neither quantized nor unquantized — they preserve
+                        # whatever flow runs through them. Skip from coverage.
+                        if OpRegistry.is_passthrough(cls_name):
+                            continue
+                        if cls_name in registered_class_names:
+                            if OpRegistry.is_quantized(cls_name):
+                                quantized_nodes.append(f"{full_name} ({cls_name})")
+                            else:
+                                unquantized_supported_nodes.append(f"{full_name} ({cls_name})")
+                        elif isinstance(module, supported_modules):
+                            unquantized_supported_nodes.append(f"{full_name} ({cls_name})")
+                        else:
+                            unquantized_unsupported_nodes.append(f"{full_name} ({cls_name})")
+
+                    elif node.op == 'call_function':
+                        target = node.target
+                        target_name = getattr(target, '__name__', str(target))
+                        if target_name in ignored_fx_ops:
+                            continue
+                        full_name = f'{prefix}.{node.name}' if prefix else node.name
+                        # @observer-wrapped functions resolve to a registered
+                        # Observed* class at runtime — count as quantized only
+                        # if that class itself is_quantized.
+                        replacement = OpRegistry.get_replacement_by_name(target_name)
+                        if replacement is not None:
+                            obs_cls = replacement[0]
+                            if OpRegistry.is_quantized(obs_cls.__name__):
+                                quantized_nodes.append(f"{full_name} ({target_name})")
+                            else:
+                                unquantized_supported_nodes.append(f"{full_name} ({target_name})")
+                        elif target in supported_functions:
+                            unquantized_supported_nodes.append(f"{full_name} ({target_name})")
+                        else:
+                            unquantized_unsupported_nodes.append(f"{full_name} ({target_name})")
+
+                    elif node.op == 'call_method':
+                        method_name = str(node.target)
+                        if method_name in ignored_fx_ops:
+                            continue
+                        full_name = f'{prefix}.{node.name}' if prefix else node.name
+                        unquantized_unsupported_nodes.append(f"{full_name} (.{method_name})")
             
             total_leaves = len(quantized_nodes) + len(unquantized_supported_nodes) + len(unquantized_unsupported_nodes)
             coverage_pct = (len(quantized_nodes) / total_leaves * 100) if total_leaves > 0 else 0
@@ -321,17 +408,13 @@ class LayerComparator:
             
             if unquantized_supported_nodes:
                 report_lines.append("Unquantized Supported Ops (Should be quantized):")
-                for node_str in unquantized_supported_nodes[:20]:
+                for node_str in unquantized_supported_nodes:
                     report_lines.append(f"  - {node_str}")
-                if len(unquantized_supported_nodes) > 20:
-                    report_lines.append(f"  ... and {len(unquantized_supported_nodes) - 20} more.")
-            
+
             if unquantized_unsupported_nodes:
                 report_lines.append("Unquantized Unsupported Ops (Not in registry):")
-                for node_str in unquantized_unsupported_nodes[:20]:
+                for node_str in unquantized_unsupported_nodes:
                     report_lines.append(f"  - {node_str}")
-                if len(unquantized_unsupported_nodes) > 20:
-                    report_lines.append(f"  ... and {len(unquantized_unsupported_nodes) - 20} more.")
                 
             if not unquantized_supported_nodes and not unquantized_unsupported_nodes:
                  report_lines.append("All ops are quantized! ✅")
@@ -762,24 +845,195 @@ class LayerComparator:
             return None
         
         detailed_failures = []
-        modules_to_process = []
-        seen = set()
-        for name in self.quant_activations.keys():
-            try:
-                module = self.quant_model.get_submodule(name)
-            except AttributeError: continue
-            modules_to_process.append((name, module))
-            seen.add(name)
-        for name, module in self.quant_model.named_modules():
-            if name not in seen:
-                modules_to_process.append((name, module))
+
+        is_custom_source = bool(
+            self.adapter is not None
+            and getattr(self.adapter, 'model_source', None) == 'custom'
+        )
+
+        # render_events: list of tuples driving the rendering loop below.
+        #   ('module', name, module)              — render the full module row
+        #   ('function', full_name, target_str)   — render minimal functional row
+        #   ('method',   full_name, method_name)  — render minimal method row
+        # Custom-source models build events from FX graph(s) with @observer
+        # pre-bake and inline sub-trace recursion. Non-custom models build
+        # events from the legacy activations + named_modules iteration so
+        # their report breakdown matches pre-edb818f behavior.
+        render_events: list = []
+
+        if is_custom_source:
+            # Walk FX graphs of the largest traceable subtrees. Aborts if
+            # any non-trivial subtree fails to trace — every op in a custom
+            # model must be either FX-visible or wrapped in @observer
+            # (which makes it FX-opaque via runspace.src.registry.observer).
+            fx_subtrees = list(fx_trace_subtrees(self.quant_model))
+
+            # Bake @observer runtime swaps into the FX graphs: for every
+            # call_function node whose target was @observer-wrapped AND has
+            # a registered Observed* replacement AND was actually
+            # instantiated during the forward (an instance lives in
+            # observer._cache), attach that instance as a submodule of the
+            # subtree root and rewrite the node to a call_module.
+            cache_by_cls: dict = {}
+            for (cls_key, _), inst in _observer_state_mod._cache.items():
+                cache_by_cls.setdefault(cls_key, inst)
+            top_level_count = len(fx_subtrees)
+            for prefix, traced in fx_subtrees:
+                try:
+                    root = self.quant_model.get_submodule(prefix) if prefix else self.quant_model
+                except AttributeError:
+                    continue
+                mutated = False
+                for node in list(traced.graph.nodes):
+                    if node.op != 'call_function':
+                        continue
+                    target = node.target
+                    fn_name = getattr(target, '__name__', None)
+                    if not fn_name:
+                        continue
+                    entry = OpRegistry.get_replacement_by_name(fn_name)
+                    if entry is None:
+                        continue
+                    obs_cls, _ = entry
+                    inst = cache_by_cls.get(obs_cls)
+                    if inst is None:
+                        continue
+                    sub_name = node.name
+                    # Attach to BOTH the original root (so external
+                    # get_submodule resolves) AND to the GraphModule (so
+                    # the call_module node we'll create resolves at FX
+                    # runtime — GraphModule copies submodules at
+                    # construction, doesn't see post-hoc additions).
+                    if not hasattr(root, sub_name):
+                        root.add_module(sub_name, inst)
+                    if not hasattr(traced, sub_name):
+                        traced.add_module(sub_name, inst)
+                    with traced.graph.inserting_before(node):
+                        new_node = traced.graph.create_node(
+                            'call_module', sub_name, node.args, node.kwargs, node.name
+                        )
+                    node.replace_all_uses_with(new_node)
+                    traced.graph.erase_node(node)
+                    mutated = True
+
+                    # Sub-trace the Observed* instance and queue its graph
+                    # so the walker can recurse inline into its body.
+                    inst_prefix = f'{prefix}.{sub_name}' if prefix else sub_name
+                    already_traced = any(p == inst_prefix for p, _ in fx_subtrees)
+                    if not already_traced:
+                        try:
+                            _, _, sub_traced = trace_quant_aware(inst)
+                            fx_subtrees.append((inst_prefix, sub_traced))
+                        except Exception:
+                            pass
+                if mutated:
+                    traced.graph.lint()
+                    traced.recompile()
+
+            def _func_target_name(t):
+                if isinstance(t, str):
+                    return t
+                return getattr(t, '__name__', repr(t))
+
+            ignored_fx_ops = set(self.compliance_config.get('ignored_fx_ops', []))
+            sub_trace_lookup = {p: t for p, t in fx_subtrees[top_level_count:]}
+
+            def _walk(prefix, traced):
+                for node in traced.graph.nodes:
+                    if node.op in ('placeholder', 'output', 'get_attr'):
+                        continue
+                    if node.op == 'call_module':
+                        target_path = node.target if isinstance(node.target, str) else node.name
+                        full = f'{prefix}.{target_path}' if prefix else target_path
+                        sub = sub_trace_lookup.get(full)
+                        if sub is not None:
+                            yield from _walk(full, sub)
+                            continue
+                    yield (prefix, node)
+
+            for prefix, node in (
+                (p, n)
+                for p, t in fx_subtrees[:top_level_count]
+                for (p, n) in _walk(p, t)
+            ):
+                if node.op == 'call_function' or node.op == 'call_method':
+                    if node.op == 'call_method':
+                        target_str = str(node.target)
+                    else:
+                        target_str = _func_target_name(node.target)
+                    if target_str in ignored_fx_ops:
+                        continue
+                    full_name = f'{prefix}.{node.name}' if prefix else node.name
+                    render_events.append(
+                        ('method' if node.op == 'call_method' else 'function',
+                         full_name, target_str)
+                    )
+                    continue
+
+                # call_module — original submodule or pre-bake-attached
+                # Observed* instance. node.target is either the qualified
+                # path of a real submodule OR the unique attached name.
+                target_path = node.target if isinstance(node.target, str) else node.name
+                lookup_paths = []
+                if prefix:
+                    lookup_paths.append(f'{prefix}.{target_path}')
+                lookup_paths.append(target_path)
+                module = None
+                full_name = None
+                for p in lookup_paths:
+                    try:
+                        module = self.quant_model.get_submodule(p)
+                        full_name = p
+                        break
+                    except AttributeError:
+                        continue
+                if module is None:
+                    continue
+                render_events.append(('module', full_name, module))
+        else:
+            # Legacy iteration: hooks-captured activation order first
+            # (preserves the original visit order through the network),
+            # then any uncovered named_modules appended at the end. Only
+            # leaf modules (or DecomposedMultiheadAttention) are emitted —
+            # composites are walked through to their leaves.
+            modules_to_process = []
+            seen = set()
+            for nm in self.quant_activations.keys():
+                try:
+                    md = self.quant_model.get_submodule(nm)
+                except AttributeError:
+                    continue
+                modules_to_process.append((nm, md))
+                seen.add(nm)
+            for nm, md in self.quant_model.named_modules():
+                if nm not in seen:
+                    modules_to_process.append((nm, md))
+            for nm, md in modules_to_process:
+                if len(list(md.children())) == 0 or md.__class__.__name__ == 'DecomposedMultiheadAttention':
+                    render_events.append(('module', nm, md))
 
         prev_output_fmt = 'N/A'
-        for name, module in modules_to_process:
-            if len(list(module.children())) == 0 or module.__class__.__name__ == 'DecomposedMultiheadAttention':
+        for ev in render_events:
+            kind = ev[0]
+            if kind == 'function' or kind == 'method':
+                full_name, target_str = ev[1], ev[2]
+                layer_type = f'.{target_str}' if kind == 'method' else target_str
+                na_fmt = f"{'N/A':<{_FMT_W}}"
+                na_iq = f"{'N/A':<{_IQ_W}}"
+                na_chk = f"{'N/A':<{_CHECK_W}}"
+                report_lines.append(
+                    f"{full_name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {'N/A':<{_SHAPE_W}} | "
+                    f"{na_fmt} | {na_iq} | {na_fmt} | {na_fmt} | {na_fmt} | "
+                    f"{na_chk} | {na_chk}"
+                )
+                continue
+
+            # kind == 'module'
+            name, module = ev[1], ev[2]
+            if True:
                 layer_type = module.__class__.__name__
                 is_under_construction = OpRegistry.is_under_construction(layer_type)
-                
+
                 if OpRegistry.is_passthrough(layer_type):
                     passthrough_str = f"{BLUE}{_wpad('↪ PASS-THROUGH', _CHECK_W)}{RESET}"
                     shape_str = str(tuple(self.ref_activations[name].shape[1:])) if name in self.ref_activations else "N/A"
@@ -1083,7 +1337,7 @@ class LayerComparator:
                     # Quantize (Unscaled)
                     quant_input_unscaled = quantize_tensor(
                         ref_input_scaled.contiguous(), q_type=input_q_type,
-                        mode='tensor', return_unscaled=True, rounding=rounding,
+                        mode='tensor', return_unscaled=True
                     )[1]
                 else:
                     # Fallback
@@ -1102,7 +1356,7 @@ class LayerComparator:
                     # Quantize (Unscaled)
                     quant_weight_unscaled = quantize_tensor(
                         ref_weight_scaled.contiguous(), q_type=weight_q_type,
-                        mode='tensor', return_unscaled=True, rounding=rounding,
+                        mode='tensor', return_unscaled=True, 
                     )[1]
                 else:
                     # Fallback

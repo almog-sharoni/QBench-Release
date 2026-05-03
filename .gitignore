@@ -26,4 +26,3 @@ tailscaled
 systemd/
 
 pyrightconfig.json
-runspace/database/*.db

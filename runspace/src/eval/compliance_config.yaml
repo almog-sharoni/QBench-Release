@@ -10,6 +10,24 @@ quantized_params:
   - weight_fp8      # Explicit FP8 weights
   - weight          # Standard weights (fallback)
 
+# FX nodes to omit from the FP8 Compliance Check table.
+# Each entry matches against:
+#   - call_function nodes by node.target.__name__ (e.g. "getitem", "getattr", "mul")
+#   - call_method nodes by node.target string (e.g. "permute", "reshape", "view")
+# These are typically Python plumbing or shape-only ops with no quantization
+# semantics. Add or remove entries to control table verbosity.
+ignored_fx_ops:
+  - getitem
+  - getattr
+  - permute
+  - reshape
+  - view
+  - contiguous
+  - size
+  - unsqueeze
+  - squeeze
+  - transpose
+
 # Future extensibility: Input/Output capture names
 # input_capture:
 #   - last_quant_input_unscaled

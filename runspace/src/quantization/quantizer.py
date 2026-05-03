@@ -45,7 +45,7 @@ def quantize(tensor: torch.Tensor, q_type: str = "fp8_e4m3", validate: bool = Fa
         tensor: Input FP32 tensor
         q_type: Quantization type ("fp8_e4m3", "fp8_e5m2", "fp4_e2m1", "fp4_e3m0")
         validate: If True, assert all values are valid FP8 (slow, for debugging)
-        rounding: Rounding mode ("nearest" or "truncate")
+        rounding: Rounding mode ("nearest")
         
     Returns:
         Quantized tensor with values constrained to valid FP8 values
