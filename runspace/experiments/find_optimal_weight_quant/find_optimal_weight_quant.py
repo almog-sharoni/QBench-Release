@@ -196,17 +196,17 @@ def get_quantized_tensor_sim(tensor, q_type, chunk_size=None, chunk_formats=None
     """
     if chunk_size is not None:
         return quantize_tensor(tensor, q_type=q_type, mode='chunk', chunk_size=chunk_size,
-                               chunk_formats=chunk_formats, rounding='nearest', validate=False)
+                               chunk_formats=chunk_formats, validate=False)
 
     if mode == 'tensor':
-        return quantize_tensor(tensor, q_type=q_type, mode='tensor', rounding='nearest', validate=False)
+        return quantize_tensor(tensor, q_type=q_type, mode='tensor', validate=False)
 
     # Default: per output-channel (dim 0) via quantize_tensor channel mode.
     # quantize_tensor(channel) preserves dim=1, so transpose [O, ...] -> [..., O]
     # to make channel axis align with output channels.
     out_channels = tensor.shape[0]
     flat = tensor.view(out_channels, -1).transpose(0, 1).contiguous()  # [K, O]
-    deq_t, _ = quantize_tensor(flat, q_type=q_type, mode='channel', rounding='nearest', validate=False)
+    deq_t, _ = quantize_tensor(flat, q_type=q_type, mode='channel', validate=False)
     dequant = deq_t.transpose(0, 1).contiguous().view_as(tensor)
     max_val_per_channel = tensor.view(out_channels, -1).abs().amax(dim=1, keepdim=True).clamp(min=1e-9)
     return dequant, max_val_per_channel.max().item()
