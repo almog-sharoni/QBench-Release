@@ -52,7 +52,6 @@ class QuantAwareTracer(torch.fx.Tracer):
             "ScaledDotProduct",
             "AttentionWeightedValues",
         ):
-        if isinstance(m, (DecomposedMultiheadAttention, DecomposedQkvAttention, DecomposedMlpBlock)):
             return False
 
         quantized_ops = tuple(
