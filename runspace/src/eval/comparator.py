@@ -166,7 +166,6 @@ class LayerComparator:
             # For DecomposedMHA, it has children, but we want to capture its output too
             if len(list(module.children())) == 0 or isinstance(module, DecomposedMultiheadAttention):
                 module.register_forward_hook(get_hook(name))
-
                 # Enable internal capture for Quant layers (including QuantizedLayerMixin-only
                 # ops like Observed* modules that aren't registered with original_cls).
                 if (

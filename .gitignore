@@ -6,6 +6,7 @@ outputs/
 .env
 tests/
 .cache/
+runspace/.torch_extensions/
 runspace/inputs/scannet/
 ./claude
 
@@ -29,3 +30,4 @@ install_docker_wrapper_ori.sh
 install_docker_wrapper.sh
 limit_ori.sh
 restart_mps.sh
+runspace/database/*.db

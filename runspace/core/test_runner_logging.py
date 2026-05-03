@@ -186,6 +186,27 @@ def test_dynamic_input_quantizer_targets_actual_consumer_after_softmax_dropout()
     assert quantizer._candidates_for_layer("out_proj", model.out_proj) == ["fp4_e1m2", "fp4_e2m1"]
 
 
+def test_dynamic_input_quantizer_logs_multihead_attention_inputs():
+    model = nn.MultiheadAttention(embed_dim=8, num_heads=2, batch_first=True)
+    quantizer = DynamicInputQuantizer(
+        model,
+        metric="mse",
+        chunk_size=4,
+        candidate_formats=["fp4_e1m2", "fp4_e2m1"],
+    )
+
+    quantizer.register_hooks()
+    x = torch.randn(2, 3, 8)
+    model(x, x, x, need_weights=False)
+    layer_stats = quantizer.get_final_stats()["layer_stats"]
+    quantizer.cleanup()
+
+    assert "query_input" in layer_stats
+    assert "key_input" in layer_stats
+    assert "value_input" in layer_stats
+    assert layer_stats["query_input"]["total_chunks"] > 0
+
+
 if __name__ == "__main__":
     test_runner_logs_fp32_weight_dt_when_weight_quantization_disabled()
     test_materialized_cache_detects_weight_quant_buffers()
@@ -193,3 +214,4 @@ if __name__ == "__main__":
     test_runner_logs_dynamic_input_map_from_processed_layer_stats()
     test_dynamic_input_quantizer_uses_unsigned_candidates_after_source_dropout()
     test_dynamic_input_quantizer_targets_actual_consumer_after_softmax_dropout()
+    test_dynamic_input_quantizer_logs_multihead_attention_inputs()

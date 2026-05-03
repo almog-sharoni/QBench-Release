@@ -4,6 +4,7 @@
 SANDBOX_DIR="qbench_sandbox"
 DASHBOARD_PY="runspace/src/database/dashboard.py"
 PORT=8501
+TORCH_EXTENSIONS_DIR="${TORCH_EXTENSIONS_DIR:-$(pwd)/runspace/.torch_extensions}"
 
 # Verify sandbox exists
 if [ ! -d "$SANDBOX_DIR" ]; then
@@ -27,7 +28,8 @@ mkdir -p tailscale_state
 
 # Run streamlit and tailscale inside the container via the wrapper script
 apptainer exec --nv --env PYTHONNOUSERSITE=1 \
+    --env TORCH_CUDA_ARCH_LIST=9.0 \
+    --env TORCH_EXTENSIONS_DIR="$TORCH_EXTENSIONS_DIR" \
     --bind /data/shared_data/imagenet:/data/imagenet \
     --bind "$(pwd)/tailscale_state":/var/lib/tailscale \
     "$SANDBOX_DIR" /usr/local/bin/start_tailscale_app.sh "$DASHBOARD_PY" "$PORT"
-

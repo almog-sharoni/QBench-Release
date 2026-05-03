@@ -1,0 +1,36 @@
+
+
+# Dashboard date run: 20260502_111219_dashboard_experiment_hybrid_vit_b_16
+# Started: 2026-05-02 11:12:19
+$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/find_optimal_hybrid_quant.py --model_name vit_b_16 --weights DEFAULT --dataset_name imagenet --dataset_path /data/imagenet/val --batch_size 128 --num_workers 32 --limit_batches -1 --output_dir /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results --weight_metrics mse --weight_chunk_size 128 --weight_formats fp4_e1m2,fp4_e2m1,fp4_e3m0 --input_metrics mse --input_chunk_size 128 --input_candidate_formats fp4_e1m2,fp4_e2m1,fp4_e3m0 --per_chunk_format --run_all_combos
+
+Using device: cuda
+Processing 1 model(s).
+Runner initialized on device: cuda
+/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+
+============================================================
+ HYBRID EXPERIMENT: vit_b_16
+  Weight metrics : ['mse']
+  Input  metrics : ['mse']
+  Weight formats : ['fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0']
+  Input formats  : ['fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0']
+============================================================
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+GenericAdapter: build_quantized=False for vit_b_16 (no quantized ops/layer overrides requested).
+Auto-detected model source: torchvision
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results/vit_b_16/weight_phase_fp32/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=150/150, mismatched=0, max_abs_diff=0.000e+00)
+
+[Phase 1] Analysing weight tensors ...
+Analyzing Layers (Weights): 0it [00:00, ?it/s]Analyzing Layers (Weights): 2it [00:00,  3.14it/s]Analyzing Layers (Weights): 20it [00:00, 34.93it/s]Analyzing Layers (Weights): 40it [00:00, 67.90it/s]Analyzing Layers (Weights): 56it [00:00, 86.68it/s]Analyzing Layers (Weights): 76it [00:01, 112.22it/s]Analyzing Layers (Weights): 92it [00:01, 121.36it/s]Analyzing Layers (Weights): 112it [00:01, 138.84it/s]Analyzing Layers (Weights): 129it [00:01, 139.94it/s]Analyzing Layers (Weights): 152it [00:01, 161.51it/s]Analyzing Layers (Weights): 152it [00:01, 100.65it/s]
+Creating quantized state dict for metric mse...
+[Phase 1] Saved quantized weights (mse) → /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results/vit_b_16/weights_mse/quantized_weights.pt
+[FP32 ref] Found in DB: Top1=81.07%, Top5=95.32%
+
+[Phase 2] All-combos grid (quantized weights × dynamic input quant) ...
+
+  Weight metric: mse  (opt_wmse[fp4_e2m1×74])
+  Skipping hybrid_wmse_imse — already in DB.
+
+[Done] Hybrid experiment finished for vit_b_16.

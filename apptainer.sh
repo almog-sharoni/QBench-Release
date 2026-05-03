@@ -3,6 +3,7 @@
 
 SANDBOX_DIR="qbench_sandbox"
 LOG_FILE="exec_commands.log"
+TORCH_EXTENSIONS_DIR="${TORCH_EXTENSIONS_DIR:-$PWD/runspace/.torch_extensions}"
 
 # Verify sandbox exists
 if [ ! -d "$SANDBOX_DIR" ]; then

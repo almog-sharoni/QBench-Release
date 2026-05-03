@@ -1,0 +1,251 @@
+
+
+# Dashboard date run: 20260502_183529_dashboard_experiment_input_vit_b_16_input_quant_baseline_test
+# Started: 2026-05-02 18:35:29
+$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name vit_b_16 --weights DEFAULT --dataset_name imagenet --dataset_path /data/imagenet/val --batch_size 128 --num_workers 32 --limit_batches 10 --output_dir /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/results --metric mse --chunk_size 128 --input_size 224 --candidate_formats fp4_e1m2,fp4_e2m1,fp4_e3m0 --excluded_ops LayerNorm --experiment_type input_quant_baseline_test --unsigned_input_sources relu,softmax,quantrelu,quantsoftmax --dynamic_unsigned_input_candidates --only_dynamic --force_rerun --force_rebuild_weights
+
+Using device: cuda
+Metrics to process: ['mse']
+Baseline formats: ['fp32', 'fp8_e1m6', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e4m3', 'fp8_e5m2', 'fp8_e6m1', 'fp8_e7m0', 'fp7_e1m5', 'fp7_e2m4', 'fp7_e3m3', 'fp7_e4m2', 'fp7_e5m1', 'fp7_e6m0', 'fp6_e1m4', 'fp6_e2m3', 'fp6_e3m2', 'fp6_e4m1', 'fp6_e5m0', 'fp5_e1m3', 'fp5_e2m2', 'fp5_e3m1', 'fp5_e4m0', 'fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0', 'fp3_e1m1', 'fp3_e2m0', 'fp2_e1m0']
+Dynamic candidate formats: ['fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0']
+Found 1 models to process.
+Runner initialized on device: cuda
+/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+
+###########################################################
+ PROCESSING MODEL: vit_b_16 (Weights: DEFAULT)
+###########################################################
+
+Skipping Baselines (--only_dynamic set)
+
+[Optimization] Loading model and dataset once for all metrics...
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Auto-detected model source: torchvision
+  [FX] Quantizing module graph: VisionTransformer
+  [FX] Trace successful for VisionTransformer, nodes=500
+prepare_model_with_materialized_weights(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/results/vit_b_16/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=198/198, mismatched=0, max_abs_diff=0.000e+00)
+
+===========================================
+Processing Metric: MSE for vit_b_16
+=============================================
+Registered hooks on 209 layers: all layers use all 3 candidates (metric=MSE).
+24 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=mse chunk_size=128
+Dynamic (vit_b_16/mse):   0%|          | 0/10 [00:00<?, ?batch/s][DynamicInputQuantizer] Layer 'conv_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_0.self_attention.q_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_0.self_attention.k_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_0.self_attention.v_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'truediv_quant_quantdiv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_0.self_attention.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_0.self_attention.dropout_layer' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_1_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_0.self_attention.out_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_0.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_1_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_0.mlp.0' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_0.mlp.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_0.mlp.2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_0.mlp.3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_0.mlp.4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_2_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_1.self_attention.q_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_1.self_attention.k_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_1.self_attention.v_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_2_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'truediv_1_quant_quantdiv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_1.self_attention.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_1.self_attention.dropout_layer' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_3_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_1.self_attention.out_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_1.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_3_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_1.mlp.0' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_1.mlp.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_1.mlp.2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_1.mlp.3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_1.mlp.4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_4_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_2.self_attention.q_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_2.self_attention.k_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_2.self_attention.v_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_4_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'truediv_2_quant_quantdiv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_2.self_attention.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_2.self_attention.dropout_layer' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_5_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_2.self_attention.out_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_2.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_5_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_2.mlp.0' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_2.mlp.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_2.mlp.2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_2.mlp.3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_2.mlp.4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_6_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_3.self_attention.q_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_3.self_attention.k_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_3.self_attention.v_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_6_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'truediv_3_quant_quantdiv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_3.self_attention.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_3.self_attention.dropout_layer' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_7_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_3.self_attention.out_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_3.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_7_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_3.mlp.0' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_3.mlp.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_3.mlp.2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_3.mlp.3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_3.mlp.4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_8_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_4.self_attention.q_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_4.self_attention.k_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_4.self_attention.v_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_8_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'truediv_4_quant_quantdiv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_4.self_attention.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_4.self_attention.dropout_layer' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_9_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_4.self_attention.out_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_4.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_9_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_4.mlp.0' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_4.mlp.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_4.mlp.2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_4.mlp.3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_4.mlp.4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_10_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_5.self_attention.q_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_5.self_attention.k_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_5.self_attention.v_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_10_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'truediv_5_quant_quantdiv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_5.self_attention.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_5.self_attention.dropout_layer' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_11_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_5.self_attention.out_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_5.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_11_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_5.mlp.0' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_5.mlp.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_5.mlp.2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_5.mlp.3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_5.mlp.4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_12_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_6.self_attention.q_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_6.self_attention.k_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_6.self_attention.v_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_12_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'truediv_6_quant_quantdiv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_6.self_attention.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_6.self_attention.dropout_layer' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_13_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_6.self_attention.out_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_6.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_13_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_6.mlp.0' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_6.mlp.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_6.mlp.2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_6.mlp.3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_6.mlp.4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_14_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_7.self_attention.q_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_7.self_attention.k_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_7.self_attention.v_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_14_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'truediv_7_quant_quantdiv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_7.self_attention.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_7.self_attention.dropout_layer' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_15_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_7.self_attention.out_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_7.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_15_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_7.mlp.0' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_7.mlp.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_7.mlp.2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_7.mlp.3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_7.mlp.4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_16_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_8.self_attention.q_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_8.self_attention.k_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_8.self_attention.v_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_16_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'truediv_8_quant_quantdiv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_8.self_attention.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_8.self_attention.dropout_layer' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_17_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_8.self_attention.out_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_8.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_17_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_8.mlp.0' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_8.mlp.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_8.mlp.2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_8.mlp.3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_8.mlp.4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_18_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_9.self_attention.q_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_9.self_attention.k_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_9.self_attention.v_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_18_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'truediv_9_quant_quantdiv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_9.self_attention.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_9.self_attention.dropout_layer' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_19_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_9.self_attention.out_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_9.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_19_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_9.mlp.0' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_9.mlp.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_9.mlp.2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_9.mlp.3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_9.mlp.4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_20_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_10.self_attention.q_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_10.self_attention.k_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_10.self_attention.v_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_20_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'truediv_10_quant_quantdiv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_10.self_attention.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_10.self_attention.dropout_layer' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_21_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_10.self_attention.out_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_10.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_21_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_10.mlp.0' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_10.mlp.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_10.mlp.2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_10.mlp.3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_10.mlp.4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_22_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_11.self_attention.q_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_11.self_attention.k_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_11.self_attention.v_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_22_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'truediv_11_quant_quantdiv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_11.self_attention.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_11.self_attention.dropout_layer' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_23_quant_quantmatmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_11.self_attention.out_proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_11.dropout' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_23_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_11.mlp.0' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_11.mlp.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_11.mlp.2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_11.mlp.3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'encoder.layers.encoder_layer_11.mlp.4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_24_quant_quantadd' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'heads.head' NOT found in cache sim map. Using standard candidates.
+Dynamic (vit_b_16/mse):  10%|█         | 1/10 [00:10<01:35, 10.65s/batch]Dynamic (vit_b_16/mse):  10%|█         | 1/10 [00:10<01:35, 10.65s/batch, acc1=86.72%, acc5=98.44%, remaining_batches=9]Dynamic (vit_b_16/mse):  20%|██        | 2/10 [00:13<00:50,  6.31s/batch, acc1=86.72%, acc5=98.44%, remaining_batches=9]Dynamic (vit_b_16/mse):  20%|██        | 2/10 [00:13<00:50,  6.31s/batch, acc1=80.86%, acc5=97.66%, remaining_batches=8]Dynamic (vit_b_16/mse):  30%|███       | 3/10 [00:17<00:34,  4.92s/batch, acc1=80.86%, acc5=97.66%, remaining_batches=8]Dynamic (vit_b_16/mse):  30%|███       | 3/10 [00:17<00:34,  4.92s/batch, acc1=79.43%, acc5=96.09%, remaining_batches=7]Dynamic (vit_b_16/mse):  40%|████      | 4/10 [00:20<00:25,  4.29s/batch, acc1=79.43%, acc5=96.09%, remaining_batches=7]Dynamic (vit_b_16/mse):  40%|████      | 4/10 [00:20<00:25,  4.29s/batch, acc1=81.25%, acc5=96.29%, remaining_batches=6]Dynamic (vit_b_16/mse):  50%|█████     | 5/10 [00:23<00:19,  3.91s/batch, acc1=81.25%, acc5=96.29%, remaining_batches=6]Dynamic (vit_b_16/mse):  50%|█████     | 5/10 [00:23<00:19,  3.91s/batch, acc1=83.28%, acc5=96.56%, remaining_batches=5]Dynamic (vit_b_16/mse):  60%|██████    | 6/10 [00:26<00:14,  3.68s/batch, acc1=83.28%, acc5=96.56%, remaining_batches=5]Dynamic (vit_b_16/mse):  60%|██████    | 6/10 [00:26<00:14,  3.68s/batch, acc1=85.16%, acc5=96.88%, remaining_batches=4]Dynamic (vit_b_16/mse):  70%|███████   | 7/10 [00:30<00:10,  3.54s/batch, acc1=85.16%, acc5=96.88%, remaining_batches=4]Dynamic (vit_b_16/mse):  70%|███████   | 7/10 [00:30<00:10,  3.54s/batch, acc1=85.94%, acc5=97.10%, remaining_batches=3]Dynamic (vit_b_16/mse):  80%|████████  | 8/10 [00:33<00:06,  3.45s/batch, acc1=85.94%, acc5=97.10%, remaining_batches=3]Dynamic (vit_b_16/mse):  80%|████████  | 8/10 [00:33<00:06,  3.45s/batch, acc1=86.13%, acc5=96.88%, remaining_batches=2]Dynamic (vit_b_16/mse):  90%|█████████ | 9/10 [00:36<00:03,  3.39s/batch, acc1=86.13%, acc5=96.88%, remaining_batches=2]Dynamic (vit_b_16/mse):  90%|█████████ | 9/10 [00:36<00:03,  3.39s/batch, acc1=86.11%, acc5=96.96%, remaining_batches=1]Dynamic (vit_b_16/mse): 100%|██████████| 10/10 [00:40<00:00,  3.35s/batch, acc1=86.11%, acc5=96.96%, remaining_batches=1]Dynamic (vit_b_16/mse): 100%|██████████| 10/10 [00:40<00:00,  3.35s/batch, acc1=86.48%, acc5=97.11%, remaining_batches=0]Dynamic (vit_b_16/mse): 100%|██████████| 10/10 [00:40<00:00,  4.00s/batch, acc1=86.48%, acc5=97.11%, remaining_batches=0]
+
+Dynamic Run (MSE): Top1=86.48%, Top5=97.11%, Certainty=0.7071
+Norm L1: 9.0732e-02, Norm MSE: 9.9234e-03
+Logged run for vit_b_16 to /data/almog/Projects/QBench-Release/runspace/database/runs.db
+Generating format distribution histogram...
+Saved histogram to /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/results/vit_b_16/mse/format_distribution.png
+Generating layer-wise format distribution for mse...
+Saved layer distribution to /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/results/vit_b_16/mse/layer_format_distribution_mse.png

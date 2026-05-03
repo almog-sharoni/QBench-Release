@@ -1,0 +1,73 @@
+
+
+# Dashboard date run: 20260501_083131_dashboard_experiment_weight_vit_b_16_weights
+# Started: 2026-05-01 08:31:31
+$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py --model_name vit_b_16 --weights DEFAULT --dataset_name imagenet --dataset_path /data/imagenet/val --batch_size 256 --num_workers 32 --limit_batches -1 --metrics mse --target weights --weight_chunk_size 128 --baseline_formats fp6_e1m4,fp6_e2m3,fp6_e3m2,fp6_e4m1,fp6_e5m0 --verify_atol 1e-07 --run_eval --per_chunk_format --skip_layer_wise --force_recalc --verify_saved_weights
+
+Using device: cuda
+Metrics to analyze: ['mse']
+Runner initialized on device: cuda
+/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+Root output directory: /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16
+Target: weights
+Loading model vit_b_16...
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+/data/almog/Projects/QBench-Release/runspace/src/adapters/adapter_factory.py:295: UserWarning: Unknown config key in 'quantization': 'weight_source'. Allowed: ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format', 'strict_format_check', 'cache_simulation_path', 'unsigned_input_sources']
+  warnings.warn(f"Unknown config key in '{section}': '{key}'. Allowed: {allowed_keys}")
+GenericAdapter: build_quantized=False for vit_b_16 (no quantized ops/layer overrides requested).
+Auto-detected model source: torchvision
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/analysis_fp32/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=150/150, mismatched=0, max_abs_diff=0.000e+00)
+Testing types: ['fp8_e1m6', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e4m3', 'fp8_e5m2', 'fp8_e6m1', 'fp8_e7m0', 'fp7_e1m5', 'fp7_e2m4', 'fp7_e3m3', 'fp7_e4m2', 'fp7_e5m1', 'fp7_e6m0', 'fp6_e1m4', 'fp6_e2m3', 'fp6_e3m2', 'fp6_e4m1', 'fp6_e5m0', 'fp5_e1m3', 'fp5_e2m2', 'fp5_e3m1', 'fp5_e4m0', 'fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0', 'fp3_e1m1', 'fp3_e2m0', 'fp2_e1m0']
+Analyzing layers for metrics: ['mse']...
+Analyzing Layers (Weights): 0it [00:00, ?it/s]Analyzing Layers (Weights): 2it [00:00,  3.10it/s]Analyzing Layers (Weights): 8it [00:01,  8.19it/s]Analyzing Layers (Weights): 9it [00:01,  8.27it/s]Analyzing Layers (Weights): 13it [00:01, 12.97it/s]Analyzing Layers (Weights): 16it [00:01, 15.55it/s]Analyzing Layers (Weights): 20it [00:01, 12.01it/s]Analyzing Layers (Weights): 22it [00:02, 12.93it/s]Analyzing Layers (Weights): 25it [00:02, 15.33it/s]Analyzing Layers (Weights): 28it [00:02, 17.54it/s]Analyzing Layers (Weights): 32it [00:02, 12.90it/s]Analyzing Layers (Weights): 34it [00:02, 13.69it/s]Analyzing Layers (Weights): 37it [00:02, 16.02it/s]Analyzing Layers (Weights): 40it [00:03, 18.06it/s]Analyzing Layers (Weights): 44it [00:03, 13.07it/s]Analyzing Layers (Weights): 46it [00:03, 13.84it/s]Analyzing Layers (Weights): 49it [00:03, 16.13it/s]Analyzing Layers (Weights): 52it [00:03, 17.92it/s]Analyzing Layers (Weights): 56it [00:04, 12.99it/s]Analyzing Layers (Weights): 58it [00:04, 13.82it/s]Analyzing Layers (Weights): 61it [00:04, 16.05it/s]Analyzing Layers (Weights): 64it [00:04, 18.00it/s]Analyzing Layers (Weights): 68it [00:05, 13.06it/s]Analyzing Layers (Weights): 70it [00:05, 13.83it/s]Analyzing Layers (Weights): 73it [00:05, 16.19it/s]Analyzing Layers (Weights): 76it [00:05, 18.20it/s]Analyzing Layers (Weights): 80it [00:05, 13.13it/s]Analyzing Layers (Weights): 82it [00:06, 13.79it/s]Analyzing Layers (Weights): 85it [00:06, 16.08it/s]Analyzing Layers (Weights): 88it [00:06, 18.07it/s]Analyzing Layers (Weights): 92it [00:06, 13.07it/s]Analyzing Layers (Weights): 94it [00:06, 13.83it/s]Analyzing Layers (Weights): 97it [00:06, 16.06it/s]Analyzing Layers (Weights): 100it [00:07, 18.01it/s]Analyzing Layers (Weights): 104it [00:07, 13.07it/s]Analyzing Layers (Weights): 106it [00:07, 13.83it/s]Analyzing Layers (Weights): 109it [00:07, 16.06it/s]Analyzing Layers (Weights): 112it [00:07, 18.09it/s]Analyzing Layers (Weights): 116it [00:08, 13.09it/s]Analyzing Layers (Weights): 118it [00:08, 13.85it/s]Analyzing Layers (Weights): 121it [00:08, 16.14it/s]Analyzing Layers (Weights): 124it [00:08, 18.16it/s]Analyzing Layers (Weights): 128it [00:09, 13.12it/s]Analyzing Layers (Weights): 130it [00:09, 13.88it/s]Analyzing Layers (Weights): 133it [00:09, 16.17it/s]Analyzing Layers (Weights): 136it [00:09, 18.16it/s]Analyzing Layers (Weights): 140it [00:09, 13.17it/s]Analyzing Layers (Weights): 142it [00:10, 13.92it/s]Analyzing Layers (Weights): 145it [00:10, 16.14it/s]Analyzing Layers (Weights): 148it [00:10, 18.16it/s]Analyzing Layers (Weights): 152it [00:10, 22.09it/s]Analyzing Layers (Weights): 152it [00:10, 14.67it/s]
+[DB] Skipping ref_fp32 — already in DB (acc1=81.07%)
+[DB] Skipping baseline_fp6_e1m4 — already in DB
+[DB] Skipping baseline_fp6_e2m3 — already in DB
+[DB] Skipping baseline_fp6_e3m2 — already in DB
+[DB] Skipping baseline_fp6_e4m1 — already in DB
+[DB] Skipping baseline_fp6_e5m0 — already in DB
+
+--- Processing Metric: mse ---
+Generating mse histograms...
+Generating mse boxplot...
+Generating mse chunk win rate plot...
+Generating mse per-chunk format distribution heatmap...
+Downsampling heatmap from 18432 to 1000 columns...
+Generating mse layer-wise error comparison plot...
+Creating quantized state dict for metric mse...
+[Chunk-Opt Delta] changed_tensors=50/152, changed_elems=99.68%, max_abs_diff=1.231e-02, mean_abs_diff=1.624e-04
+Saved chunk-quantized weights to /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/mse/quantized_weights_chunk.pt
+Verifying quantized weights file: /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/mse/quantized_weights_chunk.pt
+[VERIFY] FAILED 74/74 layers in /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/mse/quantized_weights_chunk.pt
+  - encoder.layers.encoder_layer_0.self_attention.q_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_0.self_attention.k_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_0.self_attention.v_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_1.self_attention.q_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_1.self_attention.k_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_1.self_attention.v_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_2.self_attention.q_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_2.self_attention.k_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_2.self_attention.v_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_3.self_attention.q_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_3.self_attention.k_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_3.self_attention.v_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_4.self_attention.q_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_4.self_attention.k_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_4.self_attention.v_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_5.self_attention.q_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_5.self_attention.k_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_5.self_attention.v_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_6.self_attention.q_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  - encoder.layers.encoder_layer_6.self_attention.k_proj: fmt=quantize_error:quantize_tensor: input must be on CUDA (got device cpu); the CUDA codec is the only supported backend for the standard path., max_abs_err=inf
+  ... and 54 more failures
+Traceback (most recent call last):
+  File "/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py", line 1790, in <module>
+    main()
+  File "/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py", line 1787, in main
+    process_single_model(args, device, metrics, base_root)
+  File "/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py", line 1236, in process_single_model
+    verify_quantized_weights_file(
+  File "/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py", line 660, in verify_quantized_weights_file
+    raise RuntimeError(
+RuntimeError: Quantized weight verification failed for 74/74 layers (atol=1e-07).
