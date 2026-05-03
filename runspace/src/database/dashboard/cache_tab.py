@@ -1,26 +1,29 @@
+@st.cache_data(ttl=30, show_spinner=False)
+def _load_cache_sims(db_path):
+    from runspace.src.database.handler import RunDatabase
+    db = RunDatabase(db_path=db_path)
+    return db.get_cache_simulations()
+
 with tab_cache:
-    st.markdown("""
-    <div class="dashboard-hero">
-        <div class="dashboard-hero__eyebrow">ASIC · On-Chip Memory</div>
-        <h1>Cache Simulation</h1>
-        <p>Layer-by-layer cache placement decisions — which outputs stay on chip and which must be quantized for external memory transfer.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    @st.fragment
+    def _render_cache_tab():
+        cache_sim_df = _load_cache_sims(DB_PATH)
 
-    @st.cache_data(ttl=30)
-    def _load_cache_sims():
-        from runspace.src.database.handler import RunDatabase
-        db = RunDatabase(db_path=DB_PATH)
-        return db.get_cache_simulations()
+        st.markdown("""
+        <div class="dashboard-hero">
+            <div class="dashboard-hero__eyebrow">ASIC · On-Chip Memory</div>
+            <h1>Cache Simulation</h1>
+            <p>Layer-by-layer cache placement decisions — which outputs stay on chip and which must be quantized for external memory transfer.</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-    cache_sim_df = _load_cache_sims()
+        if cache_sim_df.empty:
+            st.info(
+                "No cache simulations in the database yet. "
+                "Run `simulate_cache.py` to populate this tab."
+            )
+            return
 
-    if cache_sim_df.empty:
-        st.info(
-            "No cache simulations in the database yet. "
-            "Run `simulate_cache.py` to populate this tab."
-        )
-    else:
         # ── Model selector ────────────────────────────────────────────────────
         available_models = sorted(cache_sim_df['model_name'].dropna().unique())
         col_sel, col_refresh = st.columns([4, 1])
@@ -28,8 +31,8 @@ with tab_cache:
             "Model", available_models, key="cache_sim_model_select"
         )
         if col_refresh.button("🔄 Refresh", key="cache_sim_refresh", width='stretch'):
-            st.cache_data.clear()
-            st.rerun()
+            _load_cache_sims.clear()
+            rerun_current_fragment()
 
         # Latest simulation row for the selected model
         model_rows = cache_sim_df[cache_sim_df['model_name'] == selected_model].sort_values('id', ascending=False)
@@ -139,60 +142,62 @@ with tab_cache:
                 with st.expander(f"Off-chip layers ({len(off_chip_list)}) — copy for runner config"):
                     st.code(json.dumps(off_chip_list, indent=2), language="json")
 
-    st.markdown("---")
+        st.markdown("---")
 
-    # ── Rules Reference — fetched from DB, reflects the rules used at run time ─
-    st.markdown("#### Rule Reference")
-    st.caption(
-        "Parsed from the simulation record in the DB — always reflects the rules that were "
-        "actually used. Re-run `simulate_cache.py` after changing rule definitions to update."
-    )
-
-    rules_raw  = latest.get('rules_json') if not cache_sim_df.empty else None
-    rules_list = json.loads(rules_raw) if isinstance(rules_raw, str) and rules_raw else []
-
-    if not rules_list:
-        st.info(
-            "No rule metadata in this simulation record. "
-            "Re-run `simulate_cache.py` to populate the rules table."
+        # ── Rules Reference — fetched from DB, reflects the rules used at run time ─
+        st.markdown("#### Rule Reference")
+        st.caption(
+            "Parsed from the simulation record in the DB — always reflects the rules that were "
+            "actually used. Re-run `simulate_cache.py` after changing rule definitions to update."
         )
-    else:
-        rules_df = pd.DataFrame(rules_list).rename(columns={
-            'name':           'Rule',
-            'on_chip':        'xout On-Chip',
-            'xin_from_cache': 'xin Source',
-            'applies_to':     'Applies To',
-            'stay_condition': 'Stay Condition',
-            'permanents':     'Permanents',
-            'notes':          'Notes',
-        })
-        if 'xout On-Chip' in rules_df.columns:
-            rules_df['xout On-Chip'] = rules_df['xout On-Chip'].map(
-                {True: '✓ Yes', False: '✗ No', 'True': '✓ Yes', 'False': '✗ No'}
-            ).fillna(rules_df['xout On-Chip'].astype(str))
-        if 'xin Source' in rules_df.columns:
-            rules_df['xin Source'] = rules_df['xin Source'].map(
-                {True: 'Cache', False: 'External', 'True': 'Cache', 'False': 'External'}
-            ).fillna(rules_df['xin Source'].astype(str))
 
-        display_cols = [c for c in [
-            'Rule', 'xout On-Chip', 'xin Source',
-            'Applies To', 'Stay Condition', 'Permanents', 'Notes',
-        ] if c in rules_df.columns]
+        rules_raw  = latest.get('rules_json')
+        rules_list = json.loads(rules_raw) if isinstance(rules_raw, str) and rules_raw else []
 
-        st.dataframe(
-            rules_df[display_cols],
-            width='stretch',
-            hide_index=True,
-            column_config={
-                'Rule':           st.column_config.TextColumn("Rule",            width="medium"),
-                'xout On-Chip':   st.column_config.TextColumn("xout On-Chip",   width="small"),
-                'xin Source':     st.column_config.TextColumn("xin Source",     width="small"),
-                'Applies To':     st.column_config.TextColumn("Applies To",     width="medium"),
-                'Stay Condition': st.column_config.TextColumn("Stay Condition", width="large"),
-                'Permanents':     st.column_config.TextColumn("Permanents",     width="medium"),
-                'Notes':          st.column_config.TextColumn("Notes",          width="large"),
-            },
-        )
+        if not rules_list:
+            st.info(
+                "No rule metadata in this simulation record. "
+                "Re-run `simulate_cache.py` to populate the rules table."
+            )
+        else:
+            rules_df = pd.DataFrame(rules_list).rename(columns={
+                'name':           'Rule',
+                'on_chip':        'xout On-Chip',
+                'xin_from_cache': 'xin Source',
+                'applies_to':     'Applies To',
+                'stay_condition': 'Stay Condition',
+                'permanents':     'Permanents',
+                'notes':          'Notes',
+            })
+            if 'xout On-Chip' in rules_df.columns:
+                rules_df['xout On-Chip'] = rules_df['xout On-Chip'].map(
+                    {True: '✓ Yes', False: '✗ No', 'True': '✓ Yes', 'False': '✗ No'}
+                ).fillna(rules_df['xout On-Chip'].astype(str))
+            if 'xin Source' in rules_df.columns:
+                rules_df['xin Source'] = rules_df['xin Source'].map(
+                    {True: 'Cache', False: 'External', 'True': 'Cache', 'False': 'External'}
+                ).fillna(rules_df['xin Source'].astype(str))
+
+            display_cols = [c for c in [
+                'Rule', 'xout On-Chip', 'xin Source',
+                'Applies To', 'Stay Condition', 'Permanents', 'Notes',
+            ] if c in rules_df.columns]
+
+            st.dataframe(
+                rules_df[display_cols],
+                width='stretch',
+                hide_index=True,
+                column_config={
+                    'Rule':           st.column_config.TextColumn("Rule",            width="medium"),
+                    'xout On-Chip':   st.column_config.TextColumn("xout On-Chip",   width="small"),
+                    'xin Source':     st.column_config.TextColumn("xin Source",     width="small"),
+                    'Applies To':     st.column_config.TextColumn("Applies To",     width="medium"),
+                    'Stay Condition': st.column_config.TextColumn("Stay Condition", width="large"),
+                    'Permanents':     st.column_config.TextColumn("Permanents",     width="medium"),
+                    'Notes':          st.column_config.TextColumn("Notes",          width="large"),
+                },
+            )
+
+    _render_cache_tab()
 
 # ── Architecture Graph Tab ───────────────────────────────────────────────────

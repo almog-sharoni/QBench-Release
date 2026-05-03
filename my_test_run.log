@@ -1,0 +1,65 @@
+/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+Using device: cuda
+Metrics to process: ['mse', 'l1']
+Baseline formats: ['fp32', 'fp8_e1m6', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e4m3', 'fp8_e5m2', 'fp8_e6m1', 'fp8_e7m0', 'fp7_e1m5', 'fp7_e2m4', 'fp7_e3m3', 'fp7_e4m2', 'fp7_e5m1', 'fp7_e6m0', 'fp6_e1m4', 'fp6_e2m3', 'fp6_e3m2', 'fp6_e4m1', 'fp6_e5m0', 'fp5_e1m3', 'fp5_e2m2', 'fp5_e3m1', 'fp5_e4m0', 'fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0', 'fp3_e1m1', 'fp3_e2m0', 'fp2_e1m0']
+Dynamic candidate formats: ['fp4_e1m2', 'fp8_e1m6']
+Found 1 models to process.
+Runner initialized on device: cuda
+
+###########################################################
+ PROCESSING MODEL: vit_b_16 (Weights: DEFAULT)
+###########################################################
+[Baseline] Skipping fp32 — already in DB (acc1=81.07%)
+[Baseline] Skipping fp8_e1m6 — already in DB (acc1=80.93%)
+[Baseline] Skipping fp8_e2m5 — already in DB (acc1=80.91%)
+[Baseline] Skipping fp8_e3m4 — already in DB (acc1=80.88%)
+[Baseline] Skipping fp8_e4m3 — already in DB (acc1=80.77%)
+[Baseline] Skipping fp8_e5m2 — already in DB (acc1=79.97%)
+[Baseline] Skipping fp8_e6m1 — already in DB (acc1=75.28%)
+[Baseline] Skipping fp8_e7m0 — already in DB (acc1=0.30%)
+[Baseline] Skipping fp7_e1m5 — already in DB (acc1=80.67%)
+[Baseline] Skipping fp7_e2m4 — already in DB (acc1=80.92%)
+[Baseline] Skipping fp7_e3m3 — already in DB (acc1=80.84%)
+[Baseline] Skipping fp7_e4m2 — already in DB (acc1=80.03%)
+[Baseline] Skipping fp7_e5m1 — already in DB (acc1=75.29%)
+[Baseline] Skipping fp7_e6m0 — already in DB (acc1=0.30%)
+[Baseline] Skipping fp6_e1m4 — already in DB (acc1=79.63%)
+[Baseline] Skipping fp6_e2m3 — already in DB (acc1=80.53%)
+[Baseline] Skipping fp6_e3m2 — already in DB (acc1=79.97%)
+[Baseline] Skipping fp6_e4m1 — already in DB (acc1=75.41%)
+[Baseline] Skipping fp6_e5m0 — already in DB (acc1=0.30%)
+[Baseline] Skipping fp5_e1m3 — already in DB (acc1=93.75%)
+[Baseline] Skipping fp5_e2m2 — already in DB (acc1=95.31%)
+[Baseline] Skipping fp5_e3m1 — already in DB (acc1=92.97%)
+[Baseline] Skipping fp5_e4m0 — already in DB (acc1=0.78%)
+[Baseline] Skipping fp4_e1m2 — already in DB (acc1=2.34%)
+
+--- Running Baselines (Optimized: ['fp4_e2m1', 'fp4_e3m0', 'fp3_e1m1', 'fp3_e2m0', 'fp2_e1m0']) ---
+Runner initialized on device: cuda
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+Propagated unsigned input formats using existing GraphModule.
+Traceback (most recent call last):
+  File "/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py", line 812, in <module>
+    main()
+  File "/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py", line 809, in main
+    process_single_model(args, model_config, device, metrics)
+  File "/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py", line 572, in process_single_model
+    run_baselines(
+  File "/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py", line 315, in run_baselines
+    model, adapter, _ = runner.prepare_model_with_materialized_weights(
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/almog/Projects/QBench-Release/runspace/core/runner.py", line 966, in prepare_model_with_materialized_weights
+    model, adapter = self.load_model_from_weight_file(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/almog/Projects/QBench-Release/runspace/core/runner.py", line 829, in load_model_from_weight_file
+    self._load_state_dict_resilient(adapter.model, state_dict)
+  File "/data/almog/Projects/QBench-Release/runspace/core/runner.py", line 581, in _load_state_dict_resilient
+    model.load_state_dict(state_dict, strict=True, assign=True)
+  File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 2629, in load_state_dict
+    raise RuntimeError(
+RuntimeError: Error(s) in loading state_dict for GraphModule:
+	Missing key(s) in state_dict: "encoder.layers.encoder_layer_0.self_attention.q_proj.weight", "encoder.layers.encoder_layer_0.self_attention.q_proj.bias", "encoder.layers.encoder_layer_0.self_attention.k_proj.weight", "encoder.layers.encoder_layer_0.self_attention.k_proj.bias", "encoder.layers.encoder_layer_0.self_attention.v_proj.weight", "encoder.layers.encoder_layer_0.self_attention.v_proj.bias", "encoder.layers.encoder_layer_0.mlp.1.piecewise_lut", "encoder.layers.encoder_layer_1.self_attention.q_proj.weight", "encoder.layers.encoder_layer_1.self_attention.q_proj.bias", "encoder.layers.encoder_layer_1.self_attention.k_proj.weight", "encoder.layers.encoder_layer_1.self_attention.k_proj.bias", "encoder.layers.encoder_layer_1.self_attention.v_proj.weight", "encoder.layers.encoder_layer_1.self_attention.v_proj.bias", "encoder.layers.encoder_layer_1.mlp.1.piecewise_lut", "encoder.layers.encoder_layer_2.self_attention.q_proj.weight", "encoder.layers.encoder_layer_2.self_attention.q_proj.bias", "encoder.layers.encoder_layer_2.self_attention.k_proj.weight", "encoder.layers.encoder_layer_2.self_attention.k_proj.bias", "encoder.layers.encoder_layer_2.self_attention.v_proj.weight", "encoder.layers.encoder_layer_2.self_attention.v_proj.bias", "encoder.layers.encoder_layer_2.mlp.1.piecewise_lut", "encoder.layers.encoder_layer_3.self_attention.q_proj.weight", "encoder.layers.encoder_layer_3.self_attention.q_proj.bias", "encoder.layers.encoder_layer_3.self_attention.k_proj.weight", "encoder.layers.encoder_layer_3.self_attention.k_proj.bias", "encoder.layers.encoder_layer_3.self_attention.v_proj.weight", "encoder.layers.encoder_layer_3.self_attention.v_proj.bias", "encoder.layers.encoder_layer_3.mlp.1.piecewise_lut", "encoder.layers.encoder_layer_4.self_attention.q_proj.weight", "encoder.layers.encoder_layer_4.self_attention.q_proj.bias", "encoder.layers.encoder_layer_4.self_attention.k_proj.weight", "encoder.layers.encoder_layer_4.self_attention.k_proj.bias", "encoder.layers.encoder_layer_4.self_attention.v_proj.weight", "encoder.layers.encoder_layer_4.self_attention.v_proj.bias", "encoder.layers.encoder_layer_4.mlp.1.piecewise_lut", "encoder.layers.encoder_layer_5.self_attention.q_proj.weight", "encoder.layers.encoder_layer_5.self_attention.q_proj.bias", "encoder.layers.encoder_layer_5.self_attention.k_proj.weight", "encoder.layers.encoder_layer_5.self_attention.k_proj.bias", "encoder.layers.encoder_layer_5.self_attention.v_proj.weight", "encoder.layers.encoder_layer_5.self_attention.v_proj.bias", "encoder.layers.encoder_layer_5.mlp.1.piecewise_lut", "encoder.layers.encoder_layer_6.self_attention.q_proj.weight", "encoder.layers.encoder_layer_6.self_attention.q_proj.bias", "encoder.layers.encoder_layer_6.self_attention.k_proj.weight", "encoder.layers.encoder_layer_6.self_attention.k_proj.bias", "encoder.layers.encoder_layer_6.self_attention.v_proj.weight", "encoder.layers.encoder_layer_6.self_attention.v_proj.bias", "encoder.layers.encoder_layer_6.mlp.1.piecewise_lut", "encoder.layers.encoder_layer_7.self_attention.q_proj.weight", "encoder.layers.encoder_layer_7.self_attention.q_proj.bias", "encoder.layers.encoder_layer_7.self_attention.k_proj.weight", "encoder.layers.encoder_layer_7.self_attention.k_proj.bias", "encoder.layers.encoder_layer_7.self_attention.v_proj.weight", "encoder.layers.encoder_layer_7.self_attention.v_proj.bias", "encoder.layers.encoder_layer_7.mlp.1.piecewise_lut", "encoder.layers.encoder_layer_8.self_attention.q_proj.weight", "encoder.layers.encoder_layer_8.self_attention.q_proj.bias", "encoder.layers.encoder_layer_8.self_attention.k_proj.weight", "encoder.layers.encoder_layer_8.self_attention.k_proj.bias", "encoder.layers.encoder_layer_8.self_attention.v_proj.weight", "encoder.layers.encoder_layer_8.self_attention.v_proj.bias", "encoder.layers.encoder_layer_8.mlp.1.piecewise_lut", "encoder.layers.encoder_layer_9.self_attention.q_proj.weight", "encoder.layers.encoder_layer_9.self_attention.q_proj.bias", "encoder.layers.encoder_layer_9.self_attention.k_proj.weight", "encoder.layers.encoder_layer_9.self_attention.k_proj.bias", "encoder.layers.encoder_layer_9.self_attention.v_proj.weight", "encoder.layers.encoder_layer_9.self_attention.v_proj.bias", "encoder.layers.encoder_layer_9.mlp.1.piecewise_lut", "encoder.layers.encoder_layer_10.self_attention.q_proj.weight", "encoder.layers.encoder_layer_10.self_attention.q_proj.bias", "encoder.layers.encoder_layer_10.self_attention.k_proj.weight", "encoder.layers.encoder_layer_10.self_attention.k_proj.bias", "encoder.layers.encoder_layer_10.self_attention.v_proj.weight", "encoder.layers.encoder_layer_10.self_attention.v_proj.bias", "encoder.layers.encoder_layer_10.mlp.1.piecewise_lut", "encoder.layers.encoder_layer_11.self_attention.q_proj.weight", "encoder.layers.encoder_layer_11.self_attention.q_proj.bias", "encoder.layers.encoder_layer_11.self_attention.k_proj.weight", "encoder.layers.encoder_layer_11.self_attention.k_proj.bias", "encoder.layers.encoder_layer_11.self_attention.v_proj.weight", "encoder.layers.encoder_layer_11.self_attention.v_proj.bias", "encoder.layers.encoder_layer_11.mlp.1.piecewise_lut". 
+	Unexpected key(s) in state_dict: "encoder.layers.encoder_layer_0.self_attention.in_proj_weight", "encoder.layers.encoder_layer_0.self_attention.in_proj_bias", "encoder.layers.encoder_layer_1.self_attention.in_proj_weight", "encoder.layers.encoder_layer_1.self_attention.in_proj_bias", "encoder.layers.encoder_layer_2.self_attention.in_proj_weight", "encoder.layers.encoder_layer_2.self_attention.in_proj_bias", "encoder.layers.encoder_layer_3.self_attention.in_proj_weight", "encoder.layers.encoder_layer_3.self_attention.in_proj_bias", "encoder.layers.encoder_layer_4.self_attention.in_proj_weight", "encoder.layers.encoder_layer_4.self_attention.in_proj_bias", "encoder.layers.encoder_layer_5.self_attention.in_proj_weight", "encoder.layers.encoder_layer_5.self_attention.in_proj_bias", "encoder.layers.encoder_layer_6.self_attention.in_proj_weight", "encoder.layers.encoder_layer_6.self_attention.in_proj_bias", "encoder.layers.encoder_layer_7.self_attention.in_proj_weight", "encoder.layers.encoder_layer_7.self_attention.in_proj_bias", "encoder.layers.encoder_layer_8.self_attention.in_proj_weight", "encoder.layers.encoder_layer_8.self_attention.in_proj_bias", "encoder.layers.encoder_layer_9.self_attention.in_proj_weight", "encoder.layers.encoder_layer_9.self_attention.in_proj_bias", "encoder.layers.encoder_layer_10.self_attention.in_proj_weight", "encoder.layers.encoder_layer_10.self_attention.in_proj_bias", "encoder.layers.encoder_layer_11.self_attention.in_proj_weight", "encoder.layers.encoder_layer_11.self_attention.in_proj_bias". 

@@ -1,0 +1,70 @@
+
+
+# Dashboard date run: 20260502_093738_dashboard_experiment_weight_vit_b_16_weights
+# Started: 2026-05-02 09:37:38
+$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py --model_name vit_b_16 --weights DEFAULT --dataset_name imagenet --dataset_path /data/imagenet/val --batch_size 256 --num_workers 32 --limit_batches 10 --metrics mse --target weights --weight_chunk_size 128 --baseline_formats fp6_e1m4,fp6_e2m3,fp6_e3m2,fp6_e4m1,fp6_e5m0 --verify_atol 1e-07 --run_eval --per_chunk_format --skip_layer_wise --force_recalc --verify_saved_weights
+
+Using device: cuda
+Metrics to analyze: ['mse']
+Runner initialized on device: cuda
+/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+Root output directory: /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16
+Target: weights
+Loading model vit_b_16...
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+/data/almog/Projects/QBench-Release/runspace/src/adapters/adapter_factory.py:295: UserWarning: Unknown config key in 'quantization': 'weight_source'. Allowed: ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format', 'strict_format_check', 'cache_simulation_path', 'unsigned_input_sources']
+  warnings.warn(f"Unknown config key in '{section}': '{key}'. Allowed: {allowed_keys}")
+GenericAdapter: build_quantized=False for vit_b_16 (no quantized ops/layer overrides requested).
+Auto-detected model source: torchvision
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/analysis_fp32/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=150/150, mismatched=0, max_abs_diff=0.000e+00)
+Testing types: ['fp6_e1m4', 'fp6_e2m3', 'fp6_e3m2', 'fp6_e4m1', 'fp6_e5m0']
+Analyzing layers for metrics: ['mse']...
+Analyzing Layers (Weights): 0it [00:00, ?it/s]Analyzing Layers (Weights): 2it [03:56, 118.36s/it]Analyzing Layers (Weights): 13it [03:56, 13.37s/it]Analyzing Layers (Weights): 23it [03:56,  6.22s/it]Analyzing Layers (Weights): 32it [03:57,  3.69s/it]Analyzing Layers (Weights): 44it [03:57,  2.08s/it]Analyzing Layers (Weights): 56it [03:57,  1.29s/it]Analyzing Layers (Weights): 68it [03:57,  1.20it/s]Analyzing Layers (Weights): 80it [03:57,  1.79it/s]Analyzing Layers (Weights): 92it [03:57,  2.63it/s]Analyzing Layers (Weights): 104it [03:57,  3.79it/s]Analyzing Layers (Weights): 116it [03:58,  5.39it/s]Analyzing Layers (Weights): 128it [03:58,  7.57it/s]Analyzing Layers (Weights): 140it [03:58, 10.48it/s]Analyzing Layers (Weights): 152it [03:58,  1.57s/it]
+[DB] Skipping ref_fp32 — already in DB (acc1=81.07%)
+[DB] Skipping baseline_fp6_e1m4 — already in DB
+[DB] Skipping baseline_fp6_e2m3 — already in DB
+[DB] Skipping baseline_fp6_e3m2 — already in DB
+[DB] Skipping baseline_fp6_e4m1 — already in DB
+[DB] Skipping baseline_fp6_e5m0 — already in DB
+
+--- Processing Metric: mse ---
+Generating mse histograms...
+Generating mse boxplot...
+Generating mse chunk win rate plot...
+Generating mse per-chunk format distribution heatmap...
+Downsampling heatmap from 18432 to 1000 columns...
+Generating mse layer-wise error comparison plot...
+Creating quantized state dict for metric mse...
+[Chunk-Opt Delta] changed_tensors=50/152, changed_elems=99.68%, max_abs_diff=4.746e-02, mean_abs_diff=6.497e-04
+Saved chunk-quantized weights to /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/mse/quantized_weights_chunk.pt
+Verifying quantized weights file: /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/mse/quantized_weights_chunk.pt
+[VERIFY] PASSED 74/74 layers (atol=1e-07)
+Saved chunk quantization map to /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/mse/quantization_map_chunk.json
+Generated Chunk-Opt config for mse at /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/mse/optimized_chunk_config.yaml
+
+--- Starting Evaluation Batch ---
+Using Sequential Execution (one config at a time)...
+[Eval] Building shared DataLoader once for this evaluation batch...
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+[Eval] Running 1/1: optimized_chunk_mse
+--- Running vit_b_16 with fp8_e4m3 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/optimized_chunk_mse/config.yaml
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/mse/quantized_weights_chunk.pt (330.3 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+/data/almog/Projects/QBench-Release/runspace/src/adapters/adapter_factory.py:295: UserWarning: Unknown config key in 'quantization': 'weight_source'. Allowed: ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format', 'strict_format_check', 'cache_simulation_path', 'unsigned_input_sources']
+  warnings.warn(f"Unknown config key in '{section}': '{key}'. Allowed: {allowed_keys}")
+GenericAdapter: build_quantized=False for vit_b_16 (no quantized ops/layer overrides requested).
+Auto-detected model source: torchvision
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/optimized_chunk_mse/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=150/150, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/optimized_chunk_mse/quant_graph.svg...
+Failed to generate graph: name '_is_external_module' is not defined
+Running in EVALUATE mode (Quantized Model Only)...
+Evaluating:   0%|          | 0/10 [00:00<?, ?batch/s]Evaluating:  10%|█         | 1/10 [00:09<01:22,  9.15s/batch]Evaluating:  10%|█         | 1/10 [00:09<01:22,  9.15s/batch, acc1=87.89%, acc5=98.44%, remaining_batches=9]Evaluating:  20%|██        | 2/10 [00:09<00:31,  3.90s/batch, acc1=87.89%, acc5=98.44%, remaining_batches=9]Evaluating:  20%|██        | 2/10 [00:09<00:31,  3.90s/batch, acc1=87.50%, acc5=97.66%, remaining_batches=8]Evaluating:  30%|███       | 3/10 [00:09<00:15,  2.22s/batch, acc1=87.50%, acc5=97.66%, remaining_batches=8]Evaluating:  30%|███       | 3/10 [00:09<00:15,  2.22s/batch, acc1=90.49%, acc5=98.18%, remaining_batches=7]Evaluating:  40%|████      | 4/10 [00:09<00:08,  1.43s/batch, acc1=90.49%, acc5=98.18%, remaining_batches=7]Evaluating:  40%|████      | 4/10 [00:09<00:08,  1.43s/batch, acc1=91.11%, acc5=98.14%, remaining_batches=6]Evaluating:  50%|█████     | 5/10 [00:10<00:04,  1.00batch/s, acc1=91.11%, acc5=98.14%, remaining_batches=6]Evaluating:  50%|█████     | 5/10 [00:10<00:04,  1.00batch/s, acc1=92.03%, acc5=98.12%, remaining_batches=5]Evaluating:  60%|██████    | 6/10 [00:10<00:02,  1.36batch/s, acc1=92.03%, acc5=98.12%, remaining_batches=5]Evaluating:  60%|██████    | 6/10 [00:10<00:02,  1.36batch/s, acc1=90.17%, acc5=97.66%, remaining_batches=4]Evaluating:  70%|███████   | 7/10 [00:10<00:01,  1.76batch/s, acc1=90.17%, acc5=97.66%, remaining_batches=4]Evaluating:  70%|███████   | 7/10 [00:10<00:01,  1.76batch/s, acc1=88.17%, acc5=97.49%, remaining_batches=3]Evaluating:  80%|████████  | 8/10 [00:10<00:00,  2.17batch/s, acc1=88.17%, acc5=97.49%, remaining_batches=3]Evaluating:  80%|████████  | 8/10 [00:10<00:00,  2.17batch/s, acc1=86.91%, acc5=97.80%, remaining_batches=2]Evaluating:  90%|█████████ | 9/10 [00:10<00:00,  2.58batch/s, acc1=86.91%, acc5=97.80%, remaining_batches=2]Evaluating:  90%|█████████ | 9/10 [00:10<00:00,  2.58batch/s, acc1=86.59%, acc5=97.57%, remaining_batches=1]Evaluating: 100%|██████████| 10/10 [00:11<00:00,  2.96batch/s, acc1=86.59%, acc5=97.57%, remaining_batches=1]Evaluating: 100%|██████████| 10/10 [00:11<00:00,  2.96batch/s, acc1=85.90%, acc5=97.42%, remaining_batches=0]Evaluating: 100%|██████████| 10/10 [00:11<00:00,  1.12s/batch, acc1=85.90%, acc5=97.42%, remaining_batches=0]
+Cleaning up memory for vit_b_16...
+Logged run for vit_b_16 to /data/almog/Projects/QBench-Release/runspace/database/runs.db
+Summary report appended to /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/evaluation_summary_classification.csv
+Generating accuracy comparison plot...
+Evaluation completed. Summary: /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_weight_quant/results/vit_b_16/evaluation_summary.csv

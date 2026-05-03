@@ -3,6 +3,7 @@
 
 SANDBOX_DIR="qbench_sandbox"
 LOG_FILE="exec_commands.log"
+TORCH_EXTENSIONS_DIR="${TORCH_EXTENSIONS_DIR:-$PWD/runspace/.torch_extensions}"
 
 # Verify sandbox exists
 if [ ! -d "$SANDBOX_DIR" ]; then
@@ -11,7 +12,7 @@ if [ ! -d "$SANDBOX_DIR" ]; then
 fi
 
 # Build the exact command string
-CMD="apptainer exec --nv --env PYTHONNOUSERSITE=1 --env TORCH_CUDA_ARCH_LIST=9.0 --env TORCH_HOME=$HOME/.cache/torch --env PYTHONPATH=$PWD --bind /data/shared_data/imagenet:/data/imagenet --bind /data/yarden/scannet:/data/scannet --bind $PWD:/app \"$SANDBOX_DIR\" python $*"
+CMD="apptainer exec --nv --env PYTHONNOUSERSITE=1 --env TORCH_CUDA_ARCH_LIST=9.0 --env TORCH_EXTENSIONS_DIR=$TORCH_EXTENSIONS_DIR --env TORCH_HOME=$HOME/.cache/torch --env PYTHONPATH=$PWD --bind /data/shared_data/imagenet:/data/imagenet \"$SANDBOX_DIR\" python $*"
 
 # Append command to log
 echo "$CMD" >> "$LOG_FILE"

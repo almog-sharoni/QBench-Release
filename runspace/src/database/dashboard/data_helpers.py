@@ -31,15 +31,17 @@ def parse_dt(dt_str):
     return bits, exp, mant
 
 
-def get_runs(limit):
-    db = RunDatabase(db_path=DB_PATH)
+@st.cache_data(ttl=30, show_spinner=False)
+def get_runs(db_path, limit):
+    db = RunDatabase(db_path=db_path)
     return db.get_runs(limit=limit)
 
 
-def get_fm_runs(limit):
-    if not os.path.exists(FM_DB_PATH):
+@st.cache_data(ttl=30, show_spinner=False)
+def get_fm_runs(fm_db_path, limit):
+    if not os.path.exists(fm_db_path):
         return pd.DataFrame()
-    db = RunDatabase(db_path=FM_DB_PATH)
+    db = RunDatabase(db_path=fm_db_path)
     return db.get_fm_runs(limit=limit)
 
 
@@ -220,9 +222,11 @@ def _compute_weight_win_rate_views(raw_json):
         explicit_counts = None
         explicit_total_chunks = None
         dominant_format = None
+        stays_on_chip = None
 
         if isinstance(value, dict):
             layer_type = str(value.get("type", "?"))
+            stays_on_chip = value.get("stays_on_chip")
             fmt_spec = value.get("format")
             if isinstance(value.get("format_counts"), dict):
                 explicit_counts = {}
@@ -259,11 +263,17 @@ def _compute_weight_win_rate_views(raw_json):
         if total_chunks <= 0:
             total_chunks = int(sum(counts.values()))
 
+        layer_display = layer
+        if stays_on_chip is True:
+            layer_display = f"🟢 {layer}"
+        elif stays_on_chip is False:
+            layer_display = f"🔴 {layer}"
+
         layer_win_counts[dominant_format] = layer_win_counts.get(dominant_format, 0) + 1
         for fmt, cnt in counts.items():
             chunk_win_counts[fmt] = chunk_win_counts.get(fmt, 0) + int(cnt)
             layer_chunk_rows.append({
-                "Layer": layer,
+                "Layer": layer_display,
                 "Layer Index": int(layer_idx),
                 "Type": layer_type,
                 "Format": fmt,
@@ -271,7 +281,7 @@ def _compute_weight_win_rate_views(raw_json):
             })
 
         layer_rows.append({
-            "Layer": layer,
+            "Layer": layer_display,
             "Layer Index": int(layer_idx),
             "Type": layer_type,
             "Dominant Format": dominant_format,

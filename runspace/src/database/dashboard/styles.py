@@ -256,5 +256,39 @@ def inject_global_styles():
     .element-container:has(iframe) {
         min-width: fit-content;
     }
+
+    /* ── Suppress fragment auto-refresh "breathing" animation ──────────────
+       Streamlit temporarily sets opacity: 0.33 + a transition on fragment
+       containers whenever run_every fires. This makes content pulse white.
+       We lock opacity to 1 and kill the transition to eliminate the flash.
+    */
+    [data-testid="stVerticalBlock"],
+    [data-testid="stVerticalBlockBorderWrapper"],
+    [data-testid="stHorizontalBlock"] {
+        opacity: 1 !important;
+        transition: none !important;
+    }
+
+    /* Also override the CSS custom property Streamlit uses in some versions */
+    * {
+        --stale-opacity: 1 !important;
+        --fragment-transition-duration: 0s !important;
+    }
+
+    /* Kill any keyframe pulse/shimmer that Streamlit injects */
+    @keyframes pulse {
+        0%, 50%, 100% { opacity: 1; }
+    }
+    @keyframes streamlitPulse {
+        0%, 50%, 100% { opacity: 1; }
+    }
+    @keyframes placeholderShimmer {
+        0%, 100% { background-position: 0 0; }
+    }
+
+    /* Re-enable the intentional button hover transition (specificity wins) */
+    .stButton > button {
+        transition: background-color 0.1s ease, border-color 0.1s ease !important;
+    }
     </style>
     """, unsafe_allow_html=True)

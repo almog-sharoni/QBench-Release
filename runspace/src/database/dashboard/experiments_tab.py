@@ -47,8 +47,7 @@ def show_delete_database_dialog(db_name):
     st.warning(f"You are about to permanently delete `{db_name}`.")
     st.caption("This removes the database file from `runspace/database` and cannot be undone.")
     col_cancel, col_delete = st.columns(2)
-    if col_cancel.button("Cancel", key=f"cancel_delete_db_{db_name}", width='stretch'):
-        st.rerun()
+    col_cancel.button("Cancel", key=f"cancel_delete_db_{db_name}", width='stretch')
     if col_delete.button("Yes, Delete DB", key=f"confirm_delete_db_modal_{db_name}", type="primary", width='stretch'):
         try:
             next_db_name = choose_db_after_delete(db_name)
@@ -186,8 +185,6 @@ st.sidebar.caption("Data updates on Streamlit reruns. Active run logs refresh in
 
 st.markdown("---")
 
-st.markdown("---")
-
 tab_exp, tab_cache, tab_runner, tab_graph = st.tabs(["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph"])
 
 import streamlit.components.v1 as _dashboard_components
@@ -243,10 +240,9 @@ _graph_renderer_fn = None
 # Enter the Experiments tab context without re-indenting the existing block.
 tab_exp.__enter__()
 
-with st.spinner("Loading experiment runs..."):
-    df = get_fm_runs(selected_run_limit) if DASHBOARD_RUN_KIND == "feature_matching" else get_runs(selected_run_limit)
+df = get_fm_runs(FM_DB_PATH, selected_run_limit) if DASHBOARD_RUN_KIND == "feature_matching" else get_runs(DB_PATH, selected_run_limit)
 
-if df.empty:
+if df.empty and DASHBOARD_RUN_KIND == "feature_matching":
     st.warning("No runs found in the database yet. Run an experiment first!")
 elif DASHBOARD_RUN_KIND == "feature_matching":
     st.markdown("""
@@ -492,6 +488,21 @@ else:
 
     @st.dialog("🗑️ Delete Runs From Database", width="large")
     def show_delete_runs_dialog(run_rows, table_index):
+        done_key = f"_delete_runs_done_{table_index}"
+        if done_key in st.session_state:
+            deleted_count = st.session_state[done_key]
+            st.success(f"Deleted {deleted_count} run{'s' if deleted_count != 1 else ''} from the database.")
+            if st.button("Close", key=f"close_delete_done_{table_index}", type="primary", width='stretch'):
+                st.session_state.pop(done_key)
+                st.session_state["dashboard_flash_message"] = (
+                    f"Deleted {deleted_count} run{'s' if deleted_count != 1 else ''} from the database."
+                )
+                st.session_state.pop(f"table_{table_index}", None)
+                get_runs.clear()
+                get_fm_runs.clear()
+                st.rerun()
+            return
+
         if not run_rows:
             st.info("No runs selected.")
             return
@@ -536,17 +547,26 @@ else:
             width='stretch',
         ):
             deleted_count = delete_runs_by_ids(run_ids)
-            st.session_state["dashboard_flash_message"] = (
-                f"Deleted {deleted_count} run{'s' if deleted_count != 1 else ''} from the database."
-            )
-            for key in (
-                f"table_{table_index}",
-            ):
-                st.session_state.pop(key, None)
-            st.rerun()
+            st.session_state[done_key] = deleted_count
+            st.rerun(scope="fragment")
 
     @st.dialog("✏️ Edit Experiment Name", width="large")
     def show_edit_experiment_dialog(run_rows, table_index):
+        done_key = f"_edit_exp_done_{table_index}"
+        if done_key in st.session_state:
+            updated_count, new_name = st.session_state[done_key]
+            st.success(f"Updated experiment name to '{new_name}' for {updated_count} row{'s' if updated_count != 1 else ''}.")
+            if st.button("Close", key=f"close_edit_done_{table_index}", type="primary", width='stretch'):
+                st.session_state.pop(done_key)
+                st.session_state["dashboard_flash_message"] = (
+                    f"Updated experiment name for {updated_count} row{'s' if updated_count != 1 else ''}."
+                )
+                st.session_state.pop(f"table_{table_index}", None)
+                get_runs.clear()
+                get_fm_runs.clear()
+                st.rerun()
+            return
+
         if not run_rows:
             st.info("No runs selected.")
             return
@@ -590,14 +610,23 @@ else:
                 st.error("Enter an experiment name.")
                 return
             updated_count = update_experiment_type_by_ids(run_ids, new_experiment_type)
-            st.session_state["dashboard_flash_message"] = (
-                f"Updated experiment name for {updated_count} row{'s' if updated_count != 1 else ''}."
-            )
-            st.session_state.pop(f"table_{table_index}", None)
-            st.rerun()
+            st.session_state[done_key] = (updated_count, new_experiment_type)
+            st.rerun(scope="fragment")
 
     @st.dialog("💾 Create Database From Selected Rows", width="large")
     def show_create_db_dialog(run_rows, table_index):
+        done_key = f"_create_db_done_{table_index}"
+        if st.session_state.get(done_key):
+            copied_count, safe_name = st.session_state.pop(done_key)
+            st.success(f"Created `{safe_name}` with {copied_count} selected row{'s' if copied_count != 1 else ''}.")
+            if st.button("Close", key=f"close_create_done_{table_index}", type="primary", width='stretch'):
+                st.session_state["dashboard_flash_message"] = (
+                    f"Created `{safe_name}` with {copied_count} selected row{'s' if copied_count != 1 else ''}."
+                )
+                st.session_state.pop(f"table_{table_index}", None)
+                st.rerun()
+            return
+
         if not run_rows:
             st.info("No runs selected.")
             return
@@ -643,11 +672,8 @@ else:
             except FileExistsError as exc:
                 st.error(str(exc))
                 return
-            st.session_state["dashboard_flash_message"] = (
-                f"Created `{safe_name}` with {copied_count} selected row{'s' if copied_count != 1 else ''}."
-            )
-            st.session_state.pop(f"table_{table_index}", None)
-            st.rerun()
+            st.session_state[done_key] = (copied_count, safe_name)
+            st.rerun(scope="fragment")
 
     @st.dialog("📈 Accuracy Comparison", width="large")
     def show_large_chart(chart_df, selected_df):
@@ -1686,16 +1712,16 @@ else:
         if action_col1.button("Select all", key=f"{session_key}_select_all", width='stretch'):
             st.session_state[session_key] = options.copy()
             _sync_filter_checkboxes(session_key, options, st.session_state[session_key])
-            st.rerun()
+            rerun_current_fragment()
         if action_col2.button("Inverse", key=f"{session_key}_inverse", width='stretch'):
             selected_set = set(st.session_state[session_key])
             st.session_state[session_key] = [opt for opt in options if opt not in selected_set]
             _sync_filter_checkboxes(session_key, options, st.session_state[session_key])
-            st.rerun()
+            rerun_current_fragment()
         if action_col3.button("Clear", key=f"{session_key}_clear", width='stretch'):
             st.session_state[session_key] = []
             _sync_filter_checkboxes(session_key, options, st.session_state[session_key])
-            st.rerun()
+            rerun_current_fragment()
 
         selected_values = []
         for opt in options:
@@ -1748,7 +1774,7 @@ else:
                         del st.session_state[key]
                 
             st.session_state.num_tables -= 1
-            st.rerun()
+            rerun_current_fragment()
 
     # --- Global Filters & Settings ---
     st.sidebar.header("Global Filters & Settings")
@@ -1863,9 +1889,8 @@ else:
     st.sidebar.markdown("---")
     @st.fragment(run_every=10)
     def _render_experiment_result_tables():
-        with st.spinner("Refreshing experiment runs..."):
-            df = get_runs(selected_run_limit)
-            df = preprocess_runs_df(df)
+        df = get_runs(DB_PATH, selected_run_limit)
+        df = preprocess_runs_df(df)
         if df is None or df.empty:
             st.warning("No runs found in the database yet. Run an experiment first!")
             return
@@ -1883,6 +1908,7 @@ else:
         models = sorted(df['model_name'].unique())
         expr_types = sorted(df['experiment_type'].unique())
         render_dashboard_intro()
+        st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')} · {len(df)} rows")
         st.markdown("---")
 
         # Render Tables
@@ -1993,7 +2019,7 @@ else:
                             }
                             save_presets(st.session_state.presets)
                             st.success(f"Saved '{preset_name}'!")
-                            st.rerun()
+                            rerun_current_fragment()
                         else:
                             st.error("Enter a name")
 

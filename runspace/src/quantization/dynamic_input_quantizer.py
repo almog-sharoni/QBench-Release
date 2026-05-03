@@ -10,6 +10,9 @@ except ImportError:
     from src.ops.quant_base import quantize_tensor
     from src.ops.quant_base import _quantize_tensor_cuda
 
+import os
+import json
+
 
 DEFAULT_DYNAMIC_INPUT_CANDIDATES = [
     'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
@@ -26,6 +29,7 @@ class DynamicInputQuantizer:
     """
     _RELU_TYPES = (nn.ReLU, nn.ReLU6)
     _COMPUTE_TYPES = (nn.Conv2d, nn.Linear)
+    _ATTENTION_TYPES = (nn.MultiheadAttention,)
     _FUNCTIONAL_OP_NAMES = (
         "QuantMatMul",
         "QuantBMM",
@@ -45,6 +49,8 @@ class DynamicInputQuantizer:
         restrict_post_relu_ufp=False,
         unsigned_input_sources=None,
         use_unsigned_input_candidates=True,
+        use_cache_sim_db=False,
+        model_name=None,
     ):
         self.model = model
         self.metric = metric
@@ -82,6 +88,7 @@ class DynamicInputQuantizer:
                 continue
         self.functional_ops = tuple(functional_ops)
         self.hookable_ops = tuple(dict.fromkeys(self.supported_ops + self.functional_ops))
+        self.input_hook_ops = tuple(dict.fromkeys(self.hookable_ops + self._COMPUTE_TYPES + self._ATTENTION_TYPES))
         self.post_relu_layers = self._find_post_relu_layers()
         self.unsigned_passthrough_layers = set()
         self.post_unsigned_layers = self._find_post_unsigned_layers()
@@ -89,6 +96,32 @@ class DynamicInputQuantizer:
         self.ufp_candidates = [f for f in self.candidate_formats if f.startswith('ufp')]
         self.non_ufp_candidates = [f for f in self.candidate_formats if not f.startswith('ufp')]
         self.unsigned_candidate_formats = self._make_unsigned_candidates(self.candidate_formats)
+
+        self.cache_sim_map = {}
+        if use_cache_sim_db and model_name:
+            print(f"Loading cache simulation results from DB for {model_name}")
+            try:
+                try:
+                    from src.database.handler import RunDatabase
+                except ImportError:
+                    from ..database.handler import RunDatabase
+                db = RunDatabase()
+                sim = db.get_latest_cache_simulation(model_name)
+                if sim:
+                    for layer in sim.get('layers', []):
+                        self.cache_sim_map[layer['name']] = layer.get('stay_on_chip', True)
+                    print(f"Loaded {len(self.cache_sim_map)} layer statuses from cache sim DB.")
+                    if self.cache_sim_map:
+                        sample_keys = list(self.cache_sim_map.keys())[:10]
+                        print(f"Sample keys in cache sim map: {sample_keys}")
+                else:
+                    print(f"No cache simulation found in DB for {model_name}.")
+            except Exception as e:
+                print(f"Failed to fetch cache sim from DB: {e}")
+                
+        self.all_fp8_formats = ['fp8_e4m3', 'fp8_e5m2', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e1m6', 'fp8_e6m1', 'fp8_e7m0']
+        self.unsigned_all_fp8_formats = self._make_unsigned_candidates(self.all_fp8_formats)
+        self._reported_missing_layers = set()
 
     @staticmethod
     def _dedupe_formats(formats):
@@ -336,8 +369,8 @@ class DynamicInputQuantizer:
         count_unsigned_candidate_layers = 0
 
         for name, module in self.model.named_modules():
-            if isinstance(module, self.hookable_ops):
-                hook = self._get_hook(name)
+            if isinstance(module, self.input_hook_ops):
+                hook = self._get_attention_hook(name) if isinstance(module, self._ATTENTION_TYPES) else self._get_hook(name)
                 self.hooks.append(module.register_forward_pre_hook(hook))
                 self.hooked_modules.append(module)
                 uses_unsigned_candidates = (
@@ -376,19 +409,27 @@ class DynamicInputQuantizer:
             print(f"{count_unsigned_candidate_layers} layers are using UFP candidates.")
 
     def _candidates_for_layer(self, layer_name, module=None):
-        if (
-            (
-                self.use_unsigned_input_candidates
-                and (
-                    layer_name in self.post_unsigned_layers
-                    or layer_name in self.unsigned_passthrough_layers
-                )
+        is_unsigned = (
+            self.use_unsigned_input_candidates
+            and (
+                layer_name in self.post_unsigned_layers
+                or layer_name in self.unsigned_passthrough_layers
             )
-            or (
-                module is not None
-                and self._module_uses_unsigned_input(module)
-            )
-        ):
+        ) or (
+            module is not None
+            and self._module_uses_unsigned_input(module)
+        )
+
+        stays_on_chip = self.cache_sim_map.get(layer_name)
+        if stays_on_chip is None:
+            if layer_name not in self._reported_missing_layers:
+                print(f"[DynamicInputQuantizer] Layer '{layer_name}' NOT found in cache sim map. Using standard candidates.")
+                self._reported_missing_layers.add(layer_name)
+            
+        if stays_on_chip:
+            return self.unsigned_all_fp8_formats if is_unsigned else self.all_fp8_formats
+
+        if is_unsigned:
             return self.unsigned_candidate_formats
 
         if self.restrict_post_relu_ufp:
@@ -406,42 +447,71 @@ class DynamicInputQuantizer:
 
             candidates = self._candidates_for_layer(layer_name, module)
 
-            # 1. Perform dynamic quantization selection
-            x_quantized, best_indices = self._select_best_format(x, layer_name, candidates)
+            x_quantized, best_indices = self._quantize_input_tensor(x, layer_name, candidates)
+            self._set_module_input_quant_state(module, candidates, best_indices)
 
-            # 2. Update module state to skip its own quantization path (redundant work)
-            module.input_quantization = False 
-            module.input_mode = 'chunk'
-            module.input_chunk_size = self.chunk_size
-            
-            # Store the candidates list and the indices tensor on the module for later logging.
-            # We avoid building the list of strings here to prevent GPU-CPU sync.
-            module.input_chunk_candidates = candidates
-            module.input_chunk_format_indices = best_indices
-            
-            # For compatibility with any code that still expects a single q_type string
-            if len(candidates) > 0:
-                # We can't easily pick the "first" chosen format without a sync, 
-                # so we just use the first candidate as a placeholder.
-                module.input_q_type = candidates[0]
-            
-            module.rounding = 'nearest'
-
-            # 3. Update stats (L1/MSE)
-            with torch.no_grad():
-                diff = x - x_quantized
-                # We use sum() which stays on GPU; .item() is a small sync but acceptable
-                # compared to moving the entire tensor.
-                self.stats['sum_l1_err'] += diff.abs().sum().item()
-                self.stats['sum_mse_err'] += diff.pow(2).sum().item()
-                self.stats['sum_l1_norm'] += x.abs().sum().item()
-                self.stats['sum_l2_norm'] += x.pow(2).sum().item()
-
-            # 4. Return the quantized tensor and all other original arguments to replace the input.
+            # Return the quantized tensor and all other original arguments to replace the input.
             # This ensures multi-argument ops like QuantAdd(x, other) don't lose 'other'.
             return (x_quantized, *args[1:])
 
         return hook_fn
+
+    def _get_attention_hook(self, layer_name):
+        def input_layer_name(suffix):
+            return f"{layer_name}.{suffix}" if layer_name else suffix
+
+        def hook_fn(module, args):
+            if len(args) < 3:
+                return None
+
+            query, key, value = args[:3]
+            if not all(isinstance(t, torch.Tensor) for t in (query, key, value)):
+                return None
+
+            candidates = self._candidates_for_layer(layer_name, module)
+            q_quantized, q_indices = self._quantize_input_tensor(
+                query, input_layer_name("query_input"), candidates
+            )
+            k_quantized, _ = self._quantize_input_tensor(
+                key, input_layer_name("key_input"), candidates
+            )
+            v_quantized, _ = self._quantize_input_tensor(
+                value, input_layer_name("value_input"), candidates
+            )
+            self._set_module_input_quant_state(module, candidates, q_indices)
+
+            return (q_quantized, k_quantized, v_quantized, *args[3:])
+
+        return hook_fn
+
+    def _set_module_input_quant_state(self, module, candidates, best_indices):
+        # Disable a quantized module's built-in input quantization path after the
+        # pre-hook has already supplied dynamically quantized inputs.
+        module.input_quantization = False
+        module.input_mode = 'chunk'
+        module.input_chunk_size = self.chunk_size
+
+        # Store candidates and indices without turning the full tensor into a
+        # Python list; that would force a large GPU-CPU sync.
+        module.input_chunk_candidates = candidates
+        module.input_chunk_format_indices = best_indices
+
+        if len(candidates) > 0:
+            module.input_q_type = candidates[0]
+
+        module.rounding = 'nearest'
+
+    def _quantize_input_tensor(self, tensor, layer_name, candidates):
+        quantized, best_indices = self._select_best_format(tensor, layer_name, candidates)
+
+        with torch.no_grad():
+            diff = tensor - quantized
+            self.stats['sum_l1_err'] += diff.abs().sum().item()
+            self.stats['sum_mse_err'] += diff.pow(2).sum().item()
+            self.stats['sum_l1_norm'] += tensor.abs().sum().item()
+            self.stats['sum_l2_norm'] += tensor.pow(2).sum().item()
+
+        return quantized, best_indices
 
     def _select_best_format(self, tensor, layer_name, candidates):
         """
@@ -485,7 +555,8 @@ class DynamicInputQuantizer:
                     tensor,
                     q_type=fmt,
                     mode='chunk',
-                    chunk_size=chunk_size
+                    chunk_size=chunk_size,
+                    rounding='nearest',
                 )
                 q_flat = q_tensor.flatten(1) if q_tensor.dim() > 1 else q_tensor.flatten(0).unsqueeze(0)
                 if pad_len > 0:
@@ -556,10 +627,13 @@ class DynamicInputQuantizer:
                         counts_dict[candidates[idx]] = count
                 processed_layer_stats[layer_name] = {
                     'format_counts': counts_dict,
-                    'total_chunks': int(counts_tensor.sum().item())
+                    'total_chunks': int(counts_tensor.sum().item()),
+                    'stays_on_chip': self.cache_sim_map.get(layer_name, True)
                 }
             else:
-                processed_layer_stats[layer_name] = stats
+                stats_copy = dict(stats)
+                stats_copy['stays_on_chip'] = self.cache_sim_map.get(layer_name, True)
+                processed_layer_stats[layer_name] = stats_copy
 
         return {
             'norm_l1': norm_l1,
