@@ -26,8 +26,3 @@ tailscaled
 systemd/
 
 pyrightconfig.json
-install_docker_wrapper_ori.sh
-install_docker_wrapper.sh
-limit_ori.sh
-restart_mps.sh
-runspace/database/*.db
