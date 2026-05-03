@@ -42,14 +42,14 @@ def _top_k_keypoints(keypoints, scores, k: int):
 # Passthrough / linear ops — like ReLU, value representation unchanged
 # ---------------------------------------------------------------------------
 
-@OpRegistry.register("ObservedDiscardTrash", passthrough=True)
+@OpRegistry.register("ObservedDiscardTrash", passthrough=True, quantized=False)
 class ObservedDiscardTrash(nn.Module):
     """Drop the dustbin (last) score channel (stageB3)."""
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x[:, :-1]
 
 
-@OpRegistry.register("ObservedReorderReshape", passthrough=True)
+@OpRegistry.register("ObservedReorderReshape", passthrough=True, quantized=False)
 class ObservedReorderReshape(nn.Module):
     """Pixel-shuffle reorder/reshape (stageB4-B7): (B,64,H/8,W/8) -> (B,H,W)."""
     def forward(self, scores: torch.Tensor) -> torch.Tensor:
@@ -58,7 +58,7 @@ class ObservedReorderReshape(nn.Module):
         return scores.permute(0, 1, 3, 2, 4).reshape(b, h*8, w*8)
 
 
-@OpRegistry.register("ObservedThreshold", compliance_status="FP32 activation")
+@OpRegistry.register("ObservedThreshold", compliance_status="FP32 activation", quantized=False)
 class ObservedThreshold(nn.Module):
     """Threshold score map and extract keypoint coordinates (stageB10-B12)."""
     def __init__(self, threshold: float = 0.005):
@@ -71,20 +71,20 @@ class ObservedThreshold(nn.Module):
         return keypoints, score_list
 
 
-@OpRegistry.register("ObservedRemoveBorders", passthrough=True)
+@OpRegistry.register("ObservedRemoveBorders", replaces="remove_borders",
+                     init_from_args={"border": "border"}, passthrough=True, quantized=False)
 class ObservedRemoveBorders(nn.Module):
     """Remove keypoints too close to image borders (stageB9)."""
     def __init__(self, border: int = 4):
         super().__init__()
         self.border = border
 
-    def forward(self, keypoints, scores, h_full: int, w_full: int):
-        result = [_remove_borders(k, s, self.border, h_full, w_full)
-                  for k, s in zip(keypoints, scores)]
-        return list(zip(*result))
+    def forward(self, keypoints, scores, height: int, width: int):
+        return _remove_borders(keypoints, scores, self.border, height, width)
 
 
-@OpRegistry.register("ObservedTopKKeypoints", passthrough=True)
+@OpRegistry.register("ObservedTopKKeypoints", replaces="top_k_keypoints",
+                     init_from_args={"max_keypoints": "k"}, passthrough=True, quantized=False)
 class ObservedTopKKeypoints(nn.Module):
     """Keep only the top-k highest-scoring keypoints (stageB13)."""
     def __init__(self, max_keypoints: int = -1):
@@ -92,21 +92,17 @@ class ObservedTopKKeypoints(nn.Module):
         self.max_keypoints = max_keypoints
 
     def forward(self, keypoints, scores):
-        if self.max_keypoints < 0:
-            return list(keypoints), list(scores)
-        result = [_top_k_keypoints(k, s, self.max_keypoints)
-                  for k, s in zip(keypoints, scores)]
-        return list(zip(*result))
+        return _top_k_keypoints(keypoints, scores, self.max_keypoints)
 
 
-@OpRegistry.register("ObservedKeypointFlip", passthrough=True)
+@OpRegistry.register("ObservedKeypointFlip", passthrough=True, quantized=False)
 class ObservedKeypointFlip(nn.Module):
     """Convert keypoint coords from (row, col) to (x, y) order (stageB14)."""
     def forward(self, keypoints):
         return [torch.flip(k, [1]).float() for k in keypoints]
 
 
-@OpRegistry.register("ObservedL2Norm", compliance_status="FP32 activation")
+@OpRegistry.register("ObservedL2Norm", compliance_status="FP32 activation", quantized=False)
 class ObservedL2Norm(nn.Module):
     """L2-normalize the dense descriptor map along the channel dimension (stageC3)."""
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -117,7 +113,8 @@ class ObservedL2Norm(nn.Module):
 # NMS — max-selection like MaxPool, no arithmetic (UNDER CONSTRUCTION)
 # ---------------------------------------------------------------------------
 
-@OpRegistry.register("ObservedSimpleNMS", passthrough=True)
+@OpRegistry.register("ObservedSimpleNMS", replaces="simple_nms",
+                     init_from_args={"radius": "nms_radius"}, passthrough=True, quantized=False)
 class ObservedSimpleNMS(nn.Module):
     """NMS via repeated max_pool2d (stageB8). Pure max-selection — no arithmetic."""
     def __init__(self, radius: int = 4):
@@ -132,7 +129,7 @@ class ObservedSimpleNMS(nn.Module):
 # FP32-required ops — floating-point precision critical for correct placement
 # ---------------------------------------------------------------------------
 
-@OpRegistry.register("ObservedCoordOps", compliance_status="FP32 required")
+@OpRegistry.register("ObservedCoordOps", compliance_status="FP32 required", quantized=False)
 class ObservedCoordOps(nn.Module):
     """Shift, normalize, and map keypoint coords to [-1,1] (stageD1-D3)."""
     def __init__(self, s: int = 8):
@@ -149,7 +146,7 @@ class ObservedCoordOps(nn.Module):
         return kp * 2 - 1
 
 
-@OpRegistry.register("ObservedGridSample", compliance_status="FP32 required")
+@OpRegistry.register("ObservedGridSample", compliance_status="FP32 required", quantized=False)
 class ObservedGridSample(nn.Module):
     """Bilinear descriptor sampling + per-keypoint L2 norm (stageD4)."""
     def forward(self, descriptors: torch.Tensor, keypoints_norm: torch.Tensor) -> torch.Tensor:
@@ -179,7 +176,8 @@ def _arange_like(x, dim: int):
 
 # --- Linear / passthrough ops -------------------------------------------------
 
-@OpRegistry.register("ObservedKeypointNormalize", compliance_status="FP32 activation")
+@OpRegistry.register("ObservedKeypointNormalize", replaces="normalize_keypoints",
+                     compliance_status="FP32 activation", quantized=False)
 class ObservedKeypointNormalize(nn.Module):
     """Center + scale keypoint coordinates relative to image dimensions."""
     def forward(self, kpts: torch.Tensor, image_shape) -> torch.Tensor:
@@ -289,7 +287,9 @@ class ObservedDescMatmul(_QuantArithmeticBase):
 
 # --- FP32-required op --------------------------------------------------------
 
-@OpRegistry.register("ObservedSinkhorn", compliance_status="FP32 required")
+@OpRegistry.register("ObservedSinkhorn", replaces="log_optimal_transport",
+                     init_from_args={"iters": "iters"}, compliance_status="FP32 required",
+                     quantized=False)
 class ObservedSinkhorn(nn.Module):
     """Differentiable optimal transport via Sinkhorn in log-space.
 
@@ -322,7 +322,7 @@ class ObservedSinkhorn(nn.Module):
 
 # --- Match selection --------------------------------------------------------
 
-@OpRegistry.register("ObservedMatchSelect", compliance_status="FP32 activation")
+@OpRegistry.register("ObservedMatchSelect", compliance_status="FP32 activation", quantized=False)
 class ObservedMatchSelect(nn.Module):
     """Mutual-nearest-neighbor match selection with score threshold."""
     def __init__(self, match_threshold: float = 0.2):
@@ -343,3 +343,44 @@ class ObservedMatchSelect(nn.Module):
         indices0 = torch.where(valid0, indices0, indices0.new_tensor(-1))
         indices1 = torch.where(valid1, indices1, indices1.new_tensor(-1))
         return indices0, indices1, mscores0, mscores1
+
+
+# ===========================================================================
+# Composed @observer replacements
+# These bundle multiple primitives so a single class binds 1:1 to an upstream
+# @observer function via `replaces=`.
+# ===========================================================================
+
+
+@OpRegistry.register("ObservedAttention", replaces="attention", is_activation=False)
+class ObservedAttention(nn.Module):
+    """Attention(query, key, value) → (output, prob).
+
+    Wraps Q·Kᵀ/√d (FP8), softmax, and Score·V (FP8).
+    """
+    def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None,
+                 quant_mode="chunk", chunk_size=None):
+        super().__init__()
+        print(f"[ObservedAttention quant] attention: q_type={q_type}, quantization_bias={quantization_bias}, quant_mode={quant_mode}, chunk_size={chunk_size}")
+        kw = dict(q_type=q_type, quantization_bias=quantization_bias,
+                  quant_mode=quant_mode, chunk_size=chunk_size)
+        self.attn_scores = ObservedAttentionScores(**kw)
+        self.attn_apply = ObservedAttentionApply(**kw)
+
+    def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor):
+        s = self.attn_scores(query, key)
+        p = F.softmax(s, dim=-1)
+        return self.attn_apply(p, value), p
+
+
+@OpRegistry.register("ObservedSampleDescriptors", replaces="sample_descriptors",
+                     init_from_args={"s": "s"}, compliance_status="FP32 required")
+class ObservedSampleDescriptors(nn.Module):
+    """sample_descriptors(keypoints, descriptors, s) → bilinear-sampled, L2-normed descriptors."""
+    def __init__(self, s: int = 8):
+        super().__init__()
+        self.coord = ObservedCoordOps(s)
+        self.grid = ObservedGridSample()
+
+    def forward(self, keypoints: torch.Tensor, descriptors: torch.Tensor) -> torch.Tensor:
+        return self.grid(descriptors, self.coord(keypoints, descriptors))
