@@ -13,14 +13,19 @@ services:
     mem_limit: 64gb
     gpus: all
     user: "${UID:-1000}:${GID:-1000}"
+    ulimits:
+      nofile:
+        soft: 524288
+        hard: 524288
     environment:
       HOME: /tmp
       PYTHONUNBUFFERED: "1"
       PYTHONNOUSERSITE: "1"
       TORCH_HOME: /app/.cache/torch
-      TORCH_CUDA_ARCH_LIST: "9.0"
-      TORCH_EXTENSIONS_DIR: /app/runspace/.torch_extensions
       PYTORCH_KERNEL_CACHE_PATH: /app/.cache/torch/kernels
+      TORCH_CUDA_ARCH_LIST: 12.1a
+
+
     volumes:
       - ./:/app
       - ${IMAGENET_HOST_PATH:-/data/shared_data/imagenet}:/data/imagenet

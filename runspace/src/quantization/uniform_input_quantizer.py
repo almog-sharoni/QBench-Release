@@ -49,7 +49,6 @@ class UniformInputQuantizer:
             q_type=self.fmt,
             mode=self.quant_mode,
             chunk_size=self.chunk_size if self.quant_mode == 'chunk' else None,
-            rounding='nearest',
         )
         return x_q
 
@@ -70,7 +69,6 @@ class UniformInputQuantizer:
             q_type=fmt,
             mode=self.quant_mode,
             chunk_size=self.chunk_size if self.quant_mode == 'chunk' else None,
-            rounding='nearest',
         )
         return x_q
 

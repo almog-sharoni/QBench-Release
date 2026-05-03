@@ -163,7 +163,6 @@ class BatchReplayInputQuantizer:
                     q_type=chunk_formats[0] if chunk_formats else "fp32",
                     mode="chunk",
                     chunk_size=self.chunk_size,
-                    rounding="nearest",
                     chunk_formats=chunk_formats,
                 )
                 diff = x - x_quantized

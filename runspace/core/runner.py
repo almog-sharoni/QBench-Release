@@ -1426,7 +1426,6 @@ class Runner:
                             q_type=fmt,
                             mode='chunk',
                             chunk_size=chunk_size,
-                            rounding='nearest',
                         )
                         diff = inputs - q_inputs
                         input_only_stats['sum_l1_err'] += diff.abs().sum().item()

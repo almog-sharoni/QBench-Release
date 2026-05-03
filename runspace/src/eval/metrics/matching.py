@@ -142,8 +142,8 @@ class MatchingMetrics:
         outputs: dict from Matching.forward():
             'keypoints0':       List[Tensor[N0, 2]]
             'keypoints1':       List[Tensor[N1, 2]]
-            'matches0':         Tensor[batch, N0]   (index into kpts1, -1 = unmatched)
-            'matching_scores0': Tensor[batch, N0]
+            'matches0':         List[Tensor[N0]]    (index into kpts1, -1 = unmatched)
+            'matching_scores0': List[Tensor[N0]]
         targets: batch dict; may contain 'T_0to1', 'K0', 'K1' for GT evaluation.
         """
         kpts0_list = outputs['keypoints0']
@@ -162,7 +162,7 @@ class MatchingMetrics:
         if has_gt:
             self._has_gt = True
 
-        batch_size = matches0.shape[0]
+        batch_size = len(matches0)
         for i in range(batch_size):
             kp0 = kpts0_list[i].cpu().numpy()   # [N0, 2]
             kp1 = kpts1_list[i].cpu().numpy()   # [N1, 2]

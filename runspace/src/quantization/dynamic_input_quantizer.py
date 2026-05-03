@@ -556,7 +556,6 @@ class DynamicInputQuantizer:
                     q_type=fmt,
                     mode='chunk',
                     chunk_size=chunk_size,
-                    rounding='nearest',
                 )
                 q_flat = q_tensor.flatten(1) if q_tensor.dim() > 1 else q_tensor.flatten(0).unsqueeze(0)
                 if pad_len > 0:

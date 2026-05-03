@@ -17,14 +17,19 @@ class OpRegistry:
     _supported_functions = set() # Set of supported functional operations (e.g. F.conv2d)
     _under_construction_ops = set() # Set of ops marked as under construction
     _passthrough_ops = set() # Ops that forward to the next quantized layer without W/A quant of their own
+    _replacements_by_name = {} # Maps upstream @observer function __name__ -> (Observed cls, init_from_args dict)
+    _unquantized_ops = set() # Ops registered with quantized=False — observed but no actual W/A quantization
 
     @classmethod
-    def register(cls, op_name: str, original_cls=None, is_activation=False, compliance_status=None, under_construction=False, passthrough=False):
+    def register(cls, op_name: str, original_cls=None, *, replaces=None, init_from_args=None,
+                 is_activation=False, compliance_status=None, under_construction=False, passthrough=False,
+                 quantized=True):
         def decorator(cls_impl):
-            # print(f"DEBUG: Registering {op_name} (original={original_cls}) in OpRegistry {id(cls)}")
             cls._registry[op_name] = cls_impl
             if original_cls:
                 cls._supported_ops[original_cls] = cls_impl
+            if replaces is not None:
+                cls._replacements_by_name[replaces] = (cls_impl, dict(init_from_args or {}))
             if is_activation:
                 cls._activation_ops.add(op_name)
             if compliance_status:
@@ -33,6 +38,8 @@ class OpRegistry:
                 cls._under_construction_ops.add(op_name)
             if passthrough:
                 cls._passthrough_ops.add(op_name)
+            if not quantized:
+                cls._unquantized_ops.add(op_name)
             return cls_impl
         return decorator
 
@@ -86,6 +93,17 @@ class OpRegistry:
     def is_passthrough(cls, op_name: str):
         """Checks if the given op is a pass-through (no W/A quant of its own)."""
         return op_name in cls._passthrough_ops
+
+    @classmethod
+    def get_replacement_by_name(cls, fn_name: str):
+        """Returns (Observed cls, init_from_args) for an @observer function name, or None."""
+        return cls._replacements_by_name.get(fn_name)
+
+    @classmethod
+    def is_quantized(cls, op_name: str) -> bool:
+        """True unless the op was registered with quantized=False (observed but
+        not yet performing W/A quantization arithmetic)."""
+        return op_name not in cls._unquantized_ops
 
 # Populate standard supported functions
 import torch

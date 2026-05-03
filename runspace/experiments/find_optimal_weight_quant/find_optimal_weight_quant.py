@@ -196,17 +196,17 @@ def get_quantized_tensor_sim(tensor, q_type, chunk_size=None, chunk_formats=None
     """
     if chunk_size is not None:
         return quantize_tensor(tensor, q_type=q_type, mode='chunk', chunk_size=chunk_size,
-                               chunk_formats=chunk_formats, rounding='nearest', validate=False)
+                               chunk_formats=chunk_formats, validate=False)
 
     if mode == 'tensor':
-        return quantize_tensor(tensor, q_type=q_type, mode='tensor', rounding='nearest', validate=False)
+        return quantize_tensor(tensor, q_type=q_type, mode='tensor', validate=False)
 
     # Default: per output-channel (dim 0) via quantize_tensor channel mode.
     # quantize_tensor(channel) preserves dim=1, so transpose [O, ...] -> [..., O]
     # to make channel axis align with output channels.
     out_channels = tensor.shape[0]
     flat = tensor.view(out_channels, -1).transpose(0, 1).contiguous()  # [K, O]
-    deq_t, _ = quantize_tensor(flat, q_type=q_type, mode='channel', rounding='nearest', validate=False)
+    deq_t, _ = quantize_tensor(flat, q_type=q_type, mode='channel', validate=False)
     dequant = deq_t.transpose(0, 1).contiguous().view_as(tensor)
     max_val_per_channel = tensor.view(out_channels, -1).abs().amax(dim=1, keepdim=True).clamp(min=1e-9)
     return dequant, max_val_per_channel.max().item()
@@ -289,7 +289,6 @@ def _build_eval_dataset_cfg(args, dataset_base=None):
 from runspace.experiments.utils.plotting import (
     plot_error_histograms,
     plot_error_boxplot,
-    plot_oracle_heatmap,
     plot_accuracy_comparison,
     plot_chunk_format_distribution,
     plot_chunk_win_rate,
@@ -951,6 +950,7 @@ def process_single_model(args, device, metrics, base_root):
          
     dataset_base = _build_eval_dataset_cfg(args, config['dataset'])
 
+
     # Fetch DB state once — used for all skip checks below
     existing_runs = None if args.force_rerun else _load_existing_runs(db)
 
@@ -1344,16 +1344,20 @@ def process_single_model(args, device, metrics, base_root):
         )
         weight_quant_map_json_by_output.update(baseline_quant_maps)
 
-        # Enable Oracle Tracker
-        tracker = None
-        try:
-            from runspace.src.tracking.oracle_tracker import OracleTracker
-            tracker = OracleTracker()
-            tracker.reset()
-            tracker.enable()
-        except ImportError:
-            print("Warning: Could not import OracleTracker. Oracle visualization disabled.")
-            tracker = None
+        # Secondary DB skip for optimized configs (added later in the metrics loop)
+        if not args.force_rerun:
+            filtered_configs = []
+            for c in final_configs:
+                out_name = c.get('output_name', '')
+                if out_name == 'ref_fp32' or out_name.startswith('baseline_'):
+                    filtered_configs.append(c)  # baselines already pre-filtered
+                    continue
+                weight_dt = out_name.replace('optimized_', 'opt_')
+                if _weight_quant_run_exists(existing_runs, args.model_name, 'weight_quant_optimized', weight_dt):
+                    print(f"[DB] Skipping {out_name} — already in DB")
+                else:
+                    filtered_configs.append(c)
+            final_configs = filtered_configs
 
         results = []
         # Keep reference metrics available while logging each run immediately.
@@ -1493,6 +1497,26 @@ def process_single_model(args, device, metrics, base_root):
                           # Fallback: try looking in subdirs (e.g. if run_id uses slashes - unlikely here)
                           pass
 
+        total_eval_runs = len(final_configs)
+        for idx, run_cfg in enumerate(final_configs, start=1):
+            out_name = run_cfg.get('output_name', f'run_{idx}')
+            print(f"[Eval] Running {idx}/{total_eval_runs}: {out_name}")
+            res = runner.run_single(run_cfg, output_root=model_dir)
+            results.append(res)
+            try:
+                _log_result_immediately(res)
+            except Exception as log_err:
+                print(f"[DB] Failed to log {out_name}: {log_err}")
+
+        failed = [r for r in results if r.get('status') not in ('SUCCESS', 'NO_QUANT')]
+        if failed:
+            print(f"\n[Evaluation] {len(failed)} run(s) failed:")
+            for r in failed:
+                print(
+                    f"  - {r.get('output_name', '<unknown>')}: "
+                    f"status={r.get('status')} error={r.get('exec_error')}"
+                )
+        
         # Aggregate
         aggregator = ReportAggregator()
         summary_path = os.path.join(model_dir, "evaluation_summary.csv")
