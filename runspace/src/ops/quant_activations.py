@@ -119,7 +119,7 @@ class LUTActivation:
         return output, q_output
 
 
-@OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True, passthrough=True)
+@OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True)
 class QuantReLU(nn.ReLU, QuantizedLayerMixin):
     """
     Quantized ReLU using LUT.

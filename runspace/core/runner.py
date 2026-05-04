@@ -1700,17 +1700,30 @@ class Runner:
         qcfg = config.get('quantization', {}) or {}
         global_fmt = qcfg.get('output_format', qcfg.get('format', 'fp32'))
         layer_configs = qcfg.get('layers', {}) or {}
-        per_layer_active = {
-            (layer_cfg.get('output_format', global_fmt))
-            for layer_cfg in layer_configs.values()
-            if Runner._layer_enables_output_quant(layer_cfg)
+
+        enabled_layers = [
+            lc for lc in layer_configs.values()
+            if Runner._layer_enables_output_quant(lc)
+        ]
+        # Only count *explicit* per-layer output_format overrides; layers enabled
+        # by output_mode-only fall back to global_fmt and don't count as a distinct
+        # format for the "mixed" decision.
+        explicit_fmts = {
+            lc['output_format'] for lc in enabled_layers if 'output_format' in lc
         }
+
         if not global_on:
-            if not per_layer_active:
+            if not enabled_layers:
                 return 'fp32'
-            # Some layers enabled via per-layer override; rest fp32.
-            return 'mixed' if len(per_layer_active) > 1 else f"mixed:{next(iter(per_layer_active))}"
-        if per_layer_active and (per_layer_active - {global_fmt}):
+            if not explicit_fmts:
+                # All enabled-via-per-layer layers fall back to global_fmt as default.
+                return f"mixed:{global_fmt}"
+            if len(explicit_fmts) == 1 and len(enabled_layers) == len(explicit_fmts):
+                return f"mixed:{next(iter(explicit_fmts))}"
+            return "mixed"
+
+        # global_on
+        if explicit_fmts and (explicit_fmts - {global_fmt}):
             return "mixed"
         return global_fmt
 

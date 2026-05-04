@@ -77,6 +77,61 @@ byte-identical until the flag is enabled.
 | `output_mode` | string | Quantization mode for outputs. Options: `tensor`, `channel`, `chunk`. | `tensor` |
 | `output_chunk_size` | int | Chunk size when `output_mode` is `chunk`. | `null` |
 
+### Per-layer output_quantization override
+
+In a `quantization.layers.<name>` block, output quantization can be enabled per-layer
+even when `adapter.output_quantization` is `false` globally. Precedence:
+
+1. Explicit `output_quantization: true|false` per-layer wins.
+2. Otherwise, presence of any `output_format` / `output_mode` / `output_chunk_size`
+   in the layer block **implicitly enables** output quantization for that layer.
+3. Otherwise, the layer inherits the global `adapter.output_quantization` flag.
+
+```yaml
+adapter:
+  output_quantization: false   # off globally
+quantization:
+  format: fp8_e4m3
+  layers:
+    layer4.1.conv2:
+      output_format: fp8_e4m3   # implicitly enables output_quantization for THIS layer only
+    fc:
+      output_quantization: true # explicit form; takes precedence
+      output_format: fp8_e5m2
+```
+
+### Strict-mode compliance check
+
+`quantization.strict_format_check` (bool, default `false`) controls how the comparator
+report validates captured tensors against their declared formats:
+
+- `false` — fast path, mantissa-bit count only (`_check_mantissa_precision`). Catches
+  simulator bugs that produce too-precise values. Cheap.
+- `true` — full per-value validation through the codec (`check_fp8_compliance`).
+  Catches mantissa precision PLUS exponent range, NaN/Inf, sign violations, and
+  special-value handling. Slower but thorough.
+
+The same flag also drives the **runtime format detection** that populates the
+report's `Pre-Quant`, `Input Fmt`, and `Output Fmt` columns. In strict mode the
+detector tries each candidate format with full compliance; in non-strict it picks
+the narrowest format whose mantissa-bit budget covers the captured tensor.
+
+### Comparator report columns
+
+The comparator report's per-layer table uses **runtime-captured tensors** to
+determine each cell — values reflect what *actually happened* this batch, not
+what was configured:
+
+| Column | Meaning |
+| :--- | :--- |
+| `Weight Fmt` | Configured weight format (or `FP32` when weight quantization off / `N/A` for ops without weights). |
+| `Input Q?` | `Yes` iff the layer actually populated `last_quant_input_unscaled` this batch (= the layer's forward called `quantize_input`). |
+| `Pre-Quant` | Runtime-detected format of the tensor that arrived at the layer. |
+| `Input Fmt` | Runtime-detected format of the tensor fed to the compute kernel (post-quantize-input if called). |
+| `Output Q?` | `Yes` iff `module.output_quantization` is enabled for this layer. |
+| `Output Fmt` | Runtime-detected format of the layer's natural output (captured pre-quantize-output). For value-preserving ops like MaxPool/ReLU this remains the input format even with output quantization off. |
+| `Weight Check` / `Input Check` / `Output Check` | Compliance check on the captured tensor (mantissa-bit only when non-strict, full check when strict). |
+
 #### Technical Details: How Activations are Identified
 
 The framework distinguishes between "Layers" (weights) and "Activations" based on the class inheritance:

@@ -580,19 +580,19 @@ class GenericAdapter(BaseAdapter):
                  created.rounding = settings['rounding']
              return created
 
-        # Case 2: Layer with weights (Conv, Linear, BN) - In-place class swap
-        # We check if the QuantClass is a subclass of QuantizedLayerMixin.
-        # Activations also inherit the mixin (for quantize_output) but must take
-        # Case 3 — they need __init__ to set capture_activations / lut buffers.
-        if issubclass(QuantClass, quantized_mixin_types) and not OpRegistry.is_activation(QuantClass.__name__):
+        # Case 2: Layer with weights (Conv, Linear, BN, ...) AND activations -
+        # In-place class swap. Activations are included so that pre-existing
+        # instance state on the source module is preserved; the mixin-required
+        # attrs are initialized below.
+        if issubclass(QuantClass, quantized_mixin_types):
             # Perform in-place class swap to preserve weights
             module.__class__ = QuantClass
-            
+
             # Initialize Mixin state
             module.q_type = q_type
             module.quantization_bias = bias
             module.input_q_type = self._effective_input_q_type(settings)
-            
+
             module.input_quantization = self.input_quantization
             module.weight_quantization = self.weight_quantization
             module.input_mode = settings['input_mode']
@@ -605,13 +605,27 @@ class GenericAdapter(BaseAdapter):
             module.output_chunk_size = settings['output_chunk_size']
             module.rounding = settings['rounding']
 
+            # Mixin-required state for activations (formerly set by activation
+            # __init__ when routed through Case 3). Setting via setattr keeps
+            # the in-place swap path intact while satisfying the mixin's
+            # quantize_input / quantize_output contract.
+            if OpRegistry.is_activation(QuantClass.__name__):
+                if not hasattr(module, 'capture_activations'):
+                    module.capture_activations = False
+                if not hasattr(module, 'last_quant_output_unscaled'):
+                    module.last_quant_output_unscaled = None
+                if not hasattr(module, 'last_natural_output'):
+                    module.last_natural_output = None
+
             # Per-chunk format configuration
             if self.per_chunk_format and 'chunk_formats' in layer_conf:
                 module.chunk_formats = layer_conf['chunk_formats']
-            
-            module.register_buffer('weight_scale', None)
-            module.register_buffer('weight_fp8', None)
-            
+
+            # Only register weight buffers on layers that have a weight (skip activations).
+            if hasattr(module, 'weight') or not OpRegistry.is_activation(QuantClass.__name__):
+                module.register_buffer('weight_scale', None)
+                module.register_buffer('weight_fp8', None)
+
             # Set TF32 simulation flag if supported
             if hasattr(module, 'simulate_tf32_accum') or QuantClass.__name__ in ("QuantConv2d", "QuantConv1d"):
                 module.simulate_tf32_accum = self.simulate_tf32_accum

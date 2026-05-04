@@ -758,8 +758,12 @@ class LayerComparator:
 
         strict = self.strict_format_check
 
-        # Format-detection candidates ordered narrowest-first; first match wins.
-        _FMT_CANDIDATES = ['fp4_e2m1', 'fp4_e3m0', 'fp8_e5m2', 'fp8_e4m3', 'int8', 'int4']
+        # Narrowest-first; first match wins. Integer formats (int4/int8) are
+        # only detectable in strict mode — the non-strict mantissa-bit
+        # heuristic doesn't apply to them. Strict mode appends int4/int8 in
+        # narrowest-first order via _FMT_CANDIDATES_STRICT below.
+        _FMT_CANDIDATES = ['fp4_e2m1', 'fp4_e3m0', 'fp8_e5m2', 'fp8_e4m3']
+        _FMT_CANDIDATES_STRICT = ['fp4_e2m1', 'fp4_e3m0', 'int4', 'fp8_e5m2', 'fp8_e4m3', 'int8']
 
         def _detect_format(tensor):
             """Detect the actual format of a tensor.
@@ -770,7 +774,7 @@ class LayerComparator:
             if tensor is None:
                 return 'N/A'
             if strict:
-                for fmt in _FMT_CANDIDATES:
+                for fmt in _FMT_CANDIDATES_STRICT:
                     try:
                         res = check_fp8_compliance(tensor, q_type=fmt)
                         if res and res[0]:
@@ -778,7 +782,7 @@ class LayerComparator:
                     except Exception:
                         continue
                 return 'FP32'
-            # non-strict: count actual mantissa bits used
+            # non-strict: count actual mantissa bits used (FP candidates only)
             try:
                 mb_used = _max_mantissa_bits_used(tensor)
             except Exception:
