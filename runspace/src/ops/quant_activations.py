@@ -65,8 +65,10 @@ class LUTActivation:
             mode='tensor', return_unscaled=True,
         )[1]
         
-        # Register as buffer so it's saved with state_dict but not trained
-        self.register_buffer('lut', output_quant)
+        # persistent=False: the LUT is fully determined by activation_fn + q_type,
+        # regenerated each __init__. Excluding it from state_dict prevents
+        # load-mismatch errors when materialized weights are reloaded mid-pipeline.
+        self.register_buffer('lut', output_quant, persistent=False)
 
     def apply_lut(self, input: torch.Tensor) -> torch.Tensor:
         """
@@ -225,8 +227,11 @@ class QuantGELU(nn.GELU, LUTActivation, QuantizedLayerMixin):
         lut_values[0] = 0.0
         # Force LUT[255] = A
         lut_values[255] = A
-        
-        self.register_buffer('piecewise_lut', lut_values)
+
+        # persistent=False: the LUT is fully determined by A, regenerated each
+        # __init__. Excluding it from state_dict prevents load-mismatch errors
+        # when materialized weights are reloaded mid-pipeline.
+        self.register_buffer('piecewise_lut', lut_values, persistent=False)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if not getattr(self, 'input_quantization', True):

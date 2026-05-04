@@ -580,11 +580,12 @@ class GenericAdapter(BaseAdapter):
                  created.rounding = settings['rounding']
              return created
 
-        # Case 2: Layer with weights (Conv, Linear, BN, ...) AND activations -
-        # In-place class swap. Activations are included so that pre-existing
-        # instance state on the source module is preserved; the mixin-required
-        # attrs are initialized below.
-        if issubclass(QuantClass, quantized_mixin_types):
+        # Case 2: Layer with weights (Conv, Linear, BN) - In-place class swap.
+        # Activations are routed to Case 3 because their __init__ builds
+        # per-class state (e.g. QuantGELU.piecewise_lut, QuantSoftmax.uq_type)
+        # that an in-place __class__ swap would skip — see Bug 5 in
+        # runspace/tests/test_activation_swap.py for the regression smoke.
+        if issubclass(QuantClass, quantized_mixin_types) and not OpRegistry.is_activation(QuantClass.__name__):
             # Perform in-place class swap to preserve weights
             module.__class__ = QuantClass
 
@@ -605,26 +606,12 @@ class GenericAdapter(BaseAdapter):
             module.output_chunk_size = settings['output_chunk_size']
             module.rounding = settings['rounding']
 
-            # Mixin-required state for activations (formerly set by activation
-            # __init__ when routed through Case 3). Setting via setattr keeps
-            # the in-place swap path intact while satisfying the mixin's
-            # quantize_input / quantize_output contract.
-            if OpRegistry.is_activation(QuantClass.__name__):
-                if not hasattr(module, 'capture_activations'):
-                    module.capture_activations = False
-                if not hasattr(module, 'last_quant_output_unscaled'):
-                    module.last_quant_output_unscaled = None
-                if not hasattr(module, 'last_natural_output'):
-                    module.last_natural_output = None
-
             # Per-chunk format configuration
             if self.per_chunk_format and 'chunk_formats' in layer_conf:
                 module.chunk_formats = layer_conf['chunk_formats']
 
-            # Only register weight buffers on layers that have a weight (skip activations).
-            if hasattr(module, 'weight') or not OpRegistry.is_activation(QuantClass.__name__):
-                module.register_buffer('weight_scale', None)
-                module.register_buffer('weight_fp8', None)
+            module.register_buffer('weight_scale', None)
+            module.register_buffer('weight_fp8', None)
 
             # Set TF32 simulation flag if supported
             if hasattr(module, 'simulate_tf32_accum') or QuantClass.__name__ in ("QuantConv2d", "QuantConv1d"):
