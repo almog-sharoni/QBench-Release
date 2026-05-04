@@ -42,15 +42,8 @@ class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
                  self.last_quant_weight = w_decomp.detach()
         
         out = F.layer_norm(input_quant, self.normalized_shape, w_decomp, b, self.eps)
-        
-        # Quantize Output — only when activation quantization is enabled
-        # if getattr(self, 'input_quantization', True):
-        #     out = quantize(out, q_type=self.q_type)
-        
-        # DEBUG
-        # print(f"DEBUG: LN out min={out.min()}, max={out.max()}, q_type={self.q_type}, bias={self.quantization_bias}")
-        
-        return out
+
+        return self.quantize_output(out)
 
 try:
     from torchvision.models.convnext import LayerNorm2d
@@ -79,7 +72,7 @@ try:
             
             # Permute back to (N, C, H, W)
             out = out.permute(0, 3, 1, 2)
-            return out
+            return out  # already quantized by inner QuantLayerNorm.forward
 
 except ImportError:
     pass

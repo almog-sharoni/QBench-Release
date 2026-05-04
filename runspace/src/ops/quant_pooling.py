@@ -29,8 +29,8 @@ class QuantMaxPool2d(nn.MaxPool2d, QuantizedLayerMixin):
         if getattr(self, 'capture_activations', False):
             # last_quant_input is already captured in quantize_input
             self.last_quant_output = output.detach()
-            
-        return output
+
+        return self.quantize_output(output)
 
 
 @OpRegistry.register("QuantAdaptiveAvgPool2d", original_cls=nn.AdaptiveAvgPool2d , under_construction=True)
@@ -58,8 +58,8 @@ class QuantAdaptiveAvgPool2d(nn.AdaptiveAvgPool2d, QuantizedLayerMixin):
         # Capture activations if enabled
         if getattr(self, 'capture_activations', False):
             self.last_quant_output = output.detach()
-            
-        return output
+
+        return self.quantize_output(output)
 
 
 @OpRegistry.register("QuantAvgPool2d", original_cls=nn.AvgPool2d , under_construction=True)
@@ -87,5 +87,5 @@ class QuantAvgPool2d(nn.AvgPool2d, QuantizedLayerMixin):
         # Capture activations if enabled
         if getattr(self, 'capture_activations', False):
             self.last_quant_output = output.detach()
-            
-        return output
+
+        return self.quantize_output(output)

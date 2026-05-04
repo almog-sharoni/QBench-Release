@@ -16,14 +16,15 @@ class OpRegistry:
     _compliance_status = {} # Mapping from op_name -> status message (if custom)
     _supported_functions = set() # Set of supported functional operations (e.g. F.conv2d)
     _under_construction_ops = set() # Set of ops marked as under construction
-    _passthrough_ops = set() # Ops that forward to the next quantized layer without W/A quant of their own
     _replacements_by_name = {} # Maps upstream @observer function __name__ -> (Observed cls, init_from_args dict)
     _unquantized_ops = set() # Ops registered with quantized=False — observed but no actual W/A quantization
 
     @classmethod
     def register(cls, op_name: str, original_cls=None, *, replaces=None, init_from_args=None,
-                 is_activation=False, compliance_status=None, under_construction=False, passthrough=False,
-                 quantized=True):
+                 is_activation=False, compliance_status=None, under_construction=False,
+                 quantized=True, **_legacy_kwargs):
+        # Legacy `passthrough=` kwarg (now derived from runtime signal) is silently
+        # accepted and ignored to keep external/observed-op registrations compiling.
         def decorator(cls_impl):
             cls._registry[op_name] = cls_impl
             if original_cls:
@@ -36,8 +37,6 @@ class OpRegistry:
                 cls._compliance_status[op_name] = compliance_status
             if under_construction:
                 cls._under_construction_ops.add(op_name)
-            if passthrough:
-                cls._passthrough_ops.add(op_name)
             if not quantized:
                 cls._unquantized_ops.add(op_name)
             return cls_impl
@@ -91,8 +90,9 @@ class OpRegistry:
 
     @classmethod
     def is_passthrough(cls, op_name: str):
-        """Checks if the given op is a pass-through (no W/A quant of its own)."""
-        return op_name in cls._passthrough_ops
+        """Deprecated. Always returns False — passthrough is now a runtime property,
+        derived in the comparator from whether `last_quant_input_unscaled` was populated."""
+        return False
 
     @classmethod
     def get_replacement_by_name(cls, fn_name: str):

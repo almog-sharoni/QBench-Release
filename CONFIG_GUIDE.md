@@ -28,6 +28,9 @@ The configuration file is divided into the following sections:
 | `type` | string | Type of adapter to use. Currently supports `generic`. | `generic` |
 | `quantize_first_layer` | bool | Whether to quantize the input of the first layer. | `true` |
 | `quantized_ops` | list[str] | List of operations to replace with quantized versions. | `["Conv2d", "Linear", "ReLU"]` |
+| `input_quantization` | bool | Whether to quantize layer inputs. | `true` |
+| `weight_quantization` | bool | Whether to quantize layer weights. | `true` |
+| `output_quantization` | bool | Whether to quantize layer outputs (default `false`). | `true` |
 
 ## 3. Quantization Configuration (`quantization`)
 
@@ -62,6 +65,18 @@ This section controls how quantization is applied.
 | `act_mode` | string | Quantization mode for activation layers. Options: `tensor`, `channel`, `chunk`. | `tensor` |
 | `act_chunk_size` | int | Chunk size if `act_mode` is `chunk`. | `null` |
 
+### Output Quantization Modes
+
+Applies to every quantized op (Conv/Linear/BN/MatMul/Activations/Softmax/...) when
+`adapter.output_quantization` is `true`. Off by default — existing experiments are
+byte-identical until the flag is enabled.
+
+| Option | Type | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `output_format` | string | Output quantization format. Defaults to `format` if unset. | `fp8_e5m2` |
+| `output_mode` | string | Quantization mode for outputs. Options: `tensor`, `channel`, `chunk`. | `tensor` |
+| `output_chunk_size` | int | Chunk size when `output_mode` is `chunk`. | `null` |
+
 #### Technical Details: How Activations are Identified
 
 The framework distinguishes between "Layers" (weights) and "Activations" based on the class inheritance:
@@ -81,7 +96,14 @@ quantization:
       weight_mode: tensor
     fc:
       format: int8
+    layer4.1.conv2:
+      output_format: fp8_e4m3
+      output_mode: tensor
 ```
+
+Per-layer overrides for outputs (`output_format`, `output_mode`,
+`output_chunk_size`) follow the same pattern as inputs/weights and override the
+global `quantization.output_*` defaults.
 
 ## 4. Dataset Configuration (`dataset`)
 

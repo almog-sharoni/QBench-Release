@@ -8,7 +8,7 @@ This ensures the entire dataflow through the network stays in FP8 and is optimiz
 import torch
 import torch.nn as nn
 from runspace.src.registry.op_registry import OpRegistry
-from runspace.src.ops.quant_base import quantize_tensor
+from runspace.src.ops.quant_base import quantize_tensor, QuantizedLayerMixin
 
 
 class LUTActivation:
@@ -120,7 +120,7 @@ class LUTActivation:
 
 
 @OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True, passthrough=True)
-class QuantReLU(nn.ReLU):
+class QuantReLU(nn.ReLU, QuantizedLayerMixin):
     """
     Quantized ReLU using LUT.
     """
@@ -134,16 +134,16 @@ class QuantReLU(nn.ReLU):
         # User requested modification: instead of quantizing here and use lut to actually forward like this:
         # if x<0 than x=0 else x=x (do nothing)
         output_quant = nn.functional.relu(input)
-        
+
         if self.capture_activations:
             self.last_quant_input = input.detach()
             self.last_quant_output_unscaled = output_quant.detach()
-        
-        return output_quant
+
+        return self.quantize_output(output_quant)
 
 
 @OpRegistry.register("QuantReLU6", original_cls=nn.ReLU6, is_activation=True, compliance_status="FP32 activation")
-class QuantReLU6(nn.ReLU6):
+class QuantReLU6(nn.ReLU6, QuantizedLayerMixin):
     """
     Quantized ReLU6 using LUT.
     """
@@ -156,16 +156,16 @@ class QuantReLU6(nn.ReLU6):
     def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
         # User requested modification: use standard relu6 instead of lut
         output_quant = nn.functional.relu6(input)
-        
+
         if self.capture_activations:
             self.last_quant_input = input.detach()
             self.last_quant_output_unscaled = output_quant.detach()
-        
-        return output_quant
+
+        return self.quantize_output(output_quant)
 
 
 @OpRegistry.register("QuantSiLU", original_cls=nn.SiLU, is_activation=True, compliance_status="FP32 activation")
-class QuantSiLU(nn.SiLU):
+class QuantSiLU(nn.SiLU, QuantizedLayerMixin):
     """
     Quantized SiLU (Swish). Applies standard SiLU; quantization of the output
     is handled by the next layer's input quantizer (same pattern as QuantReLU).
@@ -183,11 +183,11 @@ class QuantSiLU(nn.SiLU):
             self.last_quant_input = input.detach()
             self.last_quant_output_unscaled = output_quant.detach()
 
-        return output_quant
+        return self.quantize_output(output_quant)
 
 
 @OpRegistry.register("QuantGELU", original_cls=nn.GELU, is_activation=True, compliance_status="FP32 activation")
-class QuantGELU(nn.GELU, LUTActivation):
+class QuantGELU(nn.GELU, LUTActivation, QuantizedLayerMixin):
     """
     Quantized GELU using a piecewise approximation with a small LUT.
     
@@ -257,5 +257,5 @@ class QuantGELU(nn.GELU, LUTActivation):
         if self.capture_activations:
             self.last_quant_input = input.detach()
             self.last_quant_output_unscaled = y.detach()
-            
-        return y
+
+        return self.quantize_output(y)

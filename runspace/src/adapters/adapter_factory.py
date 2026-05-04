@@ -14,8 +14,8 @@ from ..quantization.constants import DEFAULT_QUANTIZATION_TYPE
 
 ADAPTER_SCHEMA = {
     'model': ['name', 'pipeline', 'source', 'weights', 'repo_path', 'sg_weights', 'sp_config', 'sg_config'],
-    'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'weight_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size', 'skip_calibration', 'build_quantized', 'quantize_components', 'input_size', 'unsigned_input_sources', 'enable_fx_quantization'],
-    'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'weight_source', 'act_mode', 'act_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format', 'strict_format_check', 'cache_simulation_path', 'unsigned_input_sources'],
+    'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'weight_quantization', 'output_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size', 'skip_calibration', 'build_quantized', 'quantize_components', 'input_size', 'unsigned_input_sources', 'enable_fx_quantization'],
+    'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'weight_source', 'act_mode', 'act_chunk_size', 'output_format', 'output_mode', 'output_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format', 'strict_format_check', 'cache_simulation_path', 'unsigned_input_sources'],
     'dataset': ['name', 'path', 'batch_size', 'num_workers', 'image_size', 'grayscale', 'pairs_file', 'max_pairs', 'resize_size', 'multiprocessing_context', 'persistent_workers', 'prefetch_factor'],
     'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms', 'max_batches', 'graph_only', 'dynamic_input_quant', 'input_quant', 'save_visualizations', 'num_viz_samples'],
 }
@@ -119,6 +119,7 @@ def _resolve_adapter_inputs(config: dict) -> dict:
         'weights': model_config.get('weights', None),
         'input_quantization': adapter_config.get('input_quantization', True),
         'weight_quantization': adapter_config.get('weight_quantization', True),
+        'output_quantization': adapter_config.get('output_quantization', False),
         'quantize_first_layer': adapter_config.get('quantize_first_layer', False),
         'quantized_ops': quantized_ops,
         'excluded_ops': adapter_config.get('excluded_ops', []),
@@ -133,6 +134,9 @@ def _resolve_adapter_inputs(config: dict) -> dict:
         'weight_chunk_size': quantization_config.get('weight_chunk_size', None),
         'act_mode': quantization_config.get('act_mode', 'tensor'),
         'act_chunk_size': quantization_config.get('act_chunk_size', None),
+        'output_quantization_type': quantization_config.get('output_format', None),
+        'output_mode': quantization_config.get('output_mode', 'tensor'),
+        'output_chunk_size': quantization_config.get('output_chunk_size', None),
         'input_chunk_size': adapter_config.get('input_chunk_size', quantization_config.get('chunk_size', None)),
         'rounding': quantization_config.get('rounding', 'nearest'),
         'simulate_tf32_accum': quantization_config.get('simulate_tf32_accum', False),
@@ -150,11 +154,14 @@ def _resolve_adapter_inputs(config: dict) -> dict:
 def _common_adapter_kwargs(params: dict) -> dict:
     keys = (
         'model_name', 'model_source', 'weights', 'input_quantization',
-        'weight_quantization', 'quantize_first_layer', 'quantized_ops',
+        'weight_quantization', 'output_quantization', 'quantize_first_layer',
+        'quantized_ops',
         'excluded_ops', 'quantization_type', 'quantization_bias',
-        'layer_config', 'input_quantization_type', 'quant_mode',
+        'layer_config', 'input_quantization_type', 'output_quantization_type',
+        'quant_mode',
         'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode',
-        'act_chunk_size', 'fold_layers', 'simulate_tf32_accum', 'rounding',
+        'act_chunk_size', 'output_mode', 'output_chunk_size',
+        'fold_layers', 'simulate_tf32_accum', 'rounding',
         'input_chunk_size', 'input_size', 'enable_fx_quantization',
     )
     return {key: params[key] for key in keys}
@@ -227,11 +234,15 @@ def create_adapter(config: dict) -> BaseAdapter:
             quantize_first_layer=params['quantize_first_layer'],
             weight_quantization=params['weight_quantization'],
             input_quantization=params['input_quantization'],
+            output_quantization=params['output_quantization'],
             layer_config=params['layer_config'],
             quant_mode=params['quant_mode'],
             chunk_size=params['chunk_size'],
             weight_mode=params['weight_mode'],
             weight_chunk_size=params['weight_chunk_size'],
+            output_quantization_type=params['output_quantization_type'],
+            output_mode=params['output_mode'],
+            output_chunk_size=params['output_chunk_size'],
             rounding=params['rounding'],
             run_id=params['run_id'],
             skip_calibration=params['skip_calibration'],

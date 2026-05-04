@@ -1077,6 +1077,7 @@ class Runner:
         model_name = result.get('model_name', config.get('model', {}).get('name', 'unknown'))
         experiment_type = exp_cfg.get('type') or exp_cfg.get('name') or "runner_eval"
         weight_dt = self._effective_weight_dt(config, result, exp_cfg)
+        output_dt = exp_cfg.get('output_dt') or self._resolve_output_format(config)
 
         activation_dt = exp_cfg.get('activation_dt')
         if activation_dt is None:
@@ -1097,6 +1098,8 @@ class Runner:
                 model_name=model_name,
                 weight_dt=str(weight_dt),
                 activation_dt=str(activation_dt),
+                output_dt=str(output_dt),
+                output_map_json=self._to_json_string(self._build_output_quant_map(config)),
                 experiment_type=experiment_type,
                 status=result.get('status', 'SUCCESS'),
                 fm_num_keypoints=_fm_val('fm_num_keypoints'),
@@ -1156,10 +1159,19 @@ class Runner:
         if input_map_json is None and result.get('input_quant_map') is not None:
             input_map_json = self._to_json_string(result.get('input_quant_map'))
 
+        output_map_json = self._to_json_string(exp_cfg.get('output_map_json'))
+        if output_map_json is None and result.get('output_quant_map') is not None:
+            output_map_json = self._to_json_string(result.get('output_quant_map'))
+        if output_map_json is None:
+            inferred_output_map = self._build_output_quant_map(config)
+            if inferred_output_map is not None:
+                output_map_json = self._to_json_string(inferred_output_map)
+
         payload = {
             'model_name': model_name,
             'weight_dt': str(weight_dt),
             'activation_dt': str(activation_dt),
+            'output_dt': str(output_dt),
             'acc1': float(result.get('acc1', 0.0) or 0.0),
             'acc5': float(result.get('acc5', 0.0) or 0.0),
             'ref_acc1': ref_acc1,
@@ -1172,6 +1184,7 @@ class Runner:
             'certainty': float(metrics_cfg.get('certainty', result.get('certainty', 0.0)) or 0.0),
             'quant_map_json': quant_map_json,
             'input_map_json': input_map_json,
+            'output_map_json': output_map_json,
             'config_json': self._to_json_string(exp_cfg.get('config_json') or config),
         }
         db.log_run(**payload)
@@ -1673,6 +1686,52 @@ class Runner:
         return quant_format
 
     @staticmethod
+    def _layer_enables_output_quant(layer_cfg: Dict[str, Any]) -> bool:
+        """Mirror generic_adapter._layer_quant_settings precedence for output_quantization."""
+        if not isinstance(layer_cfg, dict):
+            return False
+        if 'output_quantization' in layer_cfg:
+            return bool(layer_cfg['output_quantization'])
+        return any(k in layer_cfg for k in ('output_format', 'output_mode', 'output_chunk_size'))
+
+    @staticmethod
+    def _resolve_output_format(config: Dict[str, Any]) -> str:
+        global_on = bool(config.get('adapter', {}).get('output_quantization', False))
+        qcfg = config.get('quantization', {}) or {}
+        global_fmt = qcfg.get('output_format', qcfg.get('format', 'fp32'))
+        layer_configs = qcfg.get('layers', {}) or {}
+        per_layer_active = {
+            (layer_cfg.get('output_format', global_fmt))
+            for layer_cfg in layer_configs.values()
+            if Runner._layer_enables_output_quant(layer_cfg)
+        }
+        if not global_on:
+            if not per_layer_active:
+                return 'fp32'
+            # Some layers enabled via per-layer override; rest fp32.
+            return 'mixed' if len(per_layer_active) > 1 else f"mixed:{next(iter(per_layer_active))}"
+        if per_layer_active and (per_layer_active - {global_fmt}):
+            return "mixed"
+        return global_fmt
+
+    @staticmethod
+    def _build_output_quant_map(config: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        global_on = bool(config.get('adapter', {}).get('output_quantization', False))
+        qcfg = config.get('quantization', {}) or {}
+        global_fmt = qcfg.get('output_format', qcfg.get('format', 'fp32'))
+        layer_configs = qcfg.get('layers', {}) or {}
+        per_layer_overrides = {
+            name: str(layer_cfg.get('output_format', global_fmt))
+            for name, layer_cfg in layer_configs.items()
+            if Runner._layer_enables_output_quant(layer_cfg)
+        }
+        if not global_on and not per_layer_overrides:
+            return None
+        out: Dict[str, str] = {'__default__': str(global_fmt) if global_on else 'fp32'}
+        out.update(per_layer_overrides)
+        return out
+
+    @staticmethod
     def _output_dir(config: Dict[str, Any], output_root: str, model_name: str, quant_format: str) -> str:
         meta = config.get('meta', {})
         output_name = config.get('output_name', '')
@@ -1694,6 +1753,7 @@ class Runner:
             'model_name': model_name,
             'adapter_type': config.get('adapter', {}).get('type', 'generic'),
             'quant_format': quant_format,
+            'output_quant_format': Runner._resolve_output_format(config),
             'base_config_path': meta.get('base_config_path', 'N/A'),
             'generated_config_path': meta.get('generated_config_path', 'N/A'),
             'output_name': config.get('output_name', ''),

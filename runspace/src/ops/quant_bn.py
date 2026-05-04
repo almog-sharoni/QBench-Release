@@ -78,16 +78,16 @@ class QuantBatchNorm2d(nn.BatchNorm2d, QuantizedLayerMixin):
                  #     self.last_quant_rv = rv_unscaled
                  self.last_quant_rv = self.running_var
 
-        return F.batch_norm(
-            input_fp8, 
-            rm_quant, 
-            rv_quant, 
-            w_decomp, 
-            self.bias, 
-            self.training, 
-            self.momentum, 
+        return self.quantize_output(F.batch_norm(
+            input_fp8,
+            rm_quant,
+            rv_quant,
+            w_decomp,
+            self.bias,
+            self.training,
+            self.momentum,
             self.eps
-        )
+        ))
 
 
 @OpRegistry.register("QuantBatchNorm1d", original_cls=nn.BatchNorm1d)
@@ -124,7 +124,7 @@ class QuantBatchNorm1d(nn.BatchNorm1d, QuantizedLayerMixin):
             if self.running_var is not None:
                 self.last_quant_rv = self.running_var
 
-        return F.batch_norm(
+        return self.quantize_output(F.batch_norm(
             input_fp8,
             self.running_mean,
             self.running_var,
@@ -133,7 +133,7 @@ class QuantBatchNorm1d(nn.BatchNorm1d, QuantizedLayerMixin):
             self.training,
             self.momentum,
             self.eps,
-        )
+        ))
 
 
 @OpRegistry.register("QuantBatchNormAct2d")
@@ -201,7 +201,7 @@ class QuantBatchNormAct2d(nn.Module, QuantizedLayerMixin):
         x = self.bn(input)
         x = self.drop(x)
         x = self.act(x)
-        return x
+        return self.quantize_output(x)
 
     @classmethod
     def from_native(cls, native_bn_act, q_type="fp8_e4m3", quantization_bias: int = None):
