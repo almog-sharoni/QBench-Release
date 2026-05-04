@@ -105,6 +105,17 @@ class OpRegistry:
         not yet performing W/A quantization arithmetic)."""
         return op_name not in cls._unquantized_ops
 
+    @classmethod
+    def get_replacement_by_name(cls, fn_name: str):
+        """Returns (Observed cls, init_from_args) for an @observer function name, or None."""
+        return cls._replacements_by_name.get(fn_name)
+
+    @classmethod
+    def is_quantized(cls, op_name: str) -> bool:
+        """True unless the op was registered with quantized=False (observed but
+        not yet performing W/A quantization arithmetic)."""
+        return op_name not in cls._unquantized_ops
+
 # Populate standard supported functions
 import torch
 import torch.nn.functional as F
