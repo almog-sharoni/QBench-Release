@@ -647,6 +647,13 @@ class GenericAdapter(BaseAdapter):
             kwargs['dim'] = module.dim
             
         created = QuantClass(**kwargs)
+        # Some activation __init__s accept q_type as a kwarg but don't assign
+        # it to self (e.g. QuantGELU, QuantReLU). Without this assignment,
+        # the report's hasattr(module, 'q_type') check would fall through and
+        # mark Output Q? / Output Fmt as N/A even though they're well-defined.
+        created.q_type = q_type
+        if bias is not None:
+            created.quantization_bias = bias
         created.input_quantization = self.input_quantization
         created.input_q_type = self._effective_input_q_type(settings)
         created.output_quantization = settings['output_quantization']

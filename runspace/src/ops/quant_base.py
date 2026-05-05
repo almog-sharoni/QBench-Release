@@ -577,7 +577,6 @@ class QuantizedLayerMixin:
                 output, q_type=q_type, return_unscaled=True, return_scale=True,
                 mode=mode, chunk_size=chunk_size,
             )
-            self.last_pre_quant_output = output.detach()
             self.last_quant_output = out_q.detach()
             self.last_quant_output_unscaled = out_q_unscaled.detach()
             self.last_quant_output_max = max_val.detach()

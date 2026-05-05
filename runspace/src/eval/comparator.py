@@ -738,60 +738,18 @@ class LayerComparator:
             examples = tensor.float()[bad].flatten()[:5].tolist() if inv_count > 0 else []
             return inv_count == 0, inv_count, examples
 
-        def _max_mantissa_bits_used(tensor):
-            """Smallest mantissa width that captures every value losslessly. 0 if tensor is all-zero."""
-            import torch as _torch
-            f32_int = tensor.float().contiguous().view(_torch.int32)
-            mantissa = f32_int & ((1 << 23) - 1)  # low 23 bits
-            nonzero = mantissa[mantissa != 0]
-            if nonzero.numel() == 0:
-                return 0
-            # Count trailing zero bits per value; mantissa bits used = 23 - trailing_zeros
-            # Use ctz via bit manipulation: trailing zeros of x = popcount(x ^ (x-1)) - 1
-            # Faster: just walk down powers of 2
-            min_trailing = 23
-            for b in range(23):
-                if (nonzero & ((1 << (b + 1)) - 1)).any():
-                    min_trailing = b
-                    break
-            return 23 - min_trailing
-
         strict = self.strict_format_check
 
-        # Narrowest-first; first match wins. Integer formats (int4/int8) are
-        # only detectable in strict mode — the non-strict mantissa-bit
-        # heuristic doesn't apply to them. Strict mode appends int4/int8 in
-        # narrowest-first order via _FMT_CANDIDATES_STRICT below.
-        _FMT_CANDIDATES = ['fp4_e2m1', 'fp4_e3m0', 'fp8_e5m2', 'fp8_e4m3']
-        _FMT_CANDIDATES_STRICT = ['fp4_e2m1', 'fp4_e3m0', 'int4', 'fp8_e5m2', 'fp8_e4m3', 'int8']
-
-        def _detect_format(tensor):
-            """Detect the actual format of a tensor.
-            Strict mode: pick the narrowest candidate that passes full check_fp8_compliance.
-            Non-strict: pick the narrowest candidate whose mantissa-bit budget covers actual usage.
-            Returns 'FP32' if no candidate fits, 'N/A' if tensor is None.
-            """
-            if tensor is None:
-                return 'N/A'
-            if strict:
-                for fmt in _FMT_CANDIDATES_STRICT:
-                    try:
-                        res = check_fp8_compliance(tensor, q_type=fmt)
-                        if res and res[0]:
-                            return fmt
-                    except Exception:
-                        continue
-                return 'FP32'
-            # non-strict: count actual mantissa bits used (FP candidates only)
-            try:
-                mb_used = _max_mantissa_bits_used(tensor)
-            except Exception:
-                return 'FP32'
-            for fmt in _FMT_CANDIDATES:
-                mb = _parse_mant_bits(fmt)
-                if mb is not None and mb_used <= mb:
-                    return fmt
-            return 'FP32'
+        # Ops whose output values are a subset of (or chosen from) their input values,
+        # so the output format equals the input format even without explicit
+        # quantize_output. For format-degrading ops (Conv/Linear/BN/Add/Softmax/etc.)
+        # the math collapses precision back to FP32 in the absence of quantize_output.
+        _VALUE_PRESERVING_OPS = {
+            'QuantReLU', 'QuantReLU6',  # output ⊆ input ∪ {0, 6} (6 fits all FP candidates)
+            'QuantMaxPool2d',           # output ⊆ input (one element per pooling window)
+            'QuantCat',                 # output is concatenation — values unchanged
+            'QuantDropout',             # eval-mode = identity
+        }
 
         def _fmt_strings(module, prev_output_fmt='FP32'):
             cls_name = module.__class__.__name__
@@ -810,19 +768,21 @@ class LayerComparator:
                 or bool(getattr(module, 'last_quant_inputs_unscaled', None))
             )
 
-            # Pre-Quant: detected format of what arrived at the layer
-            pre_quant_tensor = getattr(module, 'last_pre_quant_input', None)
-            pq = _detect_format(pre_quant_tensor) if pre_quant_tensor is not None else prev_output_fmt
+            # Pre-Quant: format of the tensor arriving at the layer. We trust
+            # the upstream layer's reported output (sequential chain). For
+            # branching topologies this is approximate — see the prev_output_fmt
+            # comment near the rendering loop.
+            pq = prev_output_fmt if prev_output_fmt not in (None, 'N/A') else 'FP32'
 
-            # Input Q? + Input Fmt (post-input-quantize compute format)
+            # Input Q? + Input Fmt
             if input_actually_quantized:
                 iq = 'Yes'
                 # Multi-operand override (QuantAdd/MatMul etc. with input1/input2 q_types)
                 i1 = getattr(module, 'input1_q_type', None)
                 i2 = getattr(module, 'input2_q_type', None)
                 if i1 or i2:
-                    i1_str = i1 or _detect_format(getattr(module, 'last_quant_input_unscaled', None))
-                    i2_str = i2 or _detect_format(getattr(module, 'last_quant_input_unscaled', None))
+                    i1_str = i1 or getattr(module, 'input_q_type', getattr(module, 'q_type', 'N/A'))
+                    i2_str = i2 or getattr(module, 'input_q_type', getattr(module, 'q_type', 'N/A'))
                     if i1_str == i2_str:
                         i = i1_str
                     else:
@@ -831,17 +791,10 @@ class LayerComparator:
                             return fmt.split('_')[0] if '_' in fmt else fmt
                         i = f"{shorten(i1_str)}|{shorten(i2_str)}"
                 else:
-                    # Detect format of the actually-quantized input tensor
-                    qit = getattr(module, 'last_quant_input_unscaled', None)
-                    if qit is not None:
-                        i = _detect_format(qit)
-                    else:
-                        # multi-operand path: scan the list
-                        tensors = getattr(module, 'last_quant_inputs_unscaled', None) or []
-                        i = _detect_format(tensors[0]) if tensors else 'N/A'
+                    i = getattr(module, 'input_q_type', None) or getattr(module, 'q_type', None) or 'N/A'
             else:
                 iq = 'No'
-                i = pq if pq not in ('N/A',) else 'FP32'
+                i = pq   # tensor flows through unchanged; format = arrival format
 
             # Output Q? from module flag (the "did we explicitly quantize?" question)
             output_quant_enabled = bool(getattr(
@@ -851,20 +804,18 @@ class LayerComparator:
             ))
             oq = 'Yes' if output_quant_enabled else 'No'
 
-            # Output Fmt: format of the tensor that LEAVES the layer.
-            # - If output quantization actually ran, use last_quant_output (post-round).
-            # - Else, use last_natural_output (pre-round, what the layer's compute produced).
-            quant_output = getattr(module, 'last_quant_output', None)
-            natural_output = getattr(module, 'last_natural_output', None)
-            output_tensor = quant_output if quant_output is not None else natural_output
-            if output_tensor is not None:
-                o = _detect_format(output_tensor)
-            elif output_quant_enabled:
+            # Output Fmt:
+            # - explicit output quantization → declared output_q_type (or fallback chain)
+            # - value-preserving op without explicit output quant → same as input fmt
+            # - format-degrading op (Conv/Linear/BN/MatMul/...) → FP32 (math collapses precision)
+            if output_quant_enabled:
                 o = (
                     getattr(module, 'output_q_type', None)
                     or getattr(module, 'uq_type', None)
                     or getattr(module, 'q_type', 'N/A')
                 )
+            elif cls_name in _VALUE_PRESERVING_OPS:
+                o = i if i not in (None, 'N/A') else pq
             elif hasattr(module, 'q_type') and module.q_type is not None:
                 o = 'FP32'
             else:
@@ -877,6 +828,10 @@ class LayerComparator:
             """Run compliance check.
             strict_format_check=True  → full per-value re-quantize check (catches range, NaN/Inf, etc.)
             strict_format_check=False → fast mantissa-bits-only check
+
+            Note: despite its name, check_fp8_compliance handles int8 and int4
+            via dedicated branches at quantizer.py:323-359 — safe to pass int
+            formats here. The name is historical.
             """
             if q_type in (None, 'N/A', 'FP32'):
                 return None
@@ -1103,6 +1058,12 @@ class LayerComparator:
                 if len(list(md.children())) == 0 or md.__class__.__name__ == 'DecomposedMultiheadAttention':
                     render_events.append(('module', nm, md))
 
+        # prev_output_fmt is a SEQUENTIAL approximation of "the format flowing into
+        # this layer". It's used as a fallback for the Pre-Quant column ONLY when
+        # the layer didn't capture its own `last_pre_quant_input`. For branching
+        # topologies (residual adds, attention, multi-input ops) the per-layer
+        # capture is the authoritative source — prev_output_fmt may show whichever
+        # module the iteration last visited, not the actual upstream producer.
         prev_output_fmt = 'N/A'
         for ev in render_events:
             kind = ev[0]

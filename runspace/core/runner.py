@@ -1099,7 +1099,7 @@ class Runner:
                 weight_dt=str(weight_dt),
                 activation_dt=str(activation_dt),
                 output_dt=str(output_dt),
-                output_map_json=self._to_json_string(self._build_output_quant_map(config)),
+                output_map_json=self._resolve_output_map_json(config, result, exp_cfg),
                 experiment_type=experiment_type,
                 status=result.get('status', 'SUCCESS'),
                 fm_num_keypoints=_fm_val('fm_num_keypoints'),
@@ -1159,13 +1159,7 @@ class Runner:
         if input_map_json is None and result.get('input_quant_map') is not None:
             input_map_json = self._to_json_string(result.get('input_quant_map'))
 
-        output_map_json = self._to_json_string(exp_cfg.get('output_map_json'))
-        if output_map_json is None and result.get('output_quant_map') is not None:
-            output_map_json = self._to_json_string(result.get('output_quant_map'))
-        if output_map_json is None:
-            inferred_output_map = self._build_output_quant_map(config)
-            if inferred_output_map is not None:
-                output_map_json = self._to_json_string(inferred_output_map)
+        output_map_json = self._resolve_output_map_json(config, result, exp_cfg)
 
         payload = {
             'model_name': model_name,
@@ -1726,6 +1720,19 @@ class Runner:
         if explicit_fmts and (explicit_fmts - {global_fmt}):
             return "mixed"
         return global_fmt
+
+    def _resolve_output_map_json(self, config: Dict[str, Any], result: Dict[str, Any],
+                                  exp_cfg: Dict[str, Any]) -> Optional[str]:
+        """3-tier resolution: experiment override → result-emitted map → inferred from config.
+        Used by both classification and FM log paths so they stay symmetric."""
+        out = self._to_json_string(exp_cfg.get('output_map_json'))
+        if out is None and result.get('output_quant_map') is not None:
+            out = self._to_json_string(result.get('output_quant_map'))
+        if out is None:
+            inferred = self._build_output_quant_map(config)
+            if inferred is not None:
+                out = self._to_json_string(inferred)
+        return out
 
     @staticmethod
     def _build_output_quant_map(config: Dict[str, Any]) -> Optional[Dict[str, str]]:
