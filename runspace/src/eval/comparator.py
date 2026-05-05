@@ -708,11 +708,14 @@ class LayerComparator:
 
         report_lines.append("--- FP8 Compliance Check (Value-Based) ---")
         _NAME_W, _TYPE_W, _SHAPE_W, _CHECK_W, _FMT_W, _IQ_W = 52, 28, 18, 22, 12, 10
-        _SEP_W = _NAME_W + _TYPE_W + _SHAPE_W + 3 * _FMT_W + 2 * _IQ_W + _FMT_W + 3 * _CHECK_W + 11 * 3
+        # Columns: Layer | Type | Shape | Weight Fmt | Input Q? | Pre-Quant | Input Fmt
+        #          | Output Q? | Output Pre-Quant | Output Fmt | Weight Check | Input Check | Output Check
+        _SEP_W = _NAME_W + _TYPE_W + _SHAPE_W + 4 * _FMT_W + 2 * _IQ_W + _FMT_W + 3 * _CHECK_W + 12 * 3
         report_lines.append(
             f"{'Layer':<{_NAME_W}} | {'Type':<{_TYPE_W}} | {'Shape':<{_SHAPE_W}} | "
             f"{'Weight Fmt':<{_FMT_W}} | {'Input Q?':<{_IQ_W}} | {'Pre-Quant':<{_FMT_W}} | "
-            f"{'Input Fmt':<{_FMT_W}} | {'Output Q?':<{_IQ_W}} | {'Output Fmt':<{_FMT_W}} | "
+            f"{'Input Fmt':<{_FMT_W}} | {'Output Q?':<{_IQ_W}} | "
+            f"{'Output Pre-Quant':<{_FMT_W}} | {'Output Fmt':<{_FMT_W}} | "
             f"{'Weight Check':<{_CHECK_W}} | {'Input Check':<{_CHECK_W}} | {'Output Check':<{_CHECK_W}}"
         )
         report_lines.append("-" * _SEP_W)
@@ -804,25 +807,32 @@ class LayerComparator:
             ))
             oq = 'Yes' if output_quant_enabled else 'No'
 
-            # Output Fmt:
-            # - explicit output quantization → declared output_q_type (or fallback chain)
-            # - value-preserving op without explicit output quant → same as input fmt
-            # - format-degrading op (Conv/Linear/BN/MatMul/...) → FP32 (math collapses precision)
+            # Output Pre-Quant: the format the layer's compute would naturally
+            # produce, before any quantize_output rounding.
+            # - value-preserving op (MaxPool/ReLU/Dropout/Cat/...) → same as input fmt
+            # - format-degrading op (Conv/Linear/BN/MatMul/...)    → FP32 (math collapses)
+            # - else (no q_type)                                   → N/A
+            if cls_name in _VALUE_PRESERVING_OPS:
+                output_pre = i if i not in (None, 'N/A') else pq
+            elif hasattr(module, 'q_type') and module.q_type is not None:
+                output_pre = 'FP32'
+            else:
+                output_pre = 'N/A'
+                oq = 'N/A'
+
+            # Output Fmt: format leaving the layer.
+            # - explicit output quantization → declared output_q_type
+            # - else                         → same as Output Pre-Quant
             if output_quant_enabled:
                 o = (
                     getattr(module, 'output_q_type', None)
                     or getattr(module, 'uq_type', None)
                     or getattr(module, 'q_type', 'N/A')
                 )
-            elif cls_name in _VALUE_PRESERVING_OPS:
-                o = i if i not in (None, 'N/A') else pq
-            elif hasattr(module, 'q_type') and module.q_type is not None:
-                o = 'FP32'
             else:
-                oq = 'N/A'
-                o = 'N/A'
+                o = output_pre
 
-            return w, iq, pq, i, oq, o
+            return w, iq, pq, i, oq, output_pre, o
 
         def _compliance_check(tensor, q_type):
             """Run compliance check.
@@ -1075,7 +1085,7 @@ class LayerComparator:
                 na_chk = f"{'N/A':<{_CHECK_W}}"
                 report_lines.append(
                     f"{full_name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {'N/A':<{_SHAPE_W}} | "
-                    f"{na_fmt} | {na_iq} | {na_fmt} | {na_fmt} | {na_iq} | {na_fmt} | "
+                    f"{na_fmt} | {na_iq} | {na_fmt} | {na_fmt} | {na_iq} | {na_fmt} | {na_fmt} | "
                     f"{na_chk} | {na_chk} | {na_chk}"
                 )
                 continue
@@ -1090,7 +1100,7 @@ class LayerComparator:
                 # all layers now go through the regular branch and rely on
                 # runtime-captured tensors + runtime format detection.
 
-                weight_fmt, input_quantized, pre_quant_fmt, input_fmt, output_quantized, output_fmt = _fmt_strings(module, prev_output_fmt)
+                weight_fmt, input_quantized, pre_quant_fmt, input_fmt, output_quantized, output_pre_quant_fmt, output_fmt = _fmt_strings(module, prev_output_fmt)
                 weight_str = f"{'N/A':<{_CHECK_W}}"
                 if is_under_construction:
                     weight_str = f"{RED}{_wpad('🚧 UNDER CONSTRUCTION', _CHECK_W)}{RESET}"
@@ -1134,7 +1144,8 @@ class LayerComparator:
                 report_lines.append(
                     f"{name:<{_NAME_W}} | {layer_type:<{_TYPE_W}} | {shape_str:<{_SHAPE_W}} | "
                     f"{weight_fmt:<{_FMT_W}} | {input_quantized:<{_IQ_W}} | {pre_quant_fmt:<{_FMT_W}} | "
-                    f"{input_fmt:<{_FMT_W}} | {output_quantized:<{_IQ_W}} | {output_fmt:<{_FMT_W}} | "
+                    f"{input_fmt:<{_FMT_W}} | {output_quantized:<{_IQ_W}} | "
+                    f"{output_pre_quant_fmt:<{_FMT_W}} | {output_fmt:<{_FMT_W}} | "
                     f"{weight_str} | {input_str} | {output_str}"
                 )
                 prev_output_fmt = output_fmt
