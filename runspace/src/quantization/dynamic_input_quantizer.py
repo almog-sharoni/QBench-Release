@@ -516,8 +516,8 @@ class DynamicInputQuantizer:
     def _select_best_format(self, tensor, layer_name, candidates):
         """
         Optimized format selection:
-        - Stacks all candidate quantizations and chooses the best per-chunk on GPU.
-        - Returns the quantized tensor and the TENSOR of best indices (no tolist()).
+        - Iterates through candidates and keeps only the best per-chunk to save VRAM.
+        - Returns the quantized tensor and the TENSOR of best indices.
         """
         chunk_size = self.chunk_size
         device = tensor.device
@@ -539,24 +539,27 @@ class DynamicInputQuantizer:
         ref_chunks = flat.view(batch_size, num_chunks, chunk_size).reshape(-1, chunk_size)
         total_chunks = ref_chunks.shape[0]
 
-        candidate_errors = []
-        candidate_qs = []
+        # Iterative selection buffers
+        best_errors = torch.full((total_chunks,), float('inf'), device=device)
+        best_qs = torch.zeros_like(ref_chunks)
+        best_indices = torch.zeros(total_chunks, dtype=torch.long, device=device)
 
-        for fmt in candidates:
+        for i, fmt in enumerate(candidates):
             if fmt == 'fp32':
-                candidate_errors.append(torch.full((total_chunks,), float('inf'), device=device))
-                candidate_qs.append(ref_chunks)
+                # FP32 is already handled as inf error in the default best_errors, 
+                # but if it's the only candidate or we want to support it:
                 continue
 
             try:
                 # quantize_tensor is already CUDA-accelerated.
-                
                 q_tensor, _ = quantize_tensor(
                     tensor,
                     q_type=fmt,
                     mode='chunk',
                     chunk_size=chunk_size,
                 )
+                
+                # Reshape q_tensor to match ref_chunks
                 q_flat = q_tensor.flatten(1) if q_tensor.dim() > 1 else q_tensor.flatten(0).unsqueeze(0)
                 if pad_len > 0:
                     q_flat = torch.nn.functional.pad(q_flat, (0, pad_len))
@@ -568,32 +571,31 @@ class DynamicInputQuantizer:
                 else:
                     err = diff.pow(2).mean(dim=1)
 
-                candidate_errors.append(err)
-                candidate_qs.append(q_chunks)
-            except Exception:
-                candidate_errors.append(torch.full((total_chunks,), float('inf'), device=device))
-                candidate_qs.append(ref_chunks)
+                # Update best-so-far
+                mask = err < best_errors
+                if mask.any():
+                    best_errors[mask] = err[mask]
+                    best_qs[mask] = q_chunks[mask]
+                    best_indices[mask] = i
+                
+                # Cleanup intermediate tensors
+                del q_tensor, q_flat, q_chunks, diff, err, mask
+                
+            except Exception as e:
+                # Skip failed formats
+                continue
 
-        all_errors = torch.stack(candidate_errors, dim=0)
-        best_indices = torch.argmin(all_errors, dim=0)
-        all_qs = torch.stack(candidate_qs, dim=0)
-        
-        # Gather the best quantized chunks
-        gather_indices = best_indices.view(1, total_chunks, 1).expand(1, total_chunks, chunk_size)
-        best_qs = torch.gather(all_qs, 0, gather_indices).squeeze(0)
-
-        q_flat = best_qs.view(batch_size, -1)
+        q_flat_final = best_qs.view(batch_size, -1)
         if pad_len > 0:
-            q_flat = q_flat[:, :num_elements]
+            q_flat_final = q_flat_final[:, :num_elements]
 
         if tensor.dim() > 1:
-            quantized_tensor = q_flat.view_as(tensor)
+            quantized_tensor = q_flat_final.view_as(tensor)
         else:
-            quantized_tensor = q_flat.view(-1).view_as(tensor)
+            quantized_tensor = q_flat_final.view(-1).view_as(tensor)
 
         # Update layer-wise format selection statistics (stay on GPU)
         if layer_name not in self.layer_stats:
-            # We initialize a tensor to hold counts on GPU
             self.layer_stats[layer_name] = {
                 'format_counts_tensor': torch.zeros(len(candidates), dtype=torch.long, device=device),
                 'candidates': candidates
@@ -604,7 +606,6 @@ class DynamicInputQuantizer:
         stats['format_counts_tensor'] += counts
 
         # Track running error for progress/debug
-        best_errors = all_errors[best_indices, torch.arange(total_chunks, device=device)]
         self.running_error += best_errors.sum().item()
         self.total_chunks += total_chunks
 
