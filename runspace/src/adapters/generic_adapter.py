@@ -28,6 +28,7 @@ class GenericAdapter(BaseAdapter):
         weights: str = None,
         input_quantization: bool = True,
         weight_quantization: bool = True,
+        output_quantization: bool = False,
         quantize_first_layer: bool = False,
         quantized_ops: list = None,
         excluded_ops: list = None,
@@ -36,12 +37,15 @@ class GenericAdapter(BaseAdapter):
         layer_config: dict = None,
         per_chunk_format: bool = False,
         input_quantization_type: str = None,
+        output_quantization_type: str = None,
         quant_mode: str = "tensor",
         chunk_size: int = None,
         weight_mode: str = "channel",
         weight_chunk_size: int = None,
         act_mode: str = "tensor",
         act_chunk_size: int = None,
+        output_mode: str = "tensor",
+        output_chunk_size: int = None,
         fold_layers: bool = False,
         simulate_tf32_accum: bool = False,
         rounding: str = "nearest",
@@ -66,6 +70,7 @@ class GenericAdapter(BaseAdapter):
         self.weights = weights
         self.input_quantization = input_quantization
         self.weight_quantization = weight_quantization
+        self.output_quantization = output_quantization
         self.quantize_first_layer = quantize_first_layer
         self.quantized_ops = quantized_ops if quantized_ops is not None else ["all"]
         self.excluded_ops = excluded_ops if excluded_ops is not None else []
@@ -74,6 +79,7 @@ class GenericAdapter(BaseAdapter):
         self.layer_config = layer_config if layer_config is not None else {}
         self.per_chunk_format = per_chunk_format
         self.input_quantization_type = input_quantization_type
+        self.output_quantization_type = output_quantization_type
         self.unsigned_input_sources = unsigned_input_sources or []
         self.run_id = run_id
         self.input_size = input_size
@@ -84,6 +90,8 @@ class GenericAdapter(BaseAdapter):
         self.weight_chunk_size = weight_chunk_size
         self.act_mode = act_mode
         self.act_chunk_size = act_chunk_size
+        self.output_mode = output_mode
+        self.output_chunk_size = output_chunk_size
         self.fold_layers = fold_layers
         self.simulate_tf32_accum = simulate_tf32_accum
         self.rounding = rounding
@@ -466,6 +474,10 @@ class GenericAdapter(BaseAdapter):
             module.weight_quantization = self.weight_quantization
             module.input_mode = settings['input_mode']
             module.input_chunk_size = settings['input_chunk_size']
+            module.output_q_type = self._effective_output_q_type(settings)
+            module.output_quantization = settings['output_quantization']
+            module.output_mode = settings['output_mode']
+            module.output_chunk_size = settings['output_chunk_size']
             module.rounding = settings['rounding']
             module.layer_name = full_name
             module.run_id = getattr(self, 'run_id', 'default')
@@ -474,6 +486,17 @@ class GenericAdapter(BaseAdapter):
         """Resolve global quantization settings plus per-layer overrides."""
         layer_conf = self.layer_config.get(name, {}) if isinstance(self.layer_config, dict) else {}
         q_type = layer_conf.get('type', layer_conf.get('format', self.quantization_type))
+
+        # Output-quantization on/off precedence:
+        # 1. explicit per-layer `output_quantization: true|false` wins
+        # 2. presence of any per-layer output_* key implicitly enables it
+        # 3. otherwise inherit from the global adapter flag
+        if 'output_quantization' in layer_conf:
+            layer_output_quant = bool(layer_conf['output_quantization'])
+        elif any(k in layer_conf for k in ('output_format', 'output_mode', 'output_chunk_size')):
+            layer_output_quant = True
+        else:
+            layer_output_quant = self.output_quantization
 
         return {
             'layer_conf': layer_conf,
@@ -489,12 +512,20 @@ class GenericAdapter(BaseAdapter):
             'weight_chunk_size': layer_conf.get('weight_chunk_size', self.weight_chunk_size),
             'act_mode': layer_conf.get('act_mode', self.act_mode),
             'act_chunk_size': layer_conf.get('act_chunk_size', self.act_chunk_size),
+            'output_quantization': layer_output_quant,
+            'output_q_type': layer_conf.get('output_format', self.output_quantization_type),
+            'output_mode': layer_conf.get('output_mode', self.output_mode),
+            'output_chunk_size': layer_conf.get('output_chunk_size', self.output_chunk_size),
             'rounding': layer_conf.get('rounding', self.rounding),
         }
 
     @staticmethod
     def _effective_input_q_type(settings: dict) -> str:
         return settings['input_q_type'] if settings['input_q_type'] else settings['q_type']
+
+    @staticmethod
+    def _effective_output_q_type(settings: dict) -> str:
+        return settings['output_q_type'] if settings['output_q_type'] else settings['q_type']
 
     @staticmethod
     def _contains_requested_name(configured_names, candidate_names) -> bool:
@@ -542,35 +573,45 @@ class GenericAdapter(BaseAdapter):
                  created.input_chunk_size = settings['input_chunk_size']
                  created.weight_mode = settings['weight_mode']
                  created.weight_chunk_size = settings['weight_chunk_size']
+                 created.output_q_type = self._effective_output_q_type(settings)
+                 created.output_quantization = settings['output_quantization']
+                 created.output_mode = settings['output_mode']
+                 created.output_chunk_size = settings['output_chunk_size']
                  created.rounding = settings['rounding']
              return created
 
-        # Case 2: Layer with weights (Conv, Linear, BN) - In-place class swap
-        # We check if the QuantClass is a subclass of QuantizedLayerMixin
-        if issubclass(QuantClass, quantized_mixin_types):
+        # Case 2: Layer with weights (Conv, Linear, BN) - In-place class swap.
+        # Activations are routed to Case 3 because their __init__ builds
+        # per-class state (e.g. QuantGELU.piecewise_lut, QuantSoftmax.uq_type)
+        # that an in-place __class__ swap would skip.
+        if issubclass(QuantClass, quantized_mixin_types) and not OpRegistry.is_activation(QuantClass.__name__):
             # Perform in-place class swap to preserve weights
             module.__class__ = QuantClass
-            
+
             # Initialize Mixin state
             module.q_type = q_type
             module.quantization_bias = bias
             module.input_q_type = self._effective_input_q_type(settings)
-            
+
             module.input_quantization = self.input_quantization
             module.weight_quantization = self.weight_quantization
             module.input_mode = settings['input_mode']
             module.input_chunk_size = settings['input_chunk_size']
             module.weight_mode = settings['weight_mode']
             module.weight_chunk_size = settings['weight_chunk_size']
+            module.output_q_type = self._effective_output_q_type(settings)
+            module.output_quantization = settings['output_quantization']
+            module.output_mode = settings['output_mode']
+            module.output_chunk_size = settings['output_chunk_size']
             module.rounding = settings['rounding']
-            
+
             # Per-chunk format configuration
             if self.per_chunk_format and 'chunk_formats' in layer_conf:
                 module.chunk_formats = layer_conf['chunk_formats']
-            
+
             module.register_buffer('weight_scale', None)
             module.register_buffer('weight_fp8', None)
-            
+
             # Set TF32 simulation flag if supported
             if hasattr(module, 'simulate_tf32_accum') or QuantClass.__name__ in ("QuantConv2d", "QuantConv1d"):
                 module.simulate_tf32_accum = self.simulate_tf32_accum
@@ -605,8 +646,19 @@ class GenericAdapter(BaseAdapter):
             kwargs['dim'] = module.dim
             
         created = QuantClass(**kwargs)
+        # Some activation __init__s accept q_type as a kwarg but don't assign
+        # it to self (e.g. QuantGELU, QuantReLU). Without this assignment,
+        # the report's hasattr(module, 'q_type') check would fall through and
+        # mark Output Q? / Output Fmt as N/A even though they're well-defined.
+        created.q_type = q_type
+        if bias is not None:
+            created.quantization_bias = bias
         created.input_quantization = self.input_quantization
         created.input_q_type = self._effective_input_q_type(settings)
+        created.output_quantization = settings['output_quantization']
+        created.output_q_type = self._effective_output_q_type(settings)
+        created.output_mode = settings['output_mode']
+        created.output_chunk_size = settings['output_chunk_size']
         created.rounding = settings['rounding']
         return created
 
@@ -1025,6 +1077,10 @@ class GenericAdapter(BaseAdapter):
                 new_mod.input_chunk_size = fx_settings['input_chunk_size']
                 new_mod.weight_mode = fx_settings['weight_mode']
                 new_mod.weight_chunk_size = fx_settings['weight_chunk_size']
+                new_mod.output_q_type = self._effective_output_q_type(fx_settings)
+                new_mod.output_quantization = fx_settings['output_quantization']
+                new_mod.output_mode = fx_settings['output_mode']
+                new_mod.output_chunk_size = fx_settings['output_chunk_size']
                 new_mod.rounding = fx_settings['rounding']
                 
                 # Replace node

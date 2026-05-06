@@ -44,4 +44,4 @@ class QuantLinear(nn.Linear, QuantizedLayerMixin):
         if getattr(self, 'capture_activations', False):
             self.last_quant_weight = w_decomp.detach()
 
-        return F.linear(input_q, w_decomp, self.bias)
+        return self.quantize_output(F.linear(input_q, w_decomp, self.bias))

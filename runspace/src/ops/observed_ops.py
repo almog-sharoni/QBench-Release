@@ -42,14 +42,14 @@ def _top_k_keypoints(keypoints, scores, k: int):
 # Passthrough / linear ops — like ReLU, value representation unchanged
 # ---------------------------------------------------------------------------
 
-@OpRegistry.register("ObservedDiscardTrash", passthrough=True, quantized=False)
+@OpRegistry.register("ObservedDiscardTrash", quantized=False)
 class ObservedDiscardTrash(nn.Module):
     """Drop the dustbin (last) score channel (stageB3)."""
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x[:, :-1]
 
 
-@OpRegistry.register("ObservedReorderReshape", passthrough=True, quantized=False)
+@OpRegistry.register("ObservedReorderReshape", quantized=False)
 class ObservedReorderReshape(nn.Module):
     """Pixel-shuffle reorder/reshape (stageB4-B7): (B,64,H/8,W/8) -> (B,H,W)."""
     def forward(self, scores: torch.Tensor) -> torch.Tensor:
@@ -72,7 +72,7 @@ class ObservedThreshold(nn.Module):
 
 
 @OpRegistry.register("ObservedRemoveBorders", replaces="remove_borders",
-                     init_from_args={"border": "border"}, passthrough=True, quantized=False)
+                     init_from_args={"border": "border"}, quantized=False)
 class ObservedRemoveBorders(nn.Module):
     """Remove keypoints too close to image borders (stageB9)."""
     def __init__(self, border: int = 4):
@@ -84,7 +84,7 @@ class ObservedRemoveBorders(nn.Module):
 
 
 @OpRegistry.register("ObservedTopKKeypoints", replaces="top_k_keypoints",
-                     init_from_args={"max_keypoints": "k"}, passthrough=True, quantized=False)
+                     init_from_args={"max_keypoints": "k"}, quantized=False)
 class ObservedTopKKeypoints(nn.Module):
     """Keep only the top-k highest-scoring keypoints (stageB13)."""
     def __init__(self, max_keypoints: int = -1):
@@ -95,7 +95,7 @@ class ObservedTopKKeypoints(nn.Module):
         return _top_k_keypoints(keypoints, scores, self.max_keypoints)
 
 
-@OpRegistry.register("ObservedKeypointFlip", passthrough=True, quantized=False)
+@OpRegistry.register("ObservedKeypointFlip", quantized=False)
 class ObservedKeypointFlip(nn.Module):
     """Convert keypoint coords from (row, col) to (x, y) order (stageB14)."""
     def forward(self, keypoints):
@@ -114,7 +114,7 @@ class ObservedL2Norm(nn.Module):
 # ---------------------------------------------------------------------------
 
 @OpRegistry.register("ObservedSimpleNMS", replaces="simple_nms",
-                     init_from_args={"radius": "nms_radius"}, passthrough=True, quantized=False)
+                     init_from_args={"radius": "nms_radius"}, quantized=False)
 class ObservedSimpleNMS(nn.Module):
     """NMS via repeated max_pool2d (stageB8). Pure max-selection — no arithmetic."""
     def __init__(self, radius: int = 4):

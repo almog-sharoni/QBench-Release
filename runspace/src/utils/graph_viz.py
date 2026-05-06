@@ -452,8 +452,6 @@ def _generate_hierarchy_graph(model: torch.nn.Module, output_path: str, model_na
             return cls_name, "#90EE90"  # Green: Quantized
         if isinstance(module, supported_modules):
             return cls_name, "#FFD700"  # Gold: Supported
-        if OpRegistry.is_passthrough(cls_name):
-            return cls_name, "#D3D3D3"  # Gray: Pass-through
         compliance = OpRegistry.get_compliance_status(cls_name)
         if compliance == "FP32 required":
             return cls_name, "#FFD580"  # Amber

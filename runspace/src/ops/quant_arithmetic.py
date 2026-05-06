@@ -46,7 +46,7 @@ class QuantAdd(_QuantArithmeticBase):
         q1_type = getattr(self, 'input1_q_type', None)
         q2_type = getattr(self, 'input2_q_type', None)
         q1, q2 = self._quantize_operands([input, other], [q1_type, q2_type])
-        return torch.add(q1, q2)
+        return self.quantize_output(torch.add(q1, q2))
 
 @OpRegistry.register("QuantSub", is_activation=False, compliance_status="Fixed-Point Subtraction")
 class QuantSub(_QuantArithmeticBase):
@@ -62,7 +62,7 @@ class QuantSub(_QuantArithmeticBase):
         q1_type = getattr(self, 'input1_q_type', None)
         q2_type = getattr(self, 'input2_q_type', None)
         q1, q2 = self._quantize_operands([input, other], [q1_type, q2_type])
-        return torch.sub(q1, q2)
+        return self.quantize_output(torch.sub(q1, q2))
 
 @OpRegistry.register("QuantMul", is_activation=False, compliance_status="Fixed-Point Multiplication")
 class QuantMul(_QuantArithmeticBase):
@@ -78,7 +78,7 @@ class QuantMul(_QuantArithmeticBase):
         q1_type = getattr(self, 'input1_q_type', None)
         q2_type = getattr(self, 'input2_q_type', None)
         q1, q2 = self._quantize_operands([input, other], [q1_type, q2_type])
-        return torch.mul(q1, q2)
+        return self.quantize_output(torch.mul(q1, q2))
 
 @OpRegistry.register("QuantDiv", is_activation=False, compliance_status="Fixed-Point Division")
 class QuantDiv(_QuantArithmeticBase):
@@ -94,7 +94,7 @@ class QuantDiv(_QuantArithmeticBase):
         q1_type = getattr(self, 'input1_q_type', None)
         q2_type = getattr(self, 'input2_q_type', None)
         q1, q2 = self._quantize_operands([input, other], [q1_type, q2_type])
-        return torch.div(q1, q2)
+        return self.quantize_output(torch.div(q1, q2))
 
 @OpRegistry.register("QuantCat", is_activation=False, compliance_status="Token Concatenation")
 class QuantCat(_QuantArithmeticBase):
@@ -110,7 +110,7 @@ class QuantCat(_QuantArithmeticBase):
         # Quantize all inputs
         try:
             quantized = self._quantize_operands(tensors)
-            return torch.cat(quantized, dim=dim)
+            return self.quantize_output(torch.cat(quantized, dim=dim))
         except Exception as e:
             print(f"QuantCat: Error in forward pass: {e}")
             raise e

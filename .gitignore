@@ -26,3 +26,4 @@ tailscaled
 systemd/
 
 pyrightconfig.json
+qbench_sandbox
