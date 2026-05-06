@@ -46,7 +46,7 @@ class GenericAdapter(BaseAdapter):
         act_chunk_size: int = None,
         output_mode: str = "tensor",
         output_chunk_size: int = None,
-        fold_layers: bool = False,
+        fold_layers: bool = True,
         simulate_tf32_accum: bool = False,
         rounding: str = "nearest",
         input_chunk_size: int = None,
@@ -418,8 +418,8 @@ class GenericAdapter(BaseAdapter):
             name_next, mod_next = named_modules[i+1]
 
             if (
-                isinstance(mod_curr, nn.Conv2d) and isinstance(mod_next, nn.BatchNorm2d)
-                or isinstance(mod_curr, nn.Linear) and isinstance(mod_next, nn.BatchNorm1d)
+                isinstance(mod_curr, (nn.Conv2d, nn.Linear)) and 
+                isinstance(mod_next, (nn.BatchNorm2d, nn.BatchNorm1d))
             ):
                 modules_to_fuse.append([name_curr, name_next])
                 i += 2
@@ -784,11 +784,13 @@ class GenericAdapter(BaseAdapter):
         # Load base model
         model = self._load_base_model()
         
-        if quantized:
-            # Fold layers if requested (before quantization)
-            if self.fold_layers:
-                self._fold_layers(model)
+        print(f"[Debug] build_model: quantized={quantized}, fold_layers={self.fold_layers}, model_name={self.model_name}")
+        # Fold layers if requested (always do this if fold_layers is True to 
+        # keep structure consistent between ref and quant models)
+        if self.fold_layers:
+            self._fold_layers(model)
 
+        if quantized:
             # Replace layers with quantized versions
             self._replace_layers(model)
             
@@ -839,11 +841,11 @@ class GenericAdapter(BaseAdapter):
         
         from ..ops.quant_softmax import qtype_to_unsigned_qtype
 
-        def _process_graph_module(gm: torch.fx.GraphModule):
+        def _process_graph_module(gm):
             modified_any = False
             # First pass: identify unsigned nodes
             unsigned_nodes = set()
-            passthrough_ops_lc = {'dropout', 'quantdropout'}
+            passthrough_ops_lc = {'dropout', 'quantdropout', 'identity', 'quantidentity'}
             
             # Map node name to the module instance for easier access
             modules = dict(gm.named_modules())
@@ -889,11 +891,13 @@ class GenericAdapter(BaseAdapter):
                         node_inputs = [arg for arg in node.args if isinstance(arg, torch.fx.Node)]
                         
                         # Handle multi-input modules (MatMul, Add, etc.)
+                        # We only apply UFP if ALL inputs are unsigned to avoid mixed-sign ops
+                        # unless the hardware/op specifically supports it.
                         if len(node_inputs) > 1:
-                            for idx, inp in enumerate(node_inputs):
-                                if inp.name in unsigned_nodes:
+                            all_unsigned = all(inp.name in unsigned_nodes for inp in node_inputs)
+                            if all_unsigned:
+                                for idx in range(len(node_inputs)):
                                     attr_name = f'input{idx+1}_q_type'
-                                    # Fallback to general input_q_type or q_type
                                     base_qtype = getattr(target_mod, attr_name, 
                                                        getattr(target_mod, 'input_q_type', 
                                                               getattr(target_mod, 'q_type', 'fp8_e4m3')))
@@ -907,10 +911,9 @@ class GenericAdapter(BaseAdapter):
                                 modified_any = True
                             elif hasattr(target_mod, 'q_type'):
                                 # Fallback if only q_type exists but no explicit input_q_type
-                                # We set input_q_type to avoid changing weight q_type
                                 setattr(target_mod, 'input_q_type', qtype_to_unsigned_qtype(target_mod.q_type))
                                 modified_any = True
-                                
+            
             return modified_any
 
         # If model is already a GraphModule (e.g. from _fx_quantize), use it directly
@@ -969,6 +972,7 @@ class GenericAdapter(BaseAdapter):
             F.gelu: "QuantGELU",
             F.silu: "QuantSiLU",
             F.hardswish: "QuantHardswish",
+            F.hardsigmoid: "QuantHardsigmoid",
             torch.matmul: "QuantMatMul",
             operator.matmul: "QuantMatMul",
             torch.bmm: "QuantBMM",
@@ -987,13 +991,34 @@ class GenericAdapter(BaseAdapter):
         quantized_ops_lc = {o.lower() for o in self.quantized_ops}
         excluded_ops_lc = {o.lower() for o in self.excluded_ops}
         target_funcs = {}
+        # Get activation types to check against input_quantization flag
+        activation_ops = {"QuantReLU", "QuantReLU6", "QuantGELU", "QuantSiLU", "QuantHardswish", "QuantHardsigmoid"}
+        
         try:
             for func, op_name in func_map.items():
                 op_name_lc = op_name.lower()
                 bare_lc = op_name_lc[len("quant"):] if op_name_lc.startswith("quant") else op_name_lc
-                if "-1" in quantized_ops_lc or "all" in quantized_ops_lc or op_name_lc in quantized_ops_lc or bare_lc in quantized_ops_lc:
-                    if op_name_lc not in excluded_ops_lc and bare_lc not in excluded_ops_lc:
-                        target_funcs[func] = op_name
+                
+                # Check if this op is requested
+                is_requested = ("-1" in quantized_ops_lc or "all" in quantized_ops_lc or 
+                                op_name_lc in quantized_ops_lc or bare_lc in quantized_ops_lc)
+                if not is_requested:
+                    continue
+                if op_name_lc in excluded_ops_lc or bare_lc in excluded_ops_lc:
+                    continue
+                    
+                # Honor quantization flags
+                if op_name in activation_ops:
+                    if not self.input_quantization:
+                        continue
+                else:
+                    # For compute ops (Add, MatMul, etc.), we usually want them if either 
+                    # input or weight quantization is enabled, as they are part of the 
+                    # quantized dataflow.
+                    if not (self.input_quantization or self.weight_quantization):
+                        continue
+                        
+                target_funcs[func] = op_name
         except Exception as e:
             print(f"1.Error in FX quantization: {e}")
         if not target_funcs:

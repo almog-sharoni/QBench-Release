@@ -182,6 +182,12 @@ class DynamicInputQuantizer:
         return bool(aliases & self.unsigned_input_sources)
 
     @staticmethod
+    def _is_multi_input_module(module):
+        class_name = module.__class__.__name__.lower()
+        unquantized_name = class_name.replace('quant', '')
+        return unquantized_name in ('add', 'mul', 'sub', 'div', 'matmul', 'bmm', 'cat')
+
+    @staticmethod
     def _is_passthrough_module(module):
         return isinstance(module, (nn.Dropout, nn.Dropout2d, nn.Dropout3d, nn.Identity))
 
@@ -290,7 +296,14 @@ class DynamicInputQuantizer:
                     continue
 
                 node_inputs = self._node_inputs(node)
-                if self._module_uses_unsigned_input(module) or any(inp.name in unsigned_nodes for inp in node_inputs):
+                
+                # Conservative check: for multi-input nodes, all must be unsigned
+                if len(node_inputs) > 1:
+                    is_post_unsigned = all(inp.name in unsigned_nodes for inp in node_inputs)
+                else:
+                    is_post_unsigned = any(inp.name in unsigned_nodes for inp in node_inputs)
+                
+                if self._module_uses_unsigned_input(module) or is_post_unsigned:
                     layer_name = f"{prefix}.{node.target}" if prefix else str(node.target)
                     post_unsigned.add(layer_name)
                     modified = True
@@ -343,7 +356,12 @@ class DynamicInputQuantizer:
                     self.unsigned_passthrough_layers.add(name)
                 continue
             elif is_compute:
-                if prev_was_unsigned or uses_unsigned_input:
+                # Conservative fallback: we don't know the exact graph connections here,
+                # but if the immediate previous module was unsigned, we assume it's a direct connection.
+                # However, for hybrid quant, it's safer to be conservative.
+                if prev_was_unsigned and not self._is_multi_input_module(module):
+                    post_unsigned.add(name)
+                elif uses_unsigned_input:
                     post_unsigned.add(name)
                 prev_was_unsigned = False
             elif not isinstance(

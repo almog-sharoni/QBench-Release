@@ -578,7 +578,9 @@ class Runner:
                 continue
 
         try:
-            model.load_state_dict(state_dict, strict=True, assign=True)
+            # We use strict=False to allow missing buffers (like piecewise_lut) 
+            # while still validating the important parameters later in _assert_state_dict_loaded.
+            model.load_state_dict(state_dict, strict=False, assign=True)
         except TypeError:
             # Older PyTorch fallback.
             for module in model.modules():

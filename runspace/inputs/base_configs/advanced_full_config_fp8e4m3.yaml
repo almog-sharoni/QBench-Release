@@ -11,8 +11,8 @@ adapter:
   # List of operations to EXCLUDE from quantization (useful when quantized_ops is ["all"])
   excluded_ops: [""]
   # Whether to fold layers (e.g. Conv+BN) before quantization
-  # fold_layers: true
-  weight_quantization: False
+  fold_layers: true
+  weight_quantization: True
   input_quantization: True
 
 quantization:

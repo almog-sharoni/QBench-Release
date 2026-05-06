@@ -127,5 +127,68 @@ $$
     - For inputs outside $[-A, A]$, the function is linear (identity or zero).
     - For inputs inside $[-A, A]$, the value is retrieved from the precomputed `piecewise_lut` using the calculated index.
     - This avoids FP32 transcendental operations during inference.
+    
+---
+
+### 5. QuantHardswish
+
+**Class:** `QuantHardswish`  
+**Original Op:** `nn.Hardswish`  
+**Status:** [!IMPORTANT] Under Construction
+
+Quantized Hardswish. This implementation uses a **piecewise approximation** with a 256-entry Look-Up Table (LUT) for the non-linear region, ensuring efficient execution during inference.
+
+#### Mathematical Formula (Approximation)
+
+The function is approximated over three regions defined by a threshold parameter $A$ (default $A=4.0$):
+
+$$
+f(x) \approx \begin{cases} 
+0 & \text{if } x \le -A \\
+x & \text{if } x \ge A \\
+\text{LUT}[i(x)] & \text{if } -A < x < A 
+\end{cases}
+$$
+
+Where the index $i(x)$ maps the input range $[-A, A]$ to the 256 LUT bins:
+
+$$
+t = \frac{x + A}{2A}
+$$
+$$
+i(x) = \lfloor \text{clamp}(t, 0, 1) \times 255 \rfloor
+$$
+
+#### Method
+1.  **LUT Construction**: A 256-value table is precomputed during initialization. Continuity is enforced by setting $\text{LUT}[0] = 0$ and $\text{LUT}[255] = A$.
+2.  **Forward Pass**: Uses index-based lookup for the central region and linear identity or zero elsewhere.
+
+---
+
+### 6. QuantHardsigmoid
+
+**Class:** `QuantHardsigmoid`  
+**Original Op:** `nn.Hardsigmoid`  
+**Status:** [!IMPORTANT] Under Construction
+
+Quantized Hardsigmoid. This implementation uses a **piecewise approximation** with a 256-entry Look-Up Table (LUT) for the non-linear region.
+
+#### Mathematical Formula (Approximation)
+
+The function is approximated over three regions defined by a threshold parameter $A$ (default $A=4.0$):
+
+$$
+f(x) \approx \begin{cases} 
+0 & \text{if } x \le -A \\
+1 & \text{if } x \ge A \\
+\text{LUT}[i(x)] & \text{if } -A < x < A 
+\end{cases}
+$$
+
+Where the index $i(x)$ maps the input range $[-A, A]$ to the 256 LUT bins.
+
+#### Method
+1.  **LUT Construction**: A 256-value table is precomputed. Continuity is enforced by setting $\text{LUT}[0] = 0$ and $\text{LUT}[255] = 1$.
+2.  **Forward Pass**: Uses index-based lookup for the central region and constant $0$ or $1$ elsewhere.
 
 

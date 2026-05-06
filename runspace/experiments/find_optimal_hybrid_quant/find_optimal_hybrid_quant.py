@@ -265,6 +265,7 @@ def _log_hybrid_run(
     acc1,
     acc5,
     status,
+    experiment_name='hybrid_quant',
     ref_acc1=None,
     ref_acc5=None,
     ref_certainty=None,
@@ -277,7 +278,7 @@ def _log_hybrid_run(
 ):
     cfg = copy.deepcopy(base_config)
     cfg['experiment'] = {
-        'name': 'find_optimal_hybrid_quant',
+        'name': experiment_name,
         'type': 'hybrid_quant',
         'weight_dt': weight_dt,
         'activation_dt': activation_dt,
@@ -338,8 +339,47 @@ def process_single_model(args, device):
         print(f"  Input Cands  : {args.input_candidate_formats}")
     print(f"{'='*60}")
 
+    # Determine experiment name: hybrid_quant_<w_bits>/<i_bits>[_w_cache_sim]
+    # Based on the first (highest) candidate bit-widths.
+    w_primary = args.weight_format if args.weight_mode == "fixed" else (args.weight_candidate_formats[0] if args.weight_candidate_formats else "unknown")
+    i_primary = args.input_format if args.input_mode == "fixed" else (args.input_candidate_formats[0] if args.input_candidate_formats else "unknown")
+    
+    def _get_bits(fmt):
+        s = str(fmt)
+        return s.split('_')[0] if '_' in s else s
+
+    experiment_name = f"hybrid_quant_{_get_bits(w_primary)}/{_get_bits(i_primary)}"
+    if args.use_cache_sim_db:
+        experiment_name += "_w_cache_sim"
+        
+        # Check if model exists in cache simulation DB
+        sim = db.get_latest_cache_simulation(model_name)
+        if sim is None:
+            print(f"\n[CacheSim] Model '{model_name}' not found in cache simulation database.")
+            print(f"[CacheSim] Triggering automatic cache simulation...")
+            try:
+                from runspace.experiments.asic_cache_simulation.simulate_cache import run_simulation as run_cache_sim
+                # Create dummy args for simulation
+                sim_args = types.SimpleNamespace()
+                sim_args.model_name = model_name
+                sim_args.cache_size = 2.0  # Default from simulate_cache.py
+                sim_args.num_banks = 16    # Default
+                sim_args.metadata_bits = 0 # Default
+                sim_args.batch_size = 1    # Default for residency analysis
+                sim_args.device = str(device)
+                
+                # Execute simulation (this will also upload to DB)
+                run_cache_sim(sim_args)
+                print(f"[CacheSim] Simulation completed and uploaded to DB.\n")
+            except Exception as e:
+                print(f"[CacheSim] Error during automatic simulation: {e}")
+                import traceback
+                traceback.print_exc()
+
+    print(f"  Experiment Name: {experiment_name}")
+
     ref_acc1, ref_acc5, ref_certainty = _get_or_run_fp32_ref_common(
-        runner, args, device, db, model_name, experiment_name='find_optimal_hybrid_quant'
+        runner, args, device, db, model_name, experiment_name=experiment_name
     )
 
     # Prepare Weights
@@ -407,6 +447,7 @@ def process_single_model(args, device):
             runner=runner, base_config=base_config, model_name=model_name,
             weight_dt=weight_dt_str, activation_dt=activation_dt_str,
             acc1=0.0, acc5=0.0, status="ERROR",
+            experiment_name=experiment_name,
             ref_acc1=ref_acc1, ref_acc5=ref_acc5, ref_certainty=ref_certainty
         )
         return
@@ -428,6 +469,7 @@ def process_single_model(args, device):
         acc1=acc1,
         acc5=acc5,
         status="SUCCESS",
+        experiment_name=experiment_name,
         ref_acc1=ref_acc1,
         ref_acc5=ref_acc5,
         ref_certainty=ref_certainty,

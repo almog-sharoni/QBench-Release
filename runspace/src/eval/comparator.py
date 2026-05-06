@@ -1153,11 +1153,11 @@ class LayerComparator:
         
         if detailed_failures:
             report_lines.append("--- Detailed Parameter Compliance Failures ---")
-            report_lines.append(f"{'Layer':<{_NAME_W}} | {'Param Name':<20} | {'Invalid Count':<15} | {'Examples'}")
-            report_lines.append("-" * (_NAME_W + 40))
+            report_lines.append(f"{'Layer':<{_NAME_W}} | {'Type':<{_TYPE_W}} | {'Param Name':<20} | {'Invalid Count':<15} | {'Examples'}")
+            report_lines.append("-" * (_NAME_W + _TYPE_W + 45))
             for fn, fl, fp, fc, fe in detailed_failures:
-                report_lines.append(f"{fn:<{_NAME_W}} | {fp:<20} | {str(fc):<15} | {fe}")
-            report_lines.append("-" * (_NAME_W + 40) + "\n")
+                report_lines.append(f"{fn:<{_NAME_W}} | {fl:<{_TYPE_W}} | {fp:<20} | {str(fc):<15} | {fe}")
+            report_lines.append("-" * (_NAME_W + _TYPE_W + 45) + "\n")
 
         # Width definitions for tables
         _NAME_W, _TYPE_W = 52, 28
