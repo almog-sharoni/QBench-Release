@@ -1,0 +1,11 @@
+- name: mobilevit_s
+  source: timm
+  weights: DEFAULT
+
+- name: mobilevit_xs
+  source: timm
+  weights: DEFAULT
+
+- name: mobilevit_xxs
+  source: timm
+  weights: DEFAULT
