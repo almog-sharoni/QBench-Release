@@ -29,7 +29,7 @@ class GenericAdapter(BaseAdapter):
         input_quantization: bool = True,
         weight_quantization: bool = True,
         output_quantization: bool = False,
-        quantize_first_layer: bool = False,
+        quantize_first_layer: bool = True,
         quantized_ops: list = None,
         excluded_ops: list = None,
         quantization_type: str = DEFAULT_QUANTIZATION_TYPE,
@@ -47,6 +47,9 @@ class GenericAdapter(BaseAdapter):
         output_mode: str = "tensor",
         output_chunk_size: int = None,
         fold_layers: bool = True,
+        fold_input_norm: bool = True,
+        input_mean: list = None,
+        input_std: list = None,
         simulate_tf32_accum: bool = False,
         rounding: str = "nearest",
         input_chunk_size: int = None,
@@ -93,6 +96,9 @@ class GenericAdapter(BaseAdapter):
         self.output_mode = output_mode
         self.output_chunk_size = output_chunk_size
         self.fold_layers = fold_layers
+        self.fold_input_norm = fold_input_norm
+        self.input_mean = input_mean
+        self.input_std = input_std
         self.simulate_tf32_accum = simulate_tf32_accum
         self.rounding = rounding
         self.input_chunk_size = input_chunk_size
@@ -419,7 +425,8 @@ class GenericAdapter(BaseAdapter):
 
             if (
                 isinstance(mod_curr, (nn.Conv2d, nn.Linear)) and 
-                isinstance(mod_next, (nn.BatchNorm2d, nn.BatchNorm1d))
+                isinstance(mod_next, (nn.BatchNorm2d, nn.BatchNorm1d)) and
+                type(mod_next).__name__ != 'BatchNormAct2d'
             ):
                 modules_to_fuse.append([name_curr, name_next])
                 i += 2
@@ -429,6 +436,59 @@ class GenericAdapter(BaseAdapter):
 
         if modules_to_fuse:
             torch.quantization.fuse_modules(model, modules_to_fuse, inplace=True)
+
+    def _fold_input_normalization(self, model: nn.Module):
+        """
+        Folds the input normalization (mean/std) into the weights and bias 
+        of the first convolutional layer.
+        """
+        if not self.fold_input_norm:
+            return
+
+        # Default ImageNet constants if not provided
+        mean = self.input_mean if self.input_mean is not None else [0.485, 0.456, 0.406]
+        std = self.input_std if self.input_std is not None else [0.229, 0.224, 0.225]
+        
+        mean_t = torch.tensor(mean, dtype=torch.float32)
+        std_t = torch.tensor(std, dtype=torch.float32)
+
+        # Find the first Conv2d layer with 3 input channels
+        first_conv = None
+        for name, module in model.named_modules():
+            # We look for the first Conv2d that has 3 input channels
+            if isinstance(module, nn.Conv2d) and module.in_channels == 3:
+                first_conv = module
+                print(f"Folding input normalization into first layer: {name}")
+                break
+        
+        if first_conv is None:
+            print("Warning: fold_input_norm=True but no 3-channel Conv2d found.")
+            return
+
+        device = first_conv.weight.device
+        mean_t = mean_t.to(device)
+        std_t = std_t.to(device)
+
+        with torch.no_grad():
+            # Weights: [Out, In, H, W]
+            # In = 3
+            # W_new = W_old / std
+            print(f"[Debug] Folding into {name}: weight range before: [{first_conv.weight.min():.4f}, {first_conv.weight.max():.4f}]")
+            std_view = std_t.view(1, 3, 1, 1)
+            first_conv.weight.copy_(first_conv.weight / std_view)
+            print(f"[Debug] Folding into {name}: weight range after: [{first_conv.weight.min():.4f}, {first_conv.weight.max():.4f}]")
+            
+            # Bias update: b_new = b_old - sum(W_new * mean)
+            # Since we already updated weight to W_new, we use it directly.
+            correction = (first_conv.weight * mean_t.view(1, 3, 1, 1)).sum(dim=(1, 2, 3))
+            
+            if first_conv.bias is None:
+                first_conv.bias = nn.Parameter(torch.zeros(first_conv.out_channels, device=device))
+                print(f"[Debug] Folding into {name}: created new bias.")
+            
+            print(f"[Debug] Folding into {name}: bias range before: [{first_conv.bias.min():.4f}, {first_conv.bias.max():.4f}]")
+            first_conv.bias.copy_(first_conv.bias - correction)
+            print(f"[Debug] Folding into {name}: bias range after: [{first_conv.bias.min():.4f}, {first_conv.bias.max():.4f}]")
 
     def _replace_layers(self, model: nn.Module):
         """Replace standard layers with quantized versions, then FX-rewrite
@@ -784,11 +844,31 @@ class GenericAdapter(BaseAdapter):
         # Load base model
         model = self._load_base_model()
         
+        # Resolve data config for timm models if mean/std not provided
+        if self.model_source == 'timm' and (self.input_mean is None or self.input_std is None):
+            try:
+                import timm
+                data_config = timm.data.resolve_model_data_config(model)
+                if self.input_mean is None:
+                    self.input_mean = data_config.get('mean')
+                    if self.input_mean:
+                        print(f"[Debug] GenericAdapter: resolved mean from timm: {self.input_mean}")
+                if self.input_std is None:
+                    self.input_std = data_config.get('std')
+                    if self.input_std:
+                        print(f"[Debug] GenericAdapter: resolved std from timm: {self.input_std}")
+            except Exception as e:
+                print(f"[Debug] GenericAdapter: failed to resolve timm data config: {e}")
+
         print(f"[Debug] build_model: quantized={quantized}, fold_layers={self.fold_layers}, model_name={self.model_name}")
         # Fold layers if requested (always do this if fold_layers is True to 
         # keep structure consistent between ref and quant models)
         if self.fold_layers:
             self._fold_layers(model)
+
+        # Fold input normalization if requested
+        if self.fold_input_norm:
+            self._fold_input_normalization(model)
 
         if quantized:
             # Replace layers with quantized versions

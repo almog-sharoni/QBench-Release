@@ -18,7 +18,12 @@ def build_runtime_config(args, model_name=None, weights=None):
 
     return {
         'model': model_cfg,
-        'adapter': {'type': 'generic', 'quantized_ops': []},
+        'adapter': {
+            'type': 'generic',
+            'quantized_ops': [],
+            'fold_input_norm': getattr(args, 'fold_input_norm', True),
+            'quantize_first_layer': getattr(args, 'fold_input_norm', True),
+        },
         'dataset': {
             'name': args.dataset_name,
             'path': args.dataset_path,

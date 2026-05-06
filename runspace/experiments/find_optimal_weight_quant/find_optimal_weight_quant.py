@@ -94,6 +94,11 @@ def get_args():
         help="Absolute tolerance used by --verify_saved_weights checks.",
     )
 
+    parser.add_argument("--fold_input_norm", action="store_true", default=True,
+                        help="Fold input normalization into first layer weights and quantize first layer")
+    parser.add_argument("--no_fold_input_norm", action="store_false", dest="fold_input_norm",
+                        help="Disable input normalization folding and first layer quantization")
+
     return parser.parse_args()
 
 

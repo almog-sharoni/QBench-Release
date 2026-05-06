@@ -1,0 +1,89 @@
+
+
+# Dashboard date run: 20260506_090428_dashboard_experiment_hybrid_resnet18
+# Started: 2026-05-06 09:04:28
+$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/find_optimal_hybrid_quant.py --model_name resnet18 --weights DEFAULT --dataset_name imagenet --dataset_path /data/imagenet/val --batch_size 128 --num_workers 16 --limit_batches 10 --output_dir /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results --weight_mode optimized --weight_metric mse --weight_candidate_formats fp8_e1m6,fp8_e2m5,fp8_e3m4,fp8_e4m3,fp8_e5m2,fp8_e6m1,fp8_e7m0 --weight_chunk_size 128 --input_mode dynamic --input_metric mse --input_candidate_formats fp8_e1m6,fp8_e2m5,fp8_e3m4,fp8_e4m3,fp8_e5m2,fp8_e6m1,fp8_e7m0 --input_chunk_size 128 --unsigned_input_sources relu,softmax,quantrelu,quantsoftmax --dynamic_unsigned_input_candidates --per_chunk_format --force_recalc --use_cache_sim_db
+
+Using device: cuda
+Processing 1 model(s).
+Runner initialized on device: cuda
+/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+
+============================================================
+ HYBRID EXPERIMENT: resnet18
+  Weight Mode  : optimized
+  Weight Metric: mse
+  Weight Cands : ['fp8_e1m6', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e4m3', 'fp8_e5m2', 'fp8_e6m1', 'fp8_e7m0']
+  Input Mode   : dynamic
+  Input Metric : mse
+  Input Cands  : ['fp8_e1m6', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e4m3', 'fp8_e5m2', 'fp8_e6m1', 'fp8_e7m0']
+============================================================
+  Experiment Name: hybrid_quant_fp8/fp8_w_cache_sim
+[FP32 ref] Found in DB: Top1=69.76%, Top5=89.08%
+
+[Weights] Running optimized weight quantization (metric=mse) ...
+Info: runtime weight quantization requested; forcing materialized weights rebuild to avoid stale FP32 cache reuse.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=False, model_name=resnet18
+prepare_model_with_materialized_weights(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results/resnet18/weight_phase_fp32/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=62/62, mismatched=0, max_abs_diff=0.000e+00)
+
+[Weight Phase] Analysing weight tensors for metric: mse ...
+Analyzing Layers (Weights): 0it [00:00, ?it/s]Analyzing Layers (Weights): 8it [00:00, 75.49it/s]Analyzing Layers (Weights): 16it [00:00, 61.65it/s]Analyzing Layers (Weights): 23it [00:00, 62.81it/s]Analyzing Layers (Weights): 30it [00:00, 57.99it/s]Analyzing Layers (Weights): 37it [00:00, 60.05it/s]Analyzing Layers (Weights): 44it [00:00, 56.65it/s]Analyzing Layers (Weights): 50it [00:00, 50.55it/s]Analyzing Layers (Weights): 57it [00:01, 54.10it/s]Analyzing Layers (Weights): 63it [00:01, 52.79it/s]Analyzing Layers (Weights): 76it [00:01, 62.81it/s]
+Creating quantized state dict for metric mse...
+[Weight Phase] Saved optimized quantized weights (mse) → /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results/resnet18/weights_mse/quantized_weights.pt
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=False, model_name=resnet18
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results/resnet18/weights_mse/quantized_weights.pt): state_dict validated (coverage=1.000, comparable=62/62, mismatched=0, max_abs_diff=0.000e+00)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+
+[Inference] Running Hybrid Setup: Weight=opt_wmse[per_chunkx41], Input=dyn_input_mse ...
+Loading cache simulation results from DB for resnet18
+Loaded 31 layer statuses from cache sim DB.
+Sample keys in cache sim map: ['conv1', 'maxpool', 'layer1.0.conv1', 'layer1.0.conv2', 'layer1.0', 'layer1.1.conv1', 'layer1.1.conv2', 'layer1.1', 'layer2.0.conv1', 'layer2.0.conv2']
+Registered hooks on 60 layers: all layers use all 7 candidates (metric=MSE).
+24 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=mse chunk_size=128
+Hybrid W=optimized I=dynamic:   0%|          | 0/10 [00:00<?, ?batch/s][DynamicInputQuantizer] Layer 'bn1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer1.0.bn1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer1.0.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer1.0.bn2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer1.1.bn1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer1.1.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer1.1.bn2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer2.0.bn1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer2.0.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer2.0.bn2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer2.0.downsample.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer2.1.bn1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer2.1.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer2.1.bn2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer3.0.bn1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer3.0.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer3.0.bn2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer3.0.downsample.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer3.1.bn1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer3.1.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer3.1.bn2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_5' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer4.0.bn1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer4.0.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer4.0.bn2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer4.0.downsample.1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_6' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer4.1.bn1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer4.1.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer4.1.bn2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_7' NOT found in cache sim map. Using standard candidates.
+Hybrid W=optimized I=dynamic:  10%|█         | 1/10 [00:07<01:04,  7.12s/batch]Hybrid W=optimized I=dynamic:  10%|█         | 1/10 [00:07<01:04,  7.12s/batch, acc1=39.84%, acc5=64.06%, remaining_batches=9]Hybrid W=optimized I=dynamic:  20%|██        | 2/10 [00:09<00:35,  4.39s/batch, acc1=39.84%, acc5=64.06%, remaining_batches=9]Hybrid W=optimized I=dynamic:  20%|██        | 2/10 [00:09<00:35,  4.39s/batch, acc1=21.88%, acc5=39.84%, remaining_batches=8]Hybrid W=optimized I=dynamic:  30%|███       | 3/10 [00:12<00:25,  3.63s/batch, acc1=21.88%, acc5=39.84%, remaining_batches=8]Hybrid W=optimized I=dynamic:  30%|███       | 3/10 [00:12<00:25,  3.63s/batch, acc1=23.70%, acc5=38.54%, remaining_batches=7]Hybrid W=optimized I=dynamic:  40%|████      | 4/10 [00:15<00:19,  3.32s/batch, acc1=23.70%, acc5=38.54%, remaining_batches=7]Hybrid W=optimized I=dynamic:  40%|████      | 4/10 [00:15<00:19,  3.32s/batch, acc1=27.73%, acc5=45.51%, remaining_batches=6]Hybrid W=optimized I=dynamic:  50%|█████     | 5/10 [00:17<00:15,  3.14s/batch, acc1=27.73%, acc5=45.51%, remaining_batches=6]Hybrid W=optimized I=dynamic:  50%|█████     | 5/10 [00:17<00:15,  3.14s/batch, acc1=31.72%, acc5=49.69%, remaining_batches=5]Hybrid W=optimized I=dynamic:  60%|██████    | 6/10 [00:21<00:12,  3.11s/batch, acc1=31.72%, acc5=49.69%, remaining_batches=5]Hybrid W=optimized I=dynamic:  60%|██████    | 6/10 [00:21<00:12,  3.11s/batch, acc1=33.59%, acc5=52.21%, remaining_batches=4]Hybrid W=optimized I=dynamic:  70%|███████   | 7/10 [00:24<00:09,  3.09s/batch, acc1=33.59%, acc5=52.21%, remaining_batches=4]Hybrid W=optimized I=dynamic:  70%|███████   | 7/10 [00:24<00:09,  3.09s/batch, acc1=35.83%, acc5=54.46%, remaining_batches=3]Hybrid W=optimized I=dynamic:  80%|████████  | 8/10 [00:26<00:06,  3.02s/batch, acc1=35.83%, acc5=54.46%, remaining_batches=3]Hybrid W=optimized I=dynamic:  80%|████████  | 8/10 [00:26<00:06,  3.02s/batch, acc1=36.52%, acc5=55.18%, remaining_batches=2]Hybrid W=optimized I=dynamic:  90%|█████████ | 9/10 [00:29<00:02,  2.97s/batch, acc1=36.52%, acc5=55.18%, remaining_batches=2]Hybrid W=optimized I=dynamic:  90%|█████████ | 9/10 [00:29<00:02,  2.97s/batch, acc1=35.85%, acc5=54.43%, remaining_batches=1]Hybrid W=optimized I=dynamic: 100%|██████████| 10/10 [00:32<00:00,  2.93s/batch, acc1=35.85%, acc5=54.43%, remaining_batches=1]Hybrid W=optimized I=dynamic: 100%|██████████| 10/10 [00:32<00:00,  2.93s/batch, acc1=36.80%, acc5=55.39%, remaining_batches=0]Hybrid W=optimized I=dynamic: 100%|██████████| 10/10 [00:32<00:00,  3.27s/batch, acc1=36.80%, acc5=55.39%, remaining_batches=0]
+  Result: Top1=36.80%, Top5=55.39%, Certainty=0.5049, NormL1=2.6649e-02, NormMSE=1.3606e-02
+Logged run for resnet18 to /data/almog/Projects/QBench-Release/runspace/database/runs.db
+
+[Done] Hybrid experiment finished for resnet18.

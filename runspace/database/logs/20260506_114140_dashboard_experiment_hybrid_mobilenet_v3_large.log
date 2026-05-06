@@ -1,0 +1,46 @@
+
+
+# Dashboard date run: 20260506_114140_dashboard_experiment_hybrid_mobilenet_v3_large
+# Started: 2026-05-06 11:41:40
+$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/find_optimal_hybrid_quant.py --model_name mobilenet_v3_large --weights DEFAULT --dataset_name imagenet --dataset_path /data/imagenet/val --batch_size 128 --num_workers 16 --limit_batches -1 --output_dir /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results --weight_mode optimized --weight_metric mse --weight_candidate_formats fp8_e1m6,fp8_e2m5,fp8_e3m4,fp8_e4m3,fp8_e5m2,fp8_e6m1,fp8_e7m0 --weight_chunk_size 128 --input_mode dynamic --input_metric mse --input_candidate_formats fp8_e1m6,fp8_e2m5,fp8_e3m4,fp8_e4m3,fp8_e5m2,fp8_e6m1,fp8_e7m0 --input_chunk_size 128 --unsigned_input_sources relu,softmax,quantrelu,quantsoftmax --dynamic_unsigned_input_candidates --per_chunk_format --force_recalc --fold_input_norm
+
+Using device: cuda
+Processing 1 model(s).
+Runner initialized on device: cuda
+/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+
+============================================================
+ HYBRID EXPERIMENT: mobilenet_v3_large
+  Weight Mode  : optimized
+  Weight Metric: mse
+  Weight Cands : ['fp8_e1m6', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e4m3', 'fp8_e5m2', 'fp8_e6m1', 'fp8_e7m0']
+  Input Mode   : dynamic
+  Input Metric : mse
+  Input Cands  : ['fp8_e1m6', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e4m3', 'fp8_e5m2', 'fp8_e6m1', 'fp8_e7m0']
+============================================================
+  Experiment Name: hybrid_quant_fp8/fp8
+[FP32 ref] Found in DB: Top1=75.27%, Top5=92.59%
+
+[Weights] Running optimized weight quantization (metric=mse) ...
+Info: runtime weight quantization requested; forcing materialized weights rebuild to avoid stale FP32 cache reuse.
+Traceback (most recent call last):
+  File "/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/find_optimal_hybrid_quant.py", line 565, in <module>
+    main()
+  File "/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/find_optimal_hybrid_quant.py", line 561, in main
+    process_single_model(args, device)
+  File "/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/find_optimal_hybrid_quant.py", line 407, in process_single_model
+    q_path, quant_map, layer_types = run_weight_phase(runner, args, device, model_dir, base_config)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/find_optimal_hybrid_quant.py", line 162, in run_weight_phase
+    model, adapter, _ = runner.prepare_model_with_materialized_weights(
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/almog/Projects/QBench-Release/runspace/core/runner.py", line 984, in prepare_model_with_materialized_weights
+    adapter = create_adapter(build_cfg)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/almog/Projects/QBench-Release/runspace/src/adapters/adapter_factory.py", line 206, in create_adapter
+    from .generic_adapter import GenericAdapter
+  File "/data/almog/Projects/QBench-Release/runspace/src/adapters/generic_adapter.py", line 491
+    break
+    ^^^^^
+SyntaxError: 'break' outside loop

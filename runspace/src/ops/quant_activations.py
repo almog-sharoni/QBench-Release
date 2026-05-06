@@ -12,7 +12,7 @@ from runspace.src.ops.quant_base import quantize_tensor, QuantizedLayerMixin
 
 
 @OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True)
-class QuantReLU(nn.ReLU):
+class QuantReLU(nn.ReLU, QuantizedLayerMixin):
     """
     Quantized ReLU using LUT.
     """
@@ -126,13 +126,13 @@ class QuantSiLU(nn.SiLU, QuantizedLayerMixin):
         
         if self.capture_activations:
             self.last_quant_input = input.detach()
-            self.last_quant_output_unscaled = output_quant.detach()
+            self.last_quant_output_unscaled = y.detach()
 
-        return self.quantize_output(output_quant)
+        return self.quantize_output(y)
 
 
-@OpRegistry.register("QuantHardswish", original_cls=nn.Hardswish, is_activation=True, under_construction=True)
-class QuantHardswish(nn.Hardswish):
+@OpRegistry.register("QuantHardswish", original_cls=nn.Hardswish, is_activation=True)
+class QuantHardswish(nn.Hardswish,QuantizedLayerMixin):
     """
     Quantized Hardswish using a piecewise approximation with a small LUT.
     """
@@ -168,11 +168,11 @@ class QuantHardswish(nn.Hardswish):
         if self.capture_activations:
             self.last_quant_input = input.detach()
             self.last_quant_output_unscaled = y.detach()
-        return y
+        return self.quantize_output(y)
 
 
-@OpRegistry.register("QuantHardsigmoid", original_cls=nn.Hardsigmoid, is_activation=True, under_construction=True)
-class QuantHardsigmoid(nn.Hardsigmoid):
+@OpRegistry.register("QuantHardsigmoid", original_cls=nn.Hardsigmoid, is_activation=True)
+class QuantHardsigmoid(nn.Hardsigmoid,QuantizedLayerMixin):
     """
     Quantized Hardsigmoid using a piecewise approximation with a small LUT.
     """
@@ -208,11 +208,11 @@ class QuantHardsigmoid(nn.Hardsigmoid):
         if self.capture_activations:
             self.last_quant_input = input.detach()
             self.last_quant_output_unscaled = y.detach()
-        return y
+        return self.quantize_output(y)
 
 
 @OpRegistry.register("QuantGELU", original_cls=nn.GELU, is_activation=True, compliance_status="FP32 activation")
-class QuantGELU(nn.GELU, LUTActivation, QuantizedLayerMixin):
+class QuantGELU(nn.GELU, QuantizedLayerMixin):
     """
     Quantized GELU using a piecewise approximation with a small LUT.
     
@@ -250,11 +250,7 @@ class QuantGELU(nn.GELU, LUTActivation, QuantizedLayerMixin):
         lut_values[0] = 0.0
         # Force LUT[255] = A
         lut_values[255] = A
-
-        # persistent=False: the LUT is fully determined by A, regenerated each
-        # __init__. Excluding it from state_dict prevents load-mismatch errors
-        # when materialized weights are reloaded mid-pipeline.
-        self.register_buffer('piecewise_lut', lut_values, persistent=False)
+        self.register_buffer('piecewise_lut', lut_values)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if not getattr(self, 'input_quantization', True):

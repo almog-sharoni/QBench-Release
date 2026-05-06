@@ -1,0 +1,160 @@
+
+
+# Dashboard date run: 20260506_100204_dashboard_run_advanced_full_config_fp8e4m3_alexnet
+# Started: 2026-05-06 10:02:04
+$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/run_interactive.py --base-config advanced_full_config_fp8e4m3.yaml --models-file models_best_acc1.yaml --models alexnet --batches 1 --histograms
+
+=== QBench Interactive Run ===
+
+
+Generating configurations...
+Processing advanced_full_config_fp8e4m3.yaml...
+Batches set to 1 (from --batches).
+Histogram generation enabled (from CLI flag).
+Enabling histogram generation for all configurations...
+
+Saved replay command to /data/almog/Projects/QBench-Release/runspace/interactive_commands.log:
+python runspace/run_interactive.py --base-config advanced_full_config_fp8e4m3.yaml --models-file models_best_acc1.yaml --models alexnet --batches 1 --histograms
+
+Starting execution of 1 configurations...
+Runner initialized on device: cuda
+/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+Running config 1/1: run_1
+--- Running alexnet with fp8_e4m3 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/outputs/advanced_full_config_fp8e4m3/alexnet/fp8e4m3/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: runtime weight quantization requested; forcing materialized weights rebuild to avoid stale FP32 cache reuse.
+[Debug] build_model: quantized=True, fold_layers=True, model_name=alexnet
+prepare_model_with_materialized_weights(file=/data/almog/Projects/QBench-Release/runspace/outputs/advanced_full_config_fp8e4m3/alexnet/fp8e4m3/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=16/16, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/outputs/advanced_full_config_fp8e4m3/alexnet/fp8e4m3/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/outputs/advanced_full_config_fp8e4m3/alexnet/fp8e4m3/quant_graph.svg
+Running in COMPARE mode (Reference vs Quantized)...
+Building structured reference model (FP32 baseline)...
+[Debug] build_model: quantized=True, fold_layers=True, model_name=alexnet
+prepare_model_with_materialized_weights(file=/data/almog/Projects/QBench-Release/runspace/outputs/advanced_full_config_fp8e4m3/alexnet/fp8e4m3/reference_fp32/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=16/16, mismatched=0, max_abs_diff=0.000e+00)
+Input quantization enabled: mode=uniform format=fp8_e4m3 quant_mode=chunk chunk_size=128
+Comparing models on 1 batches...
+Comparing:   0%|          | 0/1 [00:00<?, ?batch/s]Comparing: 100%|██████████| 1/1 [00:07<00:00,  7.31s/batch]Comparing: 100%|██████████| 1/1 [00:07<00:00,  7.31s/batch, ref_acc1=74.22%, quant_acc1=73.44%, remaining_batches=0]Comparing: 100%|██████████| 1/1 [00:07<00:00,  7.31s/batch, ref_acc1=74.22%, quant_acc1=73.44%, remaining_batches=0]
+Generating evaluation report... (this might take a moment)
+
+=== Model Comparison Report ===
+Accuracy Source: Local (Comparison Batches)
+Metric               | Reference (FP32)     | Quantized (fp8e4m3) 
+------------------------------------------------------------------
+Top-1 Accuracy       | 74.22%               | 73.44%
+Top-5 Accuracy       | 89.06%               | 89.84%
+Perplexity           | 0.00                 | 0.00
+Avg Certainty        | 0.7704               | 0.7707
+Weight Comp. Red. %  | N/A                  | -12.50% (73.2% of total compressed)
+Input Comp. Red. %   | N/A                  | 60.16% (26.8% of total compressed)
+------------------------------------------------------------------
+
+
+--- FP8 Compliance Check (Value-Based) ---
+Layer                                                | Type                         | Shape              | Weight Fmt   | Input Q?   | Pre-Quant    | Input Fmt    | Output Q?  | Output Pre-Quant | Output Fmt   | Weight Check           | Input Check            | Output Check          
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+features.0                                           | QuantConv2d                  | (3, 224, 224)      | fp8_e4m3     | No         | FP32         | FP32         | No         | FP32         | FP32         | ✅ PASS                | N/A                    | N/A                   
+features.1                                           | QuantReLU                    | (64, 55, 55)       | N/A          | No         | FP32         | FP32         | No         | FP32         | FP32         | N/A                    | N/A                    | N/A                   
+features.2                                           | QuantMaxPool2d               | (64, 55, 55)       | N/A          | Yes        | FP32         | fp8_e4m3     | No         | fp8_e4m3     | fp8_e4m3     | N/A                    | ✅ PASS                | N/A                   
+features.3                                           | QuantConv2d                  | (64, 27, 27)       | fp8_e4m3     | Yes        | fp8_e4m3     | fp8_e4m3     | No         | FP32         | FP32         | ✅ PASS                | ✅ PASS                | N/A                   
+features.4                                           | QuantReLU                    | (192, 27, 27)      | N/A          | No         | FP32         | FP32         | No         | FP32         | FP32         | N/A                    | N/A                    | N/A                   
+features.5                                           | QuantMaxPool2d               | (192, 27, 27)      | N/A          | Yes        | FP32         | fp8_e4m3     | No         | fp8_e4m3     | fp8_e4m3     | N/A                    | ✅ PASS                | N/A                   
+features.6                                           | QuantConv2d                  | (192, 13, 13)      | fp8_e4m3     | Yes        | fp8_e4m3     | fp8_e4m3     | No         | FP32         | FP32         | ✅ PASS                | ✅ PASS                | N/A                   
+features.7                                           | QuantReLU                    | (384, 13, 13)      | N/A          | No         | FP32         | FP32         | No         | FP32         | FP32         | N/A                    | N/A                    | N/A                   
+features.8                                           | QuantConv2d                  | (384, 13, 13)      | fp8_e4m3     | Yes        | FP32         | fp8_e4m3     | No         | FP32         | FP32         | ✅ PASS                | ✅ PASS                | N/A                   
+features.9                                           | QuantReLU                    | (256, 13, 13)      | N/A          | No         | FP32         | FP32         | No         | FP32         | FP32         | N/A                    | N/A                    | N/A                   
+features.10                                          | QuantConv2d                  | (256, 13, 13)      | fp8_e4m3     | Yes        | FP32         | fp8_e4m3     | No         | FP32         | FP32         | ✅ PASS                | ✅ PASS                | N/A                   
+features.11                                          | QuantReLU                    | (256, 13, 13)      | N/A          | No         | FP32         | FP32         | No         | FP32         | FP32         | N/A                    | N/A                    | N/A                   
+features.12                                          | QuantMaxPool2d               | (256, 13, 13)      | N/A          | Yes        | FP32         | fp8_e4m3     | No         | fp8_e4m3     | fp8_e4m3     | N/A                    | ✅ PASS                | N/A                   
+avgpool                                              | QuantAdaptiveAvgPool2d       | (256, 6, 6)        | N/A          | Yes        | fp8_e4m3     | fp8_e4m3     | No         | FP32         | FP32         | 🚧 UNDER CONSTRUCTION  | ✅ PASS                | N/A                   
+classifier.0                                         | QuantDropout                 | (9216,)            | N/A          | Yes        | FP32         | fp8_e4m3     | No         | fp8_e4m3     | fp8_e4m3     | N/A                    | ✅ PASS                | N/A                   
+classifier.1                                         | QuantLinear                  | (9216,)            | fp8_e4m3     | Yes        | fp8_e4m3     | fp8_e4m3     | No         | FP32         | FP32         | ✅ PASS                | ✅ PASS                | N/A                   
+classifier.2                                         | QuantReLU                    | (4096,)            | N/A          | No         | FP32         | FP32         | No         | FP32         | FP32         | N/A                    | N/A                    | N/A                   
+classifier.3                                         | QuantDropout                 | (4096,)            | N/A          | Yes        | FP32         | fp8_e4m3     | No         | fp8_e4m3     | fp8_e4m3     | N/A                    | ✅ PASS                | N/A                   
+classifier.4                                         | QuantLinear                  | (4096,)            | fp8_e4m3     | Yes        | fp8_e4m3     | fp8_e4m3     | No         | FP32         | FP32         | ✅ PASS                | ✅ PASS                | N/A                   
+classifier.5                                         | QuantReLU                    | (4096,)            | N/A          | No         | FP32         | FP32         | No         | FP32         | FP32         | N/A                    | N/A                    | N/A                   
+classifier.6                                         | QuantLinear                  | (4096,)            | fp8_e4m3     | Yes        | FP32         | fp8_e4m3     | No         | FP32         | FP32         | ✅ PASS                | ✅ PASS                | N/A                   
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+--- Quantization Coverage Verification ---
+Method: Automated Graph Tracing (torch.fx)
+Coverage: 21/22 (95.5%)
+Unquantized Unsupported Ops (Not in registry):
+  - flatten (flatten)
+----------------------------------------
+
+
+--- First Layer Input Dynamic Range ---
+Layer: features.0
+Min: -2.1179
+Max: 2.6400
+----------------------------------------
+
+
+--- Layer Comparison (Average over 1 Batches) ---
+Layer                                                | Type                         | Input MSE  | Input CosSim | Weight MSE | Weight CosSim | XMax Orig  | XMax Deq   | XMax Err % | Zeros % (I)  | Zeros % (W) 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+features.0                                           | QuantConv2d                  | 0.00e+00   | 1.0000       | 1.31e-28   | 0.9996       | N/A        | N/A        | N/A        | 0.00%        | 0.00%       
+features.1                                           | QuantReLU                    | 2.15e-09   | 0.9994       | N/A        | N/A          | N/A        | N/A        | N/A        | 0.00%        | N/A         
+features.2                                           | QuantMaxPool2d               | 5.73e-02   | 0.9989       | N/A        | N/A          | 32.00      | 60.00      | 87.50%     | 60.31%       | N/A         
+features.3                                           | QuantConv2d                  | 2.45e-01   | 0.9992       | 1.05e-29   | 0.9996       | 32.00      | 60.00      | 87.50%     | 22.55%       | 0.00%       
+features.4                                           | QuantReLU                    | 3.07e+05   | 0.9995       | N/A        | N/A          | N/A        | N/A        | N/A        | 0.00%        | N/A         
+features.5                                           | QuantMaxPool2d               | 1.52e+06   | 0.9972       | N/A        | N/A          | 64.00      | 104.00     | 62.50%     | 78.13%       | N/A         
+features.6                                           | QuantConv2d                  | 6.86e+06   | 0.9980       | 6.80e-31   | 0.9996       | 64.00      | 104.00     | 62.50%     | 49.14%       | 0.00%       
+features.7                                           | QuantReLU                    | 4.57e+08   | 0.9991       | N/A        | N/A          | N/A        | N/A        | N/A        | 0.00%        | N/A         
+features.8                                           | QuantConv2d                  | 2.24e+10   | 0.9955       | 3.27e-35   | 0.9996       | 64.00      | 112.00     | 75.00%     | 82.78%       | 0.00%       
+features.9                                           | QuantReLU                    | 5.30e+05   | 0.9981       | N/A        | N/A          | N/A        | N/A        | N/A        | 0.00%        | N/A         
+features.10                                          | QuantConv2d                  | 4.22e+03   | 0.9940       | 5.61e-39   | 0.9997       | 64.00      | 72.00      | 12.50%     | 79.69%       | 0.00%       
+features.11                                          | QuantReLU                    | 1.53e+04   | 0.9978       | N/A        | N/A          | N/A        | N/A        | N/A        | 0.00%        | N/A         
+features.12                                          | QuantMaxPool2d               | 1.99e+02   | 0.9927       | N/A        | N/A          | 32.00      | 32.00      | 0.00%      | 86.90%       | N/A         
+avgpool                                              | QuantAdaptiveAvgPool2d       | 1.26e+03   | 0.9943       | N/A        | N/A          | 32.00      | 32.00      | 0.00%      | 65.00%       | N/A         
+classifier.0                                         | QuantDropout                 | 1.26e+03   | 0.9943       | N/A        | N/A          | 32.00      | 32.00      | 0.00%      | 65.00%       | N/A         
+classifier.1                                         | QuantLinear                  | 1.26e+03   | 0.9943       | 0.00e+00   | 0.9996       | 32.00      | 32.00      | 0.00%      | 65.00%       | 0.00%       
+classifier.2                                         | QuantReLU                    | 2.07e+02   | 0.9982       | N/A        | N/A          | N/A        | N/A        | N/A        | 0.00%        | N/A         
+classifier.3                                         | QuantDropout                 | 6.53e+00   | 0.9952       | N/A        | N/A          | 16.00      | 30.00      | 87.50%     | 71.81%       | N/A         
+classifier.4                                         | QuantLinear                  | 6.53e+00   | 0.9952       | 2.80e-45   | 0.9997       | 16.00      | 30.00      | 87.50%     | 71.81%       | 0.00%       
+classifier.5                                         | QuantReLU                    | 5.30e+05   | 0.9988       | N/A        | N/A          | N/A        | N/A        | N/A        | 0.00%        | N/A         
+classifier.6                                         | QuantLinear                  | 8.51e+02   | 0.9947       | 7.65e-40   | 0.9996       | 32.00      | 36.00      | 12.50%     | 85.73%       | 0.00%       
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+--- Chunk-wise Scale Factors (Log2 Exponents) ---
+Layer                                                | Type                         | Source     | Num Chunks | Min Exp      | Max Exp      | Mean Exp     | Detailed Exponents (if few)
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+features.0                                           | QuantConv2d                  | Weight     | 64         | -3           | -1           | -1.91        | 
+features.2                                           | QuantMaxPool2d               | Input      | 193664     | -14          | 5            | 1.03         | 
+features.3                                           | QuantConv2d                  | Input      | 46720      | -7           | 5            | 1.69         | 
+features.3                                           | QuantConv2d                  | Weight     | 192        | -4           | 1            | -2.24        | 
+features.5                                           | QuantMaxPool2d               | Input      | 140032     | -13          | 6            | 1.79         | 
+features.6                                           | QuantConv2d                  | Input      | 32512      | -12          | 6            | 2.74         | 
+features.6                                           | QuantConv2d                  | Weight     | 384        | -4           | -1           | -2.79        | 
+features.8                                           | QuantConv2d                  | Input      | 64896      | -11          | 6            | 2.37         | 
+features.8                                           | QuantConv2d                  | Weight     | 256        | -4           | -2           | -3.29        | 
+features.10                                          | QuantConv2d                  | Input      | 43264      | -10          | 6            | 2.17         | 
+features.10                                          | QuantConv2d                  | Weight     | 256        | -4           | -3           | -3.62        | 
+features.12                                          | QuantMaxPool2d               | Input      | 43264      | -12          | 5            | 0.96         | 
+avgpool                                              | QuantAdaptiveAvgPool2d       | Input      | 9216       | -4           | 5            | 2.13         | 
+classifier.0                                         | QuantDropout                 | Input      | 9216       | -4           | 5            | 2.13         | 
+classifier.1                                         | QuantLinear                  | Input      | 9216       | -4           | 5            | 2.13         | 
+classifier.1                                         | QuantLinear                  | Weight     | 4096       | -9           | -4           | -5.02        | 
+classifier.3                                         | QuantDropout                 | Input      | 4096       | 1            | 4            | 2.77         | 
+classifier.4                                         | QuantLinear                  | Input      | 4096       | 1            | 4            | 2.77         | 
+classifier.4                                         | QuantLinear                  | Weight     | 4096       | -9           | -4           | -5.17        | 
+classifier.6                                         | QuantLinear                  | Input      | 4096       | 0            | 5            | 2.48         | 
+classifier.6                                         | QuantLinear                  | Weight     | 1000       | -4           | -3           | -3.82        | 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+Report saved to /data/almog/Projects/QBench-Release/runspace/outputs/advanced_full_config_fp8e4m3/alexnet/fp8e4m3/comparison_report.txt
+Saving histograms to /data/almog/Projects/QBench-Release/runspace/outputs/advanced_full_config_fp8e4m3/alexnet/fp8e4m3/histogram...
+Retrieving metrics from comparator...
+Cleaning up memory for alexnet...
+Logged run for alexnet to /data/almog/Projects/QBench-Release/runspace/database/runs.db
+
+=== Execution Completed ===
+Aggregating results...
+Summary report appended to /data/almog/Projects/QBench-Release/runspace/outputs/interactive_summary_report_classification.csv
+Summary report appended to /data/almog/Projects/QBench-Release/runspace/outputs/interactive_summary_report_classification.md
+Classification CSV:  /data/almog/Projects/QBench-Release/runspace/outputs/interactive_summary_report_classification.csv
+Classification MD:   /data/almog/Projects/QBench-Release/runspace/outputs/interactive_summary_report_classification.md

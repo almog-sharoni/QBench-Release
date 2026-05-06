@@ -1,0 +1,298 @@
+
+
+# Dashboard date run: 20260506_132011_dashboard_experiment_hybrid_mobilevit_s
+# Started: 2026-05-06 13:20:11
+$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/find_optimal_hybrid_quant.py --model_name mobilevit_s --weights DEFAULT --dataset_name imagenet --dataset_path /data/imagenet/val --batch_size 128 --num_workers 16 --limit_batches 10 --output_dir /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results --weight_mode optimized --weight_metric mse --weight_candidate_formats fp8_e1m6,fp8_e2m5,fp8_e3m4,fp8_e4m3,fp8_e5m2,fp8_e6m1,fp8_e7m0 --weight_chunk_size 128 --input_mode dynamic --input_metric mse --input_candidate_formats fp8_e1m6,fp8_e2m5,fp8_e3m4,fp8_e4m3,fp8_e5m2,fp8_e6m1,fp8_e7m0 --input_chunk_size 128 --unsigned_input_sources relu,softmax,quantrelu,quantsoftmax --dynamic_unsigned_input_candidates --per_chunk_format --force_recalc --fold_input_norm
+
+Using device: cuda
+Processing 1 model(s).
+Runner initialized on device: cuda
+/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+
+============================================================
+ HYBRID EXPERIMENT: mobilevit_s
+  Weight Mode  : optimized
+  Weight Metric: mse
+  Weight Cands : ['fp8_e1m6', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e4m3', 'fp8_e5m2', 'fp8_e6m1', 'fp8_e7m0']
+  Input Mode   : dynamic
+  Input Metric : mse
+  Input Cands  : ['fp8_e1m6', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e4m3', 'fp8_e5m2', 'fp8_e6m1', 'fp8_e7m0']
+============================================================
+  Experiment Name: hybrid_quant_fp8/fp8
+[FP32 ref] Found in DB: Top1=0.10%, Top5=0.51%
+
+[Weights] Running optimized weight quantization (metric=mse) ...
+Info: runtime weight quantization requested; forcing materialized weights rebuild to avoid stale FP32 cache reuse.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.9734, 1.1262]
+[Debug] Folding into stem.conv: weight range after: [-0.9734, 1.1262]
+[Debug] Folding into stem.conv: created new bias.
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+prepare_model_with_materialized_weights(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results/mobilevit_s/weight_phase_fp32/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=216/216, mismatched=0, max_abs_diff=0.000e+00)
+
+[Weight Phase] Analysing weight tensors for metric: mse ...
+Analyzing Layers (Weights): 0it [00:00, ?it/s]Analyzing Layers (Weights): 332it [00:00, 3291.62it/s]Analyzing Layers (Weights): 519it [00:00, 3562.14it/s]
+Creating quantized state dict for metric mse...
+[Weight Phase] Saved optimized quantized weights (mse) → /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results/mobilevit_s/weights_mse/quantized_weights.pt
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.3943, 0.3482]
+[Debug] Folding into stem.conv: weight range after: [-0.3943, 0.3482]
+[Debug] Folding into stem.conv: created new bias.
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results/mobilevit_s/weights_mse/quantized_weights.pt): state_dict validated (coverage=1.000, comparable=216/216, mismatched=0, max_abs_diff=0.000e+00)
+Skipping timm normalization for mobilevit_s (using mean=0, std=1)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+
+[Inference] Running Hybrid Setup: Weight=opt_wmse[per_chunkx104], Input=dyn_input_mse ...
+Registered hooks on 235 layers: all layers use all 7 candidates (metric=MSE).
+18 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=mse chunk_size=128
+Hybrid W=optimized I=dynamic:   0%|          | 0/10 [00:00<?, ?batch/s][DynamicInputQuantizer] Layer 'stem.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stem.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stem.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.0.0.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.0.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.1.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.1.2.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.0.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_1x1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_6' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.0.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_7' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.transformer.1.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_5' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_proj.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_proj.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_proj.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_fusion.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_fusion.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.2.1.conv_fusion.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.0.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_1x1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_18' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_5' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_6' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.0.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_7' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_19' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_6' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_7' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_8' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.1.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_9' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_20' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_8' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_9' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_10' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.2.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_11' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_21' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_10' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_11' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_12' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.transformer.3.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_13' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_proj.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_proj.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_proj.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_fusion.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_fusion.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.3.1.conv_fusion.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv1_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv1_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv1_1x1.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv2_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv2_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv2_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv3_1x1.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.0.conv3_1x1.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_kxk.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_kxk.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_kxk.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_1x1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_32' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_12' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_13' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_14' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.0.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_15' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_33' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_14' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_15' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_16' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.1.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_17' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.attn.qkv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'mul_34' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_16' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.attn.softmax' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.attn.attn_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'matmul_17' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.attn.proj' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.attn.proj_drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_18' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.mlp.fc1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.mlp.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.mlp.drop1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.mlp.fc2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.transformer.2.mlp.drop2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_19' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_proj.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_proj.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_proj.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_fusion.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_fusion.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'stages.4.1.conv_fusion.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'final_conv.conv' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'final_conv.bn.bn' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'final_conv.bn.act' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'head.global_pool.pool' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'head.drop' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'head.fc' NOT found in cache sim map. Using standard candidates.
+Hybrid W=optimized I=dynamic:  10%|█         | 1/10 [00:06<00:58,  6.46s/batch]Hybrid W=optimized I=dynamic:  10%|█         | 1/10 [00:06<00:58,  6.46s/batch, acc1=70.31%, acc5=85.16%, remaining_batches=9]Hybrid W=optimized I=dynamic:  20%|██        | 2/10 [00:07<00:28,  3.53s/batch, acc1=70.31%, acc5=85.16%, remaining_batches=9]Hybrid W=optimized I=dynamic:  20%|██        | 2/10 [00:07<00:28,  3.53s/batch, acc1=50.78%, acc5=80.86%, remaining_batches=8]Hybrid W=optimized I=dynamic:  30%|███       | 3/10 [00:09<00:18,  2.59s/batch, acc1=50.78%, acc5=80.86%, remaining_batches=8]Hybrid W=optimized I=dynamic:  30%|███       | 3/10 [00:09<00:18,  2.59s/batch, acc1=52.08%, acc5=81.25%, remaining_batches=7]Hybrid W=optimized I=dynamic:  40%|████      | 4/10 [00:10<00:12,  2.12s/batch, acc1=52.08%, acc5=81.25%, remaining_batches=7]Hybrid W=optimized I=dynamic:  40%|████      | 4/10 [00:10<00:12,  2.12s/batch, acc1=55.66%, acc5=81.25%, remaining_batches=6]Hybrid W=optimized I=dynamic:  50%|█████     | 5/10 [00:12<00:09,  1.89s/batch, acc1=55.66%, acc5=81.25%, remaining_batches=6]Hybrid W=optimized I=dynamic:  50%|█████     | 5/10 [00:12<00:09,  1.89s/batch, acc1=56.09%, acc5=79.53%, remaining_batches=5]Hybrid W=optimized I=dynamic:  60%|██████    | 6/10 [00:13<00:06,  1.74s/batch, acc1=56.09%, acc5=79.53%, remaining_batches=5]Hybrid W=optimized I=dynamic:  60%|██████    | 6/10 [00:13<00:06,  1.74s/batch, acc1=57.94%, acc5=80.21%, remaining_batches=4]Hybrid W=optimized I=dynamic:  70%|███████   | 7/10 [00:15<00:04,  1.64s/batch, acc1=57.94%, acc5=80.21%, remaining_batches=4]Hybrid W=optimized I=dynamic:  70%|███████   | 7/10 [00:15<00:04,  1.64s/batch, acc1=59.60%, acc5=80.80%, remaining_batches=3]Hybrid W=optimized I=dynamic:  80%|████████  | 8/10 [00:16<00:03,  1.54s/batch, acc1=59.60%, acc5=80.80%, remaining_batches=3]Hybrid W=optimized I=dynamic:  80%|████████  | 8/10 [00:16<00:03,  1.54s/batch, acc1=60.25%, acc5=80.47%, remaining_batches=2]Hybrid W=optimized I=dynamic:  90%|█████████ | 9/10 [00:17<00:01,  1.49s/batch, acc1=60.25%, acc5=80.47%, remaining_batches=2]Hybrid W=optimized I=dynamic:  90%|█████████ | 9/10 [00:17<00:01,  1.49s/batch, acc1=57.73%, acc5=78.21%, remaining_batches=1]Hybrid W=optimized I=dynamic: 100%|██████████| 10/10 [00:19<00:00,  1.47s/batch, acc1=57.73%, acc5=78.21%, remaining_batches=1]Hybrid W=optimized I=dynamic: 100%|██████████| 10/10 [00:19<00:00,  1.47s/batch, acc1=58.05%, acc5=78.44%, remaining_batches=0]Hybrid W=optimized I=dynamic: 100%|██████████| 10/10 [00:19<00:00,  1.93s/batch, acc1=58.05%, acc5=78.44%, remaining_batches=0]
+  Result: Top1=58.05%, Top5=78.44%, Certainty=0.7024, NormL1=8.9134e-03, NormMSE=3.9158e-04
+Logged run for mobilevit_s to /data/almog/Projects/QBench-Release/runspace/database/runs.db
+
+[Done] Hybrid experiment finished for mobilevit_s.

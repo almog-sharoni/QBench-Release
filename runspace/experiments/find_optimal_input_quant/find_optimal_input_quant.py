@@ -83,7 +83,8 @@ def _build_input_quant_config(args, model_name, weights, default_format, quantiz
             'type': 'generic',
             'quantized_ops': INPUT_ONLY_QUANTIZED_OPS,
             'excluded_ops': args.excluded_ops,
-            'quantize_first_layer': quantize_first_layer,
+            'quantize_first_layer': args.fold_input_norm if hasattr(args, 'fold_input_norm') else quantize_first_layer,
+            'fold_input_norm': args.fold_input_norm if hasattr(args, 'fold_input_norm') else True,
             'input_quantization': input_quantization,
             'weight_quantization': False,
             'input_size': getattr(args, 'input_size', 224),
@@ -242,6 +243,10 @@ def get_args():
         action="store_true",
         help="Fetch cache simulation results from the database instead of a file.",
     )
+    parser.add_argument("--fold_input_norm", action="store_true", default=True,
+                        help="Fold input normalization into first layer weights and quantize first layer")
+    parser.add_argument("--no_fold_input_norm", action="store_false", dest="fold_input_norm",
+                        help="Disable input normalization folding and first layer quantization")
     # Add other args as needed
     args = parser.parse_args()
     args.excluded_ops = [op.strip() for op in args.excluded_ops.split(',') if op.strip()]

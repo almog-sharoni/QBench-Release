@@ -603,7 +603,7 @@ class QuantizedLayerMixin:
         
         # 1. Handle Input
         if getattr(self, 'is_first_layer', False):
-            if not getattr(self, 'quantize_first_layer', False):
+            if not getattr(self, 'quantize_first_layer', True):
                 # Do NOT quantize to FP8. Just cast to float for the operation.
                 input_fp8 = input.float()
             else:

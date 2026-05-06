@@ -78,7 +78,7 @@ class Runner:
 
         layer_cfg = quant_cfg.get('layers', adapter_cfg.get('layers'))
         has_layer_overrides = isinstance(layer_cfg, dict) and len(layer_cfg) > 0
-        quantize_first_layer = bool(adapter_cfg.get('quantize_first_layer', False))
+        quantize_first_layer = bool(adapter_cfg.get('quantize_first_layer', True))
 
         explicit_build_quantized = adapter_cfg.get('build_quantized')
         if explicit_build_quantized is None:
@@ -1122,6 +1122,7 @@ class Runner:
                 ref_pose_auc_10=_fm_val('ref_pose_auc_10'),
                 ref_pose_auc_20=_fm_val('ref_pose_auc_20'),
                 config_json=self._to_json_string(exp_cfg.get('config_json') or config),
+                cli_command=" ".join(sys.argv),
             )
             return None
 
@@ -1183,6 +1184,7 @@ class Runner:
             'input_map_json': input_map_json,
             'output_map_json': output_map_json,
             'config_json': self._to_json_string(exp_cfg.get('config_json') or config),
+            'cli_command': " ".join(sys.argv),
         }
         db.log_run(**payload)
         return payload
@@ -1602,6 +1604,12 @@ class Runner:
         )
         dataset_cfg['model_name'] = model_name
         self._resolve_paths(dataset_cfg, ('path', 'pairs_file', 'root'))
+
+        # If adapter is already created (unlikely here but possible), check its fold_input_norm
+        # Otherwise, check the config directly.
+        adapter_cfg_resolved = config.get('adapter', {})
+        fold_input_norm = adapter_cfg_resolved.get('fold_input_norm', True)
+        dataset_cfg['skip_normalization'] = fold_input_norm
 
         # Cap num_workers to avoid exhausting fds or RAM during long sequential runs.
         # On unified-memory hosts (e.g. GB10: CPU+GPU share one LPDDR5X pool),

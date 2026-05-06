@@ -110,6 +110,10 @@ def get_args():
                         help="Allow using unsigned formats (UFP) for layers with unsigned inputs")
     parser.add_argument("--no_dynamic_unsigned_input_candidates", action="store_false", dest="dynamic_unsigned_input_candidates",
                         help="Disable using unsigned formats (UFP) for layers with unsigned inputs")
+    parser.add_argument("--fold_input_norm", action="store_true", default=True,
+                        help="Fold input normalization into first layer weights and quantize first layer")
+    parser.add_argument("--no_fold_input_norm", action="store_false", dest="fold_input_norm",
+                        help="Disable input normalization folding and first layer quantization")
 
     # Output
     parser.add_argument("--output_dir", type=str,
@@ -318,6 +322,8 @@ def process_single_model(args, device):
     base_config['adapter']['quantized_ops'] = ['all']
     base_config['adapter']['input_quantization'] = True
     base_config['adapter']['weight_quantization'] = True
+    base_config['adapter']['fold_input_norm'] = args.fold_input_norm
+    base_config['adapter']['quantize_first_layer'] = args.fold_input_norm
 
     runner = Runner(device)
     db = runner._get_db()

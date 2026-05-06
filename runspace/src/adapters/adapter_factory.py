@@ -14,7 +14,7 @@ from ..quantization.constants import DEFAULT_QUANTIZATION_TYPE
 
 ADAPTER_SCHEMA = {
     'model': ['name', 'pipeline', 'source', 'weights', 'repo_path', 'sg_weights', 'sp_config', 'sg_config'],
-    'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'weight_quantization', 'output_quantization', 'quantization_type', 'layers', 'fold_layers', 'input_quantization_type', 'input_chunk_size', 'skip_calibration', 'build_quantized', 'quantize_components', 'input_size', 'unsigned_input_sources', 'enable_fx_quantization'],
+    'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'weight_quantization', 'output_quantization', 'quantization_type', 'layers', 'fold_layers', 'fold_input_norm', 'input_mean', 'input_std', 'input_quantization_type', 'input_chunk_size', 'skip_calibration', 'build_quantized', 'quantize_components', 'input_size', 'unsigned_input_sources', 'enable_fx_quantization'],
     'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'weight_source', 'act_mode', 'act_chunk_size', 'output_format', 'output_mode', 'output_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format', 'strict_format_check', 'cache_simulation_path', 'unsigned_input_sources'],
     'dataset': ['name', 'path', 'batch_size', 'num_workers', 'image_size', 'grayscale', 'pairs_file', 'max_pairs', 'resize_size', 'multiprocessing_context', 'persistent_workers', 'prefetch_factor'],
     'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms', 'max_batches', 'graph_only', 'dynamic_input_quant', 'input_quant', 'save_visualizations', 'num_viz_samples'],
@@ -86,7 +86,7 @@ def _build_quantized_default(adapter_config: dict, quantized_ops, layer_config) 
     qops = quantized_ops if isinstance(quantized_ops, list) else [quantized_ops]
     has_qops = any(bool(op) for op in qops)
     has_layer_overrides = isinstance(layer_config, dict) and len(layer_config) > 0
-    return bool(adapter_config.get('quantize_first_layer', False) or has_qops or has_layer_overrides)
+    return bool(adapter_config.get('quantize_first_layer', True) or has_qops or has_layer_overrides)
 
 
 def _resolve_adapter_inputs(config: dict) -> dict:
@@ -120,10 +120,13 @@ def _resolve_adapter_inputs(config: dict) -> dict:
         'input_quantization': adapter_config.get('input_quantization', True),
         'weight_quantization': adapter_config.get('weight_quantization', True),
         'output_quantization': adapter_config.get('output_quantization', False),
-        'quantize_first_layer': adapter_config.get('quantize_first_layer', False),
+        'quantize_first_layer': adapter_config.get('quantize_first_layer', True),
         'quantized_ops': quantized_ops,
         'excluded_ops': adapter_config.get('excluded_ops', []),
         'fold_layers': adapter_config.get('fold_layers', True),
+        'fold_input_norm': adapter_config.get('fold_input_norm', True),
+        'input_mean': adapter_config.get('input_mean', None),
+        'input_std': adapter_config.get('input_std', None),
         'skip_calibration': adapter_config.get('skip_calibration', False),
         'quantization_type': quantization_type,
         'quantization_bias': quantization_config.get('bias', None),
@@ -161,7 +164,7 @@ def _common_adapter_kwargs(params: dict) -> dict:
         'quant_mode',
         'chunk_size', 'weight_mode', 'weight_chunk_size', 'act_mode',
         'act_chunk_size', 'output_mode', 'output_chunk_size',
-        'fold_layers', 'simulate_tf32_accum', 'rounding',
+        'fold_layers', 'fold_input_norm', 'input_mean', 'input_std', 'simulate_tf32_accum', 'rounding',
         'input_chunk_size', 'input_size', 'enable_fx_quantization',
     )
     return {key: params[key] for key in keys}
@@ -249,6 +252,10 @@ def create_adapter(config: dict) -> BaseAdapter:
             build_quantized=params['build_quantized'],
             quantize_components=adapter_config.get('quantize_components', []),
             strict_format_check=params['strict_format_check'],
+            fold_layers=params['fold_layers'],
+            fold_input_norm=params['fold_input_norm'],
+            input_mean=params['input_mean'],
+            input_std=params['input_std'],
         )
         if _should_print_adapter_config(config):
             _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)
