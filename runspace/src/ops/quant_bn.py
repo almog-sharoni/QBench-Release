@@ -201,6 +201,10 @@ class QuantBatchNormAct2d(nn.Module, QuantizedLayerMixin):
         x = self.bn(input)
         x = self.drop(x)
         x = self.act(x)
+        # If the inner activation is itself a quantized layer, it has already
+        # applied its own output quantization per its per-layer config.
+        if isinstance(self.act, QuantizedLayerMixin):
+            return x
         return self.quantize_output(x)
 
     @classmethod

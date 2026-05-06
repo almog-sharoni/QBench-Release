@@ -22,9 +22,7 @@ class OpRegistry:
     @classmethod
     def register(cls, op_name: str, original_cls=None, *, replaces=None, init_from_args=None,
                  is_activation=False, compliance_status=None, under_construction=False,
-                 quantized=True, **_legacy_kwargs):
-        # Legacy `passthrough=` kwarg (now derived from runtime signal) is silently
-        # accepted and ignored to keep external/observed-op registrations compiling.
+                 quantized=True):
         def decorator(cls_impl):
             cls._registry[op_name] = cls_impl
             if original_cls:
@@ -87,12 +85,6 @@ class OpRegistry:
     def is_under_construction(cls, op_name: str):
         """Checks if the given op is marked as under construction."""
         return op_name in cls._under_construction_ops
-
-    @classmethod
-    def is_passthrough(cls, op_name: str):
-        """Deprecated. Always returns False — passthrough is now a runtime property,
-        derived in the comparator from whether `last_quant_input_unscaled` was populated."""
-        return False
 
     @classmethod
     def get_replacement_by_name(cls, fn_name: str):

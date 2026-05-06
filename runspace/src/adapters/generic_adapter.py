@@ -583,8 +583,7 @@ class GenericAdapter(BaseAdapter):
         # Case 2: Layer with weights (Conv, Linear, BN) - In-place class swap.
         # Activations are routed to Case 3 because their __init__ builds
         # per-class state (e.g. QuantGELU.piecewise_lut, QuantSoftmax.uq_type)
-        # that an in-place __class__ swap would skip — see Bug 5 in
-        # runspace/tests/test_activation_swap.py for the regression smoke.
+        # that an in-place __class__ swap would skip.
         if issubclass(QuantClass, quantized_mixin_types) and not OpRegistry.is_activation(QuantClass.__name__):
             # Perform in-place class swap to preserve weights
             module.__class__ = QuantClass

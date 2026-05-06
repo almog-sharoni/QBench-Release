@@ -144,7 +144,8 @@ class RunDatabase:
                     ref_pose_auc_5 REAL,
                     ref_pose_auc_10 REAL,
                     ref_pose_auc_20 REAL,
-                    config_json TEXT
+                    config_json TEXT,
+                    output_map_json TEXT
                 )
             ''')
 

@@ -1078,6 +1078,7 @@ class Runner:
         experiment_type = exp_cfg.get('type') or exp_cfg.get('name') or "runner_eval"
         weight_dt = self._effective_weight_dt(config, result, exp_cfg)
         output_dt = exp_cfg.get('output_dt') or self._resolve_output_format(config)
+        output_dt = str(output_dt).strip().lower() if output_dt else 'fp32'
 
         activation_dt = exp_cfg.get('activation_dt')
         if activation_dt is None:
@@ -1692,7 +1693,7 @@ class Runner:
     def _resolve_output_format(config: Dict[str, Any]) -> str:
         global_on = bool(config.get('adapter', {}).get('output_quantization', False))
         qcfg = config.get('quantization', {}) or {}
-        global_fmt = qcfg.get('output_format', qcfg.get('format', 'fp32'))
+        global_fmt = str(qcfg.get('output_format', qcfg.get('format', 'fp32'))).strip().lower()
         layer_configs = qcfg.get('layers', {}) or {}
 
         enabled_layers = [
@@ -1738,16 +1739,25 @@ class Runner:
     def _build_output_quant_map(config: Dict[str, Any]) -> Optional[Dict[str, str]]:
         global_on = bool(config.get('adapter', {}).get('output_quantization', False))
         qcfg = config.get('quantization', {}) or {}
-        global_fmt = qcfg.get('output_format', qcfg.get('format', 'fp32'))
+        global_fmt = str(qcfg.get('output_format', qcfg.get('format', 'fp32'))).strip().lower()
         layer_configs = qcfg.get('layers', {}) or {}
-        per_layer_overrides = {
-            name: str(layer_cfg.get('output_format', global_fmt))
-            for name, layer_cfg in layer_configs.items()
-            if Runner._layer_enables_output_quant(layer_cfg)
-        }
+
+        per_layer_overrides: Dict[str, str] = {}
+        for name, layer_cfg in layer_configs.items():
+            if not isinstance(layer_cfg, dict):
+                continue
+            if Runner._layer_enables_output_quant(layer_cfg):
+                per_layer_overrides[name] = str(
+                    layer_cfg.get('output_format', global_fmt)
+                ).strip().lower()
+            elif global_on and layer_cfg.get('output_quantization') is False:
+                # Layer explicitly opts out while global is on — record fp32
+                # so the map distinguishes "default" from "explicitly disabled".
+                per_layer_overrides[name] = 'fp32'
+
         if not global_on and not per_layer_overrides:
             return None
-        out: Dict[str, str] = {'__default__': str(global_fmt) if global_on else 'fp32'}
+        out: Dict[str, str] = {'__default__': global_fmt if global_on else 'fp32'}
         out.update(per_layer_overrides)
         return out
 
