@@ -13,6 +13,27 @@ except ImportError:
     from .. import ops
 
 
+class _DeletedNoOp:
+    """Callable placeholder for no-op modules removed from nn.Module registry."""
+
+    def __init__(self, p: float = 0.0, inplace: bool = False):
+        self.p = p
+        self.inplace = inplace
+        self.training = False
+
+    def __call__(self, input, *args, **kwargs):
+        return input
+
+    def train(self, mode: bool = True):
+        self.training = bool(mode)
+        return self
+
+    def eval(self):
+        return self.train(False)
+
+    def __repr__(self):
+        return "DeletedNoOp()"
+
 
 class GenericAdapter(BaseAdapter):
     """
@@ -498,12 +519,76 @@ class GenericAdapter(BaseAdapter):
         attached submodules alike)."""
         self._first_layer_found = False
         self._recursive_replace(model)
+        self._prune_noop_layers(model, context="post-recursive quantization")
         if self.enable_fx_quantization:
             try:
                 self._fx_quantize(model)
             except Exception as e:
                 print(f"Note: FX quantization skipped ({type(e).__name__}: {e})")
+        self._prune_noop_layers(model, context="post-FX quantization")
         self._configure_remaining_mixin_ops(model)
+
+    @staticmethod
+    def _noop_layer_types():
+        dropout_type_names = (
+            "Dropout",
+            "Dropout1d",
+            "Dropout2d",
+            "Dropout3d",
+            "AlphaDropout",
+            "FeatureAlphaDropout",
+        )
+        dropout_types = tuple(
+            getattr(nn, type_name)
+            for type_name in dropout_type_names
+            if hasattr(nn, type_name)
+        )
+        return (nn.Identity,) + dropout_types
+
+    @classmethod
+    def _is_noop_layer(cls, module: nn.Module) -> bool:
+        return isinstance(module, cls._noop_layer_types())
+
+    @staticmethod
+    def _deleted_noop_for(module: nn.Module) -> _DeletedNoOp:
+        return _DeletedNoOp(
+            p=float(getattr(module, "p", 0.0) or 0.0),
+            inplace=bool(getattr(module, "inplace", False)),
+        )
+
+    def _prune_noop_layers(self, model: nn.Module, context: str = "") -> int:
+        removed = self._prune_noop_layers_impl(model)
+        if removed:
+            suffix = f" ({context})" if context else ""
+            print(f"Deleted {removed} no-op Dropout/Identity layers from model{suffix}.")
+        return removed
+
+    def _prune_noop_layers_impl(self, module: nn.Module) -> int:
+        removed = 0
+
+        if isinstance(module, nn.Sequential):
+            for child_name, child in list(module._modules.items()):
+                if child is None:
+                    continue
+                if self._is_noop_layer(child):
+                    del module._modules[child_name]
+                    removed += 1
+                    continue
+                removed += self._prune_noop_layers_impl(child)
+            return removed
+
+        for child_name, child in list(module.named_children()):
+            if child is None:
+                continue
+            if self._is_noop_layer(child):
+                replacement = self._deleted_noop_for(child)
+                delattr(module, child_name)
+                object.__setattr__(module, child_name, replacement)
+                removed += 1
+                continue
+            removed += self._prune_noop_layers_impl(child)
+
+        return removed
 
     def _configure_remaining_mixin_ops(self, model: nn.Module):
         """Propagate adapter config + per-layer overrides to QuantizedLayerMixin ops
@@ -905,6 +990,8 @@ class GenericAdapter(BaseAdapter):
                     # recursive replacement already handled all registered ops.
                     print(f"Note: FX quantization skipped ({type(e).__name__}: {e})")
                     raise e # Do not remove
+
+            self._prune_noop_layers(model, context="final quantized model")
                     
             if self.unsigned_input_sources:
                 self._propagate_unsigned_inputs(model)
@@ -970,19 +1057,20 @@ class GenericAdapter(BaseAdapter):
                         # Extract all positional nodes (most common for activations/weights)
                         node_inputs = [arg for arg in node.args if isinstance(arg, torch.fx.Node)]
                         
-                        # Handle multi-input modules (MatMul, Add, etc.)
-                        # We only apply UFP if ALL inputs are unsigned to avoid mixed-sign ops
-                        # unless the hardware/op specifically supports it.
+                        # Handle multi-input modules (MatMul, Add, etc.) per
+                        # operand. A softmax-weighted matmul has unsigned
+                        # attention weights but signed values, and its output
+                        # must not make the following projection unsigned.
                         if len(node_inputs) > 1:
-                            all_unsigned = all(inp.name in unsigned_nodes for inp in node_inputs)
-                            if all_unsigned:
-                                for idx in range(len(node_inputs)):
-                                    attr_name = f'input{idx+1}_q_type'
-                                    base_qtype = getattr(target_mod, attr_name, 
-                                                       getattr(target_mod, 'input_q_type', 
-                                                              getattr(target_mod, 'q_type', 'fp8_e4m3')))
-                                    setattr(target_mod, attr_name, qtype_to_unsigned_qtype(base_qtype))
-                                    modified_any = True
+                            for idx, input_node in enumerate(node_inputs):
+                                if input_node.name not in unsigned_nodes:
+                                    continue
+                                attr_name = f'input{idx+1}_q_type'
+                                base_qtype = getattr(target_mod, attr_name,
+                                                   getattr(target_mod, 'input_q_type',
+                                                          getattr(target_mod, 'q_type', 'fp8_e4m3')))
+                                setattr(target_mod, attr_name, qtype_to_unsigned_qtype(base_qtype))
+                                modified_any = True
                                     
                         # Handle single-input modules
                         elif len(node_inputs) == 1 and node_inputs[0].name in unsigned_nodes:
@@ -1241,7 +1329,12 @@ class GenericAdapter(BaseAdapter):
         if module_name.startswith("torch.nn"):
             return False
         from runspace.src.ops.quant_base import QuantizedLayerMixin
-        if isinstance(module, QuantizedLayerMixin):
+        composite_quantized_names = {
+            "DecomposedMultiheadAttention",
+            "DecomposedQkvAttention",
+            "DecomposedMlpBlock",
+        }
+        if isinstance(module, QuantizedLayerMixin) and cls.__name__ not in composite_quantized_names:
             return False
         if module_name == "runspace.src.ops.observed_ops":
             return False

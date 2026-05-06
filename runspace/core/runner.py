@@ -1139,11 +1139,8 @@ class Runner:
         input_quant = result.get('input_quant') or result.get('dynamic_input_quant') or {}
 
         mse = metrics_cfg.get('mse')
-        l1 = metrics_cfg.get('l1')
         if mse is None:
             mse = input_quant.get('norm_mse', result.get('dyn_norm_mse'))
-        if l1 is None:
-            l1 = input_quant.get('norm_l1', result.get('dyn_norm_l1'))
 
         quant_map_json = None
         if not weights_are_fp32:
@@ -1178,7 +1175,7 @@ class Runner:
             'experiment_type': experiment_type,
             'status': result.get('status', 'SUCCESS'),
             'mse': float(mse) if mse is not None else None,
-            'l1': float(l1) if l1 is not None else None,
+            'l1': None,
             'certainty': float(metrics_cfg.get('certainty', result.get('certainty', 0.0)) or 0.0),
             'quant_map_json': quant_map_json,
             'input_map_json': input_map_json,
@@ -1235,7 +1232,7 @@ class Runner:
           {
             enabled: bool,
             mode: dynamic|uniform|input_only,
-            metric: mse|l1,           # dynamic
+            metric: mse,              # dynamic
             format: fp*_e*m*,         # uniform/input_only
             chunk_size: int,
             candidate_formats: [...], # dynamic optional
@@ -1284,7 +1281,7 @@ class Runner:
             candidate_formats = input_quant_cfg.get('candidate_formats')
             if isinstance(candidate_formats, str):
                 candidate_formats = [f.strip() for f in candidate_formats.split(',') if f.strip()]
-            metric = input_quant_cfg.get('metric', 'mse')
+            metric = 'mse'
             quantizer = DynamicInputQuantizer(
                 model=model,
                 metric=metric,
@@ -1295,9 +1292,10 @@ class Runner:
                 use_unsigned_input_candidates=input_quant_cfg.get('dynamic_unsigned_input_candidates', True),
                 use_cache_sim_db=input_quant_cfg.get('use_cache_sim_db', False),
                 model_name=input_quant_cfg.get('model_name'),
+                skip_depthwise_input_quant=input_quant_cfg.get('skip_depthwise_input_quant', False),
             )
             quantizer.register_hooks()
-            print(f"Input quantization enabled: mode=dynamic metric={metric} chunk_size={chunk_size}")
+            print(f"Input quantization enabled: mode=dynamic metric=MSE chunk_size={chunk_size}")
             return quantizer
 
         if mode == 'uniform':
@@ -1354,9 +1352,7 @@ class Runner:
         stats = {
             'mode': mode,
             'chunk_size': int(input_quant_cfg.get('chunk_size', 128)),
-            'norm_l1': final_stats.get('norm_l1', 0.0),
             'norm_mse': final_stats.get('norm_mse', 0.0),
-            'total_l1': final_stats.get('total_l1', 0.0),
             'total_mse': final_stats.get('total_mse', 0.0),
             'layer_stats': layer_stats,
         }
@@ -1399,9 +1395,7 @@ class Runner:
             total_batches = loader_len
 
         input_only_stats = {
-            'sum_l1_err': 0.0,
             'sum_mse_err': 0.0,
-            'sum_l1_norm': 0.0,
             'sum_l2_norm': 0.0,
         }
 
@@ -1440,9 +1434,7 @@ class Runner:
                             chunk_size=chunk_size,
                         )
                         diff = inputs - q_inputs
-                        input_only_stats['sum_l1_err'] += diff.abs().sum().item()
                         input_only_stats['sum_mse_err'] += diff.pow(2).sum().item()
-                        input_only_stats['sum_l1_norm'] += inputs.abs().sum().item()
                         input_only_stats['sum_l2_norm'] += inputs.pow(2).sum().item()
                         inputs = q_inputs
 
@@ -1476,10 +1468,6 @@ class Runner:
             and normalized_input_quant_cfg.get('enabled', False)
             and normalized_input_quant_cfg.get('mode') == 'input_only'
         ):
-            norm_l1 = (
-                input_only_stats['sum_l1_err'] / input_only_stats['sum_l1_norm']
-                if input_only_stats['sum_l1_norm'] > 0 else 0.0
-            )
             norm_mse = (
                 input_only_stats['sum_mse_err'] / input_only_stats['sum_l2_norm']
                 if input_only_stats['sum_l2_norm'] > 0 else 0.0
@@ -1488,9 +1476,7 @@ class Runner:
                 'mode': 'input_only',
                 'format': normalized_input_quant_cfg.get('format'),
                 'chunk_size': int(normalized_input_quant_cfg.get('chunk_size', 128)),
-                'norm_l1': norm_l1,
                 'norm_mse': norm_mse,
-                'total_l1': input_only_stats['sum_l1_err'],
                 'total_mse': input_only_stats['sum_mse_err'],
                 'layer_stats': {},
             }
@@ -1812,7 +1798,6 @@ class Runner:
             'input_comp_red': 0.0,
             'input_comp_share': 0.0,
             'dyn_metric': None,
-            'dyn_norm_l1': 0.0,
             'dyn_norm_mse': 0.0,
             'fm_num_keypoints': 0.0,
             'fm_mean_score': 0.0,
@@ -1840,7 +1825,6 @@ class Runner:
         results['input_quant'] = stats
         if stats.get('mode') == 'dynamic':
             results['dyn_metric'] = stats.get('metric')
-            results['dyn_norm_l1'] = stats.get('norm_l1', 0.0)
             results['dyn_norm_mse'] = stats.get('norm_mse', 0.0)
 
     def run_single(

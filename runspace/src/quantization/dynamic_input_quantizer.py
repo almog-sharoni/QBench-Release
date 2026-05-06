@@ -27,7 +27,7 @@ class DynamicInputQuantizer:
     Runtime dynamic input quantizer.
 
     Registers forward pre-hooks on quantized modules and selects per-chunk
-    input formats by minimizing the configured error metric.
+    input formats by minimizing MSE.
     """
     _RELU_TYPES = (nn.ReLU, nn.ReLU6)
     _COMPUTE_TYPES = (nn.Conv2d, nn.Linear)
@@ -53,12 +53,14 @@ class DynamicInputQuantizer:
         use_unsigned_input_candidates=True,
         use_cache_sim_db=False,
         model_name=None,
+        skip_depthwise_input_quant=False,
     ):
         self.model = model
-        self.metric = metric
+        self.metric = 'mse'
         self.chunk_size = chunk_size
         self.restrict_post_relu_ufp = bool(restrict_post_relu_ufp)
         self.use_unsigned_input_candidates = bool(use_unsigned_input_candidates)
+        self.skip_depthwise_input_quant = bool(skip_depthwise_input_quant)
         self.unsigned_input_sources = {
             str(source).lower()
             for source in (unsigned_input_sources or [])
@@ -66,15 +68,14 @@ class DynamicInputQuantizer:
         }
         self.hooks = []
         self.hooked_modules = []
+        self.skipped_depthwise_modules = []
         self.layer_stats = {}
-        self.running_error = 0.0
+        self.running_error = None
         self.total_chunks = 0
 
         self.stats = {
-            'sum_l1_err': 0.0,
-            'sum_mse_err': 0.0,
-            'sum_l1_norm': 0.0,
-            'sum_l2_norm': 0.0
+            'sum_mse_err': None,
+            'sum_l2_norm': None
         }
 
         if candidate_formats is None:
@@ -193,6 +194,15 @@ class DynamicInputQuantizer:
     def _is_passthrough_module(module):
         return isinstance(module, (nn.Dropout, nn.Dropout2d, nn.Dropout3d, nn.Identity))
 
+    @staticmethod
+    def _is_depthwise_conv(module):
+        return (
+            isinstance(module, nn.Conv2d)
+            and getattr(module, 'groups', 1) > 1
+            and getattr(module, 'groups', 1) == getattr(module, 'in_channels', None)
+            and getattr(module, 'groups', 1) == getattr(module, 'out_channels', None)
+        )
+
     def _find_post_relu_layers(self):
         post_relu = set()
         prev_was_relu = False
@@ -299,9 +309,12 @@ class DynamicInputQuantizer:
 
                 node_inputs = self._node_inputs(node)
                 
-                # Conservative check: for multi-input nodes, all must be unsigned
+                # Dynamic pre-hooks quantize the first tensor argument for
+                # multi-input functional ops. Treat only that operand as the
+                # immediate unsigned consumer; do not let the op output become
+                # an unsigned source for downstream layers.
                 if len(node_inputs) > 1:
-                    is_post_unsigned = all(inp.name in unsigned_nodes for inp in node_inputs)
+                    is_post_unsigned = node_inputs[0].name in unsigned_nodes
                 else:
                     is_post_unsigned = any(inp.name in unsigned_nodes for inp in node_inputs)
                 
@@ -315,11 +328,11 @@ class DynamicInputQuantizer:
         try:
             if isinstance(self.model, torch.fx.GraphModule):
                 process_graph_module(self.model)
-                return post_unsigned, bool(post_unsigned)
+                return post_unsigned, True
 
             _, _, gm = trace_quant_aware(self.model)
             process_graph_module(gm)
-            return post_unsigned, bool(post_unsigned)
+            return post_unsigned, True
         except Exception:
             pass
 
@@ -327,8 +340,8 @@ class DynamicInputQuantizer:
         for child_name, child in self.model.named_children():
             try:
                 _, _, gm = trace_quant_aware(child)
-                if process_graph_module(gm, child_name):
-                    traced_any = True
+                traced_any = True
+                process_graph_module(gm, child_name)
             except Exception:
                 continue
 
@@ -387,9 +400,17 @@ class DynamicInputQuantizer:
         count_dynamic = 0
         count_ufp = 0
         count_unsigned_candidate_layers = 0
+        count_skipped_depthwise = 0
 
         for name, module in self.model.named_modules():
             if isinstance(module, self.input_hook_ops):
+                if self.skip_depthwise_input_quant and self._is_depthwise_conv(module):
+                    module.input_quantization = False
+                    module.input_mode = 'fp32'
+                    self.skipped_depthwise_modules.append(module)
+                    count_skipped_depthwise += 1
+                    continue
+
                 hook = self._get_attention_hook(name) if isinstance(module, self._ATTENTION_TYPES) else self._get_hook(name)
                 self.hooks.append(module.register_forward_pre_hook(hook))
                 self.hooked_modules.append(module)
@@ -413,7 +434,7 @@ class DynamicInputQuantizer:
             print(
                 f"Registered hooks on {count_dynamic + count_ufp} layers: "
                 f"{count_ufp} post-ReLU (UFP candidates), "
-                f"{count_dynamic} other (non-UFP candidates, metric={self.metric.upper()})."
+                f"{count_dynamic} other (non-UFP candidates, metric=MSE)."
             )
             if not self.ufp_candidates:
                 print("  WARNING: no UFP formats in candidates; post-ReLU layers use non-UFP.")
@@ -423,10 +444,15 @@ class DynamicInputQuantizer:
             print(
                 f"Registered hooks on {count_dynamic + count_ufp} layers: "
                 f"all layers use all {len(self.candidate_formats)} candidates "
-                f"(metric={self.metric.upper()})."
+                f"(metric=MSE)."
             )
         if self.use_unsigned_input_candidates:
             print(f"{count_unsigned_candidate_layers} layers are using UFP candidates.")
+        if self.skip_depthwise_input_quant:
+            print(
+                f"Depthwise input-quant ablation: skipped input quantization "
+                f"for {count_skipped_depthwise} depthwise Conv2d layers."
+            )
 
     def _candidates_for_layer(self, layer_name, module=None):
         is_unsigned = (
@@ -526,10 +552,15 @@ class DynamicInputQuantizer:
 
         with torch.no_grad():
             diff = tensor - quantized
-            self.stats['sum_l1_err'] += diff.abs().sum().item()
-            self.stats['sum_mse_err'] += diff.pow(2).sum().item()
-            self.stats['sum_l1_norm'] += tensor.abs().sum().item()
-            self.stats['sum_l2_norm'] += tensor.pow(2).sum().item()
+            updates = {
+                'sum_mse_err': diff.pow(2).sum(),
+                'sum_l2_norm': tensor.pow(2).sum(),
+            }
+            for key, value in updates.items():
+                if self.stats[key] is None:
+                    self.stats[key] = value.detach()
+                else:
+                    self.stats[key] += value.detach()
 
         return quantized, best_indices
 
@@ -574,17 +605,13 @@ class DynamicInputQuantizer:
                 q_chunks = q_chunked.reshape(-1, chunk_size)
 
                 diff = ref_chunks - q_chunks
-                if self.metric == 'l1':
-                    err = diff.abs().mean(dim=1)
-                else:
-                    err = diff.pow(2).mean(dim=1)
+                err = diff.pow(2).mean(dim=1)
 
                 # Update best-so-far
                 mask = err < best_errors
-                if mask.any():
-                    best_errors[mask] = err[mask]
-                    best_qs[mask] = q_chunks[mask]
-                    best_indices[mask] = i
+                best_errors[mask] = err[mask]
+                best_qs[mask] = q_chunks[mask]
+                best_indices[mask] = i
                 
                 # Cleanup intermediate tensors
                 del q_tensor, q_chunked, q_chunks, diff, err, mask
@@ -611,14 +638,24 @@ class DynamicInputQuantizer:
         stats['format_counts_tensor'] += counts
 
         # Track running error for progress/debug
-        self.running_error += best_errors.sum().item()
+        error_sum = best_errors.sum().detach()
+        if self.running_error is None:
+            self.running_error = error_sum
+        else:
+            self.running_error += error_sum
         self.total_chunks += total_chunks
 
         return quantized_tensor, best_indices
 
     def get_final_stats(self):
-        norm_l1 = self.stats['sum_l1_err'] / self.stats['sum_l1_norm'] if self.stats['sum_l1_norm'] > 0 else 0.0
-        norm_mse = self.stats['sum_mse_err'] / self.stats['sum_l2_norm'] if self.stats['sum_l2_norm'] > 0 else 0.0
+        scalar_stats = {
+            key: (value.item() if isinstance(value, torch.Tensor) else 0.0)
+            for key, value in self.stats.items()
+        }
+        norm_mse = (
+            scalar_stats['sum_mse_err'] / scalar_stats['sum_l2_norm']
+            if scalar_stats['sum_l2_norm'] > 0 else 0.0
+        )
         
         # Convert GPU stats to the expected dict format for logging/plotting
         processed_layer_stats = {}
@@ -641,10 +678,8 @@ class DynamicInputQuantizer:
                 processed_layer_stats[layer_name] = stats_copy
 
         return {
-            'norm_l1': norm_l1,
             'norm_mse': norm_mse,
-            'total_l1': self.stats['sum_l1_err'],
-            'total_mse': self.stats['sum_mse_err'],
+            'total_mse': scalar_stats['sum_mse_err'],
             'layer_stats': processed_layer_stats
         }
 
@@ -662,5 +697,11 @@ class DynamicInputQuantizer:
             # Restore default quantization state if needed
             # (though normally hooks are removed after the run anyway)
             module.input_quantization = True 
+
+        for module in self.skipped_depthwise_modules:
+            module.input_quantization = True
+            if hasattr(module, 'input_mode'):
+                module.input_mode = 'chunk'
+        self.skipped_depthwise_modules = []
 
         self.hooked_modules = []

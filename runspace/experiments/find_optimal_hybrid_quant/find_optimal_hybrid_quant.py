@@ -97,7 +97,7 @@ def get_args():
     parser.add_argument("--input_format", type=str, default="fp8_e4m3",
                         help="Fixed input format (e.g. 'fp8_e4m3') if input_mode is 'fixed'.")
     parser.add_argument("--input_metric", type=str, default="mse",
-                        help="Metric (e.g. 'mse', 'l1') if input_mode is 'dynamic'.")
+                        help="Metric if input_mode is 'dynamic'. Only 'mse' is supported.")
     parser.add_argument("--input_candidate_formats", type=str, default=None,
                         help="Comma-separated input candidate formats for dynamic input selection.")
     parser.add_argument("--input_chunk_size", type=int, default=128,
@@ -110,6 +110,8 @@ def get_args():
                         help="Allow using unsigned formats (UFP) for layers with unsigned inputs")
     parser.add_argument("--no_dynamic_unsigned_input_candidates", action="store_false", dest="dynamic_unsigned_input_candidates",
                         help="Disable using unsigned formats (UFP) for layers with unsigned inputs")
+    parser.add_argument("--skip_depthwise_input_quant", action="store_true",
+                        help="Ablation: leave depthwise Conv2d inputs in FP32 while keeping other dynamic input quantization enabled")
     parser.add_argument("--fold_input_norm", action="store_true", default=True,
                         help="Fold input normalization into first layer weights and quantize first layer")
     parser.add_argument("--no_fold_input_norm", action="store_false", dest="fold_input_norm",
@@ -275,7 +277,6 @@ def _log_hybrid_run(
     ref_certainty=None,
     certainty=None,
     mse=None,
-    l1=None,
     quant_map_json=None,
     input_map_json=None,
     input_quant_stats=None,
@@ -291,7 +292,6 @@ def _log_hybrid_run(
         'ref_certainty': ref_certainty,
         'metrics': {
             'mse': mse,
-            'l1': l1,
             'certainty': certainty,
         },
         'quant_map_json': quant_map_json,
@@ -310,6 +310,7 @@ def _log_hybrid_run(
 
 
 def process_single_model(args, device):
+    args.input_metric = "mse"
     model_name = args.model_name
     model_dir = os.path.join(args.output_dir, model_name)
     os.makedirs(model_dir, exist_ok=True)
@@ -433,6 +434,7 @@ def process_single_model(args, device):
             model_name=args.model_name,
             unsigned_input_sources=args.unsigned_input_sources,
             dynamic_unsigned_input_candidates=args.dynamic_unsigned_input_candidates,
+            skip_depthwise_input_quant=args.skip_depthwise_input_quant,
         )
 
     loader = _build_loader(args, device, runner)
@@ -458,12 +460,11 @@ def process_single_model(args, device):
         )
         return
 
-    norm_l1 = input_stats['norm_l1'] if input_stats else None
     norm_mse = input_stats['norm_mse'] if input_stats else None
 
     print(
         f"  Result: Top1={acc1:.2f}%, Top5={acc5:.2f}%, Certainty={certainty:.4f}"
-        + (f", NormL1={norm_l1:.4e}, NormMSE={norm_mse:.4e}" if norm_l1 is not None else "")
+        + (f", NormMSE={norm_mse:.4e}" if norm_mse is not None else "")
     )
 
     _log_hybrid_run(
@@ -481,7 +482,6 @@ def process_single_model(args, device):
         ref_certainty=ref_certainty,
         certainty=certainty,
         mse=norm_mse,
-        l1=norm_l1,
         quant_map_json=quant_map_json,
         input_quant_stats=input_stats,
     )
@@ -513,7 +513,7 @@ def process_single_model(args, device):
                 
         save_data['accuracy'] = {
             'top1': acc1, 'top5': acc5, 'certainty': certainty,
-            'norm_l1': norm_l1, 'norm_mse': norm_mse,
+            'norm_mse': norm_mse,
             'weight_mode': args.weight_mode, 'weight_dt': weight_dt_str,
             'input_mode': args.input_mode, 'input_dt': activation_dt_str,
         }

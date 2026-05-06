@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--model", required=True, help="Model name, for example mobilevit_xxs")
-    parser.add_argument("--metric", default="l1", help="Dynamic metric suffix, for example l1 or mse")
+    parser.add_argument("--metric", default="mse", help="Dynamic metric suffix. Only mse is supported.")
     parser.add_argument(
         "--baseline-format",
         default="fp8_e1m6",

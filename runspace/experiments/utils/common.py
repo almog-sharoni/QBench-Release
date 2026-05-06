@@ -258,6 +258,7 @@ def build_dynamic_input_quant_cfg(
     dynamic_unsigned_input_candidates=True,
     use_cache_sim_db=False,
     model_name=None,
+    skip_depthwise_input_quant=False,
 ):
     """Build the dynamic layer-input quantizer config used by input quant experiments."""
     if not enabled:
@@ -281,6 +282,7 @@ def build_dynamic_input_quant_cfg(
         'dynamic_unsigned_input_candidates': bool(dynamic_unsigned_input_candidates),
         'use_cache_sim_db': use_cache_sim_db,
         'model_name': model_name,
+        'skip_depthwise_input_quant': bool(skip_depthwise_input_quant),
     }
 
 

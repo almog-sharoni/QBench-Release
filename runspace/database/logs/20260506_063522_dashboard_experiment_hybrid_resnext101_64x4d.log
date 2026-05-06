@@ -1,411 +1,0 @@
-
-
-# Dashboard date run: 20260506_063522_dashboard_experiment_hybrid_resnext101_64x4d
-# Started: 2026-05-06 06:35:22
-$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/find_optimal_hybrid_quant.py --model_name resnext101_64x4d --weights DEFAULT --dataset_name imagenet --dataset_path /data/imagenet/val --batch_size 64 --num_workers 8 --limit_batches -1 --output_dir /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results --weight_mode optimized --weight_metric mse --weight_candidate_formats fp8_e1m6,fp8_e2m5,fp8_e3m4,fp8_e4m3,fp8_e5m2,fp8_e6m1,fp8_e7m0 --weight_chunk_size 128 --input_mode dynamic --input_metric mse --input_candidate_formats fp8_e1m6,fp8_e2m5,fp8_e3m4,fp8_e4m3,fp8_e5m2,fp8_e6m1,fp8_e7m0 --input_chunk_size 128 --unsigned_input_sources quantsoftmax,softmax,relu,quantrelu --dynamic_unsigned_input_candidates --per_chunk_format --use_cache_sim_db
-
-Using device: cuda
-Processing 1 model(s).
-Runner initialized on device: cuda
-/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
-  _C._set_float32_matmul_precision(precision)
-
-============================================================
- HYBRID EXPERIMENT: resnext101_64x4d
-  Weight Mode  : optimized
-  Weight Metric: mse
-  Weight Cands : ['fp8_e1m6', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e4m3', 'fp8_e5m2', 'fp8_e6m1', 'fp8_e7m0']
-  Input Mode   : dynamic
-  Input Metric : mse
-  Input Cands  : ['fp8_e1m6', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e4m3', 'fp8_e5m2', 'fp8_e6m1', 'fp8_e7m0']
-============================================================
-
-[CacheSim] Model 'resnext101_64x4d' not found in cache simulation database.
-[CacheSim] Triggering automatic cache simulation...
---- ASIC Cache Simulation ---
-Model:         resnext101_64x4d
-Cache Size:    2.000M elements  (16 banks × 125.0K elements)
-Metadata Bits: 0 per 128-bit chunk
-Batch Size:    1
-Auto-detected model source: torchvision
-
-Layer Name                                    | Type           |       Input |     Weights |      Output |      Banked |     NextXin | OnChip  | Reason
--------------------------------------------------------------------------------------------------------------------------------------------------------
-conv1                                         | QuantConv2d    |      150.5K |        9.4K |      802.8K |      875.0K |      875.0K | yes     | conv_output_dominated
-bn1                                           | QuantBatchNorm2d |      802.8K |          64 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-relu                                          | QuantReLU      |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-maxpool                                       | QuantMaxPool2d |      802.8K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer1.0.conv1                                | QuantConv2d    |      200.7K |       16.4K |      802.8K |      875.0K |      875.0K | yes     | conv_output_dominated
-layer1.0.bn1                                  | QuantBatchNorm2d |      802.8K |         256 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.0.relu                                 | QuantReLU      |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.0.conv2                                | QuantConv2d    |      802.8K |        9.2K |      802.8K |      875.0K |      875.0K | yes     | conv_output_dominated
-layer1.0.bn2                                  | QuantBatchNorm2d |      802.8K |         256 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.0.relu                                 | QuantReLU      |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.0.conv3                                | QuantConv2d    |      802.8K |       65.5K |      802.8K |      875.0K |      875.0K | yes     | conv_output_dominated
-layer1.0.bn3                                  | QuantBatchNorm2d |      802.8K |         256 |      802.8K |      875.0K |      250.0K | yes     | global_fit
-layer1.0.downsample.0                         | QuantConv2d    |      200.7K |       16.4K |      802.8K |      875.0K |      875.0K | yes     | conv_output_dominated
-layer1.0.downsample.1                         | QuantBatchNorm2d |      802.8K |         256 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-add                                           | QuantAdd       |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | residual
-layer1.0.relu                                 | QuantReLU      |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.1.conv1                                | QuantConv2d    |      802.8K |       65.5K |      802.8K |      875.0K |      875.0K | yes     | conv_output_dominated
-layer1.1.bn1                                  | QuantBatchNorm2d |      802.8K |         256 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.1.relu                                 | QuantReLU      |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.1.conv2                                | QuantConv2d    |      802.8K |        9.2K |      802.8K |      875.0K |      875.0K | yes     | conv_output_dominated
-layer1.1.bn2                                  | QuantBatchNorm2d |      802.8K |         256 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.1.relu                                 | QuantReLU      |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.1.conv3                                | QuantConv2d    |      802.8K |       65.5K |      802.8K |      875.0K |      875.0K | yes     | conv_output_dominated
-layer1.1.bn3                                  | QuantBatchNorm2d |      802.8K |         256 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-add_1                                         | QuantAdd       |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | residual
-layer1.1.relu                                 | QuantReLU      |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.2.conv1                                | QuantConv2d    |      802.8K |       65.5K |      802.8K |      875.0K |      875.0K | yes     | conv_output_dominated
-layer1.2.bn1                                  | QuantBatchNorm2d |      802.8K |         256 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.2.relu                                 | QuantReLU      |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.2.conv2                                | QuantConv2d    |      802.8K |        9.2K |      802.8K |      875.0K |      875.0K | yes     | conv_output_dominated
-layer1.2.bn2                                  | QuantBatchNorm2d |      802.8K |         256 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.2.relu                                 | QuantReLU      |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer1.2.conv3                                | QuantConv2d    |      802.8K |       65.5K |      802.8K |      875.0K |      875.0K | yes     | conv_output_dominated
-layer1.2.bn3                                  | QuantBatchNorm2d |      802.8K |         256 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-add_2                                         | QuantAdd       |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | residual
-layer1.2.relu                                 | QuantReLU      |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer2.0.conv1                                | QuantConv2d    |      802.8K |      131.1K |      1.606M |      1.625M |      1.625M | no      | conv_stream_xin_out — output to external
-layer2.0.bn1                                  | QuantBatchNorm2d |      1.606M |         512 |      1.606M |      1.625M |      1.625M | no      | fallback — output to external
-layer2.0.relu                                 | QuantReLU      |      1.606M |           0 |      1.606M |      1.625M |      1.625M | no      | fallback — output to external
-layer2.0.conv2                                | QuantConv2d    |      1.606M |       36.9K |      401.4K |      500.0K |      500.0K | yes     | conv_input_dominated
-layer2.0.bn2                                  | QuantBatchNorm2d |      401.4K |         512 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.0.relu                                 | QuantReLU      |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.0.conv3                                | QuantConv2d    |      401.4K |      262.1K |      401.4K |      500.0K |      500.0K | yes     | conv_output_dominated
-layer2.0.bn3                                  | QuantBatchNorm2d |      401.4K |         512 |      401.4K |      500.0K |      875.0K | yes     | global_fit
-layer2.0.downsample.0                         | QuantConv2d    |      802.8K |      131.1K |      401.4K |      500.0K |      500.0K | yes     | conv_input_dominated
-layer2.0.downsample.1                         | QuantBatchNorm2d |      401.4K |         512 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-add_3                                         | QuantAdd       |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | residual
-layer2.0.relu                                 | QuantReLU      |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.1.conv1                                | QuantConv2d    |      401.4K |      262.1K |      401.4K |      500.0K |      500.0K | yes     | conv_output_dominated
-layer2.1.bn1                                  | QuantBatchNorm2d |      401.4K |         512 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.1.relu                                 | QuantReLU      |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.1.conv2                                | QuantConv2d    |      401.4K |       36.9K |      401.4K |      500.0K |      500.0K | yes     | conv_output_dominated
-layer2.1.bn2                                  | QuantBatchNorm2d |      401.4K |         512 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.1.relu                                 | QuantReLU      |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.1.conv3                                | QuantConv2d    |      401.4K |      262.1K |      401.4K |      500.0K |      500.0K | yes     | conv_output_dominated
-layer2.1.bn3                                  | QuantBatchNorm2d |      401.4K |         512 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-add_4                                         | QuantAdd       |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | residual
-layer2.1.relu                                 | QuantReLU      |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.2.conv1                                | QuantConv2d    |      401.4K |      262.1K |      401.4K |      500.0K |      500.0K | yes     | conv_output_dominated
-layer2.2.bn1                                  | QuantBatchNorm2d |      401.4K |         512 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.2.relu                                 | QuantReLU      |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.2.conv2                                | QuantConv2d    |      401.4K |       36.9K |      401.4K |      500.0K |      500.0K | yes     | conv_output_dominated
-layer2.2.bn2                                  | QuantBatchNorm2d |      401.4K |         512 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.2.relu                                 | QuantReLU      |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.2.conv3                                | QuantConv2d    |      401.4K |      262.1K |      401.4K |      500.0K |      500.0K | yes     | conv_output_dominated
-layer2.2.bn3                                  | QuantBatchNorm2d |      401.4K |         512 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-add_5                                         | QuantAdd       |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | residual
-layer2.2.relu                                 | QuantReLU      |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.3.conv1                                | QuantConv2d    |      401.4K |      262.1K |      401.4K |      500.0K |      500.0K | yes     | conv_output_dominated
-layer2.3.bn1                                  | QuantBatchNorm2d |      401.4K |         512 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.3.relu                                 | QuantReLU      |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.3.conv2                                | QuantConv2d    |      401.4K |       36.9K |      401.4K |      500.0K |      500.0K | yes     | conv_output_dominated
-layer2.3.bn2                                  | QuantBatchNorm2d |      401.4K |         512 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.3.relu                                 | QuantReLU      |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer2.3.conv3                                | QuantConv2d    |      401.4K |      262.1K |      401.4K |      500.0K |      500.0K | yes     | conv_output_dominated
-layer2.3.bn3                                  | QuantBatchNorm2d |      401.4K |         512 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-add_6                                         | QuantAdd       |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | residual
-layer2.3.relu                                 | QuantReLU      |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer3.0.conv1                                | QuantConv2d    |      401.4K |      524.3K |      802.8K |      875.0K |      875.0K | yes     | conv_output_dominated
-layer3.0.bn1                                  | QuantBatchNorm2d |      802.8K |        1.0K |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer3.0.relu                                 | QuantReLU      |      802.8K |           0 |      802.8K |      875.0K |      875.0K | yes     | global_fit
-layer3.0.conv2                                | QuantConv2d    |      802.8K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_input_dominated
-layer3.0.bn2                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.0.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.0.conv3                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.0.bn3                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      500.0K | yes     | global_fit
-layer3.0.downsample.0                         | QuantConv2d    |      401.4K |      524.3K |      200.7K |      250.0K |      250.0K | yes     | conv_input_dominated
-layer3.0.downsample.1                         | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_7                                         | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.0.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.1.conv1                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.1.bn1                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.1.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.1.conv2                                | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.1.bn2                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.1.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.1.conv3                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.1.bn3                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_8                                         | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.1.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.2.conv1                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.2.bn1                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.2.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.2.conv2                                | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.2.bn2                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.2.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.2.conv3                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.2.bn3                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_9                                         | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.2.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.3.conv1                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.3.bn1                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.3.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.3.conv2                                | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.3.bn2                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.3.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.3.conv3                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.3.bn3                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_10                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.3.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.4.conv1                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.4.bn1                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.4.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.4.conv2                                | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.4.bn2                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.4.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.4.conv3                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.4.bn3                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_11                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.4.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.5.conv1                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.5.bn1                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.5.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.5.conv2                                | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.5.bn2                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.5.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.5.conv3                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.5.bn3                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_12                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.5.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.6.conv1                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.6.bn1                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.6.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.6.conv2                                | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.6.bn2                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.6.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.6.conv3                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.6.bn3                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_13                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.6.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.7.conv1                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.7.bn1                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.7.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.7.conv2                                | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.7.bn2                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.7.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.7.conv3                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.7.bn3                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_14                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.7.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.8.conv1                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.8.bn1                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.8.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.8.conv2                                | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.8.bn2                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.8.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.8.conv3                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.8.bn3                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_15                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.8.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.9.conv1                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.9.bn1                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.9.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.9.conv2                                | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.9.bn2                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.9.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.9.conv3                                | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.9.bn3                                  | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_16                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.9.relu                                 | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.10.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.10.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.10.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.10.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.10.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.10.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.10.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.10.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_17                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.10.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.11.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.11.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.11.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.11.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.11.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.11.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.11.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.11.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_18                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.11.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.12.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.12.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.12.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.12.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.12.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.12.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.12.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.12.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_19                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.12.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.13.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.13.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.13.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.13.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.13.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.13.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.13.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.13.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_20                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.13.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.14.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.14.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.14.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.14.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.14.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.14.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.14.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.14.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_21                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.14.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.15.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.15.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.15.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.15.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.15.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.15.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.15.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.15.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_22                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.15.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.16.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.16.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.16.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.16.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.16.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.16.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.16.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.16.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_23                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.16.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.17.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.17.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.17.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.17.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.17.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.17.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.17.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.17.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_24                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.17.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.18.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.18.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.18.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.18.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.18.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.18.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.18.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.18.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_25                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.18.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.19.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.19.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.19.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.19.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.19.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.19.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.19.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.19.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_26                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.19.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.20.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.20.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.20.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.20.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.20.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.20.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.20.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.20.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_27                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.20.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.21.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.21.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.21.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.21.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.21.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.21.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.21.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.21.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_28                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.21.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.22.conv1                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.22.bn1                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.22.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.22.conv2                               | QuantConv2d    |      200.7K |      147.5K |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.22.bn2                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.22.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer3.22.conv3                               | QuantConv2d    |      200.7K |      1.049M |      200.7K |      250.0K |      250.0K | yes     | conv_output_dominated
-layer3.22.bn3                                 | QuantBatchNorm2d |      200.7K |        1.0K |      200.7K |      250.0K |      250.0K | yes     | global_fit
-add_29                                        | QuantAdd       |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | residual
-layer3.22.relu                                | QuantReLU      |      200.7K |           0 |      200.7K |      250.0K |      250.0K | yes     | global_fit
-layer4.0.conv1                                | QuantConv2d    |      200.7K |      2.097M |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer4.0.bn1                                  | QuantBatchNorm2d |      401.4K |        2.0K |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer4.0.relu                                 | QuantReLU      |      401.4K |           0 |      401.4K |      500.0K |      500.0K | yes     | global_fit
-layer4.0.conv2                                | QuantConv2d    |      401.4K |      589.8K |      100.4K |      125.0K |      125.0K | yes     | conv_input_dominated
-layer4.0.bn2                                  | QuantBatchNorm2d |      100.4K |        2.0K |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.0.relu                                 | QuantReLU      |      100.4K |           0 |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.0.conv3                                | QuantConv2d    |      100.4K |      4.194M |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.0.bn3                                  | QuantBatchNorm2d |      100.4K |        2.0K |      100.4K |      125.0K |      250.0K | yes     | global_fit
-layer4.0.downsample.0                         | QuantConv2d    |      200.7K |      2.097M |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.0.downsample.1                         | QuantBatchNorm2d |      100.4K |        2.0K |      100.4K |      125.0K |      125.0K | yes     | global_fit
-add_30                                        | QuantAdd       |      100.4K |           0 |      100.4K |      125.0K |      125.0K | yes     | residual
-layer4.0.relu                                 | QuantReLU      |      100.4K |           0 |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.1.conv1                                | QuantConv2d    |      100.4K |      4.194M |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.1.bn1                                  | QuantBatchNorm2d |      100.4K |        2.0K |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.1.relu                                 | QuantReLU      |      100.4K |           0 |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.1.conv2                                | QuantConv2d    |      100.4K |      589.8K |      100.4K |      125.0K |      125.0K | yes     | conv_output_dominated
-layer4.1.bn2                                  | QuantBatchNorm2d |      100.4K |        2.0K |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.1.relu                                 | QuantReLU      |      100.4K |           0 |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.1.conv3                                | QuantConv2d    |      100.4K |      4.194M |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.1.bn3                                  | QuantBatchNorm2d |      100.4K |        2.0K |      100.4K |      125.0K |      125.0K | yes     | global_fit
-add_31                                        | QuantAdd       |      100.4K |           0 |      100.4K |      125.0K |      125.0K | yes     | residual
-layer4.1.relu                                 | QuantReLU      |      100.4K |           0 |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.2.conv1                                | QuantConv2d    |      100.4K |      4.194M |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.2.bn1                                  | QuantBatchNorm2d |      100.4K |        2.0K |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.2.relu                                 | QuantReLU      |      100.4K |           0 |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.2.conv2                                | QuantConv2d    |      100.4K |      589.8K |      100.4K |      125.0K |      125.0K | yes     | conv_output_dominated
-layer4.2.bn2                                  | QuantBatchNorm2d |      100.4K |        2.0K |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.2.relu                                 | QuantReLU      |      100.4K |           0 |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.2.conv3                                | QuantConv2d    |      100.4K |      4.194M |      100.4K |      125.0K |      125.0K | yes     | global_fit
-layer4.2.bn3                                  | QuantBatchNorm2d |      100.4K |        2.0K |      100.4K |      125.0K |      125.0K | yes     | global_fit
-add_32                                        | QuantAdd       |      100.4K |           0 |      100.4K |      125.0K |      125.0K | yes     | residual
-layer4.2.relu                                 | QuantReLU      |      100.4K |           0 |      100.4K |      125.0K |      125.0K | yes     | global_fit
-avgpool                                       | QuantAdaptiveAvgPool2d |      100.4K |           0 |        2.0K |      125.0K |      125.0K | yes     | global_fit
-fc                                            | QuantLinear    |        2.0K |      2.048M |        1.0K |      125.0K |           0 | yes     | global_fit
--------------------------------------------------------------------------------------------------------------------------------------------------------
-Total layers:              344
-Layers marked QUANTIZE:    3
-Layers FLAGGED (no rule):  0
-
-Results saved to /data/almog/Projects/QBench-Release/runspace/experiments/asic_cache_simulation/simulation_results.json
-[CacheSim] Stored simulation for resnext101_64x4d to DB.
-[CacheSim] Simulation completed and uploaded to DB.
-
-  Experiment Name: hybrid_quant_fp8/fp8_w_cache_sim
-[FP32 ref] Found in DB: Top1=82.98%, Top5=96.26%
-
-[Weights] Running optimized weight quantization (metric=mse) ...
-Info: runtime weight quantization requested; forcing materialized weights rebuild to avoid stale FP32 cache reuse.
-Auto-detected model source: torchvision
-prepare_model_with_materialized_weights(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results/resnext101_64x4d/weight_phase_fp32/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=314/314, mismatched=0, max_abs_diff=0.000e+00)
-
-[Weight Phase] Analysing weight tensors for metric: mse ...
-Analyzing Layers (Weights): 0it [00:00, ?it/s]Analyzing Layers (Weights): 9it [00:00, 83.30it/s]Analyzing Layers (Weights): 18it [00:00, 72.38it/s]Analyzing Layers (Weights): 26it [00:00, 65.41it/s]Analyzing Layers (Weights): 33it [00:00, 58.86it/s]Analyzing Layers (Weights): 41it [00:00, 63.14it/s]Analyzing Layers (Weights): 48it [00:00, 62.58it/s]Analyzing Layers (Weights): 55it [00:00, 61.64it/s]Analyzing Layers (Weights): 62it [00:00, 61.01it/s]Analyzing Layers (Weights): 69it [00:01, 56.92it/s]Analyzing Layers (Weights): 77it [00:01, 60.38it/s]Analyzing Layers (Weights): 84it [00:01, 60.87it/s]Analyzing Layers (Weights): 91it [00:01, 60.63it/s]Analyzing Layers (Weights): 98it [00:01, 60.51it/s]Analyzing Layers (Weights): 105it [00:01, 57.18it/s]Analyzing Layers (Weights): 112it [00:01, 58.03it/s]Analyzing Layers (Weights): 119it [00:01, 58.67it/s]Analyzing Layers (Weights): 126it [00:02, 58.86it/s]Analyzing Layers (Weights): 132it [00:02, 56.58it/s]Analyzing Layers (Weights): 139it [00:02, 57.28it/s]Analyzing Layers (Weights): 145it [00:02, 55.96it/s]Analyzing Layers (Weights): 152it [00:02, 57.21it/s]Analyzing Layers (Weights): 159it [00:02, 58.14it/s]Analyzing Layers (Weights): 166it [00:02, 58.49it/s]Analyzing Layers (Weights): 172it [00:02, 56.72it/s]Analyzing Layers (Weights): 179it [00:03, 57.39it/s]Analyzing Layers (Weights): 185it [00:03, 56.04it/s]Analyzing Layers (Weights): 192it [00:03, 58.89it/s]Analyzing Layers (Weights): 199it [00:03, 59.30it/s]Analyzing Layers (Weights): 206it [00:03, 59.18it/s]Analyzing Layers (Weights): 212it [00:03, 56.78it/s]Analyzing Layers (Weights): 219it [00:03, 57.33it/s]Analyzing Layers (Weights): 225it [00:03, 55.62it/s]Analyzing Layers (Weights): 232it [00:03, 56.54it/s]Analyzing Layers (Weights): 239it [00:04, 57.60it/s]Analyzing Layers (Weights): 246it [00:04, 58.10it/s]Analyzing Layers (Weights): 252it [00:04, 56.07it/s]Analyzing Layers (Weights): 260it [00:04, 59.16it/s]Analyzing Layers (Weights): 266it [00:04, 55.90it/s]Analyzing Layers (Weights): 272it [00:04, 56.58it/s]Analyzing Layers (Weights): 278it [00:04, 57.07it/s]Analyzing Layers (Weights): 284it [00:04, 42.25it/s]Analyzing Layers (Weights): 320it [00:05, 63.76it/s]
-Creating quantized state dict for metric mse...
-[Weight Phase] Saved optimized quantized weights (mse) → /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results/resnext101_64x4d/weights_mse/quantized_weights.pt
-load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
-Auto-detected model source: torchvision
-load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_hybrid_quant/results/resnext101_64x4d/weights_mse/quantized_weights.pt): state_dict validated (coverage=1.000, comparable=314/314, mismatched=0, max_abs_diff=0.000e+00)
-Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
-
-[Inference] Running Hybrid Setup: Weight=opt_wmse[per_chunkx209], Input=dyn_input_mse ...
-Loading cache simulation results from DB for resnext101_64x4d
-Loaded 278 layer statuses from cache sim DB.
-Sample keys in cache sim map: ['conv1', 'bn1', 'relu', 'maxpool', 'layer1.0.conv1', 'layer1.0.bn1', 'layer1.0.relu', 'layer1.0.conv2', 'layer1.0.bn2', 'layer1.0.conv3']
-Registered hooks on 278 layers: all layers use all 7 candidates (metric=MSE).
-132 layers are using UFP candidates.
-Input quantization enabled: mode=dynamic metric=mse chunk_size=128
-Hybrid W=optimized I=dynamic:   0%|          | 0/782 [00:00<?, ?batch/s]Hybrid W=optimized I=dynamic:   0%|          | 1/782 [00:15<3:26:11, 15.84s/batch]Hybrid W=optimized I=dynamic:   0%|          | 1/782 [00:15<3:26:11, 15.84s/batch, acc1=10.94%, acc5=42.19%, remaining_batches=781]Hybrid W=optimized I=dynamic:   0%|          | 2/782 [00:28<3:04:34, 14.20s/batch, acc1=10.94%, acc5=42.19%, remaining_batches=781]Hybrid W=optimized I=dynamic:   0%|          | 2/782 [00:28<3:04:34, 14.20s/batch, acc1=7.03%, acc5=33.59%, remaining_batches=780] Hybrid W=optimized I=dynamic:   0%|          | 3/782 [00:41<2:56:50, 13.62s/batch, acc1=7.03%, acc5=33.59%, remaining_batches=780]Hybrid W=optimized I=dynamic:   0%|          | 3/782 [00:41<2:56:50, 13.62s/batch, acc1=5.21%, acc5=33.85%, remaining_batches=779]Hybrid W=optimized I=dynamic:   1%|          | 4/782 [00:54<2:53:30, 13.38s/batch, acc1=5.21%, acc5=33.85%, remaining_batches=779]Hybrid W=optimized I=dynamic:   1%|          | 4/782 [00:54<2:53:30, 13.38s/batch, acc1=9.77%, acc5=35.94%, remaining_batches=778]Hybrid W=optimized I=dynamic:   1%|          | 5/782 [01:07<2:50:14, 13.15s/batch, acc1=9.77%, acc5=35.94%, remaining_batches=778]Hybrid W=optimized I=dynamic:   1%|          | 5/782 [01:07<2:50:14, 13.15s/batch, acc1=9.06%, acc5=31.56%, remaining_batches=777]Hybrid W=optimized I=dynamic:   1%|          | 6/782 [01:18<2:41:07, 12.46s/batch, acc1=9.06%, acc5=31.56%, remaining_batches=777]Hybrid W=optimized I=dynamic:   1%|          | 6/782 [01:18<2:41:07, 12.46s/batch, acc1=9.11%, acc5=30.47%, remaining_batches=776]Hybrid W=optimized I=dynamic:   1%|          | 7/782 [01:28<2:28:08, 11.47s/batch, acc1=9.11%, acc5=30.47%, remaining_batches=776]Hybrid W=optimized I=dynamic:   1%|          | 7/782 [01:28<2:28:08, 11.47s/batch, acc1=8.26%, acc5=30.58%, remaining_batches=775]Hybrid W=optimized I=dynamic:   1%|          | 8/782 [01:39<2:28:43, 11.53s/batch, acc1=8.26%, acc5=30.58%, remaining_batches=775]Hybrid W=optimized I=dynamic:   1%|          | 8/782 [01:39<2:28:43, 11.53s/batch, acc1=11.91%, acc5=34.18%, remaining_batches=774]Hybrid W=optimized I=dynamic:   1%|          | 9/782 [01:52<2:34:12, 11.97s/batch, acc1=11.91%, acc5=34.18%, remaining_batches=774]Hybrid W=optimized I=dynamic:   1%|          | 9/782 [01:52<2:34:12, 11.97s/batch, acc1=11.28%, acc5=32.29%, remaining_batches=773]Hybrid W=optimized I=dynamic:   1%|▏         | 10/782 [02:03<2:28:39, 11.55s/batch, acc1=11.28%, acc5=32.29%, remaining_batches=773]Hybrid W=optimized I=dynamic:   1%|▏         | 10/782 [02:03<2:28:39, 11.55s/batch, acc1=11.41%, acc5=32.81%, remaining_batches=772]Hybrid W=optimized I=dynamic:   1%|▏         | 11/782 [02:16<2:32:50, 11.89s/batch, acc1=11.41%, acc5=32.81%, remaining_batches=772]Hybrid W=optimized I=dynamic:   1%|▏         | 11/782 [02:16<2:32:50, 11.89s/batch, acc1=10.65%, acc5=30.40%, remaining_batches=771]Hybrid W=optimized I=dynamic:   2%|▏         | 12/782 [02:29<2:37:05, 12.24s/batch, acc1=10.65%, acc5=30.40%, remaining_batches=771]Hybrid W=optimized I=dynamic:   2%|▏         | 12/782 [02:29<2:37:05, 12.24s/batch, acc1=9.77%, acc5=28.39%, remaining_batches=770] Hybrid W=optimized I=dynamic:   2%|▏         | 13/782 [02:41<2:39:29, 12.44s/batch, acc1=9.77%, acc5=28.39%, remaining_batches=770]Hybrid W=optimized I=dynamic:   2%|▏         | 13/782 [02:41<2:39:29, 12.44s/batch, acc1=9.38%, acc5=27.28%, remaining_batches=769]Hybrid W=optimized I=dynamic:   2%|▏         | 14/782 [02:54<2:38:26, 12.38s/batch, acc1=9.38%, acc5=27.28%, remaining_batches=769]Hybrid W=optimized I=dynamic:   2%|▏         | 14/782 [02:54<2:38:26, 12.38s/batch, acc1=9.82%, acc5=27.46%, remaining_batches=768]Hybrid W=optimized I=dynamic:   2%|▏         | 15/782 [03:06<2:37:30, 12.32s/batch, acc1=9.82%, acc5=27.46%, remaining_batches=768]Hybrid W=optimized I=dynamic:   2%|▏         | 15/782 [03:06<2:37:30, 12.32s/batch, acc1=9.69%, acc5=26.46%, remaining_batches=767]Hybrid W=optimized I=dynamic:   2%|▏         | 16/782 [03:18<2:34:49, 12.13s/batch, acc1=9.69%, acc5=26.46%, remaining_batches=767]Hybrid W=optimized I=dynamic:   2%|▏         | 16/782 [03:18<2:34:49, 12.13s/batch, acc1=9.67%, acc5=26.46%, remaining_batches=766]Hybrid W=optimized I=dynamic:   2%|▏         | 17/782 [03:30<2:37:34, 12.36s/batch, acc1=9.67%, acc5=26.46%, remaining_batches=766]Hybrid W=optimized I=dynamic:   2%|▏         | 17/782 [03:30<2:37:34, 12.36s/batch, acc1=10.29%, acc5=27.02%, remaining_batches=765]Hybrid W=optimized I=dynamic:   2%|▏         | 18/782 [03:43<2:39:17, 12.51s/batch, acc1=10.29%, acc5=27.02%, remaining_batches=765]Hybrid W=optimized I=dynamic:   2%|▏         | 18/782 [03:43<2:39:17, 12.51s/batch, acc1=11.89%, acc5=29.51%, remaining_batches=764]Hybrid W=optimized I=dynamic:   2%|▏         | 19/782 [03:56<2:40:46, 12.64s/batch, acc1=11.89%, acc5=29.51%, remaining_batches=764]Hybrid W=optimized I=dynamic:   2%|▏         | 19/782 [03:56<2:40:46, 12.64s/batch, acc1=11.51%, acc5=29.19%, remaining_batches=763]Hybrid W=optimized I=dynamic:   3%|▎         | 20/782 [04:09<2:42:49, 12.82s/batch, acc1=11.51%, acc5=29.19%, remaining_batches=763]Hybrid W=optimized I=dynamic:   3%|▎         | 20/782 [04:09<2:42:49, 12.82s/batch, acc1=11.48%, acc5=28.98%, remaining_batches=762]Hybrid W=optimized I=dynamic:   3%|▎         | 21/782 [04:24<2:48:19, 13.27s/batch, acc1=11.48%, acc5=28.98%, remaining_batches=762]Hybrid W=optimized I=dynamic:   3%|▎         | 21/782 [04:24<2:48:19, 13.27s/batch, acc1=10.94%, acc5=27.68%, remaining_batches=761]Hybrid W=optimized I=dynamic:   3%|▎         | 22/782 [04:38<2:52:29, 13.62s/batch, acc1=10.94%, acc5=27.68%, remaining_batches=761]Hybrid W=optimized I=dynamic:   3%|▎         | 22/782 [04:38<2:52:29, 13.62s/batch, acc1=10.58%, acc5=26.56%, remaining_batches=760]Hybrid W=optimized I=dynamic:   3%|▎         | 23/782 [04:52<2:54:16, 13.78s/batch, acc1=10.58%, acc5=26.56%, remaining_batches=760]Hybrid W=optimized I=dynamic:   3%|▎         | 23/782 [04:52<2:54:16, 13.78s/batch, acc1=10.60%, acc5=26.63%, remaining_batches=759]Hybrid W=optimized I=dynamic:   3%|▎         | 24/782 [05:05<2:49:40, 13.43s/batch, acc1=10.60%, acc5=26.63%, remaining_batches=759]Hybrid W=optimized I=dynamic:   3%|▎         | 24/782 [05:05<2:49:40, 13.43s/batch, acc1=10.55%, acc5=26.30%, remaining_batches=758]Hybrid W=optimized I=dynamic:   3%|▎         | 25/782 [05:20<2:56:03, 13.95s/batch, acc1=10.55%, acc5=26.30%, remaining_batches=758]Hybrid W=optimized I=dynamic:   3%|▎         | 25/782 [05:20<2:56:03, 13.95s/batch, acc1=10.62%, acc5=26.56%, remaining_batches=757]Hybrid W=optimized I=dynamic:   3%|▎         | 26/782 [05:36<3:02:22, 14.47s/batch, acc1=10.62%, acc5=26.56%, remaining_batches=757]Hybrid W=optimized I=dynamic:   3%|▎         | 26/782 [05:36<3:02:22, 14.47s/batch, acc1=10.22%, acc5=25.54%, remaining_batches=756]Hybrid W=optimized I=dynamic:   3%|▎         | 27/782 [05:52<3:06:47, 14.84s/batch, acc1=10.22%, acc5=25.54%, remaining_batches=756]Hybrid W=optimized I=dynamic:   3%|▎         | 27/782 [05:52<3:06:47, 14.84s/batch, acc1=9.90%, acc5=24.77%, remaining_batches=755] Hybrid W=optimized I=dynamic:   4%|▎         | 28/782 [06:06<3:05:36, 14.77s/batch, acc1=9.90%, acc5=24.77%, remaining_batches=755]Hybrid W=optimized I=dynamic:   4%|▎         | 28/782 [06:06<3:05:36, 14.77s/batch, acc1=9.54%, acc5=24.00%, remaining_batches=754]Hybrid W=optimized I=dynamic:   4%|▎         | 29/782 [06:18<2:54:48, 13.93s/batch, acc1=9.54%, acc5=24.00%, remaining_batches=754]Hybrid W=optimized I=dynamic:   4%|▎         | 29/782 [06:18<2:54:48, 13.93s/batch, acc1=9.21%, acc5=23.28%, remaining_batches=753]Hybrid W=optimized I=dynamic:   4%|▍         | 30/782 [06:30<2:46:23, 13.28s/batch, acc1=9.21%, acc5=23.28%, remaining_batches=753]Hybrid W=optimized I=dynamic:   4%|▍         | 30/782 [06:30<2:46:23, 13.28s/batch, acc1=9.11%, acc5=23.07%, remaining_batches=752]Hybrid W=optimized I=dynamic:   4%|▍         | 31/782 [06:42<2:41:37, 12.91s/batch, acc1=9.11%, acc5=23.07%, remaining_batches=752]Hybrid W=optimized I=dynamic:   4%|▍         | 31/782 [06:42<2:41:37, 12.91s/batch, acc1=8.87%, acc5=22.63%, remaining_batches=751]Hybrid W=optimized I=dynamic:   4%|▍         | 32/782 [06:55<2:41:19, 12.91s/batch, acc1=8.87%, acc5=22.63%, remaining_batches=751]Hybrid W=optimized I=dynamic:   4%|▍         | 32/782 [06:55<2:41:19, 12.91s/batch, acc1=8.84%, acc5=22.51%, remaining_batches=750]Hybrid W=optimized I=dynamic:   4%|▍         | 33/782 [07:08<2:43:12, 13.07s/batch, acc1=8.84%, acc5=22.51%, remaining_batches=750]Hybrid W=optimized I=dynamic:   4%|▍         | 33/782 [07:08<2:43:12, 13.07s/batch, acc1=8.57%, acc5=21.88%, remaining_batches=749]Hybrid W=optimized I=dynamic:   4%|▍         | 34/782 [07:25<2:55:00, 14.04s/batch, acc1=8.57%, acc5=21.88%, remaining_batches=749]Hybrid W=optimized I=dynamic:   4%|▍         | 34/782 [07:25<2:55:00, 14.04s/batch, acc1=8.41%, acc5=21.51%, remaining_batches=748]Hybrid W=optimized I=dynamic:   4%|▍         | 35/782 [07:40<3:00:34, 14.50s/batch, acc1=8.41%, acc5=21.51%, remaining_batches=748]Hybrid W=optimized I=dynamic:   4%|▍         | 35/782 [07:40<3:00:34, 14.50s/batch, acc1=8.17%, acc5=21.16%, remaining_batches=747]Hybrid W=optimized I=dynamic:   5%|▍         | 36/782 [07:52<2:50:37, 13.72s/batch, acc1=8.17%, acc5=21.16%, remaining_batches=747]Hybrid W=optimized I=dynamic:   5%|▍         | 36/782 [07:52<2:50:37, 13.72s/batch, acc1=8.33%, acc5=21.31%, remaining_batches=746]Hybrid W=optimized I=dynamic:   5%|▍         | 37/782 [08:05<2:45:34, 13.34s/batch, acc1=8.33%, acc5=21.31%, remaining_batches=746]Hybrid W=optimized I=dynamic:   5%|▍         | 37/782 [08:05<2:45:34, 13.34s/batch, acc1=8.19%, acc5=21.33%, remaining_batches=745]Hybrid W=optimized I=dynamic:   5%|▍         | 38/782 [08:17<2:41:57, 13.06s/batch, acc1=8.19%, acc5=21.33%, remaining_batches=745]Hybrid W=optimized I=dynamic:   5%|▍         | 38/782 [08:17<2:41:57, 13.06s/batch, acc1=8.02%, acc5=21.05%, remaining_batches=744]

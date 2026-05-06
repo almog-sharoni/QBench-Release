@@ -24,7 +24,7 @@ with tab_runner:
     RUNNER_LOG_DIR = os.path.join(PROJECT_ROOT, "runspace/database/logs")
     DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), "dashboard")
     EXPERIMENT_RUN_STATE_PATH = os.path.join(RUNNER_OUTPUT_DIR, "experiment_run_state.json")
-    EXPERIMENT_MODELS_CONFIG_PATH = os.path.join(DASHBOARD_DIR, "models.config")
+    EXPERIMENT_MODELS_CONFIG_PATH = os.path.join(DASHBOARD_DIR, "models.yaml")
 
     def _dashboard_runner_pid_running(pid):
         if not pid:
@@ -213,7 +213,7 @@ with tab_runner:
                 text = f.read()
             loaded = yaml.safe_load(text)
         except Exception as exc:
-            st.warning(f"Could not load `models.config`: {exc}")
+            st.warning(f"Could not load `models.yaml`: {exc}")
             loaded = None
 
         if isinstance(loaded, dict):
@@ -875,7 +875,7 @@ with tab_runner:
             options=model_options,
             index=model_options.index(model_default) if model_default in model_options else 0,
             key=f"{prefix}_model_name",
-            help="Loaded from dashboard/models.config.",
+            help="Loaded from dashboard/models.yaml.",
         )
         selected_model_entry = selected_entry_by_name.get(model_name, {})
         values = {
