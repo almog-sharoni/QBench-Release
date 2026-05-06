@@ -75,17 +75,17 @@ class QuantConv2d(nn.Conv2d, QuantizedLayerMixin):
                     # Conv2d bias is [Out], needs [1, Out, 1, 1]
                     bias_view = self.bias.view(1, -1, 1, 1)
                     output = output + bias_view
-                    
-                return output
-            
+
+                return self.quantize_output(output)
+
         else:
             # Standard convolution
-            return nn.functional.conv2d(
-                input_fp8, 
-                w_decomp, 
-                self.bias, 
-                self.stride, 
-                self.padding, 
-                self.dilation, 
+            return self.quantize_output(nn.functional.conv2d(
+                input_fp8,
+                w_decomp,
+                self.bias,
+                self.stride,
+                self.padding,
+                self.dilation,
                 self.groups
-            )
+            ))

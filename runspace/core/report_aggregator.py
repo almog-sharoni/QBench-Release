@@ -5,7 +5,7 @@ from datetime import datetime
 
 
 _CLASSIFICATION_FIELDS = [
-    'timestamp', 'model_name', 'output_name', 'quant_format',
+    'timestamp', 'model_name', 'output_name', 'quant_format', 'output_quant_format',
     'base_config_path', 'generated_config_path', 'status',
     'acc1', 'acc5', 'certainty', 'ref_acc1', 'ref_acc5', 'ref_certainty',
     'acc_drop', 'weight_comp_red', 'weight_comp_share', 'input_comp_red', 'input_comp_share',
@@ -13,7 +13,7 @@ _CLASSIFICATION_FIELDS = [
 ]
 
 _FM_FIELDS = [
-    'timestamp', 'model_name', 'output_name', 'quant_format',
+    'timestamp', 'model_name', 'output_name', 'quant_format', 'output_quant_format',
     'base_config_path', 'generated_config_path', 'status',
     'fm_num_keypoints', 'fm_mean_score', 'fm_desc_norm', 'fm_repeatability',
     'matching_precision', 'matching_score', 'mean_num_matches',

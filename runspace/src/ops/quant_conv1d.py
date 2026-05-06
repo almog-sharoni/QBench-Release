@@ -43,9 +43,9 @@ class QuantConv1d(nn.Conv1d, QuantizedLayerMixin):
                 )
                 if self.bias is not None:
                     output = output + self.bias.view(1, -1, 1)
-                return output
+                return self.quantize_output(output)
         else:
-            return nn.functional.conv1d(
+            return self.quantize_output(nn.functional.conv1d(
                 input_q, w_decomp, self.bias,
                 self.stride, self.padding, self.dilation, self.groups
-            )
+            ))

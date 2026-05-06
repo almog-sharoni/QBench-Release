@@ -26,7 +26,7 @@ class QuantMatMul(_QuantArithmeticBase):
         q1_type = getattr(self, 'input1_q_type', None)
         q2_type = getattr(self, 'input2_q_type', None)
         q1, q2 = self._quantize_operands([input1, input2], [q1_type, q2_type])
-        return torch.matmul(q1, q2)
+        return self.quantize_output(torch.matmul(q1, q2))
 
 
 @OpRegistry.register("QuantBMM", is_activation=False, compliance_status="FP8 Batch MatMul")
@@ -50,7 +50,7 @@ class QuantBMM(_QuantArithmeticBase):
         q1_type = getattr(self, 'input1_q_type', None)
         q2_type = getattr(self, 'input2_q_type', None)
         q1, q2 = self._quantize_operands([input1, input2], [q1_type, q2_type])
-        return torch.bmm(q1, q2)
+        return self.quantize_output(torch.bmm(q1, q2))
 
 
 __all__ = ["QuantMatMul", "QuantBMM"]

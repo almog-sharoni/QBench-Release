@@ -482,6 +482,10 @@ class QuantizedLayerMixin:
         """
         if not isinstance(input, torch.Tensor):
             return input
+        if getattr(self, 'capture_activations', False):
+            # Capture the raw input format on every call (regardless of input_quantization),
+            # so the comparator can runtime-detect what format actually arrived at this layer.
+            self.last_pre_quant_input = input.detach()
             
         # Use input_q_type if available, otherwise fallback to q_type
         q_type = override_q_type or getattr(self, 'input_q_type', getattr(self, 'q_type', 'fp8_e4m3'))
@@ -548,6 +552,42 @@ class QuantizedLayerMixin:
 
         return input_fp8
 
+    def quantize_output(self, output, override_q_type: str = None):
+        """
+        Quantize a layer's output tensor.
+        Pass-through when self.output_quantization is False (default).
+        Always captures last_natural_output for report-side runtime format detection
+        when capture_activations is on, regardless of whether quantization runs.
+        """
+        if not isinstance(output, torch.Tensor):
+            return output
+        if getattr(self, 'capture_activations', False):
+            self.last_natural_output = output.detach()
+        if not getattr(self, 'output_quantization', False):
+            return output
+
+        q_type = override_q_type or getattr(self, 'output_q_type',
+                                            getattr(self, 'q_type', 'fp8_e4m3'))
+        mode = getattr(self, 'output_mode', 'tensor')
+        chunk_size = getattr(self, 'output_chunk_size', None)
+        capture = getattr(self, 'capture_activations', False)
+
+        if capture:
+            out_q, out_q_unscaled, max_val, scale_b, scale_p = quantize_tensor(
+                output, q_type=q_type, return_unscaled=True, return_scale=True,
+                mode=mode, chunk_size=chunk_size,
+            )
+            self.last_quant_output = out_q.detach()
+            self.last_quant_output_unscaled = out_q_unscaled.detach()
+            self.last_quant_output_max = max_val.detach()
+            self.last_quant_output_scale = scale_b.detach()
+            self.last_quant_output_scale_packed = scale_p.detach()
+        else:
+            out_q, _ = quantize_tensor(
+                output, q_type=q_type, mode=mode, chunk_size=chunk_size,
+            )
+        return out_q
+
 
     def quantized_forward(self, input, *args, **kwargs):
         """
@@ -604,8 +644,8 @@ class QuantizedLayerMixin:
             # last_quant_input is already captured in quantize_input if enabled
             if w_decomp is not None:
                 self.last_quant_weight = w_decomp.detach()
-                
-        return output
+
+        return self.quantize_output(output)
 
 # Prevent tracing into quantize_tensor to avoid Proxy errors with dynamic shapes
 if hasattr(torch, 'fx') and hasattr(torch.fx, 'wrap'):
