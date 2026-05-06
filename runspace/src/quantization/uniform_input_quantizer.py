@@ -1,8 +1,14 @@
 import torch
 import torch.nn as nn
 
-from src.registry.op_registry import OpRegistry
-from src.ops.quant_base import quantize_tensor
+try:
+    from ..registry.op_registry import OpRegistry
+    from ..ops.quant_base import quantize_tensor
+    from .chunking import count_context_chunks
+except ImportError:
+    from src.registry.op_registry import OpRegistry
+    from src.ops.quant_base import quantize_tensor
+    from src.quantization.chunking import count_context_chunks
 
 
 class UniformInputQuantizer:
@@ -81,21 +87,10 @@ class UniformInputQuantizer:
             fmt = self._effective_format_for_module(module)
             x_q = self._quantize_with_format(x, fmt)
 
-            if x.dim() > 1:
-                flat = x.flatten(1)
-                batch_size = x.shape[0]
-            else:
-                flat = x.flatten(0).unsqueeze(0)
-                batch_size = 1
-
             if self.quant_mode == 'chunk':
-                num_elements = flat.shape[-1]
-                if num_elements % self.chunk_size != 0:
-                    num_elements += self.chunk_size - (num_elements % self.chunk_size)
-                num_chunks = num_elements // self.chunk_size
-                total_chunks = batch_size * num_chunks
+                total_chunks = count_context_chunks(x, self.chunk_size)
             else:
-                total_chunks = batch_size
+                total_chunks = x.shape[0] if x.dim() > 0 else 1
 
             module.input_quantization = True
             module.input_mode = self.quant_mode

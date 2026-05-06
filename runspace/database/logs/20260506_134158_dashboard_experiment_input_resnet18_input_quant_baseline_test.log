@@ -1,0 +1,59 @@
+
+
+# Dashboard date run: 20260506_134158_dashboard_experiment_input_resnet18_input_quant_baseline_test
+# Started: 2026-05-06 13:41:58
+$ /usr/bin/python /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name resnet18 --weights DEFAULT --dataset_name imagenet --dataset_path /data/imagenet/val --batch_size 128 --num_workers 32 --limit_batches -1 --output_dir /data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/results --metric mse --chunk_size 128 --input_size 224 --baseline_formats fp32,fp8_e1m6,fp8_e2m5,fp8_e3m4,fp8_e4m3,fp8_e5m2,fp8_e6m1,fp8_e7m0,fp7_e1m5,fp7_e2m4,fp7_e3m3,fp7_e4m2,fp7_e5m1,fp7_e6m0,fp6_e1m4,fp6_e2m3,fp6_e3m2,fp6_e4m1,fp6_e5m0,fp5_e1m3,fp5_e2m2,fp5_e3m1,fp5_e4m0,fp4_e1m2,fp4_e2m1,fp4_e3m0,fp3_e1m1,fp3_e2m0,fp2_e1m0 --candidate_formats fp4_e1m2,fp4_e2m1,fp4_e3m0 --excluded_ops LayerNorm --experiment_type input_quant_baseline_test --unsigned_input_sources relu,softmax,quantrelu,quantsoftmax --dynamic_unsigned_input_candidates --only_dynamic --force_rerun --force_rebuild_weights --use_cache_sim_db --fold_input_norm
+
+Using device: cuda
+Metrics to process: ['mse']
+Baseline formats: ['fp32', 'fp8_e1m6', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e4m3', 'fp8_e5m2', 'fp8_e6m1', 'fp8_e7m0', 'fp7_e1m5', 'fp7_e2m4', 'fp7_e3m3', 'fp7_e4m2', 'fp7_e5m1', 'fp7_e6m0', 'fp6_e1m4', 'fp6_e2m3', 'fp6_e3m2', 'fp6_e4m1', 'fp6_e5m0', 'fp5_e1m3', 'fp5_e2m2', 'fp5_e3m1', 'fp5_e4m0', 'fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0', 'fp3_e1m1', 'fp3_e2m0', 'fp2_e1m0']
+Dynamic candidate formats: ['fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0']
+Found 1 models to process.
+Runner initialized on device: cuda
+/usr/local/lib/python3.12/dist-packages/torch/__init__.py:1605: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /opt/pytorch/pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+
+###########################################################
+ PROCESSING MODEL: resnet18 (Weights: DEFAULT)
+###########################################################
+
+Skipping Baselines (--only_dynamic set)
+
+[Optimization] Loading model and dataset once for all metrics...
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=resnet18
+Folding input normalization into first layer: conv1
+[Debug] Folding into conv1: weight range before: [-0.3083, 0.3939]
+[Debug] Folding into conv1: weight range after: [-1.3765, 1.7584]
+[Debug] Folding into conv1: bias range before: [-0.6402, 0.6933]
+[Debug] Folding into conv1: bias range after: [-1.3591, 1.1241]
+Propagated unsigned input formats using existing GraphModule.
+prepare_model_with_materialized_weights(file=/data/almog/Projects/QBench-Release/runspace/experiments/find_optimal_input_quant/results/resnet18/weights/materialized_weights.pt): state_dict validated (coverage=1.000, comparable=42/42, mismatched=0, max_abs_diff=0.000e+00)
+
+===========================================
+Processing Metric: MSE for resnet18
+=============================================
+Loading cache simulation results from DB for resnet18
+Loaded 31 layer statuses from cache sim DB.
+Sample keys in cache sim map: ['conv1', 'maxpool', 'layer1.0.conv1', 'layer1.0.conv2', 'layer1.0', 'layer1.1.conv1', 'layer1.1.conv2', 'layer1.1', 'layer2.0.conv1', 'layer2.0.conv2']
+Registered hooks on 40 layers: all layers use all 3 candidates (metric=MSE).
+20 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=mse chunk_size=128
+Dynamic (resnet18/mse):   0%|          | 0/391 [00:00<?, ?batch/s][DynamicInputQuantizer] Layer 'relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer1.0.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer1.1.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_1' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer2.0.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_2' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer2.1.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_3' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer3.0.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_4' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer3.1.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_5' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer4.0.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_6' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'layer4.1.relu' NOT found in cache sim map. Using standard candidates.
+[DynamicInputQuantizer] Layer 'add_7' NOT found in cache sim map. Using standard candidates.

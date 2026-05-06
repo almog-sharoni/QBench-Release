@@ -5,10 +5,12 @@ try:
     from ..registry.op_registry import OpRegistry
     from ..ops.quant_base import quantize_tensor
     from ..ops.quant_base import _quantize_tensor_cuda
+    from .chunking import chunk_tensor_by_context, unchunk_tensor_by_context
 except ImportError:
     from src.registry.op_registry import OpRegistry
     from src.ops.quant_base import quantize_tensor
     from src.ops.quant_base import _quantize_tensor_cuda
+    from src.quantization.chunking import chunk_tensor_by_context, unchunk_tensor_by_context
 
 import os
 import json
@@ -540,21 +542,11 @@ class DynamicInputQuantizer:
         chunk_size = self.chunk_size
         device = tensor.device
 
-        if tensor.dim() > 1:
-            flat = tensor.flatten(1)
-            batch_size = tensor.shape[0]
-        else:
-            flat = tensor.flatten(0).unsqueeze(0)
-            batch_size = 1
-
-        num_elements = flat.shape[-1]
-        pad_len = 0
-        if num_elements % chunk_size != 0:
-            pad_len = chunk_size - (num_elements % chunk_size)
-            flat = torch.nn.functional.pad(flat, (0, pad_len))
-
-        num_chunks = flat.shape[-1] // chunk_size
-        ref_chunks = flat.view(batch_size, num_chunks, chunk_size).reshape(-1, chunk_size)
+        ref_chunked, original_shape, pad_len = chunk_tensor_by_context(
+            tensor, chunk_size
+        )
+        num_contexts, num_chunks, chunk_size = ref_chunked.shape
+        ref_chunks = ref_chunked.reshape(-1, chunk_size)
         total_chunks = ref_chunks.shape[0]
 
         # Iterative selection buffers
@@ -578,10 +570,8 @@ class DynamicInputQuantizer:
                 )
                 
                 # Reshape q_tensor to match ref_chunks
-                q_flat = q_tensor.flatten(1) if q_tensor.dim() > 1 else q_tensor.flatten(0).unsqueeze(0)
-                if pad_len > 0:
-                    q_flat = torch.nn.functional.pad(q_flat, (0, pad_len))
-                q_chunks = q_flat.view(batch_size, num_chunks, chunk_size).reshape(-1, chunk_size)
+                q_chunked, _, _ = chunk_tensor_by_context(q_tensor, chunk_size)
+                q_chunks = q_chunked.reshape(-1, chunk_size)
 
                 diff = ref_chunks - q_chunks
                 if self.metric == 'l1':
@@ -597,20 +587,17 @@ class DynamicInputQuantizer:
                     best_indices[mask] = i
                 
                 # Cleanup intermediate tensors
-                del q_tensor, q_flat, q_chunks, diff, err, mask
+                del q_tensor, q_chunked, q_chunks, diff, err, mask
                 
             except Exception as e:
                 # Skip failed formats
                 continue
 
-        q_flat_final = best_qs.view(batch_size, -1)
-        if pad_len > 0:
-            q_flat_final = q_flat_final[:, :num_elements]
-
-        if tensor.dim() > 1:
-            quantized_tensor = q_flat_final.view_as(tensor)
-        else:
-            quantized_tensor = q_flat_final.view(-1).view_as(tensor)
+        quantized_tensor = unchunk_tensor_by_context(
+            best_qs.reshape(num_contexts, num_chunks, chunk_size),
+            original_shape,
+            pad_len,
+        )
 
         # Update layer-wise format selection statistics (stay on GPU)
         if layer_name not in self.layer_stats:
