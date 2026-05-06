@@ -42,15 +42,8 @@ class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
                  self.last_quant_weight = w_decomp.detach()
         
         out = F.layer_norm(input_quant, self.normalized_shape, w_decomp, b, self.eps)
-        
-        # Quantize Output — only when activation quantization is enabled
-        # if getattr(self, 'input_quantization', True):
-        #     out = quantize(out, q_type=self.q_type)
-        
-        # DEBUG
-        # print(f"DEBUG: LN out min={out.min()}, max={out.max()}, q_type={self.q_type}, bias={self.quantization_bias}")
-        
-        return out
+
+        return self.quantize_output(out)
 
 try:
     from torchvision.models.convnext import LayerNorm2d
@@ -73,12 +66,20 @@ try:
             # Input: (N, C, H, W)
             # Permute to (N, H, W, C) for LayerNorm
             x = input.permute(0, 2, 3, 1)
-            
-            # Use QuantLayerNorm forward
+
+            # Use QuantLayerNorm forward (this captures last_natural_output /
+            # last_quant_output in (N, H, W, C) shape via super().quantize_output).
             out = super().forward(x)
-            
-            # Permute back to (N, C, H, W)
+
+            # Permute back to (N, C, H, W) — the wrapper's natural output shape.
             out = out.permute(0, 3, 1, 2)
+
+            # Re-capture in the wrapper's true (N, C, H, W) shape so report
+            # columns key off the tensor that actually leaves this module.
+            if getattr(self, 'capture_activations', False):
+                self.last_natural_output = out.detach()
+                if getattr(self, 'last_quant_output', None) is not None:
+                    self.last_quant_output = out.detach()
             return out
 
 except ImportError:

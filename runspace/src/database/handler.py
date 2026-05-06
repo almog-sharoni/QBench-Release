@@ -32,6 +32,7 @@ class RunDatabase:
                     model_name TEXT NOT NULL,
                     weight_dt TEXT,
                     activation_dt TEXT,
+                    output_dt TEXT,
                     acc1 REAL,
                     acc5 REAL,
                     ref_acc1 REAL,
@@ -76,6 +77,10 @@ class RunDatabase:
             except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE runs ADD COLUMN input_map_json TEXT")
             except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN output_map_json TEXT")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN output_dt TEXT")
+            except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE runs ADD COLUMN config_json TEXT")
             except sqlite3.OperationalError: pass
             
@@ -119,6 +124,7 @@ class RunDatabase:
                     model_name TEXT NOT NULL,
                     weight_dt TEXT,
                     activation_dt TEXT,
+                    output_dt TEXT,
                     experiment_type TEXT,
                     run_date TEXT,
                     status TEXT,
@@ -138,9 +144,15 @@ class RunDatabase:
                     ref_pose_auc_5 REAL,
                     ref_pose_auc_10 REAL,
                     ref_pose_auc_20 REAL,
-                    config_json TEXT
+                    config_json TEXT,
+                    output_map_json TEXT
                 )
             ''')
+
+            try: cursor.execute("ALTER TABLE fm_runs ADD COLUMN output_dt TEXT")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE fm_runs ADD COLUMN output_map_json TEXT")
+            except sqlite3.OperationalError: pass
 
             self._init_cache_sim_table(cursor)
 
@@ -149,13 +161,17 @@ class RunDatabase:
     def log_run(self, model_name, weight_dt, activation_dt, acc1, acc5, status="SUCCESS",
                 ref_acc1=None, ref_acc5=None, ref_certainty=None, experiment_type=None, run_date=None,
                 mse=None, l1=None, certainty=None, quant_map_json=None, input_map_json=None,
-                config_json=None):
+                config_json=None, output_dt=None, output_map_json=None):
         """
         Logs a new run to the database.
-        quant_map_json : JSON string mapping layer -> weight format.
-        input_map_json : JSON string mapping layer -> dominant input format
-                         (from DynamicInputQuantizer layer_stats).
-        config_json    : JSON string of the full run configuration dict.
+        quant_map_json  : JSON string mapping layer -> weight format.
+        input_map_json  : JSON string mapping layer -> dominant input format
+                          (from DynamicInputQuantizer layer_stats).
+        output_map_json : JSON string mapping layer -> output format / per-layer
+                          override resolved at runtime.
+        output_dt       : Global output quantization format string (e.g. fp8_e5m2);
+                          'fp32' when output_quantization is disabled.
+        config_json     : JSON string of the full run configuration dict.
         """
         if run_date is None:
             from datetime import datetime
@@ -165,15 +181,15 @@ class RunDatabase:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO runs (
-                    model_name, weight_dt, activation_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
+                    model_name, weight_dt, activation_dt, output_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
                     experiment_type, run_date, status, mse, l1, certainty, quant_map_json, input_map_json,
-                    config_json
+                    output_map_json, config_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                model_name, weight_dt, activation_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
+                model_name, weight_dt, activation_dt, output_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
                 experiment_type, run_date, status, mse, l1, certainty, quant_map_json, input_map_json,
-                config_json
+                output_map_json, config_json
             ))
             conn.commit()
             print(f"Logged run for {model_name} to {self.db_path}")
@@ -444,7 +460,8 @@ class RunDatabase:
                    mean_num_matches=None, pose_auc_5=None, pose_auc_10=None,
                    pose_auc_20=None, ref_matching_precision=None, ref_matching_score=None,
                    ref_mean_num_matches=None, ref_pose_auc_5=None, ref_pose_auc_10=None,
-                   ref_pose_auc_20=None, config_json=None):
+                   ref_pose_auc_20=None, config_json=None,
+                   output_dt=None, output_map_json=None):
         """Logs a feature-matching run to the fm_runs table."""
         if run_date is None:
             run_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -452,23 +469,23 @@ class RunDatabase:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO fm_runs (
-                    model_name, weight_dt, activation_dt, experiment_type, run_date, status,
+                    model_name, weight_dt, activation_dt, output_dt, experiment_type, run_date, status,
                     fm_num_keypoints, fm_mean_score, fm_desc_norm, fm_repeatability,
                     matching_precision, matching_score, mean_num_matches,
                     pose_auc_5, pose_auc_10, pose_auc_20,
                     ref_matching_precision, ref_matching_score, ref_mean_num_matches,
                     ref_pose_auc_5, ref_pose_auc_10, ref_pose_auc_20,
-                    config_json
+                    output_map_json, config_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                model_name, weight_dt, activation_dt, experiment_type, run_date, status,
+                model_name, weight_dt, activation_dt, output_dt, experiment_type, run_date, status,
                 fm_num_keypoints, fm_mean_score, fm_desc_norm, fm_repeatability,
                 matching_precision, matching_score, mean_num_matches,
                 pose_auc_5, pose_auc_10, pose_auc_20,
                 ref_matching_precision, ref_matching_score, ref_mean_num_matches,
                 ref_pose_auc_5, ref_pose_auc_10, ref_pose_auc_20,
-                config_json,
+                output_map_json, config_json,
             ))
             conn.commit()
             print(f"Logged FM run for {model_name} to {self.db_path}")

@@ -37,7 +37,7 @@ def qtype_to_unsigned_qtype(
     return "u" + q_type
 
 @OpRegistry.register("QuantSoftmax", original_cls=nn.Softmax, is_activation=True)
-class QuantSoftmax(nn.Softmax):
+class QuantSoftmax(nn.Softmax, QuantizedLayerMixin):
     q_type: str
     uq_type: str
     quantization_bias: int | None
@@ -84,7 +84,7 @@ class QuantSoftmax(nn.Softmax):
                 self.last_quant_inputs_unscaled = []
                 self.last_quant_input_formats = []
                 self.last_quant_output_unscaled = None
-            return prob
+            return self.quantize_output(prob)
 
         # Quantization of the Input
         input_dequant, input_unscaled, _, _, _ = quantize_tensor(
@@ -153,8 +153,8 @@ class QuantSoftmax(nn.Softmax):
             ]
             self.last_quant_input_formats = [self.q_type, q_type_x]
             self.last_quant_output_unscaled = prob.detach()
-            
-        return prob
+
+        return self.quantize_output(prob)
 
 # class QuantSoftmax(nn.Softmax , QuantizedLayerMixin):
 #     def __init__(self, dim: int | None = None, q_type: str = "fp8_e4m3", quantization_bias: int | None = None, quant_mode: str = "tensor", chunk_size: int | None = None):
