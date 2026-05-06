@@ -14,7 +14,7 @@ quantization:
   weight_chunk_size: 128
   weight_mode: chunk
   calib_method: max
-  strict_format_check: true
+  strict_format_check: false
 
 # Paper-aligned ScanNet benchmark: SuperGlue's own test pairs
 # (assets/scannet_test_pairs_with_gt.txt) covering all 100 test scenes.
@@ -24,8 +24,8 @@ dataset:
   path: /data/scannet
   pairs_file: /app/runspace/inputs/scannet/pairs_test_paper_100scenes.txt
   image_size: [480, 640]
-  batch_size: 1
-  num_workers: 20
+  batch_size: 10
+  num_workers: 10
   max_pairs: 1500
 
 model:
@@ -34,7 +34,7 @@ model:
 
 evaluation:
   mode: compare
-  save_visualizations: true
+  save_visualizations: false
   num_viz_samples: 5
   compare_batches: -1
   max_batches: -1

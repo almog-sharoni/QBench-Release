@@ -12,7 +12,7 @@ from runspace.src.ops.quant_base import quantize_tensor, QuantizedLayerMixin
 
 
 @OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True)
-class QuantReLU(nn.ReLU):
+class QuantReLU(nn.ReLU,QuantizedLayerMixin):
     """
     Quantized ReLU using LUT.
     """
@@ -132,7 +132,7 @@ class QuantSiLU(nn.SiLU, QuantizedLayerMixin):
 
 
 @OpRegistry.register("QuantGELU", original_cls=nn.GELU, is_activation=True, compliance_status="FP32 activation")
-class QuantGELU(nn.GELU, LUTActivation, QuantizedLayerMixin):
+class QuantGELU(nn.GELU, QuantizedLayerMixin):
     """
     Quantized GELU using a piecewise approximation with a small LUT.
     

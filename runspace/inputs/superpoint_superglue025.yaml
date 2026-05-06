@@ -1,0 +1,99 @@
+- name: superpoint_superglue01
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.001
+  sg_config:
+    match_threshold: 0.25
+
+- name: superpoint_superglue02
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.002
+  sg_config:
+    match_threshold: 0.25
+
+- name: superpoint_superglue03
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.003
+  sg_config:
+    match_threshold: 0.25
+
+- name: superpoint_superglue04
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.004
+  sg_config:
+    match_threshold: 0.25
+
+- name: superpoint_superglue05
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.005
+  sg_config:
+    match_threshold: 0.25
+
+- name: superpoint_superglue06
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.006
+  sg_config:
+    match_threshold: 0.25
+
+- name: superpoint_superglue07
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.007
+  sg_config:
+    match_threshold: 0.25
+
+- name: superpoint_superglue08
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.008
+  sg_config:
+    match_threshold: 0.25
+
+- name: superpoint_superglue09
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.009
+  sg_config:
+    match_threshold: 0.25
+
+- name: superpoint_superglue10
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.010
+  sg_config:
+    match_threshold: 0.25
