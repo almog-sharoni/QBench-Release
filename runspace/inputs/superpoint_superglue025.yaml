@@ -1,4 +1,4 @@
-- name: superpoint_superglue01
+- name: superpoint_superglue_025_01
   pipeline: superpoint_superglue
   source: custom
   sg_weights: indoor
@@ -8,7 +8,7 @@
   sg_config:
     match_threshold: 0.25
 
-- name: superpoint_superglue02
+- name: superpoint_superglue_025_02
   pipeline: superpoint_superglue
   source: custom
   sg_weights: indoor
@@ -18,7 +18,7 @@
   sg_config:
     match_threshold: 0.25
 
-- name: superpoint_superglue03
+- name: superpoint_superglue_025_03
   pipeline: superpoint_superglue
   source: custom
   sg_weights: indoor
@@ -28,7 +28,7 @@
   sg_config:
     match_threshold: 0.25
 
-- name: superpoint_superglue04
+- name: superpoint_superglue_025_04
   pipeline: superpoint_superglue
   source: custom
   sg_weights: indoor
@@ -38,7 +38,7 @@
   sg_config:
     match_threshold: 0.25
 
-- name: superpoint_superglue05
+- name: superpoint_superglue_025_05
   pipeline: superpoint_superglue
   source: custom
   sg_weights: indoor
@@ -48,7 +48,7 @@
   sg_config:
     match_threshold: 0.25
 
-- name: superpoint_superglue06
+- name: superpoint_superglue_025_06
   pipeline: superpoint_superglue
   source: custom
   sg_weights: indoor
@@ -58,7 +58,7 @@
   sg_config:
     match_threshold: 0.25
 
-- name: superpoint_superglue07
+- name: superpoint_superglue_025_07
   pipeline: superpoint_superglue
   source: custom
   sg_weights: indoor
@@ -68,7 +68,7 @@
   sg_config:
     match_threshold: 0.25
 
-- name: superpoint_superglue08
+- name: superpoint_superglue_025_08
   pipeline: superpoint_superglue
   source: custom
   sg_weights: indoor
@@ -78,7 +78,7 @@
   sg_config:
     match_threshold: 0.25
 
-- name: superpoint_superglue09
+- name: superpoint_superglue_025_09
   pipeline: superpoint_superglue
   source: custom
   sg_weights: indoor
@@ -88,7 +88,7 @@
   sg_config:
     match_threshold: 0.25
 
-- name: superpoint_superglue10
+- name: superpoint_superglue_025_10
   pipeline: superpoint_superglue
   source: custom
   sg_weights: indoor
