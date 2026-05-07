@@ -361,7 +361,6 @@ class ObservedAttention(nn.Module):
     def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None,
                  quant_mode="chunk", chunk_size=None):
         super().__init__()
-        print(f"[ObservedAttention quant] attention: q_type={q_type}, quantization_bias={quantization_bias}, quant_mode={quant_mode}, chunk_size={chunk_size}")
         kw = dict(q_type=q_type, quantization_bias=quantization_bias,
                   quant_mode=quant_mode, chunk_size=chunk_size)
         self.attn_scores = ObservedAttentionScores(**kw)
