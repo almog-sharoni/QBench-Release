@@ -972,16 +972,19 @@ class LayerComparator:
                     traced.graph.erase_node(node)
                     mutated = True
 
-                    # Sub-trace the Observed* instance and queue its graph
-                    # so the walker can recurse inline into its body.
-                    inst_prefix = f'{prefix}.{sub_name}' if prefix else sub_name
-                    already_traced = any(p == inst_prefix for p, _ in fx_subtrees)
-                    if not already_traced:
-                        try:
-                            _, _, sub_traced = trace_quant_aware(inst)
-                            fx_subtrees.append((inst_prefix, sub_traced))
-                        except Exception:
-                            pass
+                    # Sub-trace and queue ONLY for quantized=False wrappers —
+                    # for quantized=True wrappers (e.g. ObservedSimpleNMS) the
+                    # row should render once, using the wrapper's own
+                    # input/output q_type, not be decomposed into its body.
+                    if not OpRegistry.is_quantized(obs_cls.__name__):
+                        inst_prefix = f'{prefix}.{sub_name}' if prefix else sub_name
+                        already_traced = any(p == inst_prefix for p, _ in fx_subtrees)
+                        if not already_traced:
+                            try:
+                                _, _, sub_traced = trace_quant_aware(inst)
+                                fx_subtrees.append((inst_prefix, sub_traced))
+                            except Exception:
+                                pass
                 if mutated:
                     traced.graph.lint()
                     traced.recompile()

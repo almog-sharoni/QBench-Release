@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.models as models
 import os
 from .base_adapter import BaseAdapter
@@ -981,6 +982,7 @@ class GenericAdapter(BaseAdapter):
             torch.div: "QuantDiv",
             operator.truediv: "QuantDiv",
             torch.cat: "QuantCat",
+            F.softmax: "QuantSoftmax",
         }
         
         # Filter by requested quantized ops
@@ -1051,7 +1053,21 @@ class GenericAdapter(BaseAdapter):
                 # QuantReLU supports inplace in init
                 if 'inplace' in node.kwargs:
                     kwargs['inplace'] = node.kwargs['inplace']
-                
+
+                # F.softmax(x, dim=...) — `dim` is a constructor arg on
+                # QuantSoftmax, not a forward arg. Peel it out of the call
+                # site so the resulting call_module passes only the input.
+                fwd_args = node.args
+                fwd_kwargs = dict(node.kwargs)
+                if node.target is F.softmax:
+                    if 'dim' in fwd_kwargs:
+                        kwargs['dim'] = fwd_kwargs.pop('dim')
+                    elif len(fwd_args) >= 2:
+                        kwargs['dim'] = fwd_args[1]
+                        fwd_args = (fwd_args[0],)
+                    fwd_kwargs.pop('_stacklevel', None)
+                    fwd_kwargs.pop('dtype', None)
+
                 new_mod = QuantClass(**kwargs)
 
                 # Add module to GraphModule. Use FX's auto-numbered node.name
@@ -1085,7 +1101,7 @@ class GenericAdapter(BaseAdapter):
                 
                 # Replace node
                 with graph.inserting_after(node):
-                    new_node = graph.call_module(new_mod_name, args=node.args, kwargs=node.kwargs)
+                    new_node = graph.call_module(new_mod_name, args=fwd_args, kwargs=fwd_kwargs)
                     node.replace_all_uses_with(new_node)
                 
                 # Erase old node

@@ -114,15 +114,22 @@ class ObservedL2Norm(nn.Module):
 # ---------------------------------------------------------------------------
 
 @OpRegistry.register("ObservedSimpleNMS", replaces="simple_nms",
-                     init_from_args={"radius": "nms_radius"}, quantized=False)
-class ObservedSimpleNMS(nn.Module):
-    """NMS via repeated max_pool2d (stageB8). Pure max-selection — no arithmetic."""
-    def __init__(self, radius: int = 4):
+                     init_from_args={"radius": "nms_radius"}, quantized=True)
+class ObservedSimpleNMS(nn.Module, QuantizedLayerMixin):
+    """NMS via repeated max_pool2d (stageB8). Pure max-selection — values pass through unchanged."""
+    def __init__(self, radius: int = 4, q_type: str = "fp8_e4m3",
+                 quant_mode: str = "tensor", chunk_size: int | None = None):
         super().__init__()
         self.radius = radius
+        self.q_type = q_type
+        self.quant_mode = quant_mode
+        self.chunk_size = chunk_size
+        self.capture_activations = False
 
     def forward(self, scores: torch.Tensor) -> torch.Tensor:
-        return _simple_nms(scores, self.radius)
+        scores_q = self.quantize_input(scores)
+        out = _simple_nms(scores_q, self.radius)
+        return self.quantize_output(out)
 
 
 # ---------------------------------------------------------------------------
