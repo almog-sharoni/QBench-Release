@@ -123,6 +123,51 @@ class OpRegistry:
         return list(cls._observed_variants.get(fn_name, {}).keys())
 
     @classmethod
+    def resolve_observed_class_from_config(cls, fn_name: str, cfg: dict | None,
+                                           parent_path: str = ""):
+        """Resolve the variant class declared for ``fn_name`` in the active
+        config's ``layers:`` block, or the default class when no variant is
+        set. Mirrors the lookup in ``observer._resolve_observed_entry`` so
+        report-side code can pick the same class the dispatch used.
+
+        Lookup keys on ``layers``: qualified path (``<parent>.<fn>``), bare
+        function name, then any key ending in ``.<fn>``.
+        """
+        layers = (cfg or {}).get("layers", {}) if isinstance(cfg, dict) else {}
+        layer_cfg = None
+        if layers:
+            qualified = f"{parent_path}.{fn_name}" if parent_path else fn_name
+            layer_cfg = layers.get(qualified) or layers.get(fn_name)
+            if layer_cfg is None:
+                suffix = f".{fn_name}"
+                for key, val in layers.items():
+                    if isinstance(key, str) and key.endswith(suffix):
+                        layer_cfg = val
+                        break
+        variant_tag = layer_cfg.get("variant") if isinstance(layer_cfg, dict) else None
+        if variant_tag is not None:
+            entry = cls.get_observed_variant(fn_name, variant_tag)
+            if entry is not None:
+                return entry[0]
+        default = cls.get_replacement_by_name(fn_name)
+        return default[0] if default is not None else None
+
+    @classmethod
+    def iter_observed_classes(cls, fn_name: str):
+        """Yields every class registered as the default replacement OR any
+        variant of the given @observer function name, default first.
+        De-duplicated by class object identity."""
+        seen = set()
+        default = cls._replacements_by_name.get(fn_name)
+        if default is not None and id(default[0]) not in seen:
+            seen.add(id(default[0]))
+            yield default[0]
+        for entry in cls._observed_variants.get(fn_name, {}).values():
+            if id(entry[0]) not in seen:
+                seen.add(id(entry[0]))
+                yield entry[0]
+
+    @classmethod
     def is_quantized(cls, op_name: str) -> bool:
         """True unless the op was registered with quantized=False (observed but
         not yet performing W/A quantization arithmetic)."""

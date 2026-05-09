@@ -216,30 +216,49 @@ def _fx_mark_opaque_in_caller(fn_name: str) -> None:
 def _resolve_observed_entry(target):
     """Pick the (cls, init_from_args) entry for an @observer-decorated function,
     honoring an optional `variant: <tag>` from the active config's `layers:`
-    block. Lookup keys (in order): qualified-path, bare function name."""
+    block. The class lookup itself lives in
+    :meth:`OpRegistry.resolve_observed_class_from_config` so report-side code
+    can resolve to the same class without duplicating the rules."""
     fn_name = target.__name__
-    cfg = get_active_config() or {}
-    layers = cfg.get("layers", {}) if isinstance(cfg, dict) else {}
-    variant_tag = None
+    cfg = get_active_config()
+    parent = _current_parent_path()
+
+    chosen_cls = OpRegistry.resolve_observed_class_from_config(fn_name, cfg, parent)
+    default = OpRegistry.get_replacement_by_name(fn_name)
+    if default is None:
+        return None
+    if chosen_cls is None:
+        return default
+
+    # If the user asked for a variant tag we don't recognize,
+    # resolve_observed_class_from_config silently falls back to default —
+    # surface that here as a warning so config typos don't go unnoticed.
+    layers = (cfg or {}).get("layers", {}) if isinstance(cfg, dict) else {}
     if layers:
-        parent = _current_parent_path()
-        qualified_name = f"{parent}.{fn_name}" if parent else fn_name
-        layer_cfg = layers.get(qualified_name) or layers.get(fn_name) or {}
-        if isinstance(layer_cfg, dict):
-            variant_tag = layer_cfg.get("variant")
-    entry = None
-    if variant_tag is not None:
-        entry = OpRegistry.get_observed_variant(fn_name, variant_tag)
-        if entry is None:
+        qualified = f"{parent}.{fn_name}" if parent else fn_name
+        layer_cfg = layers.get(qualified) or layers.get(fn_name)
+        if layer_cfg is None:
+            suffix = f".{fn_name}"
+            for key, val in layers.items():
+                if isinstance(key, str) and key.endswith(suffix):
+                    layer_cfg = val
+                    break
+        variant_tag = layer_cfg.get("variant") if isinstance(layer_cfg, dict) else None
+        if variant_tag is not None and OpRegistry.get_observed_variant(fn_name, variant_tag) is None:
             warnings.warn(
                 f"Unknown variant '{variant_tag}' for @observer function '{fn_name}'; "
                 f"falling back to default. Known variants: "
                 f"{OpRegistry.list_observed_variants(fn_name) or '<none>'}.",
                 stacklevel=3,
             )
-    if entry is None:
-        entry = OpRegistry.get_replacement_by_name(fn_name)
-    return entry
+
+    if chosen_cls is default[0]:
+        return default
+    # Find the matching variant entry for its init_from_args.
+    for entry in OpRegistry._observed_variants.get(fn_name, {}).values():
+        if entry[0] is chosen_cls:
+            return entry
+    return (chosen_cls, dict(default[1]))
 
 
 def observer(target):

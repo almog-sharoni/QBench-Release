@@ -948,8 +948,27 @@ class LayerComparator:
                     entry = OpRegistry.get_replacement_by_name(fn_name)
                     if entry is None:
                         continue
-                    obs_cls, _ = entry
-                    inst = cache_by_cls.get(obs_cls)
+                    # Resolve the variant the active config asked for first,
+                    # then fall back to any other cached variant — covers
+                    # both the configured case and the (unconfigured)
+                    # default case without letting a stale singleton from
+                    # another variant override the user's choice.
+                    cfg_for_render = getattr(self.adapter, "quant_config", None) if self.adapter is not None else None
+                    expected_cls = OpRegistry.resolve_observed_class_from_config(
+                        fn_name, cfg_for_render, parent_path=prefix
+                    )
+                    obs_cls = None
+                    inst = None
+                    if expected_cls is not None:
+                        cand_inst = cache_by_cls.get(expected_cls)
+                        if cand_inst is not None:
+                            obs_cls, inst = expected_cls, cand_inst
+                    if inst is None:
+                        for cand_cls in OpRegistry.iter_observed_classes(fn_name):
+                            cand_inst = cache_by_cls.get(cand_cls)
+                            if cand_inst is not None:
+                                obs_cls, inst = cand_cls, cand_inst
+                                break
                     if inst is None:
                         continue
                     sub_name = node.name
