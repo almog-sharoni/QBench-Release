@@ -799,12 +799,10 @@ class LayerComparator:
                 iq = 'No'
                 i = pq   # tensor flows through unchanged; format = arrival format
 
-            # Output Q? from module flag (the "did we explicitly quantize?" question)
-            output_quant_enabled = bool(getattr(
-                module,
-                'output_quantization',
-                getattr(self.adapter, 'output_quantization', False),
-            ))
+            # Output Q? from the module's own flag — no adapter-level fallback,
+            # so the column reflects what actually runs at quantize_output() time
+            # rather than what the adapter intended.
+            output_quant_enabled = bool(getattr(module, 'output_quantization', False))
             oq = 'Yes' if output_quant_enabled else 'No'
 
             # Output Pre-Quant: the format the layer's compute would naturally
