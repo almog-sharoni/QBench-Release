@@ -17,18 +17,37 @@ class OpRegistry:
     _supported_functions = set() # Set of supported functional operations (e.g. F.conv2d)
     _under_construction_ops = set() # Set of ops marked as under construction
     _replacements_by_name = {} # Maps upstream @observer function __name__ -> (Observed cls, init_from_args dict)
+    _observed_variants = {} # replaces -> {variant_tag: (cls, init_from_args)}
     _unquantized_ops = set() # Ops registered with quantized=False — observed but no actual W/A quantization
 
     @classmethod
     def register(cls, op_name: str, original_cls=None, *, replaces=None, init_from_args=None,
                  is_activation=False, compliance_status=None, under_construction=False,
-                 quantized=True):
+                 quantized=True, variant: str = None, default: bool = False):
         def decorator(cls_impl):
             cls._registry[op_name] = cls_impl
             if original_cls:
                 cls._supported_ops[original_cls] = cls_impl
             if replaces is not None:
-                cls._replacements_by_name[replaces] = (cls_impl, dict(init_from_args or {}))
+                init_args = dict(init_from_args or {})
+                if variant is not None:
+                    cls._observed_variants.setdefault(replaces, {})[variant] = (cls_impl, init_args)
+                is_default = default or variant is None
+                if is_default:
+                    existing = cls._replacements_by_name.get(replaces)
+                    # Two distinct class objects with the same qualified name come
+                    # from the dual `src.*` / `runspace.src.*` import aliasing —
+                    # treat as the same registration. Only object-distinct, name-
+                    # distinct classes are a real conflict.
+                    if existing is not None and existing[0] is not cls_impl \
+                            and getattr(existing[0], "__qualname__", existing[0].__name__) \
+                                != getattr(cls_impl, "__qualname__", cls_impl.__name__):
+                        raise ValueError(
+                            f"Multiple default replacements registered for '{replaces}': "
+                            f"{existing[0].__name__} and {cls_impl.__name__}. "
+                            f"Only one variant may use default=True (or omit `variant`)."
+                        )
+                    cls._replacements_by_name[replaces] = (cls_impl, init_args)
             if is_activation:
                 cls._activation_ops.add(op_name)
             if compliance_status:
@@ -90,6 +109,18 @@ class OpRegistry:
     def get_replacement_by_name(cls, fn_name: str):
         """Returns (Observed cls, init_from_args) for an @observer function name, or None."""
         return cls._replacements_by_name.get(fn_name)
+
+    @classmethod
+    def get_observed_variant(cls, fn_name: str, variant: str):
+        """Returns (Observed cls, init_from_args) for a tagged variant of an
+        @observer function, or None when the tag is unknown."""
+        return cls._observed_variants.get(fn_name, {}).get(variant)
+
+    @classmethod
+    def list_observed_variants(cls, fn_name: str):
+        """Returns the list of variant tags registered against an @observer
+        function (empty when none were tagged)."""
+        return list(cls._observed_variants.get(fn_name, {}).keys())
 
     @classmethod
     def is_quantized(cls, op_name: str) -> bool:

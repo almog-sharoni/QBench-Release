@@ -3,7 +3,7 @@ adapter:
   quantize_first_layer: false
   type: feature_matching
   quantized_ops: ["all"]
-  excluded_ops: ["softmax"]
+  excluded_ops: [""]
   weight_quantization: true
   input_quantization: false
   output_quantization: true
@@ -15,18 +15,22 @@ quantization:
   weight_chunk_size: 128
   weight_mode: chunk
   calib_method: max
-  strict_format_check: true
+  strict_format_check: false
   layers:
     backbone.superpoint.convPb:
       output_format: fp8_e3m4
+    backbone.superpoint.softmax :
+      skip_quantization: true
+    backbone.superglue.log_optimal_transport:
+      variant: v1
 
 dataset:
   name: scannet_pairs
   path: /data/scannet
   pairs_file: /app/runspace/inputs/scannet/pairs_test_paper_100scenes.txt
   image_size: [480, 640]
-  batch_size: 10
-  num_workers: 10
+  batch_size: 20
+  num_workers: 16
   max_pairs: 1500
 
 model:

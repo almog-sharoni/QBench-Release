@@ -115,6 +115,7 @@ class GenericAdapter(BaseAdapter):
             "mode": self.quant_mode,
             "chunk_size": self.input_chunk_size if self.input_chunk_size is not None else self.chunk_size,
             "quantization_bias": self.quantization_bias,
+            "layers": self.layer_config,
         }
 
     def _auto_detect_model_source(self) -> str:
@@ -753,10 +754,11 @@ class GenericAdapter(BaseAdapter):
                     quant_class = DecomposedMlpBlock
                     should_quantize = True
             
-            # Check layer config for fp32 override
+            # Check layer config for explicit skip / fp32 override
             if should_quantize and full_name in self.layer_config:
                 l_conf = self.layer_config[full_name]
-                if l_conf.get('format') == 'fp32' or l_conf.get('type') == 'fp32':
+                if l_conf.get('skip_quantization') is True \
+                        or l_conf.get('format') == 'fp32' or l_conf.get('type') == 'fp32':
                     should_quantize = False
 
             if should_quantize:
@@ -1027,27 +1029,27 @@ class GenericAdapter(BaseAdapter):
             print("Note: submodule FX fallback did not find any safe traceable children.")
         return model
 
-    def _fx_quantize_module_graph(self, module: nn.Module, target_funcs: dict):
+    def _fx_quantize_module_graph(self, module: nn.Module, target_funcs: dict, traced_path: str = ""):
         try:
             _, graph, gm = trace_quant_aware(module)
         except Exception as e:
             return None, False
         non_tensor_nodes = find_non_tensor_nodes(graph)
         modified = False
-        
+
         for node in list(graph.nodes):
             if node.name in non_tensor_nodes:
                 continue
             if node.op == 'call_function' and node.target in target_funcs:
                 op_name = target_funcs[node.target]
                 QuantClass = OpRegistry.get(op_name)
-                
+
                 # Create new module instance
                 # We use the same config as the adapter
                 kwargs = {'q_type': self.quantization_type}
                 if self.quantization_bias is not None:
                     kwargs['quantization_bias'] = self.quantization_bias
-                
+
                 # Add specific args if needed (e.g. inplace)
                 # We pass them to the module init if supported, or rely on forward kwargs
                 # QuantReLU supports inplace in init
@@ -1068,8 +1070,6 @@ class GenericAdapter(BaseAdapter):
                     fwd_kwargs.pop('_stacklevel', None)
                     fwd_kwargs.pop('dtype', None)
 
-                new_mod = QuantClass(**kwargs)
-
                 # Add module to GraphModule. Use FX's auto-numbered node.name
                 # (e.g. "cat", "add", "add_1", "truediv") so the report path
                 # reads cleanly: backbone.superglue.gnn.cat instead of
@@ -1080,6 +1080,14 @@ class GenericAdapter(BaseAdapter):
                 while hasattr(gm, new_mod_name):
                     _i += 1
                     new_mod_name = f"{base}_{_i}"
+
+                qualified_name = f"{traced_path}.{new_mod_name}" if traced_path else new_mod_name
+                if isinstance(self.layer_config, dict):
+                    layer_conf = self.layer_config.get(qualified_name, {})
+                    if layer_conf.get('skip_quantization') is True:
+                        continue
+
+                new_mod = QuantClass(**kwargs)
                 gm.add_module(new_mod_name, new_mod)
 
                 # Propagate runtime config (mirrors _create_quantized_module for
@@ -1166,18 +1174,19 @@ class GenericAdapter(BaseAdapter):
         # symbolic_trace raises.
         return True
 
-    def _fx_quantize_submodules(self, module: nn.Module, target_funcs: dict) -> bool:
+    def _fx_quantize_submodules(self, module: nn.Module, target_funcs: dict, module_path: str = "") -> bool:
         modified_any = False
 
         for child_name, child in list(module.named_children()):
+            child_path = f"{module_path}.{child_name}" if module_path else child_name
             if self._is_safe_fx_submodule(child):
-                quantized_child, modified = self._fx_quantize_module_graph(child, target_funcs)
+                quantized_child, modified = self._fx_quantize_module_graph(child, target_funcs, traced_path=child_path)
                 if modified and quantized_child is not None:
                     setattr(module, child_name, quantized_child)
                     modified_any = True
                     continue
 
-            if self._fx_quantize_submodules(child, target_funcs):
+            if self._fx_quantize_submodules(child, target_funcs, module_path=child_path):
                 modified_any = True
 
         return modified_any

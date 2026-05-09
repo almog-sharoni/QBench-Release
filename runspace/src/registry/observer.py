@@ -15,6 +15,7 @@ import functools
 import inspect
 import sys
 import threading
+import warnings
 from collections import Counter
 from contextlib import contextmanager
 
@@ -212,6 +213,35 @@ def _fx_mark_opaque_in_caller(fn_name: str) -> None:
     _wrapped_fns_to_patch[(id(caller_globals), fn_name)] = caller_globals
 
 
+def _resolve_observed_entry(target):
+    """Pick the (cls, init_from_args) entry for an @observer-decorated function,
+    honoring an optional `variant: <tag>` from the active config's `layers:`
+    block. Lookup keys (in order): qualified-path, bare function name."""
+    fn_name = target.__name__
+    cfg = get_active_config() or {}
+    layers = cfg.get("layers", {}) if isinstance(cfg, dict) else {}
+    variant_tag = None
+    if layers:
+        parent = _current_parent_path()
+        qualified_name = f"{parent}.{fn_name}" if parent else fn_name
+        layer_cfg = layers.get(qualified_name) or layers.get(fn_name) or {}
+        if isinstance(layer_cfg, dict):
+            variant_tag = layer_cfg.get("variant")
+    entry = None
+    if variant_tag is not None:
+        entry = OpRegistry.get_observed_variant(fn_name, variant_tag)
+        if entry is None:
+            warnings.warn(
+                f"Unknown variant '{variant_tag}' for @observer function '{fn_name}'; "
+                f"falling back to default. Known variants: "
+                f"{OpRegistry.list_observed_variants(fn_name) or '<none>'}.",
+                stacklevel=3,
+            )
+    if entry is None:
+        entry = OpRegistry.get_replacement_by_name(fn_name)
+    return entry
+
+
 def observer(target):
     if inspect.isclass(target):
         target.__qbench_observed_class__ = True
@@ -220,7 +250,7 @@ def observer(target):
     @functools.wraps(target)
     def wrapped(*args, **kwargs):
         if _flag():
-            entry = OpRegistry.get_replacement_by_name(target.__name__)
+            entry = _resolve_observed_entry(target)
             if entry is not None:
                 cls, init_from_args = entry
                 init_kwargs, fwd_args, fwd_kwargs = _split_call(target, args, kwargs, init_from_args)
