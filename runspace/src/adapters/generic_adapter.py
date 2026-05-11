@@ -742,6 +742,9 @@ class GenericAdapter(BaseAdapter):
             module.weight_quantization = self.weight_quantization
             module.input_mode = settings['input_mode']
             module.input_chunk_size = settings['input_chunk_size']
+            module.quant_mode = settings['input_mode'] # For ops that use quant_mode (e.g. QuantLayerNorm)
+            module.capture_activations = getattr(self, 'capture_activations', False)
+            
             module.weight_mode = settings['weight_mode']
             module.weight_chunk_size = settings['weight_chunk_size']
             module.output_q_type = self._effective_output_q_type(settings)
@@ -749,6 +752,7 @@ class GenericAdapter(BaseAdapter):
             module.output_mode = settings['output_mode']
             module.output_chunk_size = settings['output_chunk_size']
             module.rounding = settings['rounding']
+
 
             # Per-chunk format configuration
             if self.per_chunk_format and 'chunk_formats' in layer_conf:
