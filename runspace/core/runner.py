@@ -866,6 +866,7 @@ class Runner:
         adapter_cfg = ref_cfg.setdefault('adapter', {})
         adapter_cfg['input_quantization'] = False
         adapter_cfg['weight_quantization'] = False
+        adapter_cfg['fold_input_norm'] = False
         
         # 2. Set global format to fp32
         quant_cfg = ref_cfg.setdefault('quantization', {})
@@ -1964,18 +1965,27 @@ class Runner:
                 
                 # Build structured reference model using a proper config to ensure 
                 # identical structure (folding, ops) to the quantized model.
-                print(f"Building structured reference model (FP32 baseline)...")
+                print(f"Building structured reference model (FP32 baseline; input normalization is not folded)...")
                 ref_config = self._build_reference_config(config)
                 
-                # We use a sub-directory for the reference to avoid overwriting the main config/weights
-                ref_output_dir = os.path.join(output_dir, "reference_fp32")
+                # Use a distinct reference cache because this FP32 baseline keeps
+                # input normalization outside the model, unlike older folded refs.
+                ref_output_dir = os.path.join(output_dir, "reference_fp32_unfolded_input_norm")
                 os.makedirs(ref_output_dir, exist_ok=True)
+                ref_config.setdefault('experiment', {})
+                ref_materialize_cfg = ref_config['experiment'].setdefault('materialize_weights', {})
+                ref_materialize_cfg['force_rebuild'] = True
                 
-                ref_model, _, _ = self.prepare_model_with_materialized_weights(
+                ref_model, ref_adapter, _ = self.prepare_model_with_materialized_weights(
                     config=ref_config,
                     output_dir=ref_output_dir
                 )
                 # Note: prepare_model_with_materialized_weights already moved ref_model to self.device
+                ref_input_normalization = bool(config.get('adapter', {}).get('fold_input_norm', True))
+                ref_input_mean = getattr(ref_adapter, 'input_mean', None) if ref_input_normalization else None
+                ref_input_std = getattr(ref_adapter, 'input_std', None) if ref_input_normalization else None
+                if ref_input_normalization:
+                    print("Reference model will receive normalized inputs during comparison.")
 
                 eval_cfg = config.get('evaluation', {})
                 comparator = LayerComparator(
@@ -1989,6 +1999,9 @@ class Runner:
                     save_histograms=eval_cfg.get('save_histograms', False),
                     save_visualizations=eval_cfg.get('save_visualizations', False),
                     num_viz_samples=eval_cfg.get('num_viz_samples', 5),
+                    ref_input_normalization=ref_input_normalization,
+                    ref_input_mean=ref_input_mean,
+                    ref_input_std=ref_input_std,
                 )
                 
                 # Determine number of batches
@@ -2061,6 +2074,7 @@ class Runner:
             if 'model' in locals(): del model
             if 'ref_model' in locals(): del ref_model
             if 'adapter' in locals(): del adapter
+            if 'ref_adapter' in locals(): del ref_adapter
             if 'evaluator' in locals(): del evaluator
             if 'ref_evaluator' in locals(): del ref_evaluator
             if 'comparator' in locals(): del comparator

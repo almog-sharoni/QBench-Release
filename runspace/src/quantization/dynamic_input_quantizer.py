@@ -18,7 +18,14 @@ import json
 
 DEFAULT_DYNAMIC_INPUT_CANDIDATES = [
     'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
-    'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0'
+    'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0',
+    'ufp8_e1m7', 'ufp8_e2m6', 'ufp8_e3m5', 'ufp8_e4m4', 'ufp8_e5m3', 'ufp8_e6m2', 'ufp8_e7m1', 'ufp8_e8m0',
+    'ufp7_e1m6', 'ufp7_e2m5', 'ufp7_e3m4', 'ufp7_e4m3', 'ufp7_e5m2', 'ufp7_e6m1', 'ufp7_e7m0',
+    'ufp6_e1m5', 'ufp6_e2m4', 'ufp6_e3m3', 'ufp6_e4m2', 'ufp6_e5m1', 'ufp6_e6m0',
+    'ufp5_e1m4', 'ufp5_e2m3', 'ufp5_e3m2', 'ufp5_e4m1', 'ufp5_e5m0',
+    'ufp4_e1m3', 'ufp4_e2m2', 'ufp4_e3m1', 'ufp4_e4m0',
+    'ufp3_e1m2', 'ufp3_e2m1', 'ufp3_e3m0',
+    'ufp2_e1m1', 'ufp2_e2m0'
 ]
 
 

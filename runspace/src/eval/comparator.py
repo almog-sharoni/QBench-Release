@@ -14,7 +14,22 @@ from src.utils.fx_trace_utils import trace_quant_aware, fx_trace_subtrees
 
 
 class LayerComparator:
-    def __init__(self, ref_model, quant_model, model_name="model", quant_type="quant", adapter=None, device=None, output_dir=None, save_histograms=False, save_visualizations=False, num_viz_samples=5):
+    def __init__(
+        self,
+        ref_model,
+        quant_model,
+        model_name="model",
+        quant_type="quant",
+        adapter=None,
+        device=None,
+        output_dir=None,
+        save_histograms=False,
+        save_visualizations=False,
+        num_viz_samples=5,
+        ref_input_normalization=False,
+        ref_input_mean=None,
+        ref_input_std=None,
+    ):
         self.ref_model = ref_model
         self.quant_model = quant_model
         self.model_name = model_name
@@ -26,6 +41,9 @@ class LayerComparator:
         self.save_visualizations = save_visualizations
         self.num_viz_samples = num_viz_samples
         self._viz_count = 0
+        self.ref_input_normalization = bool(ref_input_normalization)
+        self.ref_input_mean = ref_input_mean if ref_input_mean is not None else [0.485, 0.456, 0.406]
+        self.ref_input_std = ref_input_std if ref_input_std is not None else [0.229, 0.224, 0.225]
         self.ref_activations = {}
         self.ref_weights = {}
         self.hooks = []
@@ -65,6 +83,19 @@ class LayerComparator:
         if isinstance(x, dict):
             return {k: v.to(self.device) if isinstance(v, torch.Tensor) else v
                     for k, v in x.items()}
+        return x
+
+    def _normalize_ref_inputs(self, x):
+        if not self.ref_input_normalization:
+            return x
+        if isinstance(x, torch.Tensor):
+            if x.ndim >= 4 and x.shape[1] == 3:
+                mean = torch.as_tensor(self.ref_input_mean, device=x.device, dtype=x.dtype).view(1, 3, 1, 1)
+                std = torch.as_tensor(self.ref_input_std, device=x.device, dtype=x.dtype).view(1, 3, 1, 1)
+                return (x - mean) / std
+            return x
+        if isinstance(x, dict):
+            return {k: self._normalize_ref_inputs(v) for k, v in x.items()}
         return x
 
     def _load_compliance_config(self):
@@ -237,6 +268,7 @@ class LayerComparator:
                 
                 ref_inputs = self._to_device(ref_inputs)
                 quant_inputs = self._to_device(quant_inputs)
+                ref_inputs = self._normalize_ref_inputs(ref_inputs)
                 if quant_targets is not None:
                     quant_targets = self._to_device(quant_targets)
                 targets = quant_targets

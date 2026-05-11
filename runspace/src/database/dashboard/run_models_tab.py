@@ -841,7 +841,7 @@ with tab_runner:
             for name in (
                 "weight_mode", "weight_format", "weight_metric", "weight_candidate_formats", "weight_chunk_size",
                 "input_mode", "input_format", "input_metric", "input_candidate_formats", "input_chunk_size",
-                "unsigned_input_sources"
+                "unsigned_input_sources", "experiment_type"
             ):
                 _dashboard_runner_add_experiment_arg(kind, command, name, values.get(name))
             if values.get("dynamic_unsigned_input_candidates", True):
@@ -1098,6 +1098,7 @@ with tab_runner:
             hm1, hm2 = st.columns(2)
             hybrid_values["weight_mode"] = hm1.selectbox("Weight mode", options=["fixed", "optimized"], index=1 if str(_dashboard_runner_experiment_default("hybrid", "weight_mode", "optimized")) == "optimized" else 0, key="runner_exp_hybrid_weight_mode")
             hybrid_values["input_mode"] = hm2.selectbox("Input mode", options=["fixed", "dynamic"], index=1 if str(_dashboard_runner_experiment_default("hybrid", "input_mode", "dynamic")) == "dynamic" else 0, key="runner_exp_hybrid_input_mode")
+            hybrid_values["experiment_type"] = st.text_input("Experiment type", value=str(_dashboard_runner_experiment_default("hybrid", "experiment_type", "hybrid_quant_optimal")), key="runner_exp_hybrid_type")
             
             w_col, i_col = st.columns(2)
             with w_col:

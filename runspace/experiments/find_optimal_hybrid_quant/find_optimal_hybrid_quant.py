@@ -9,6 +9,7 @@ import torch
 import copy
 import types
 import csv
+from tqdm import tqdm
 
 # Fix for container permission issues
 os.environ['TORCH_HOME'] = '/tmp/torch'
@@ -46,6 +47,7 @@ from runspace.experiments.find_optimal_input_quant.find_optimal_input_quant impo
 
 HYBRID_WEIGHT_FORMATS = list(weight_baseline_formats)
 HYBRID_INPUT_CANDIDATE_FORMATS = list(input_candidate_formats)
+DEFAULT_HYBRID_EXPERIMENT_TYPE = "hybrid_quant_optimal"
 
 
 def _parse_csv_arg(value, fallback):
@@ -84,6 +86,8 @@ def get_args():
                         help="Comma-separated candidates for optimized weights.")
     parser.add_argument("--weight_chunk_size", type=int, default=128,
                         help="Chunk size for weight quantization blocks")
+    parser.add_argument("--weight_act_batches", type=int, default=10,
+                        help="Calibration batches for activation-aware weight metrics such as act_mse")
     parser.add_argument("--per_chunk_format", action="store_true",
                         help="Enable per-chunk format for weights in optimized mode")
     parser.add_argument("--force_recalc", action="store_true",
@@ -120,6 +124,8 @@ def get_args():
     # Output
     parser.add_argument("--output_dir", type=str,
                         default=os.path.join(os.path.dirname(__file__), "results"))
+    parser.add_argument("--experiment_type", type=str, default=DEFAULT_HYBRID_EXPERIMENT_TYPE,
+                        help="Experiment type label for database logging")
 
     args = parser.parse_args()
     args.weight_candidate_formats = _parse_csv_arg(args.weight_candidate_formats, HYBRID_WEIGHT_FORMATS)
@@ -209,6 +215,7 @@ def run_weight_phase(runner, args, device, model_dir, base_config):
     q_state_dict, q_map = create_quantized_state_dict(
         model, layer_results_map, wa, m, use_chunking=args.per_chunk_format
     )
+    q_state_dict = _materialize_weight_buffers_from_map(model, q_state_dict, q_map, args)
     q_path = os.path.join(metric_dir, "quantized_weights.pt")
     torch.save(q_state_dict, q_path)
 
@@ -227,6 +234,190 @@ def run_weight_phase(runner, args, device, model_dir, base_config):
     gc.collect()
     torch.cuda.empty_cache()
 
+    return q_path, q_map, layer_types
+
+
+def _iter_weight_modules(model):
+    supported = (torch.nn.Conv2d, torch.nn.Linear)
+    for name, module in model.named_modules():
+        if name and isinstance(module, supported) and getattr(module, 'weight', None) is not None:
+            yield name, module
+
+
+def _disable_runtime_io_quant(model):
+    for module in model.modules():
+        if hasattr(module, 'input_quantization'):
+            module.input_quantization = False
+        if hasattr(module, 'output_quantization'):
+            module.output_quantization = False
+        if hasattr(module, 'weight_fp8'):
+            module.weight_fp8 = None
+        if hasattr(module, 'weight_scale'):
+            module.weight_scale = None
+        if hasattr(module, 'weight_scale_packed'):
+            module.weight_scale_packed = None
+
+
+def _activation_weight_error_for_module(module, inputs, ref_output, quantized_weights):
+    import torch.nn.functional as F
+
+    x = inputs[0] if isinstance(inputs, tuple) else inputs
+    if not isinstance(x, torch.Tensor) or not isinstance(ref_output, torch.Tensor):
+        return {}
+
+    errors = {}
+    with torch.no_grad():
+        for fmt, q_weight in quantized_weights.items():
+            try:
+                if isinstance(module, torch.nn.Conv2d):
+                    q_out = F.conv2d(
+                        x,
+                        q_weight,
+                        module.bias,
+                        module.stride,
+                        module.padding,
+                        module.dilation,
+                        module.groups,
+                    )
+                elif isinstance(module, torch.nn.Linear):
+                    q_out = F.linear(x, q_weight, module.bias)
+                else:
+                    continue
+                diff = ref_output - q_out
+                errors[fmt] = (diff.pow(2).sum().detach(), diff.numel())
+            except Exception:
+                errors[fmt] = (torch.tensor(float('inf'), device=x.device), 1)
+    return errors
+
+
+def _materialize_weight_buffers_from_map(model, q_state_dict, q_map, args):
+    """
+    Keep saved `weight`, `weight_fp8`, and `weight_scale` mutually consistent.
+
+    The evaluation path prefers weight_fp8/weight_scale when present. A state dict
+    with quantized `.weight` tensors but stale FP8 buffers can therefore evaluate a
+    different model than the one described by the quantization map.
+    """
+    modules = dict(model.named_modules())
+    model.load_state_dict(q_state_dict, strict=False)
+    for layer_name, selected_format in q_map.items():
+        module = modules.get(layer_name)
+        if module is None or not hasattr(module, 'calibrate_weights'):
+            continue
+        module.weight_quantization = True
+        module.weight_chunk_size = args.weight_chunk_size
+        if isinstance(selected_format, list):
+            module.chunk_formats = selected_format
+            module.weight_mode = 'chunk'
+            module.q_type = selected_format[0] if selected_format else getattr(module, 'q_type', 'fp8_e1m6')
+        else:
+            module.chunk_formats = None
+            module.weight_mode = 'channel'
+            module.q_type = selected_format
+        module.calibrate_weights()
+    return model.state_dict()
+
+
+def run_activation_weight_phase(runner, args, device, model_dir, base_config):
+    """
+    Activation-aware layer-wise weight selection.
+
+    For each Conv2d/Linear-like quantized module, run a small calibration window
+    through the FP32-weight model, and choose the weight format that minimizes the
+    module's local output MSE for the observed inputs. This intentionally ignores
+    per-chunk format selection; it answers whether layer sensitivity, not raw
+    weight reconstruction, is driving the MobileNetV3 drop.
+    """
+    metric = args.weight_metric
+    analysis_dir = os.path.join(model_dir, f"weight_phase_{metric}")
+    model, adapter, _ = runner.prepare_model_with_materialized_weights(
+        config=base_config,
+        output_dir=analysis_dir,
+    )
+    model.eval()
+    _disable_runtime_io_quant(model)
+
+    loader = _build_loader(args, device, runner, config_builder=lambda _: base_config)
+    calib_batches = int(args.weight_act_batches if args.weight_act_batches > 0 else 10)
+    if args.limit_batches and args.limit_batches > 0:
+        calib_batches = min(calib_batches, int(args.limit_batches))
+
+    qt_options = [fmt for fmt in args.weight_candidate_formats if str(fmt).lower() != 'fp32']
+    layer_results_map = {}
+
+    print(
+        f"\n[Weight Phase] Activation-aware weight search ({metric}) "
+        f"over {calib_batches} calibration batches ..."
+    )
+
+    for layer_name, module in tqdm(list(_iter_weight_modules(model)), desc="Analyzing Layers (ActMSE)"):
+        q_weights = {}
+        for fmt in qt_options:
+            try:
+                q_w, _ = get_quantized_tensor_sim(
+                    module.weight.detach(),
+                    fmt,
+                    chunk_size=args.weight_chunk_size,
+                )
+                q_weights[fmt] = q_w.detach()
+            except Exception:
+                pass
+        if not q_weights:
+            continue
+
+        sum_err = {fmt: 0.0 for fmt in q_weights}
+        sum_numel = {fmt: 0 for fmt in q_weights}
+
+        def hook_fn(mod, inputs, output):
+            batch_errors = _activation_weight_error_for_module(mod, inputs, output, q_weights)
+            for fmt, (err_sum, numel) in batch_errors.items():
+                sum_err[fmt] += float(err_sum.item())
+                sum_numel[fmt] += int(numel)
+
+        handle = module.register_forward_hook(hook_fn)
+        try:
+            with torch.inference_mode():
+                for batch_idx, batch in enumerate(loader):
+                    if batch_idx >= calib_batches:
+                        break
+                    inputs, targets = adapter.prepare_batch(batch)
+                    inputs = runner._to_device(inputs)
+                    targets = runner._to_device(targets)
+                    adapter.forward(model, (inputs, targets))
+        finally:
+            handle.remove()
+
+        metrics = {
+            fmt: (sum_err[fmt] / sum_numel[fmt] if sum_numel[fmt] > 0 else float('inf'))
+            for fmt in q_weights
+        }
+        best_fmt = min(metrics, key=metrics.get)
+        layer_results_map[layer_name] = {
+            'layer': layer_name,
+            'shape': tuple(module.weight.shape),
+            'max_val': float(module.weight.detach().abs().max().item()),
+            'numel': int(module.weight.numel()),
+            'metrics': {metric: metrics},
+            'best_error': metrics[best_fmt],
+        }
+
+    metric_dir = os.path.join(model_dir, f"weights_{metric}")
+    os.makedirs(metric_dir, exist_ok=True)
+    q_state_dict, q_map = create_quantized_state_dict(
+        model, layer_results_map, args, metric, use_chunking=False
+    )
+    q_state_dict = _materialize_weight_buffers_from_map(model, q_state_dict, q_map, args)
+    q_path = os.path.join(metric_dir, "quantized_weights.pt")
+    torch.save(q_state_dict, q_path)
+    with open(os.path.join(metric_dir, "quantization_map.json"), 'w') as f:
+        json.dump(q_map, f, indent=4)
+
+    print(f"[Weight Phase] Saved activation-aware quantized weights ({metric}) → {q_path}")
+
+    layer_types = _layer_types_from_model(model)
+    del model, adapter, loader
+    gc.collect()
+    torch.cuda.empty_cache()
     return q_path, q_map, layer_types
 
 
@@ -284,7 +475,7 @@ def _log_hybrid_run(
     cfg = copy.deepcopy(base_config)
     cfg['experiment'] = {
         'name': experiment_name,
-        'type': 'hybrid_quant',
+        'type': runner.args.experiment_type if hasattr(runner, 'args') and hasattr(runner.args, 'experiment_type') else 'hybrid_quant',
         'weight_dt': weight_dt,
         'activation_dt': activation_dt,
         'ref_acc1': ref_acc1,
@@ -327,6 +518,7 @@ def process_single_model(args, device):
     base_config['adapter']['quantize_first_layer'] = args.fold_input_norm
 
     runner = Runner(device)
+    runner.args = args # Store args in runner for logging access
     db = runner._get_db()
 
     print(f"\n{'='*60}")
@@ -405,7 +597,12 @@ def process_single_model(args, device):
         torch.cuda.empty_cache()
     else:
         print(f"\n[Weights] Running optimized weight quantization (metric={args.weight_metric}) ...")
-        q_path, quant_map, layer_types = run_weight_phase(runner, args, device, model_dir, base_config)
+        if args.weight_metric == "act_mse":
+            q_path, quant_map, layer_types = run_activation_weight_phase(
+                runner, args, device, model_dir, base_config
+            )
+        else:
+            q_path, quant_map, layer_types = run_weight_phase(runner, args, device, model_dir, base_config)
         weight_dt_str = _summarise_quant_map(quant_map, prefix=f"opt_w{args.weight_metric}")
 
     quant_map_json = _build_weight_map_json(quant_map, layer_types)
