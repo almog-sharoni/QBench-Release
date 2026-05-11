@@ -148,16 +148,13 @@ class RunDatabase:
                     ref_pose_auc_10 REAL,
                     ref_pose_auc_20 REAL,
                     config_json TEXT,
-                    output_map_json TEXT,
-                    cli_command TEXT
+                    output_map_json TEXT
                 )
             ''')
 
             try: cursor.execute("ALTER TABLE fm_runs ADD COLUMN output_dt TEXT")
             except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE fm_runs ADD COLUMN output_map_json TEXT")
-            except sqlite3.OperationalError: pass
-            try: cursor.execute("ALTER TABLE fm_runs ADD COLUMN cli_command TEXT")
             except sqlite3.OperationalError: pass
 
             self._init_cache_sim_table(cursor)
@@ -167,7 +164,7 @@ class RunDatabase:
     def log_run(self, model_name, weight_dt, activation_dt, acc1, acc5, status="SUCCESS",
                 ref_acc1=None, ref_acc5=None, ref_certainty=None, experiment_type=None, run_date=None,
                 mse=None, l1=None, certainty=None, quant_map_json=None, input_map_json=None,
-                config_json=None, output_dt=None, output_map_json=None, cli_command=None):
+                config_json=None, output_dt=None, output_map_json=None):
         """
         Logs a new run to the database.
         quant_map_json  : JSON string mapping layer -> weight format.
@@ -189,13 +186,13 @@ class RunDatabase:
                 INSERT INTO runs (
                     model_name, weight_dt, activation_dt, output_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
                     experiment_type, run_date, status, mse, l1, certainty, quant_map_json, input_map_json,
-                    output_map_json, config_json, cli_command
+                    output_map_json, config_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 model_name, weight_dt, activation_dt, output_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
                 experiment_type, run_date, status, mse, l1, certainty, quant_map_json, input_map_json,
-                output_map_json, config_json, cli_command
+                output_map_json, config_json
             ))
             conn.commit()
             print(f"Logged run for {model_name} to {self.db_path}")
@@ -467,7 +464,7 @@ class RunDatabase:
                    pose_auc_20=None, ref_matching_precision=None, ref_matching_score=None,
                    ref_mean_num_matches=None, ref_pose_auc_5=None, ref_pose_auc_10=None,
                    ref_pose_auc_20=None, config_json=None,
-                   output_dt=None, output_map_json=None, cli_command=None):
+                   output_dt=None, output_map_json=None):
         """Logs a feature-matching run to the fm_runs table."""
         if run_date is None:
             run_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -481,9 +478,9 @@ class RunDatabase:
                     pose_auc_5, pose_auc_10, pose_auc_20,
                     ref_matching_precision, ref_matching_score, ref_mean_num_matches,
                     ref_pose_auc_5, ref_pose_auc_10, ref_pose_auc_20,
-                    output_map_json, config_json, cli_command
+                    output_map_json, config_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 model_name, weight_dt, activation_dt, output_dt, experiment_type, run_date, status,
                 fm_num_keypoints, fm_mean_score, fm_desc_norm, fm_repeatability,
@@ -491,7 +488,7 @@ class RunDatabase:
                 pose_auc_5, pose_auc_10, pose_auc_20,
                 ref_matching_precision, ref_matching_score, ref_mean_num_matches,
                 ref_pose_auc_5, ref_pose_auc_10, ref_pose_auc_20,
-                output_map_json, config_json, cli_command
+                output_map_json, config_json,
             ))
             conn.commit()
             print(f"Logged FM run for {model_name} to {self.db_path}")

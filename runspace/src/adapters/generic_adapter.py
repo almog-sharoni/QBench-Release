@@ -50,7 +50,7 @@ class GenericAdapter(BaseAdapter):
         input_quantization: bool = True,
         weight_quantization: bool = True,
         output_quantization: bool = False,
-        quantize_first_layer: bool = True,
+        quantize_first_layer: bool = False,
         quantized_ops: list = None,
         excluded_ops: list = None,
         quantization_type: str = DEFAULT_QUANTIZATION_TYPE,
@@ -67,10 +67,7 @@ class GenericAdapter(BaseAdapter):
         act_chunk_size: int = None,
         output_mode: str = "tensor",
         output_chunk_size: int = None,
-        fold_layers: bool = True,
-        fold_input_norm: bool = True,
-        input_mean: list = None,
-        input_std: list = None,
+        fold_layers: bool = False,
         simulate_tf32_accum: bool = False,
         rounding: str = "nearest",
         input_chunk_size: int = None,
@@ -519,13 +516,11 @@ class GenericAdapter(BaseAdapter):
         attached submodules alike)."""
         self._first_layer_found = False
         self._recursive_replace(model)
-        self._prune_noop_layers(model, context="post-recursive quantization")
         if self.enable_fx_quantization:
             try:
                 self._fx_quantize(model)
             except Exception as e:
                 print(f"Note: FX quantization skipped ({type(e).__name__}: {e})")
-        self._prune_noop_layers(model, context="post-FX quantization")
         self._configure_remaining_mixin_ops(model)
 
     @staticmethod
@@ -1166,27 +1161,9 @@ class GenericAdapter(BaseAdapter):
             for func, op_name in func_map.items():
                 op_name_lc = op_name.lower()
                 bare_lc = op_name_lc[len("quant"):] if op_name_lc.startswith("quant") else op_name_lc
-                
-                # Check if this op is requested
-                is_requested = ("-1" in quantized_ops_lc or "all" in quantized_ops_lc or 
-                                op_name_lc in quantized_ops_lc or bare_lc in quantized_ops_lc)
-                if not is_requested:
-                    continue
-                if op_name_lc in excluded_ops_lc or bare_lc in excluded_ops_lc:
-                    continue
-                    
-                # Honor quantization flags
-                if op_name in activation_ops:
-                    if not self.input_quantization:
-                        continue
-                else:
-                    # For compute ops (Add, MatMul, etc.), we usually want them if either 
-                    # input or weight quantization is enabled, as they are part of the 
-                    # quantized dataflow.
-                    if not (self.input_quantization or self.weight_quantization):
-                        continue
-                        
-                target_funcs[func] = op_name
+                if "-1" in quantized_ops_lc or "all" in quantized_ops_lc or op_name_lc in quantized_ops_lc or bare_lc in quantized_ops_lc:
+                    if op_name_lc not in excluded_ops_lc and bare_lc not in excluded_ops_lc:
+                        target_funcs[func] = op_name
         except Exception as e:
             print(f"1.Error in FX quantization: {e}")
         if not target_funcs:
@@ -1329,12 +1306,7 @@ class GenericAdapter(BaseAdapter):
         if module_name.startswith("torch.nn"):
             return False
         from runspace.src.ops.quant_base import QuantizedLayerMixin
-        composite_quantized_names = {
-            "DecomposedMultiheadAttention",
-            "DecomposedQkvAttention",
-            "DecomposedMlpBlock",
-        }
-        if isinstance(module, QuantizedLayerMixin) and cls.__name__ not in composite_quantized_names:
+        if isinstance(module, QuantizedLayerMixin):
             return False
         if module_name == "runspace.src.ops.observed_ops":
             return False
