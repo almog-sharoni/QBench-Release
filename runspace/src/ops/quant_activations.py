@@ -194,25 +194,11 @@ class QuantHardsigmoid(nn.Hardsigmoid,QuantizedLayerMixin):
         lut_values[255] = 1.0
         self.register_buffer('piecewise_lut', lut_values)
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        if not getattr(self, 'input_quantization', True):
-            return nn.functional.hardsigmoid(input, inplace=self.inplace)
-        x = input
-        A = self.A
-        t = (x + A) / (2 * A)
-        t = torch.clamp(t, 0.0, 1.0)
-        i = torch.floor(t * 255.0).long()
-        y_lut = self.piecewise_lut[i]
-        y = torch.where(x <= -A, 0.0,
-                        torch.where(x >= A, 1.0, y_lut))
-        if self.capture_activations:
-            self.last_quant_input = input.detach()
-            self.last_quant_output_unscaled = y.detach()
-        return self.quantize_output(y)
+        return self.quantize_output(output_quant)
 
 
 @OpRegistry.register("QuantGELU", original_cls=nn.GELU, is_activation=True, compliance_status="FP32 activation")
-class QuantGELU(nn.GELU, QuantizedLayerMixin):
+class QuantGELU(nn.GELU, LUTActivation, QuantizedLayerMixin):
     """
     Quantized GELU using a piecewise approximation with a small LUT.
     
@@ -250,7 +236,11 @@ class QuantGELU(nn.GELU, QuantizedLayerMixin):
         lut_values[0] = 0.0
         # Force LUT[255] = A
         lut_values[255] = A
-        self.register_buffer('piecewise_lut', lut_values)
+
+        # persistent=False: the LUT is fully determined by A, regenerated each
+        # __init__. Excluding it from state_dict prevents load-mismatch errors
+        # when materialized weights are reloaded mid-pipeline.
+        self.register_buffer('piecewise_lut', lut_values, persistent=False)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if not getattr(self, 'input_quantization', True):

@@ -469,7 +469,7 @@ class QuantizedLayerMixin:
             return input
         if getattr(self, 'capture_activations', False):
             # Capture the raw input format on every call (regardless of input_quantization),
-            # so the comparator can runtime-detect what arrived at this layer.
+            # so the comparator can runtime-detect what format actually arrived at this layer.
             self.last_pre_quant_input = input.detach()
             
         # Use input_q_type if available, otherwise fallback to q_type

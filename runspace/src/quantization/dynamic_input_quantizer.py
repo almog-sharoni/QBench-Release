@@ -608,30 +608,36 @@ class DynamicInputQuantizer:
                 )
                 
                 # Reshape q_tensor to match ref_chunks
-                q_chunked, _, _ = chunk_tensor_by_context(q_tensor, chunk_size)
-                q_chunks = q_chunked.reshape(-1, chunk_size)
+                q_flat = q_tensor.flatten(1) if q_tensor.dim() > 1 else q_tensor.flatten(0).unsqueeze(0)
+                if pad_len > 0:
+                    q_flat = torch.nn.functional.pad(q_flat, (0, pad_len))
+                q_chunks = q_flat.view(batch_size, num_chunks, chunk_size).reshape(-1, chunk_size)
 
                 diff = ref_chunks - q_chunks
                 err = diff.pow(2).mean(dim=1)
 
                 # Update best-so-far
                 mask = err < best_errors
-                best_errors[mask] = err[mask]
-                best_qs[mask] = q_chunks[mask]
-                best_indices[mask] = i
+                if mask.any():
+                    best_errors[mask] = err[mask]
+                    best_qs[mask] = q_chunks[mask]
+                    best_indices[mask] = i
                 
                 # Cleanup intermediate tensors
-                del q_tensor, q_chunked, q_chunks, diff, err, mask
+                del q_tensor, q_flat, q_chunks, diff, err, mask
                 
             except Exception as e:
                 # Skip failed formats
                 continue
 
-        quantized_tensor = unchunk_tensor_by_context(
-            best_qs.reshape(num_contexts, num_chunks, chunk_size),
-            original_shape,
-            pad_len,
-        )
+        q_flat_final = best_qs.view(batch_size, -1)
+        if pad_len > 0:
+            q_flat_final = q_flat_final[:, :num_elements]
+
+        if tensor.dim() > 1:
+            quantized_tensor = q_flat_final.view_as(tensor)
+        else:
+            quantized_tensor = q_flat_final.view(-1).view_as(tensor)
 
         # Update layer-wise format selection statistics (stay on GPU)
         if layer_name not in self.layer_stats:
@@ -645,11 +651,7 @@ class DynamicInputQuantizer:
         stats['format_counts_tensor'] += counts
 
         # Track running error for progress/debug
-        error_sum = best_errors.sum().detach()
-        if self.running_error is None:
-            self.running_error = error_sum
-        else:
-            self.running_error += error_sum
+        self.running_error += best_errors.sum().item()
         self.total_chunks += total_chunks
 
         return quantized_tensor, best_indices

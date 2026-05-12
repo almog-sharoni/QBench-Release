@@ -91,10 +91,10 @@ $$
 
 ### 4. QuantGELU
 
-**Class:** `QuantGELU`  
-**Original Op:** `nn.GELU`
+**Class:** `QuantSiLU`  
+**Original Op:** `nn.SiLU` (also known as Swish)
 
-Gaussian Error Linear Unit. This implementation uses a **piecewise approximation** combined with a small Look-Up Table (LUT) for the non-linear region. This allows for efficient execution without expensive `erf` calculations at runtime.
+Sigmoid Linear Unit. This implementation uses a **piecewise approximation** with a small Look-Up Table (LUT) for the non-linear region, ensuring high performance during inference.
 
 #### Mathematical Formula (Approximation)
 
@@ -120,7 +120,7 @@ $$
 #### Method
 1.  **LUT Construction (Initialization)**:
     - A table of 256 values is precomputed.
-    - Each entry corresponds to `GELU(x_i)` where $x_i$ is the midpoint of the $i$-th bin in $[-A, A]$.
+    - Each entry corresponds to `SiLU(x_i)` where $x_i$ is the midpoint of the $i$-th bin in $[-A, A]$.
     - Continuity is enforced by setting $\text{LUT}[0] = 0$ and $\text{LUT}[255] = A$.
 
 2.  **Forward Pass**:

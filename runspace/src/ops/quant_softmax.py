@@ -76,8 +76,15 @@ class QuantSoftmax(nn.Softmax, QuantizedLayerMixin):
         # self.mant_bits = get_mant_bits(q_type)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        capture = getattr(self, 'capture_activations', False)
-
+        if not getattr(self, 'input_quantization', True):
+            prob = super().forward(input)
+            if self.capture_activations:
+                self.last_quant_input = input.detach()
+                self.last_quant_input_unscaled = None
+                self.last_quant_inputs_unscaled = []
+                self.last_quant_input_formats = []
+                self.last_quant_output_unscaled = None
+            return self.quantize_output(prob)
 
         # Quantization of the Input
         input_dequant = self.quantize_input(input)

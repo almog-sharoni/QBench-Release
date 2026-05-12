@@ -120,7 +120,7 @@ def _resolve_adapter_inputs(config: dict) -> dict:
         'input_quantization': adapter_config.get('input_quantization', True),
         'weight_quantization': adapter_config.get('weight_quantization', True),
         'output_quantization': adapter_config.get('output_quantization', False),
-        'quantize_first_layer': adapter_config.get('quantize_first_layer', True),
+        'quantize_first_layer': adapter_config.get('quantize_first_layer', False),
         'quantized_ops': quantized_ops,
         'excluded_ops': adapter_config.get('excluded_ops', []),
         'fold_layers': adapter_config.get('fold_layers', True),

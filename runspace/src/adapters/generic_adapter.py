@@ -50,7 +50,7 @@ class GenericAdapter(BaseAdapter):
         input_quantization: bool = True,
         weight_quantization: bool = True,
         output_quantization: bool = False,
-        quantize_first_layer: bool = True,
+        quantize_first_layer: bool = False,
         quantized_ops: list = None,
         excluded_ops: list = None,
         quantization_type: str = DEFAULT_QUANTIZATION_TYPE,
@@ -1333,12 +1333,7 @@ class GenericAdapter(BaseAdapter):
         if module_name.startswith("torch.nn"):
             return False
         from runspace.src.ops.quant_base import QuantizedLayerMixin
-        composite_quantized_names = {
-            "DecomposedMultiheadAttention",
-            "DecomposedQkvAttention",
-            "DecomposedMlpBlock",
-        }
-        if isinstance(module, QuantizedLayerMixin) and cls.__name__ not in composite_quantized_names:
+        if isinstance(module, QuantizedLayerMixin):
             return False
         if module_name == "runspace.src.ops.observed_ops":
             return False
