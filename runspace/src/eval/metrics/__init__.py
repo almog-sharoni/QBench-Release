@@ -56,13 +56,7 @@ class MetricsEngine:
 
 
 def compute_mse(tensor_a, tensor_b):
-    return compute_mean_pow16_error(tensor_a, tensor_b)
-
-
-def compute_mean_pow16_error(tensor_a, tensor_b):
-    delta = tensor_a - tensor_b
-    delta_pow16 = delta.pow(16)
-    return delta_pow16.mean().item()
+    return ((tensor_a - tensor_b) ** 2).mean().item()
 
 
 def compute_cosine_similarity(tensor_a, tensor_b):

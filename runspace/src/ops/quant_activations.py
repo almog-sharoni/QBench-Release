@@ -126,7 +126,32 @@ class QuantSiLU(nn.SiLU, QuantizedLayerMixin):
         
         if self.capture_activations:
             self.last_quant_input = input.detach()
-            self.last_quant_output_unscaled = output_quant.detach()
+            self.last_quant_output_unscaled = y.detach()
+        return self.quantize_output(y)
+
+
+@OpRegistry.register("QuantHardsigmoid", original_cls=nn.Hardsigmoid, is_activation=True)
+class QuantHardsigmoid(nn.Hardsigmoid,QuantizedLayerMixin):
+    """
+    Quantized Hardsigmoid using a piecewise approximation with a small LUT.
+    """
+    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, A: float = 4.0, **kwargs):
+        super().__init__(inplace=inplace)
+        self.capture_activations = False
+        self.quantization_bias = quantization_bias
+        self.last_quant_output_unscaled = None
+        self.A = A
+        self.build_piecewise_lut(A)
+        
+    def build_piecewise_lut(self, A):
+        L = 256
+        i = torch.arange(L, dtype=torch.float32)
+        x_i = -A + ((i + 0.5) / L) * (2 * A)
+        lut_values = nn.functional.hardsigmoid(x_i)
+        # Force exact boundaries
+        lut_values[0] = 0.0
+        lut_values[255] = 1.0
+        self.register_buffer('piecewise_lut', lut_values)
 
         return self.quantize_output(output_quant)
 

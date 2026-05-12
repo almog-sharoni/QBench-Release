@@ -78,10 +78,15 @@ class BatchRecordingDynamicInputQuantizer(DynamicInputQuantizer):
                 diff_flat = diff.reshape(-1)
                 x_flat = x.reshape(-1)
 
-                self.stats["sum_l1_err"] += diff_flat.abs().sum().item()
-                self.stats["sum_mse_err"] += diff_flat.pow(2).sum().item()
-                self.stats["sum_l1_norm"] += x_flat.abs().sum().item()
-                self.stats["sum_l2_norm"] += x_flat.pow(2).sum().item()
+                updates = {
+                    "sum_mse_err": diff_flat.pow(2).sum(),
+                    "sum_l2_norm": x_flat.pow(2).sum(),
+                }
+                for key, value in updates.items():
+                    if self.stats[key] is None:
+                        self.stats[key] = value.detach()
+                    else:
+                        self.stats[key] += value.detach()
 
             return None
 
@@ -103,9 +108,7 @@ class BatchReplayInputQuantizer:
         self.current_offsets: Dict[str, int] = defaultdict(int)
         self.layer_stats = {}
         self.stats = {
-            "sum_l1_err": 0.0,
             "sum_mse_err": 0.0,
-            "sum_l1_norm": 0.0,
             "sum_l2_norm": 0.0,
         }
 
@@ -169,9 +172,7 @@ class BatchReplayInputQuantizer:
                 diff_flat = diff.reshape(-1)
                 x_flat = x.reshape(-1)
 
-                self.stats["sum_l1_err"] += diff_flat.abs().sum().item()
                 self.stats["sum_mse_err"] += diff_flat.pow(2).sum().item()
-                self.stats["sum_l1_norm"] += x_flat.abs().sum().item()
                 self.stats["sum_l2_norm"] += x_flat.pow(2).sum().item()
 
             counts = self.layer_stats.setdefault(layer_name, {"format_counts": {}, "type": module.__class__.__name__})
@@ -184,12 +185,9 @@ class BatchReplayInputQuantizer:
         return hook_fn
 
     def get_final_stats(self):
-        norm_l1 = self.stats["sum_l1_err"] / self.stats["sum_l1_norm"] if self.stats["sum_l1_norm"] > 0 else 0.0
         norm_mse = self.stats["sum_mse_err"] / self.stats["sum_l2_norm"] if self.stats["sum_l2_norm"] > 0 else 0.0
         return {
-            "norm_l1": norm_l1,
             "norm_mse": norm_mse,
-            "total_l1": self.stats["sum_l1_err"],
             "total_mse": self.stats["sum_mse_err"],
         }
 
@@ -216,7 +214,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers")
     parser.add_argument("--limit_batches", type=int, default=4, help="Number of batches to verify")
     parser.add_argument("--chunk_size", type=int, default=128, help="Chunk size")
-    parser.add_argument("--metric", type=str, default="l1", help="Dynamic metric: l1 or mse")
+    parser.add_argument("--metric", type=str, default="mse", help="Dynamic metric. Only mse is supported.")
     parser.add_argument(
         "--excluded_ops",
         type=str,
@@ -375,10 +373,10 @@ def main() -> None:
         )
         print()
         print(
-            f"Dynamic norm_l1={dynamic_stats['norm_l1']:.6e}, norm_mse={dynamic_stats['norm_mse']:.6e}"
+            f"Dynamic norm_mse={dynamic_stats['norm_mse']:.6e}"
         )
         print(
-            f"Replay  norm_l1={replay_stats['norm_l1']:.6e}, norm_mse={replay_stats['norm_mse']:.6e}"
+            f"Replay  norm_mse={replay_stats['norm_mse']:.6e}"
         )
         print()
         print(

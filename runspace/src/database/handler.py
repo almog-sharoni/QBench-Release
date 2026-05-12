@@ -43,7 +43,8 @@ class RunDatabase:
                     status TEXT,
                     mse REAL,
                     l1 REAL,
-                    certainty REAL
+                    certainty REAL,
+                    cli_command TEXT
                 )
             ''')
             
@@ -82,6 +83,8 @@ class RunDatabase:
             try: cursor.execute("ALTER TABLE runs ADD COLUMN output_dt TEXT")
             except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE runs ADD COLUMN config_json TEXT")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN cli_command TEXT")
             except sqlite3.OperationalError: pass
             
             # Create model_graphs table for storing quantization visualizations
