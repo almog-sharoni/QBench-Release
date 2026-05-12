@@ -1,7 +1,8 @@
 import os
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
+
+from runspace.src.quantization.chunking import chunk_tensor_by_context
 
 def plot_error_histograms(data, formats, output_dir, metric):
     """Generate histograms of errors for each format."""
@@ -224,27 +225,12 @@ def compute_mean_pow16_error(tensor_a, tensor_b):
 
 def get_chunked_tensor(tensor, chunk_size):
     """
-    Reshapes tensor into [N, num_chunks, chunk_size].
+    Reshapes tensor into [contexts, num_chunks, chunk_size].
+    Contexts are all indices except the last dimension, so chunks never cross
+    from one logical row/place into the next.
     Returns chunked_tensor, original_shape, padding_length
     """
-    shape = tensor.shape
-    if tensor.dim() > 1:
-        flat = tensor.flatten(1)
-        batch = shape[0]
-    else:
-        flat = tensor.flatten(0)
-        batch = 1
-        
-    num_elements = flat.shape[-1]
-    pad_len = 0
-    if num_elements % chunk_size != 0:
-        pad_len = chunk_size - (num_elements % chunk_size)
-        flat = torch.nn.functional.pad(flat, (0, pad_len))
-        
-    num_chunks = flat.shape[-1] // chunk_size
-    chunked = flat.view(batch, num_chunks, chunk_size)
-    
-    return chunked, shape, pad_len
+    return chunk_tensor_by_context(tensor, chunk_size)
 
 def plot_chunk_format_distribution(chunk_formats, formats, output_dir, metric):
     """

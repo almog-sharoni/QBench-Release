@@ -26,7 +26,7 @@ class QuantConv1d(nn.Conv1d, QuantizedLayerMixin):
         else:
             w_decomp = self.weight
 
-        if self.is_first_layer and not getattr(self, 'quantize_first_layer', False):
+        if self.is_first_layer and not getattr(self, 'quantize_first_layer', True):
             input_q = input.float()
         else:
             input_q = self.quantize_input(input)

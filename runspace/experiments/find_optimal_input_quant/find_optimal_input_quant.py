@@ -83,7 +83,8 @@ def _build_input_quant_config(args, model_name, weights, default_format, quantiz
             'type': 'generic',
             'quantized_ops': INPUT_ONLY_QUANTIZED_OPS,
             'excluded_ops': args.excluded_ops,
-            'quantize_first_layer': quantize_first_layer,
+            'quantize_first_layer': args.fold_input_norm if hasattr(args, 'fold_input_norm') else quantize_first_layer,
+            'fold_input_norm': args.fold_input_norm if hasattr(args, 'fold_input_norm') else True,
             'input_quantization': input_quantization,
             'weight_quantization': False,
             'input_size': getattr(args, 'input_size', 224),
@@ -154,7 +155,7 @@ def get_args():
     parser.add_argument("--num_workers", type=int, default=32, help="Number of workers")
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of batches to process (default: -1 for all)")
     parser.add_argument("--output_dir", type=str, default=os.path.join(os.path.dirname(__file__), "results"), help="Output directory")
-    parser.add_argument("--metric", type=str, default="mse,l1", help="Comma-separated error metrics for dynamic selection (e.g. 'mse,l1')")
+    parser.add_argument("--metric", type=str, default="mse", help="Dynamic selection metric. Only 'mse' is supported.")
     parser.add_argument("--chunk_size", type=int, default=128, help="Chunk size for input quantization (blocks)")
     parser.add_argument("--input_size", type=int, default=224, help="Input image size (resolution)")
     parser.add_argument(
@@ -242,6 +243,10 @@ def get_args():
         action="store_true",
         help="Fetch cache simulation results from the database instead of a file.",
     )
+    parser.add_argument("--fold_input_norm", action="store_true", default=True,
+                        help="Fold input normalization into first layer weights and quantize first layer")
+    parser.add_argument("--no_fold_input_norm", action="store_false", dest="fold_input_norm",
+                        help="Disable input normalization folding and first layer quantization")
     # Add other args as needed
     args = parser.parse_args()
     args.excluded_ops = [op.strip() for op in args.excluded_ops.split(',') if op.strip()]
@@ -329,16 +334,13 @@ def run_baselines(args, device, formats, on_result=None):
             acc5 = eval_results.get('acc5', 0.0)
             certainty = eval_results.get('certainty', 0.0)
             input_stats = eval_results.get('input_quant', {}) if fmt != 'fp32' else {}
-            norm_l1 = float(input_stats.get('norm_l1', 0.0) or 0.0)
             norm_mse = float(input_stats.get('norm_mse', 0.0) or 0.0)
 
             final_stats[fmt] = {
                 'acc1': acc1,
                 'acc5': acc5,
                 'certainty': certainty,
-                'norm_l1': norm_l1,
                 'norm_mse': norm_mse,
-                'total_l1': float(input_stats.get('total_l1', 0.0) or 0.0),
                 'total_mse': float(input_stats.get('total_mse', 0.0) or 0.0),
                 'layer_stats': input_stats.get('layer_stats', {}) if isinstance(input_stats, dict) else {},
             }
@@ -358,7 +360,7 @@ def run_baselines(args, device, formats, on_result=None):
 
             print(
                 f"Baseline {fmt}: Top1={acc1:.2f}%, Top5={acc5:.2f}%, "
-                f"Certainty={certainty:.4f}, NormL1={norm_l1:.4e}, NormMSE={norm_mse:.4e}"
+                f"Certainty={certainty:.4f}, NormMSE={norm_mse:.4e}"
             )
 
             del model
@@ -505,7 +507,7 @@ def process_single_model(args, model_config, device, metrics):
                         r = row.iloc[0]
                         cached_baseline_stats[fmt] = {
                             'acc1': float(r['acc1']), 'acc5': float(r['acc5']),
-                            'norm_l1': float(r['l1'] or 0), 'norm_mse': float(r['mse'] or 0),
+                            'norm_mse': float(r['mse'] or 0),
                             'certainty': float(r['certainty'] or 0),
                         }
                         print(f"[Baseline] Skipping {fmt} — already in DB (acc1={r['acc1']:.2f}%)")
@@ -539,7 +541,6 @@ def process_single_model(args, model_config, device, metrics):
                 'ref_certainty': ref_certainty_live,
                 'metrics': {
                     'mse': stats.get('norm_mse', 0.0),
-                    'l1': stats.get('norm_l1', 0.0),
                     'certainty': stats.get('certainty', 0.0),
                 },
                 'config_json': cfg_json,
@@ -557,9 +558,7 @@ def process_single_model(args, model_config, device, metrics):
                             'mode': 'uniform',
                             'format': fmt,
                             'chunk_size': args.chunk_size,
-                            'norm_l1': stats.get('norm_l1', 0.0),
                             'norm_mse': stats.get('norm_mse', 0.0),
-                            'total_l1': stats.get('total_l1', 0.0),
                             'total_mse': stats.get('total_mse', 0.0),
                             'layer_stats': stats.get('layer_stats', {}),
                         }
@@ -591,7 +590,7 @@ def process_single_model(args, model_config, device, metrics):
                     'output_name': f"Base_{fmt}", 
                     'acc1': stats['acc1'],
                     'acc5': stats['acc5'],
-                    'errors': {'norm_l1': stats['norm_l1'], 'norm_mse': stats['norm_mse']}
+                    'errors': {'norm_mse': stats['norm_mse']}
                 })
                 continue
                 
@@ -600,7 +599,6 @@ def process_single_model(args, model_config, device, metrics):
                 'acc1': stats['acc1'],
                 'acc5': stats['acc5'],
                 'errors': {
-                    'norm_l1': stats['norm_l1'],
                     'norm_mse': stats['norm_mse']
                 }
             })
@@ -678,12 +676,11 @@ def process_single_model(args, model_config, device, metrics):
                     dyn_stats = eval_results.get('dynamic_input_quant', {})
                     layer_stats = dyn_stats.get('layer_stats', {})
                     final_stats = {
-                        'norm_l1': dyn_stats.get('norm_l1', 0.0),
                         'norm_mse': dyn_stats.get('norm_mse', 0.0),
                     }
                     
                     print(f"\nDynamic Run ({metric.upper()}): Top1={acc1:.2f}%, Top5={acc5:.2f}%, Certainty={certainty:.4f}")
-                    print(f"Norm L1: {final_stats['norm_l1']:.4e}, Norm MSE: {final_stats['norm_mse']:.4e}")
+                    print(f"Norm MSE: {final_stats['norm_mse']:.4e}")
                     
                     # Log Dynamic Result to Database using the actual runtime config.
                     _cfg_dyn = _serialize_runtime_config(
@@ -705,7 +702,6 @@ def process_single_model(args, model_config, device, metrics):
                         'ref_certainty': ref_certainty,
                         'metrics': {
                             'mse': final_stats['norm_mse'],
-                            'l1': final_stats['norm_l1'],
                             'certainty': certainty,
                         },
                         'config_json': _cfg_dyn,
@@ -731,7 +727,6 @@ def process_single_model(args, model_config, device, metrics):
                         save_data = copy.deepcopy(layer_stats)
                         save_data['accuracy'] = {
                             'top1': acc1, 'top5': acc5,
-                            'norm_l1': final_stats['norm_l1'],
                             'norm_mse': final_stats['norm_mse']
                         }
                         json.dump(save_data, f, indent=4)
@@ -778,7 +773,11 @@ def main():
     print(f"Using device: {device}")
     
     # Parse metrics
-    metrics = [m.strip().lower() for m in args.metric.split(',')]
+    metrics = [m.strip().lower() for m in args.metric.split(',') if m.strip()]
+    unsupported_metrics = [m for m in metrics if m != 'mse']
+    if unsupported_metrics:
+        print(f"Ignoring unsupported dynamic metric(s): {unsupported_metrics}. Only MSE is supported.")
+    metrics = ['mse']
     print(f"Metrics to process: {metrics}")
     print(f"Baseline formats: {args.baseline_formats}")
     print(f"Dynamic candidate formats: {args.candidate_formats}")

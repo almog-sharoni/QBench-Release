@@ -18,7 +18,12 @@ def build_runtime_config(args, model_name=None, weights=None):
 
     return {
         'model': model_cfg,
-        'adapter': {'type': 'generic', 'quantized_ops': []},
+        'adapter': {
+            'type': 'generic',
+            'quantized_ops': [],
+            'fold_input_norm': getattr(args, 'fold_input_norm', True),
+            'quantize_first_layer': getattr(args, 'fold_input_norm', True),
+        },
         'dataset': {
             'name': args.dataset_name,
             'path': args.dataset_path,
@@ -253,6 +258,7 @@ def build_dynamic_input_quant_cfg(
     dynamic_unsigned_input_candidates=True,
     use_cache_sim_db=False,
     model_name=None,
+    skip_depthwise_input_quant=False,
 ):
     """Build the dynamic layer-input quantizer config used by input quant experiments."""
     if not enabled:
@@ -276,6 +282,7 @@ def build_dynamic_input_quant_cfg(
         'dynamic_unsigned_input_candidates': bool(dynamic_unsigned_input_candidates),
         'use_cache_sim_db': use_cache_sim_db,
         'model_name': model_name,
+        'skip_depthwise_input_quant': bool(skip_depthwise_input_quant),
     }
 
 

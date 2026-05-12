@@ -13,6 +13,27 @@ except ImportError:
     from .. import ops
 
 
+class _DeletedNoOp:
+    """Callable placeholder for no-op modules removed from nn.Module registry."""
+
+    def __init__(self, p: float = 0.0, inplace: bool = False):
+        self.p = p
+        self.inplace = inplace
+        self.training = False
+
+    def __call__(self, input, *args, **kwargs):
+        return input
+
+    def train(self, mode: bool = True):
+        self.training = bool(mode)
+        return self
+
+    def eval(self):
+        return self.train(False)
+
+    def __repr__(self):
+        return "DeletedNoOp()"
+
 
 class GenericAdapter(BaseAdapter):
     """
@@ -93,6 +114,9 @@ class GenericAdapter(BaseAdapter):
         self.output_mode = output_mode
         self.output_chunk_size = output_chunk_size
         self.fold_layers = fold_layers
+        self.fold_input_norm = fold_input_norm
+        self.input_mean = input_mean
+        self.input_std = input_std
         self.simulate_tf32_accum = simulate_tf32_accum
         self.rounding = rounding
         self.input_chunk_size = input_chunk_size
@@ -418,8 +442,9 @@ class GenericAdapter(BaseAdapter):
             name_next, mod_next = named_modules[i+1]
 
             if (
-                isinstance(mod_curr, nn.Conv2d) and isinstance(mod_next, nn.BatchNorm2d)
-                or isinstance(mod_curr, nn.Linear) and isinstance(mod_next, nn.BatchNorm1d)
+                isinstance(mod_curr, (nn.Conv2d, nn.Linear)) and 
+                isinstance(mod_next, (nn.BatchNorm2d, nn.BatchNorm1d)) and
+                type(mod_next).__name__ != 'BatchNormAct2d'
             ):
                 modules_to_fuse.append([name_curr, name_next])
                 i += 2
@@ -429,6 +454,59 @@ class GenericAdapter(BaseAdapter):
 
         if modules_to_fuse:
             torch.quantization.fuse_modules(model, modules_to_fuse, inplace=True)
+
+    def _fold_input_normalization(self, model: nn.Module):
+        """
+        Folds the input normalization (mean/std) into the weights and bias 
+        of the first convolutional layer.
+        """
+        if not self.fold_input_norm:
+            return
+
+        # Default ImageNet constants if not provided
+        mean = self.input_mean if self.input_mean is not None else [0.485, 0.456, 0.406]
+        std = self.input_std if self.input_std is not None else [0.229, 0.224, 0.225]
+        
+        mean_t = torch.tensor(mean, dtype=torch.float32)
+        std_t = torch.tensor(std, dtype=torch.float32)
+
+        # Find the first Conv2d layer with 3 input channels
+        first_conv = None
+        for name, module in model.named_modules():
+            # We look for the first Conv2d that has 3 input channels
+            if isinstance(module, nn.Conv2d) and module.in_channels == 3:
+                first_conv = module
+                print(f"Folding input normalization into first layer: {name}")
+                break
+        
+        if first_conv is None:
+            print("Warning: fold_input_norm=True but no 3-channel Conv2d found.")
+            return
+
+        device = first_conv.weight.device
+        mean_t = mean_t.to(device)
+        std_t = std_t.to(device)
+
+        with torch.no_grad():
+            # Weights: [Out, In, H, W]
+            # In = 3
+            # W_new = W_old / std
+            print(f"[Debug] Folding into {name}: weight range before: [{first_conv.weight.min():.4f}, {first_conv.weight.max():.4f}]")
+            std_view = std_t.view(1, 3, 1, 1)
+            first_conv.weight.copy_(first_conv.weight / std_view)
+            print(f"[Debug] Folding into {name}: weight range after: [{first_conv.weight.min():.4f}, {first_conv.weight.max():.4f}]")
+            
+            # Bias update: b_new = b_old - sum(W_new * mean)
+            # Since we already updated weight to W_new, we use it directly.
+            correction = (first_conv.weight * mean_t.view(1, 3, 1, 1)).sum(dim=(1, 2, 3))
+            
+            if first_conv.bias is None:
+                first_conv.bias = nn.Parameter(torch.zeros(first_conv.out_channels, device=device))
+                print(f"[Debug] Folding into {name}: created new bias.")
+            
+            print(f"[Debug] Folding into {name}: bias range before: [{first_conv.bias.min():.4f}, {first_conv.bias.max():.4f}]")
+            first_conv.bias.copy_(first_conv.bias - correction)
+            print(f"[Debug] Folding into {name}: bias range after: [{first_conv.bias.min():.4f}, {first_conv.bias.max():.4f}]")
 
     def _replace_layers(self, model: nn.Module):
         """Replace standard layers with quantized versions, then FX-rewrite
@@ -444,6 +522,68 @@ class GenericAdapter(BaseAdapter):
             except Exception as e:
                 print(f"Note: FX quantization skipped ({type(e).__name__}: {e})")
         self._configure_remaining_mixin_ops(model)
+
+    @staticmethod
+    def _noop_layer_types():
+        dropout_type_names = (
+            "Dropout",
+            "Dropout1d",
+            "Dropout2d",
+            "Dropout3d",
+            "AlphaDropout",
+            "FeatureAlphaDropout",
+        )
+        dropout_types = tuple(
+            getattr(nn, type_name)
+            for type_name in dropout_type_names
+            if hasattr(nn, type_name)
+        )
+        return (nn.Identity,) + dropout_types
+
+    @classmethod
+    def _is_noop_layer(cls, module: nn.Module) -> bool:
+        return isinstance(module, cls._noop_layer_types())
+
+    @staticmethod
+    def _deleted_noop_for(module: nn.Module) -> _DeletedNoOp:
+        return _DeletedNoOp(
+            p=float(getattr(module, "p", 0.0) or 0.0),
+            inplace=bool(getattr(module, "inplace", False)),
+        )
+
+    def _prune_noop_layers(self, model: nn.Module, context: str = "") -> int:
+        removed = self._prune_noop_layers_impl(model)
+        if removed:
+            suffix = f" ({context})" if context else ""
+            print(f"Deleted {removed} no-op Dropout/Identity layers from model{suffix}.")
+        return removed
+
+    def _prune_noop_layers_impl(self, module: nn.Module) -> int:
+        removed = 0
+
+        if isinstance(module, nn.Sequential):
+            for child_name, child in list(module._modules.items()):
+                if child is None:
+                    continue
+                if self._is_noop_layer(child):
+                    del module._modules[child_name]
+                    removed += 1
+                    continue
+                removed += self._prune_noop_layers_impl(child)
+            return removed
+
+        for child_name, child in list(module.named_children()):
+            if child is None:
+                continue
+            if self._is_noop_layer(child):
+                replacement = self._deleted_noop_for(child)
+                delattr(module, child_name)
+                object.__setattr__(module, child_name, replacement)
+                removed += 1
+                continue
+            removed += self._prune_noop_layers_impl(child)
+
+        return removed
 
     def _configure_remaining_mixin_ops(self, model: nn.Module):
         """Propagate adapter config + per-layer overrides to QuantizedLayerMixin ops
@@ -784,11 +924,33 @@ class GenericAdapter(BaseAdapter):
         # Load base model
         model = self._load_base_model()
         
-        if quantized:
-            # Fold layers if requested (before quantization)
-            if self.fold_layers:
-                self._fold_layers(model)
+        # Resolve data config for timm models if mean/std not provided
+        if self.model_source == 'timm' and (self.input_mean is None or self.input_std is None):
+            try:
+                import timm
+                data_config = timm.data.resolve_model_data_config(model)
+                if self.input_mean is None:
+                    self.input_mean = data_config.get('mean')
+                    if self.input_mean:
+                        print(f"[Debug] GenericAdapter: resolved mean from timm: {self.input_mean}")
+                if self.input_std is None:
+                    self.input_std = data_config.get('std')
+                    if self.input_std:
+                        print(f"[Debug] GenericAdapter: resolved std from timm: {self.input_std}")
+            except Exception as e:
+                print(f"[Debug] GenericAdapter: failed to resolve timm data config: {e}")
 
+        print(f"[Debug] build_model: quantized={quantized}, fold_layers={self.fold_layers}, model_name={self.model_name}")
+        # Fold layers if requested (always do this if fold_layers is True to 
+        # keep structure consistent between ref and quant models)
+        if self.fold_layers:
+            self._fold_layers(model)
+
+        # Fold input normalization if requested
+        if self.fold_input_norm:
+            self._fold_input_normalization(model)
+
+        if quantized:
             # Replace layers with quantized versions
             self._replace_layers(model)
             
@@ -823,6 +985,8 @@ class GenericAdapter(BaseAdapter):
                     # recursive replacement already handled all registered ops.
                     print(f"Note: FX quantization skipped ({type(e).__name__}: {e})")
                     raise e # Do not remove
+
+            self._prune_noop_layers(model, context="final quantized model")
                     
             if self.unsigned_input_sources:
                 self._propagate_unsigned_inputs(model)
@@ -839,11 +1003,11 @@ class GenericAdapter(BaseAdapter):
         
         from ..ops.quant_softmax import qtype_to_unsigned_qtype
 
-        def _process_graph_module(gm: torch.fx.GraphModule):
+        def _process_graph_module(gm):
             modified_any = False
             # First pass: identify unsigned nodes
             unsigned_nodes = set()
-            passthrough_ops_lc = {'dropout', 'quantdropout'}
+            passthrough_ops_lc = {'dropout', 'quantdropout', 'identity', 'quantidentity'}
             
             # Map node name to the module instance for easier access
             modules = dict(gm.named_modules())
@@ -888,17 +1052,20 @@ class GenericAdapter(BaseAdapter):
                         # Extract all positional nodes (most common for activations/weights)
                         node_inputs = [arg for arg in node.args if isinstance(arg, torch.fx.Node)]
                         
-                        # Handle multi-input modules (MatMul, Add, etc.)
+                        # Handle multi-input modules (MatMul, Add, etc.) per
+                        # operand. A softmax-weighted matmul has unsigned
+                        # attention weights but signed values, and its output
+                        # must not make the following projection unsigned.
                         if len(node_inputs) > 1:
-                            for idx, inp in enumerate(node_inputs):
-                                if inp.name in unsigned_nodes:
-                                    attr_name = f'input{idx+1}_q_type'
-                                    # Fallback to general input_q_type or q_type
-                                    base_qtype = getattr(target_mod, attr_name, 
-                                                       getattr(target_mod, 'input_q_type', 
-                                                              getattr(target_mod, 'q_type', 'fp8_e4m3')))
-                                    setattr(target_mod, attr_name, qtype_to_unsigned_qtype(base_qtype))
-                                    modified_any = True
+                            for idx, input_node in enumerate(node_inputs):
+                                if input_node.name not in unsigned_nodes:
+                                    continue
+                                attr_name = f'input{idx+1}_q_type'
+                                base_qtype = getattr(target_mod, attr_name,
+                                                   getattr(target_mod, 'input_q_type',
+                                                          getattr(target_mod, 'q_type', 'fp8_e4m3')))
+                                setattr(target_mod, attr_name, qtype_to_unsigned_qtype(base_qtype))
+                                modified_any = True
                                     
                         # Handle single-input modules
                         elif len(node_inputs) == 1 and node_inputs[0].name in unsigned_nodes:
@@ -907,10 +1074,9 @@ class GenericAdapter(BaseAdapter):
                                 modified_any = True
                             elif hasattr(target_mod, 'q_type'):
                                 # Fallback if only q_type exists but no explicit input_q_type
-                                # We set input_q_type to avoid changing weight q_type
                                 setattr(target_mod, 'input_q_type', qtype_to_unsigned_qtype(target_mod.q_type))
                                 modified_any = True
-                                
+            
             return modified_any
 
         # If model is already a GraphModule (e.g. from _fx_quantize), use it directly
@@ -969,6 +1135,7 @@ class GenericAdapter(BaseAdapter):
             F.gelu: "QuantGELU",
             F.silu: "QuantSiLU",
             F.hardswish: "QuantHardswish",
+            F.hardsigmoid: "QuantHardsigmoid",
             torch.matmul: "QuantMatMul",
             operator.matmul: "QuantMatMul",
             torch.bmm: "QuantBMM",
@@ -987,6 +1154,9 @@ class GenericAdapter(BaseAdapter):
         quantized_ops_lc = {o.lower() for o in self.quantized_ops}
         excluded_ops_lc = {o.lower() for o in self.excluded_ops}
         target_funcs = {}
+        # Get activation types to check against input_quantization flag
+        activation_ops = {"QuantReLU", "QuantReLU6", "QuantGELU", "QuantSiLU", "QuantHardswish", "QuantHardsigmoid"}
+        
         try:
             for func, op_name in func_map.items():
                 op_name_lc = op_name.lower()

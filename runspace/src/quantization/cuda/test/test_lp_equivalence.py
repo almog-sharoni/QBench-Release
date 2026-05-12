@@ -93,9 +93,21 @@ FORMATS_DEFAULT = _SIGNED # dict union; fallback to _SIGNED for Python < 3.9
 FORMATS_DEFAULT.update(_UNSIGNED)
 
 SHAPES_TENSOR  = [(32,),     (8, 16),  (256, 512)]
-SHAPES_CHUNK   = [(128,),    (8, 128), (256, 512), (1, 12, 197, 197), (4, 197, 197)]
+SHAPES_CHUNK   = [(128,),    (8, 128), (256, 512), (1, 2, 3), (1, 12, 197, 197), (4, 197, 197)]
 SHAPES_CHANNEL = [(8, 128),  (4, 16, 8, 8), (256, 256)]
 CHANNEL_DIM    = 1
+
+
+def _expected_context_chunks(shape, chunk_size=128):
+    if len(shape) <= 1:
+        contexts = 1
+        context_len = shape[0] if shape else 1
+    else:
+        contexts = 1
+        for size in shape[:-1]:
+            contexts *= size
+        context_len = shape[-1]
+    return contexts * ((context_len + chunk_size - 1) // chunk_size)
 
 
 # ----------------------------------------------------------------------------
@@ -137,9 +149,11 @@ def _run_chunk(formats, shapes):
             data, scales = encode_chunk(x, e, m, is_signed)
             y_cuda = decode_chunk(data, scales, list(x.shape), e, m, is_signed)
             err = (y_cuda - y_ref).abs().max().item()
-            ok  = (err == 0.0)
+            expected_chunks = _expected_context_chunks(shape, 128)
+            scale_ok = scales.numel() == expected_chunks
+            ok  = (err == 0.0 and scale_ok)
             print(f"  {'PASS' if ok else 'FAIL':4s}  {q_type:10s} shape={str(shape):28s} "
-                  f"max_err={err:.3e}")
+                  f"max_err={err:.3e} scales={scales.numel()}/{expected_chunks}")
             pass_n += int(ok); fail_n += int(not ok)
     return pass_n, fail_n
 

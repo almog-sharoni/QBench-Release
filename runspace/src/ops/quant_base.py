@@ -8,6 +8,10 @@ except ImportError:
     pass
 from runspace.src.quantization.quantizer import quantize
 from runspace.src.quantization.constants import get_format_params
+from runspace.src.quantization.chunking import (
+    chunk_tensor_by_context,
+    unchunk_tensor_by_context,
+)
 
 def _get_reduce_dims(input: torch.Tensor):
     return tuple(range(input.dim()))
@@ -268,34 +272,22 @@ class QuantizedLayerMixin:
         chunk_formats = getattr(self, 'chunk_formats', None) # Per-chunk format list
         
         if chunk_formats is not None and chunk_size is not None:
-            # Flatten weight
-            if self.weight.dim() > 1:
-                flat_weight = self.weight.flatten(1)
-                batch_size = self.weight.shape[0]
-            else:
-                flat_weight = self.weight.flatten(0)
-                batch_size = 1
-            
-            num_elements = flat_weight.shape[-1]
-            pad_len = 0
-            if num_elements % chunk_size != 0:
-                pad_len = chunk_size - (num_elements % chunk_size)
-                flat_weight = torch.nn.functional.pad(flat_weight, (0, pad_len))
-            
-            num_chunks = flat_weight.shape[-1] // chunk_size
-            chunked = flat_weight.reshape(batch_size, num_chunks, chunk_size)
+            chunked, original_shape, pad_len = chunk_tensor_by_context(
+                self.weight, chunk_size
+            )
+            num_contexts, num_chunks, chunk_size = chunked.shape
             
             # chunk_formats handling
-            total_chunks = batch_size * num_chunks
+            total_chunks = num_contexts * num_chunks
             
             # Align chunk_formats
             final_formats = []
             if len(chunk_formats) == total_chunks:
                 final_formats = chunk_formats
             elif len(chunk_formats) == num_chunks:
-                # Broadcast across batch
+                # Broadcast across logical contexts.
                 final_formats = []
-                for _ in range(batch_size):
+                for _ in range(num_contexts):
                     final_formats.extend(chunk_formats)
             else:
                 print(f"Warning: chunk_formats length ({len(chunk_formats)}) mismatch. Expected {total_chunks} or {num_chunks}.")
@@ -344,22 +336,15 @@ class QuantizedLayerMixin:
                 scale_expanded = scale.expand(-1, chunk_size).contiguous()
                 scale_flat[indices_tensor] = scale_expanded
 
-            # Reshape back to [batch, num_chunks, chunk_size]
-            weight_fp8_chunked = quantized_flat.reshape(batch_size, num_chunks, chunk_size)
-            weight_scale_chunked = scale_flat.reshape(batch_size, num_chunks, chunk_size)
-            
-            # Reshape to flat [batch, num_elements_padded]
-            weight_fp8_flat = weight_fp8_chunked.reshape(batch_size, -1)
-            weight_scale_flat = weight_scale_chunked.reshape(batch_size, -1)
-            
-            # Remove padding
-            if pad_len > 0:
-                weight_fp8_flat = weight_fp8_flat[:, :num_elements]
-                weight_scale_flat = weight_scale_flat[:, :num_elements]
-            
             # View as original shape (clone to ensure contiguous, non-overlapping memory)
-            self.weight_fp8 = weight_fp8_flat.reshape_as(self.weight).clone()
-            self.weight_scale = weight_scale_flat.reshape_as(self.weight).clone()
+            weight_fp8_chunked = quantized_flat.reshape(num_contexts, num_chunks, chunk_size)
+            weight_scale_chunked = scale_flat.reshape(num_contexts, num_chunks, chunk_size)
+            self.weight_fp8 = unchunk_tensor_by_context(
+                weight_fp8_chunked, original_shape, pad_len
+            ).clone()
+            self.weight_scale = unchunk_tensor_by_context(
+                weight_scale_chunked, original_shape, pad_len
+            ).clone()
             
             # Store chunk formats for reference
             self.weight_chunk_formats = final_formats
@@ -603,7 +588,7 @@ class QuantizedLayerMixin:
         
         # 1. Handle Input
         if getattr(self, 'is_first_layer', False):
-            if not getattr(self, 'quantize_first_layer', False):
+            if not getattr(self, 'quantize_first_layer', True):
                 # Do NOT quantize to FP8. Just cast to float for the operation.
                 input_fp8 = input.float()
             else:

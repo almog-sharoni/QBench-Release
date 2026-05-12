@@ -30,34 +30,47 @@ def _build_imagenet_loader(dataset_cfg: dict) -> DataLoader:
     model_source = dataset_cfg.get('model_source', 'torchvision')
     model_name = dataset_cfg.get('model_name', '')
 
+    skip_normalization = bool(dataset_cfg.get('skip_normalization', False))
     if model_source == 'timm':
         try:
             import timm
             _tmp = timm.create_model(model_name, pretrained=False)
             data_cfg = timm.data.resolve_model_data_config(_tmp)
             del _tmp
-            transform = timm.data.create_transform(**data_cfg, is_training=False)
-            print(f"Using timm transforms for {model_name}: "
-                  f"input_size={data_cfg.get('input_size')}, "
-                  f"mean={data_cfg.get('mean')}, std={data_cfg.get('std')}")
+            
+            if skip_normalization:
+                print(f"Skipping timm normalization for {model_name} (using mean=0, std=1)")
+                cfg_override = data_cfg.copy()
+                cfg_override['mean'] = (0.0, 0.0, 0.0)
+                cfg_override['std'] = (1.0, 1.0, 1.0)
+                transform = timm.data.create_transform(**cfg_override, is_training=False)
+            else:
+                transform = timm.data.create_transform(**data_cfg, is_training=False)
+                print(f"Using timm transforms for {model_name}: "
+                      f"input_size={data_cfg.get('input_size')}, "
+                      f"mean={data_cfg.get('mean')}, std={data_cfg.get('std')}")
         except Exception as e:
             print(f"Warning: Could not resolve timm transforms for {model_name}: {e}. "
                   "Using standard ImageNet transforms.")
-            transform = transforms.Compose([
+            t_list = [
                 transforms.Resize(resize_size),
                 transforms.CenterCrop(image_size),
                 transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225]),
-            ])
+            ]
+            if not skip_normalization:
+                t_list.append(transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                std=[0.229, 0.224, 0.225]))
+            transform = transforms.Compose(t_list)
     else:
-        transform = transforms.Compose([
+        t_list = [
             transforms.Resize(resize_size),
             transforms.CenterCrop(image_size),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225]),
-        ])
+        ]
+        if not skip_normalization:
+            t_list.append(transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                            std=[0.229, 0.224, 0.225]))
+        transform = transforms.Compose(t_list)
 
     if not os.path.exists(data_dir):
         raise FileNotFoundError(f"Dataset directory not found: {data_dir}")

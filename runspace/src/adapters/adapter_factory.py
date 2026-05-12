@@ -86,7 +86,7 @@ def _build_quantized_default(adapter_config: dict, quantized_ops, layer_config) 
     qops = quantized_ops if isinstance(quantized_ops, list) else [quantized_ops]
     has_qops = any(bool(op) for op in qops)
     has_layer_overrides = isinstance(layer_config, dict) and len(layer_config) > 0
-    return bool(adapter_config.get('quantize_first_layer', False) or has_qops or has_layer_overrides)
+    return bool(adapter_config.get('quantize_first_layer', True) or has_qops or has_layer_overrides)
 
 
 def _resolve_adapter_inputs(config: dict) -> dict:
@@ -123,7 +123,10 @@ def _resolve_adapter_inputs(config: dict) -> dict:
         'quantize_first_layer': adapter_config.get('quantize_first_layer', False),
         'quantized_ops': quantized_ops,
         'excluded_ops': adapter_config.get('excluded_ops', []),
-        'fold_layers': adapter_config.get('fold_layers', False),
+        'fold_layers': adapter_config.get('fold_layers', True),
+        'fold_input_norm': adapter_config.get('fold_input_norm', True),
+        'input_mean': adapter_config.get('input_mean', None),
+        'input_std': adapter_config.get('input_std', None),
         'skip_calibration': adapter_config.get('skip_calibration', False),
         'quantization_type': quantization_type,
         'quantization_bias': quantization_config.get('bias', None),
@@ -249,6 +252,10 @@ def create_adapter(config: dict) -> BaseAdapter:
             build_quantized=params['build_quantized'],
             quantize_components=adapter_config.get('quantize_components', []),
             strict_format_check=params['strict_format_check'],
+            fold_layers=params['fold_layers'],
+            fold_input_norm=params['fold_input_norm'],
+            input_mean=params['input_mean'],
+            input_std=params['input_std'],
         )
         if _should_print_adapter_config(config):
             _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)

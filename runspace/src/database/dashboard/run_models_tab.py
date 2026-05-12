@@ -24,7 +24,7 @@ with tab_runner:
     RUNNER_LOG_DIR = os.path.join(PROJECT_ROOT, "runspace/database/logs")
     DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), "dashboard")
     EXPERIMENT_RUN_STATE_PATH = os.path.join(RUNNER_OUTPUT_DIR, "experiment_run_state.json")
-    EXPERIMENT_MODELS_CONFIG_PATH = os.path.join(DASHBOARD_DIR, "models.config")
+    EXPERIMENT_MODELS_CONFIG_PATH = os.path.join(DASHBOARD_DIR, "models.yaml")
 
     def _dashboard_runner_pid_running(pid):
         if not pid:
@@ -183,6 +183,16 @@ with tab_runner:
             return kind_state[name]
         return _dashboard_runner_arg_default(kind, name, fallback)
 
+    def _dashboard_runner_ui_default(name, fallback=None):
+        state = _dashboard_runner_load_experiment_run_state()
+        ui_state = state.get("_ui", {}) if isinstance(state, dict) else {}
+        if isinstance(ui_state, dict) and name in ui_state:
+            return ui_state[name]
+        return fallback
+
+    def _dashboard_runner_save_experiment_ui_state(name, value):
+        _dashboard_runner_save_experiment_run_state("_ui", {name: value})
+
     def _dashboard_runner_model_entry_from_item(item):
         if isinstance(item, str):
             name = item.strip()
@@ -203,7 +213,7 @@ with tab_runner:
                 text = f.read()
             loaded = yaml.safe_load(text)
         except Exception as exc:
-            st.warning(f"Could not load `models.config`: {exc}")
+            st.warning(f"Could not load `models.yaml`: {exc}")
             loaded = None
 
         if isinstance(loaded, dict):
@@ -485,7 +495,8 @@ with tab_runner:
         config.setdefault("meta", {})
 
         config["adapter"]["type"] = "generic"
-        config["adapter"]["quantize_first_layer"] = bool(form_values["quantize_first_layer"])
+        config["adapter"]["fold_input_norm"] = bool(form_values["fold_input_norm"])
+        config["adapter"]["quantize_first_layer"] = bool(form_values["fold_input_norm"])
         config["adapter"]["weight_quantization"] = bool(form_values["weight_quantization"])
         config["adapter"]["input_quantization"] = bool(form_values["input_quantization"])
         config["adapter"]["quantized_ops"] = _dashboard_runner_split_csv(form_values["quantized_ops"]) or ["all"]
@@ -809,6 +820,10 @@ with tab_runner:
                 command.append("--no_dynamic_unsigned_input_candidates")
             for name in ("only_dynamic", "only_baselines", "force_rerun", "force_rebuild_weights", "use_cache_sim_db"):
                 _dashboard_runner_add_experiment_bool(kind, command, name, values.get(name))
+            if values.get("fold_input_norm", True):
+                command.append("--fold_input_norm")
+            else:
+                command.append("--no_fold_input_norm")
         elif kind == "weight":
             for name in ("metrics", "target", "weight_chunk_size", "baseline_formats", "verify_atol"):
                 _dashboard_runner_add_experiment_arg(kind, command, name, values.get(name))
@@ -818,11 +833,15 @@ with tab_runner:
                 "verify_saved_weights",
             ):
                 _dashboard_runner_add_experiment_bool(kind, command, name, values.get(name))
+            if values.get("fold_input_norm", True):
+                command.append("--fold_input_norm")
+            else:
+                command.append("--no_fold_input_norm")
         elif kind == "hybrid":
             for name in (
                 "weight_mode", "weight_format", "weight_metric", "weight_candidate_formats", "weight_chunk_size",
                 "input_mode", "input_format", "input_metric", "input_candidate_formats", "input_chunk_size",
-                "unsigned_input_sources"
+                "unsigned_input_sources", "experiment_type"
             ):
                 _dashboard_runner_add_experiment_arg(kind, command, name, values.get(name))
             if values.get("dynamic_unsigned_input_candidates", True):
@@ -833,6 +852,10 @@ with tab_runner:
                 "per_chunk_format", "force_recalc", "skip_weight_analysis", "use_cache_sim_db"
             ):
                 _dashboard_runner_add_experiment_bool(kind, command, name, values.get(name))
+            if values.get("fold_input_norm", True):
+                command.append("--fold_input_norm")
+            else:
+                command.append("--no_fold_input_norm")
         return command
 
     def _dashboard_runner_common_experiment_fields(kind, prefix):
@@ -852,7 +875,7 @@ with tab_runner:
             options=model_options,
             index=model_options.index(model_default) if model_default in model_options else 0,
             key=f"{prefix}_model_name",
-            help="Loaded from dashboard/models.config.",
+            help="Loaded from dashboard/models.yaml.",
         )
         selected_model_entry = selected_entry_by_name.get(model_name, {})
         values = {
@@ -961,9 +984,27 @@ with tab_runner:
     
     
         st.markdown("#### Experiment Runs")
-        input_tab, weight_tab, hybrid_tab = st.tabs(["Input Quant", "Weight Quant", "Hybrid Quant"])
+        experiment_kind_labels = {
+            "input": "Input Quant",
+            "weight": "Weight Quant",
+            "hybrid": "Hybrid Quant",
+        }
+        experiment_kind_options = list(experiment_kind_labels)
+        saved_experiment_kind = str(_dashboard_runner_ui_default("selected_experiment_kind", "input"))
+        if saved_experiment_kind not in experiment_kind_options:
+            saved_experiment_kind = "input"
+        selected_experiment_kind = st.radio(
+            "Experiment",
+            options=experiment_kind_options,
+            format_func=lambda kind: experiment_kind_labels[kind],
+            index=experiment_kind_options.index(saved_experiment_kind),
+            horizontal=True,
+            label_visibility="collapsed",
+            key="runner_exp_selected_kind",
+        )
+        _dashboard_runner_save_experiment_ui_state("selected_experiment_kind", selected_experiment_kind)
     
-        with input_tab:
+        if selected_experiment_kind == "input":
             input_values = _dashboard_runner_common_experiment_fields(
                 "input",
                 "runner_exp_input",
@@ -1001,10 +1042,16 @@ with tab_runner:
             input_values["force_rerun"] = f3.checkbox("Force rerun", value=bool(_dashboard_runner_experiment_default("input", "force_rerun", False)), key="runner_exp_input_force_rerun")
             input_values["force_rebuild_weights"] = f4.checkbox("Force rebuild weights", value=bool(_dashboard_runner_experiment_default("input", "force_rebuild_weights", False)), key="runner_exp_input_force_rebuild")
             input_values["use_cache_sim_db"] = st.checkbox("Use cache simulation from DB", value=bool(_dashboard_runner_experiment_default("input", "use_cache_sim_db", False)), key="runner_exp_input_use_cache_sim")
+            input_values["fold_input_norm"] = st.checkbox(
+                "Fold input normalization (and quantize 1st layer)",
+                value=bool(_dashboard_runner_experiment_default("input", "fold_input_norm", True)),
+                key="runner_exp_input_fold_norm",
+                help="Fold mean/std into first layer weights. Enabling this automatically enables first-layer quantization.",
+            )
             _dashboard_runner_save_experiment_run_state("input", input_values)
             _dashboard_runner_render_experiment_launch("input", input_values, "Input Quant Experiment")
     
-        with weight_tab:
+        if selected_experiment_kind == "weight":
             weight_values = _dashboard_runner_common_experiment_fields(
                 "weight",
                 "runner_exp_weight",
@@ -1034,10 +1081,16 @@ with tab_runner:
             weight_values["force_recalc"] = wf7.checkbox("Force recalc", value=bool(_dashboard_runner_experiment_default("weight", "force_recalc", False)), key="runner_exp_weight_force_recalc")
             weight_values["force_rerun"] = wf8.checkbox("Force rerun", value=bool(_dashboard_runner_experiment_default("weight", "force_rerun", False)), key="runner_exp_weight_force_rerun")
             weight_values["verify_saved_weights"] = st.checkbox("Verify saved weights", value=bool(_dashboard_runner_experiment_default("weight", "verify_saved_weights", False)), key="runner_exp_weight_verify_saved")
+            weight_values["fold_input_norm"] = st.checkbox(
+                "Fold input normalization (and quantize 1st layer)",
+                value=bool(_dashboard_runner_experiment_default("weight", "fold_input_norm", True)),
+                key="runner_exp_weight_fold_norm",
+                help="Fold mean/std into first layer weights. Enabling this automatically enables first-layer quantization.",
+            )
             _dashboard_runner_save_experiment_run_state("weight", weight_values)
             _dashboard_runner_render_experiment_launch("weight", weight_values, "Weight Quant Experiment")
     
-        with hybrid_tab:
+        if selected_experiment_kind == "hybrid":
             hybrid_values = _dashboard_runner_common_experiment_fields(
                 "hybrid",
                 "runner_exp_hybrid",
@@ -1045,6 +1098,7 @@ with tab_runner:
             hm1, hm2 = st.columns(2)
             hybrid_values["weight_mode"] = hm1.selectbox("Weight mode", options=["fixed", "optimized"], index=1 if str(_dashboard_runner_experiment_default("hybrid", "weight_mode", "optimized")) == "optimized" else 0, key="runner_exp_hybrid_weight_mode")
             hybrid_values["input_mode"] = hm2.selectbox("Input mode", options=["fixed", "dynamic"], index=1 if str(_dashboard_runner_experiment_default("hybrid", "input_mode", "dynamic")) == "dynamic" else 0, key="runner_exp_hybrid_input_mode")
+            hybrid_values["experiment_type"] = st.text_input("Experiment type", value=str(_dashboard_runner_experiment_default("hybrid", "experiment_type", "hybrid_quant_optimal")), key="runner_exp_hybrid_type")
             
             w_col, i_col = st.columns(2)
             with w_col:
@@ -1094,6 +1148,12 @@ with tab_runner:
                     )
 
             hybrid_values["use_cache_sim_db"] = st.checkbox("Use cache simulation from DB", value=bool(_dashboard_runner_experiment_default("hybrid", "use_cache_sim_db", False)), key="runner_exp_hybrid_use_cache_sim")
+            hybrid_values["fold_input_norm"] = st.checkbox(
+                "Fold input normalization (and quantize 1st layer)",
+                value=bool(_dashboard_runner_experiment_default("hybrid", "fold_input_norm", True)),
+                key="runner_exp_hybrid_fold_norm",
+                help="Fold mean/std into first layer weights. Enabling this automatically enables first-layer quantization.",
+            )
             
             _dashboard_runner_save_experiment_run_state("hybrid", hybrid_values)
             _dashboard_runner_render_experiment_launch("hybrid", hybrid_values, "Hybrid Quant Experiment")
@@ -1172,10 +1232,11 @@ with tab_runner:
                         value=bool(template_adapter.get("input_quantization", True)),
                         key=_builder_key("input_quant"),
                     )
-                    quantize_first_layer = qa3.checkbox(
-                        "Quantize first layer",
-                        value=bool(template_adapter.get("quantize_first_layer", False)),
-                        key=_builder_key("first_layer"),
+                    fold_input_norm = qa3.checkbox(
+                        "Fold input normalization",
+                        value=bool(template_adapter.get("fold_input_norm", True)),
+                        key=_builder_key("fold_norm"),
+                        help="Fold mean/std into first layer weights and enable first-layer quantization.",
                     )
     
                     q1, q2, q3 = st.columns(3)
@@ -1315,7 +1376,8 @@ with tab_runner:
                 form_values = {
                     "config_name": config_name,
                     "template_config": template_config_name,
-                    "quantize_first_layer": quantize_first_layer,
+                    "fold_input_norm": fold_input_norm,
+                    "quantize_first_layer": fold_input_norm,
                     "weight_quantization": weight_quantization,
                     "input_quantization": input_quantization,
                     "quantized_ops": quantized_ops,

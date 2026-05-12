@@ -10,6 +10,8 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from runspace.src.quantization.chunking import chunk_tensor_by_context
+
 def get_format_params(fmt_str):
     """
     Parses format string (e.g., 'fp4_e2m1') to get mantissa bits.
@@ -171,25 +173,9 @@ def main():
                 all_passed = False
                 continue
             
-            # Replicate get_chunked_tensor logic
-            if weight.dim() > 1:
-                flat = weight.flatten(1)
-                batch = weight.shape[0]
-            else:
-                flat = weight.flatten(0)
-                batch = 1
-                
-            num_elements = flat.shape[-1]
-            pad_len = 0
-            if num_elements % args.chunk_size != 0:
-                pad_len = args.chunk_size - (num_elements % args.chunk_size)
-                flat = torch.nn.functional.pad(flat, (0, pad_len))
-                
-            num_chunks = flat.shape[-1] // args.chunk_size
-            # [B, N, C]
-            chunked = flat.view(batch, num_chunks, args.chunk_size)
+            chunked, _, _ = chunk_tensor_by_context(weight, args.chunk_size)
             
-            # Flatten to [B*N, C] to match the formats list (which is flat list of all chunks)
+            # Flatten to [contexts*num_chunks, C] to match the formats list.
             chunked_flat = chunked.reshape(-1, args.chunk_size)
 
             model_weights_count += chunked_flat.shape[0]

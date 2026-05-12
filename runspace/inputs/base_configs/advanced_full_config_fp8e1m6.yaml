@@ -4,7 +4,9 @@
 adapter:
   type: generic
   # Whether to quantize the input of the very first layer (usually the image input)
-  quantize_first_layer: false
+  quantize_first_layer: true
+  # Whether to fold the input normalization (mean/std) into the first layer's weights
+  fold_input_norm: true
   # List of operations to replace with quantized versions
   # Use ["-1"] or ["all"] to quantize everything supported
   quantized_ops: ["all"]

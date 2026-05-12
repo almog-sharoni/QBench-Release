@@ -32,6 +32,18 @@ def test_handler():
     # Check shape
     assert len(df) == 3
     assert "model_name" in df.columns
+    assert "cli_command" in df.columns
+    
+    # Log a run with a CLI command
+    print("Logging run with CLI command...")
+    test_cmd = "python3 run_all.py --test"
+    db.log_run("test_model", "fp32", "fp32", 100.0, 100.0, "SUCCESS", cli_command=test_cmd)
+    
+    # Verify retrieval
+    df2 = db.get_runs()
+    latest = df2[df2['model_name'] == 'test_model'].iloc[0]
+    assert latest["cli_command"] == test_cmd
+    print(f"Verified CLI command: {latest['cli_command']}")
     
     print("\nDatabase Summary:")
     print(db.get_summary())

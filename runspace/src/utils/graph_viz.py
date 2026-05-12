@@ -133,15 +133,31 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
                 if fx_node.op == 'call_module':
                     module = traced.get_submodule(fx_node.target)
                     label_text = type(module).__name__
-                    if isinstance(module, quantized_ops):
-                        color = "#90EE90" # LightGreen
+
+                    # Determine if this is a quantized, supported, or unsupported module
+                    from src.ops.quant_base import QuantizedLayerMixin
+                    is_quant = (
+                        isinstance(module, quantized_ops) or 
+                        isinstance(module, QuantizedLayerMixin) or
+                        label_text in OpRegistry._registry
+                    )
+                    
+                    if is_quant:
+                        if OpRegistry.is_under_construction(label_text):
+                             color = "#FFD580" # Amber (Under Construction)
+                        else:
+                             color = "#90EE90" # LightGreen (Quantized)
                     elif isinstance(module, supported_modules):
                         color = "#FFD700" # Gold
                     elif isinstance(module, (torch.nn.ReLU, torch.nn.Identity, torch.nn.Dropout)):
                         color = "#D3D3D3" # Gray
                     elif _is_external_module(module):
                         # External leaf: determine color from its internal layers
-                        internal_quant  = any(isinstance(c, quantized_ops)    for _, c in module.named_modules())
+                        internal_quant  = any(
+                            isinstance(c, quantized_ops) or 
+                            isinstance(c, QuantizedLayerMixin) 
+                            for _, c in module.named_modules()
+                        )
                         internal_supported = any(isinstance(c, supported_modules) for _, c in module.named_modules())
                         color = "#90EE90" if internal_quant else ("#FFD700" if internal_supported else "#D3D3D3")
                         # Expand internals as a DOT cluster subgraph
@@ -228,7 +244,7 @@ def generate_quantization_graph(model: torch.nn.Module, output_path: str, model_
         section_titles = {
             "#90EE90": "Quantized Layers",
             "#FFD700": "Supported Layers (Unquantized)",
-            "#FFD580": "FP32 Required (coord/interp)",
+            "#FFD580": "Under Construction / FP32 Req",
             "#FFB6C1": "Unsupported Layers",
             "#D3D3D3": "Structural / Other"
         }
