@@ -460,7 +460,7 @@ class QuantizedLayerMixin:
             self.last_quant_weight = (self.weight_fp8.float() * self.weight_scale).detach()
             self.last_quant_weight_scale = self.weight_scale.detach()
 
-    def quantize_input(self, input: torch.Tensor, override_q_type: str = None):
+    def quantize_input(self, input: torch.Tensor, override_q_type: str = None, internal: bool = False):
         """
         Quantizes input tensor to FP8.
         Returns: (input_fp8, scale)
@@ -483,7 +483,8 @@ class QuantizedLayerMixin:
         chunk_formats = getattr(self, 'input_chunk_formats', None) # Per-chunk input formats
         
         # Check if input quantization is enabled
-        if not getattr(self, 'input_quantization', True):
+        # If internal=True, we ALWAYS quantize (bypassing DynamicInputQuantizer's disablement)
+        if not internal and not getattr(self, 'input_quantization', True):
             # If disabled, return input as-is (cast to float if needed) and scale=1.0
             # But we still need to return max_val for stats?
             # The signature is (input_fp8, max_val) or (input_fp8, scale) depending on return_scale

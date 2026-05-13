@@ -61,7 +61,7 @@ quantization:
 dataset:
   name: imagenet
   path: /data/imagenet/val
-  batch_size: 128
+  batch_size: 32
   num_workers: 32
 
 evaluation:

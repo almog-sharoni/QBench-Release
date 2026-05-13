@@ -39,8 +39,8 @@ class QuantConv2d(nn.Conv2d, QuantizedLayerMixin):
                 # Use shared quantization logic
                 input_fp8 = self.quantize_input(input.float())
             
-            if getattr(self, 'capture_activations', False):
-                 print(f"[Debug] First layer input range: [{input.min():.4f}, {input.max():.4f}], Quantized range: [{input_fp8.min():.4f}, {input_fp8.max():.4f}]")
+            # if getattr(self, 'capture_activations', False):
+            #      print(f"[Debug] First layer input range: [{input.min():.4f}, {input.max():.4f}], Quantized range: [{input_fp8.min():.4f}, {input_fp8.max():.4f}]")
 
         else:
             # Use shared quantization logic

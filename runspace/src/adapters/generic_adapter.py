@@ -67,7 +67,10 @@ class GenericAdapter(BaseAdapter):
         act_chunk_size: int = None,
         output_mode: str = "tensor",
         output_chunk_size: int = None,
-        fold_layers: bool = False,
+        fold_layers: bool = True,
+        fold_input_norm: bool = True,
+        input_mean: list = None,
+        input_std: list = None,
         simulate_tf32_accum: bool = False,
         rounding: str = "nearest",
         input_chunk_size: int = None,
@@ -516,11 +519,13 @@ class GenericAdapter(BaseAdapter):
         attached submodules alike)."""
         self._first_layer_found = False
         self._recursive_replace(model)
+        self._prune_noop_layers(model, context="post-recursive quantization")
         if self.enable_fx_quantization:
             try:
                 self._fx_quantize(model)
             except Exception as e:
                 print(f"Note: FX quantization skipped ({type(e).__name__}: {e})")
+        self._prune_noop_layers(model, context="post-FX quantization")
         self._configure_remaining_mixin_ops(model)
 
     @staticmethod
@@ -737,6 +742,9 @@ class GenericAdapter(BaseAdapter):
             module.weight_quantization = self.weight_quantization
             module.input_mode = settings['input_mode']
             module.input_chunk_size = settings['input_chunk_size']
+            module.quant_mode = settings['input_mode'] # For ops that use quant_mode (e.g. QuantLayerNorm)
+            module.capture_activations = getattr(self, 'capture_activations', False)
+            
             module.weight_mode = settings['weight_mode']
             module.weight_chunk_size = settings['weight_chunk_size']
             module.output_q_type = self._effective_output_q_type(settings)
@@ -744,6 +752,7 @@ class GenericAdapter(BaseAdapter):
             module.output_mode = settings['output_mode']
             module.output_chunk_size = settings['output_chunk_size']
             module.rounding = settings['rounding']
+
 
             # Per-chunk format configuration
             if self.per_chunk_format and 'chunk_formats' in layer_conf:
@@ -1161,9 +1170,27 @@ class GenericAdapter(BaseAdapter):
             for func, op_name in func_map.items():
                 op_name_lc = op_name.lower()
                 bare_lc = op_name_lc[len("quant"):] if op_name_lc.startswith("quant") else op_name_lc
-                if "-1" in quantized_ops_lc or "all" in quantized_ops_lc or op_name_lc in quantized_ops_lc or bare_lc in quantized_ops_lc:
-                    if op_name_lc not in excluded_ops_lc and bare_lc not in excluded_ops_lc:
-                        target_funcs[func] = op_name
+                
+                # Check if this op is requested
+                is_requested = ("-1" in quantized_ops_lc or "all" in quantized_ops_lc or 
+                                op_name_lc in quantized_ops_lc or bare_lc in quantized_ops_lc)
+                if not is_requested:
+                    continue
+                if op_name_lc in excluded_ops_lc or bare_lc in excluded_ops_lc:
+                    continue
+                    
+                # Honor quantization flags
+                if op_name in activation_ops:
+                    if not self.input_quantization:
+                        continue
+                else:
+                    # For compute ops (Add, MatMul, etc.), we usually want them if either 
+                    # input or weight quantization is enabled, as they are part of the 
+                    # quantized dataflow.
+                    if not (self.input_quantization or self.weight_quantization):
+                        continue
+                        
+                target_funcs[func] = op_name
         except Exception as e:
             print(f"1.Error in FX quantization: {e}")
         if not target_funcs:

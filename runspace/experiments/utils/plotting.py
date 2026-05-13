@@ -465,4 +465,3 @@ def plot_accuracy_comparison(results, output_dir):
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "accuracy_comparison.png"))
     plt.close()
-

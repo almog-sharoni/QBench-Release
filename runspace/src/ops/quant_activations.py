@@ -12,7 +12,7 @@ from runspace.src.ops.quant_base import quantize_tensor, QuantizedLayerMixin
 
 
 @OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True)
-class QuantReLU(nn.ReLU):
+class QuantReLU(nn.ReLU, QuantizedLayerMixin):
     """
     Quantized ReLU using LUT.
     """
@@ -124,6 +124,47 @@ class QuantSiLU(nn.SiLU, QuantizedLayerMixin):
         y = torch.where(x <= -A, 0.0,
                         torch.where(x >= A, x, y_lut))
         
+        if self.capture_activations:
+            self.last_quant_input = input.detach()
+            self.last_quant_output_unscaled = y.detach()
+
+        return self.quantize_output(y)
+
+
+@OpRegistry.register("QuantHardswish", original_cls=nn.Hardswish, is_activation=True)
+class QuantHardswish(nn.Hardswish,QuantizedLayerMixin):
+    """
+    Quantized Hardswish using a piecewise approximation with a small LUT.
+    """
+    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, A: float = 4.0, **kwargs):
+        super().__init__(inplace=inplace)
+        self.capture_activations = False
+        self.quantization_bias = quantization_bias
+        self.last_quant_output_unscaled = None
+        self.A = A
+        self.build_piecewise_lut(A)
+        
+    def build_piecewise_lut(self, A):
+        L = 256
+        i = torch.arange(L, dtype=torch.float32)
+        x_i = -A + ((i + 0.5) / L) * (2 * A)
+        lut_values = nn.functional.hardswish(x_i)
+        # Force exact boundaries
+        lut_values[0] = 0.0
+        lut_values[255] = A
+        self.register_buffer('piecewise_lut', lut_values)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if not getattr(self, 'input_quantization', True):
+            return nn.functional.hardswish(input, inplace=self.inplace)
+        x = input
+        A = self.A
+        t = (x + A) / (2 * A)
+        t = torch.clamp(t, 0.0, 1.0)
+        i = torch.floor(t * 255.0).long()
+        y_lut = self.piecewise_lut[i]
+        y = torch.where(x <= -A, 0.0,
+                        torch.where(x >= A, x, y_lut))
         if self.capture_activations:
             self.last_quant_input = input.detach()
             self.last_quant_output_unscaled = y.detach()
