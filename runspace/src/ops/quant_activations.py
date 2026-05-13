@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from runspace.src.registry.op_registry import OpRegistry
 from runspace.src.ops.quant_base import quantize_tensor, QuantizedLayerMixin
+from runspace.src.quantization.quantizer import round_fractional_part
 
 
 @OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True)
@@ -96,7 +97,10 @@ class QuantSiLU(nn.SiLU, QuantizedLayerMixin):
         # Force LUT[255] = A
         lut_values[255] = A
         
-        self.register_buffer('piecewise_lut', lut_values)
+        # Enforce 17-bit precision (1s, 8e, 8m)
+        lut_values = round_fractional_part(lut_values)
+
+        self.register_buffer('piecewise_lut', lut_values, persistent=False)
 
     def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
         if not getattr(self, 'input_quantization', True):
@@ -132,7 +136,7 @@ class QuantSiLU(nn.SiLU, QuantizedLayerMixin):
 
 
 @OpRegistry.register("QuantHardswish", original_cls=nn.Hardswish, is_activation=True)
-class QuantHardswish(nn.Hardswish,QuantizedLayerMixin):
+class QuantHardswish(nn.Hardswish, QuantizedLayerMixin):
     """
     Quantized Hardswish using a piecewise approximation with a small LUT.
     """
@@ -152,7 +156,11 @@ class QuantHardswish(nn.Hardswish,QuantizedLayerMixin):
         # Force exact boundaries
         lut_values[0] = 0.0
         lut_values[255] = A
-        self.register_buffer('piecewise_lut', lut_values)
+
+        # Enforce 17-bit precision (1s, 8e, 8m)
+        lut_values = round_fractional_part(lut_values)
+
+        self.register_buffer('piecewise_lut', lut_values, persistent=False)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if not getattr(self, 'input_quantization', True):
@@ -172,7 +180,7 @@ class QuantHardswish(nn.Hardswish,QuantizedLayerMixin):
 
 
 @OpRegistry.register("QuantHardsigmoid", original_cls=nn.Hardsigmoid, is_activation=True)
-class QuantHardsigmoid(nn.Hardsigmoid,QuantizedLayerMixin):
+class QuantHardsigmoid(nn.Hardsigmoid, QuantizedLayerMixin):
     """
     Quantized Hardsigmoid using a piecewise approximation with a small LUT.
     """
@@ -192,13 +200,34 @@ class QuantHardsigmoid(nn.Hardsigmoid,QuantizedLayerMixin):
         # Force exact boundaries
         lut_values[0] = 0.0
         lut_values[255] = 1.0
-        self.register_buffer('piecewise_lut', lut_values)
 
-        return self.quantize_output(output_quant)
+        # Enforce 17-bit precision (1s, 8e, 8m)
+        lut_values = round_fractional_part(lut_values)
+
+        self.register_buffer('piecewise_lut', lut_values, persistent=False)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if not getattr(self, 'input_quantization', True):
+            return nn.functional.hardsigmoid(input, inplace=self.inplace)
+        x = input
+        A = self.A
+        t = (x + A) / (2 * A)
+        t = torch.clamp(t, 0.0, 1.0)
+        i = torch.floor(t * 255.0).long()
+        y_lut = self.piecewise_lut[i]
+        
+        # Hardsigmoid saturates to 0.0 at -A and 1.0 at +A (assuming A >= 3)
+        y = torch.where(x <= -A, 0.0,
+                        torch.where(x >= A, 1.0, y_lut))
+        
+        if self.capture_activations:
+            self.last_quant_input = input.detach()
+            self.last_quant_output_unscaled = y.detach()
+        return self.quantize_output(y)
 
 
 @OpRegistry.register("QuantGELU", original_cls=nn.GELU, is_activation=True, compliance_status="FP32 activation")
-class QuantGELU(nn.GELU, LUTActivation, QuantizedLayerMixin):
+class QuantGELU(nn.GELU, QuantizedLayerMixin):
     """
     Quantized GELU using a piecewise approximation with a small LUT.
     
@@ -236,6 +265,9 @@ class QuantGELU(nn.GELU, LUTActivation, QuantizedLayerMixin):
         lut_values[0] = 0.0
         # Force LUT[255] = A
         lut_values[255] = A
+
+        # Enforce 17-bit precision (1s, 8e, 8m)
+        lut_values = round_fractional_part(lut_values)
 
         # persistent=False: the LUT is fully determined by A, regenerated each
         # __init__. Excluding it from state_dict prevents load-mismatch errors
