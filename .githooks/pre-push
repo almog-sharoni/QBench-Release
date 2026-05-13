@@ -1,0 +1,35 @@
+#!/bin/bash
+# Pre-push hook: run quantization compliance tests before pushing.
+# Tries the Apptainer sandbox first; falls back to local python3.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TEST_SCRIPT="runspace/tests/test_quantization_compliance.py"
+APPTAINER_WRAPPER="$REPO_ROOT/apptainer.sh"
+
+echo "=========================================="
+echo "Running quantization compliance checks..."
+echo "=========================================="
+
+EXIT_CODE=0
+
+if [ -x "$APPTAINER_WRAPPER" ]; then
+    echo "[hook] Running via apptainer.sh ..."
+    bash "$APPTAINER_WRAPPER" "$TEST_SCRIPT"
+    EXIT_CODE=$?
+else
+    echo "[hook] apptainer.sh not found or not executable — falling back to local python3."
+    python3 "$REPO_ROOT/$TEST_SCRIPT"
+    EXIT_CODE=$?
+fi
+
+if [ $EXIT_CODE -ne 0 ]; then
+    echo ""
+    echo "Quantization compliance tests FAILED. Push aborted."
+    echo "Run manually: python $TEST_SCRIPT"
+    exit 1
+fi
+
+echo ""
+echo "All quantization compliance checks passed."
+exit 0
