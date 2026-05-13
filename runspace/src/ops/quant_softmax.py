@@ -87,14 +87,9 @@ class QuantSoftmax(nn.Softmax, QuantizedLayerMixin):
             return self.quantize_output(prob)
 
         # Quantization of the Input
-        input_dequant, input_unscaled, _, _, _ = quantize_tensor(
-            input,
-            q_type=self.q_type,
-            mode=self.quant_mode,
-            chunk_size=self.chunk_size,
-            return_unscaled=True,
-            return_scale=True
-        )
+        input_dequant = self.quantize_input(input)
+        input_unscaled = getattr(self, 'last_quant_input_unscaled', None) if capture else None
+
         # Numerically Stable Softmax (Max Subtraction)
         dim = self.dim if self.dim is not None else -1
         max_val = input_dequant.amax(dim=dim, keepdim=True)
@@ -121,40 +116,26 @@ class QuantSoftmax(nn.Softmax, QuantizedLayerMixin):
         # input quant again for second pipeline trough ipu
         # Use ufp if softmax is in unsigned_input_sources
         q_type_x = self.uq_type if any(s in self.unsigned_input_sources for s in ["softmax", "quantsoftmax"]) else self.q_type
-        # q_type_x = self.q_type
         
-        x_val, x_val_unscaled, _, _, _ = quantize_tensor(
-            x_val,
-            q_type=q_type_x,
-            mode=self.quant_mode,
-            chunk_size=self.chunk_size,
-            return_unscaled=True,
-            return_scale=True
-        )
+        x_val = self.quantize_input(x_val, override_q_type=q_type_x, internal=True)
+        x_val_unscaled = getattr(self, 'last_quant_input_unscaled', None) if capture else None
 
         
         # Division
         prob = x_val / sum_exp
         
-        # # Final output quantization
-        # prob, _ = quantize_tensor(
-        #     prob,
-        #     q_type=self.uq_type,
-        #     mode=self.quant_mode,
-        #     chunk_size=self.chunk_size
-        # )
 
-        if self.capture_activations:
+        if capture:
             self.last_quant_input = input.detach()
-            self.last_quant_input_unscaled = input_unscaled.detach()
             self.last_quant_inputs_unscaled = [
-                input_unscaled.detach(),
-                x_val_unscaled.detach(),
+                input_unscaled.detach() if input_unscaled is not None else None,
+                x_val_unscaled.detach() if x_val_unscaled is not None else None,
             ]
             self.last_quant_input_formats = [self.q_type, q_type_x]
             self.last_quant_output_unscaled = prob.detach()
 
         return self.quantize_output(prob)
+
 
 # class QuantSoftmax(nn.Softmax , QuantizedLayerMixin):
 #     def __init__(self, dim: int | None = None, q_type: str = "fp8_e4m3", quantization_bias: int | None = None, quant_mode: str = "tensor", chunk_size: int | None = None):
