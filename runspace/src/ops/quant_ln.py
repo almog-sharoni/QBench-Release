@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from runspace.src.registry.op_registry import OpRegistry
 from runspace.src.ops.quant_base import quantize_tensor, QuantizedLayerMixin
-from runspace.src.quantization.quantizer import quantize
+from runspace.src.quantization.quantizer import quantize, round_fractional_part
 
 def qtype_to_unsigned_qtype(
     q_type: str,
@@ -61,6 +61,8 @@ def rsqrt_lut_approx_with_inv_n(x, n, lut_size=256, eps=1e-12):
 
     inv_n = 1.0 / float(n)
     lut = torch.rsqrt(inv_n * lut_m)
+    # Enforce 17-bit precision (1s, 8e, 8m)
+    lut = round_fractional_part(lut)
 
     mant_rsqrt_with_inv_n = lut[idx]
 
