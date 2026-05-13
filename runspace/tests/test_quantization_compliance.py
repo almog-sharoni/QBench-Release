@@ -26,6 +26,10 @@ from runspace.src.adapters.adapter_factory import create_adapter
 from runspace.src.ops.quant_base import QuantizedLayerMixin
 from runspace.src.quantization.quantizer import quantize_fp_generic
 from runspace.src.quantization.constants import get_format_params
+from runspace.src.quantization.dynamic_input_quantizer import (
+    DynamicInputQuantizer,
+    DEFAULT_DYNAMIC_INPUT_CANDIDATES,
+)
 
 
 MODELS = [
@@ -214,6 +218,89 @@ def test_one_config_cpu(model_spec, q_format, mode_info):
 
 
 # ---------------------------------------------------------------------------
+# Dynamic input quantizer test (per-chunk format selection)
+# ---------------------------------------------------------------------------
+
+def test_dynamic_config(model_spec, device):
+    label = f"{model_spec['name']}/dynamic/fp8_e4m3"
+    config = build_config(model_spec, "fp8_e4m3", {"mode": "chunk", "chunk_size": 128})
+
+    adapter = create_adapter(config)
+    model = adapter.model
+    model.eval()
+
+    if device.type == "cuda":
+        model = model.to(device)
+
+    for _name, module in model.named_modules():
+        if isinstance(module, QuantizedLayerMixin):
+            module.capture_activations = True
+
+    dq = DynamicInputQuantizer(
+        model,
+        chunk_size=128,
+        candidate_formats=DEFAULT_DYNAMIC_INPUT_CANDIDATES,
+        restrict_post_relu_ufp=True,
+        use_unsigned_input_candidates=True,
+    )
+    dq.register_hooks()
+
+    inputs = torch.randn(model_spec["input_shape"], device=device, dtype=torch.float32)
+
+    with torch.inference_mode():
+        model(inputs)
+
+    # Snapshot per-module data before cleanup (cleanup resets indices/candidates)
+    def _is_multi_input(module):
+        return bool(
+            getattr(module, "last_quant_inputs_unscaled", None)
+            or getattr(module, "input1_q_type", None)
+        ) or module.__class__.__name__ in (
+            "QuantAdd", "QuantSub", "QuantMul", "QuantDiv", "QuantMatMul",
+            "QuantBMM", "QuantCat", "ObservedAdd", "ObservedSub", "ObservedMul",
+            "ObservedDiv", "ObservedMatMul", "ObservedBMM", "ObservedCat",
+        )
+
+    snapshots = []
+    for name, module in model.named_modules():
+        if not isinstance(module, QuantizedLayerMixin):
+            continue
+        pre_quant = getattr(module, "last_pre_quant_input", None)
+        if pre_quant is not None and isinstance(pre_quant, torch.Tensor):
+            pre_quant = pre_quant.detach().clone()
+        indices = getattr(module, "input_chunk_format_indices", None)
+        w = getattr(module, "weight_fp8", None)
+        if w is None:
+            w = getattr(module, "weight", None)
+        if w is not None and isinstance(w, torch.Tensor):
+            w = w.detach().clone()
+        q_type = getattr(module, "q_type", "fp8_e4m3")
+        multi = _is_multi_input(module)
+        snapshots.append((name, q_type, w, indices, pre_quant, multi))
+
+    dq.cleanup()
+
+    results = {"weight": [], "input": []}
+    hooked_count = 0
+    input_count = 0
+
+    for name, layer_q_type, w, indices, pre_quant, multi in snapshots:
+        if w is not None and w.numel() > 0:
+            ok, cnt, ex, failures = check_bit_structure(w, layer_q_type)
+            results["weight"].append((name, ok, cnt, ex, failures, layer_q_type))
+
+        if indices is not None:
+            hooked_count += 1
+            if pre_quant is not None and not multi:
+                input_count += 1
+
+    results["input"].append(("(dynamic layers hooked)", hooked_count > 0, 0, [], {}, "dynamic"))
+    results["input"].append(("(dynamic layers with capturable input)", input_count > 0, 0, [], {}, "dynamic"))
+
+    return label, results
+
+
+# ---------------------------------------------------------------------------
 # Output formatting
 # ---------------------------------------------------------------------------
 
@@ -312,6 +399,36 @@ def main():
 
     print("\nResults:")
     for line in all_lines:
+        print(line)
+
+    print()
+
+    # --- Dynamic input quantizer tests ---
+    print("=" * 62)
+    print("Dynamic Input Quantizer Tests")
+    print("=" * 62)
+    dyn_lines = []
+    for model_spec in MODELS:
+        if quick and model_spec["name"] == "vit_b_16":
+            dyn_lines.append(f"  {model_spec['name']}/dynamic/fp8_e4m3: SKIPPED (QBENCH_QUICK)")
+            continue
+        try:
+            label, results = test_dynamic_config(model_spec, device)
+            ok, line = format_result(label, results)
+            dyn_lines.append(line)
+            if ok:
+                pass_count += 1
+            else:
+                fail_count += 1
+        except Exception:
+            dyn_lines.append(f"  {model_spec['name']}/dynamic/fp8_e4m3: ERROR — {traceback.format_exc().splitlines()[-1]}")
+            fail_count += 1
+        finally:
+            gc.collect()
+            if has_cuda:
+                torch.cuda.empty_cache()
+
+    for line in dyn_lines:
         print(line)
 
     print()
