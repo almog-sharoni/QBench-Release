@@ -500,7 +500,7 @@ class DynamicInputQuantizer:
 
             candidates = self._candidates_for_layer(layer_name, module)
 
-            x_quantized, best_indices = self._quantize_input_tensor(x, layer_name, candidates)
+            x_quantized, best_indices = self._quantize_input_tensor(x, layer_name, candidates, module)
             self._set_module_input_quant_state(module, candidates, best_indices)
 
             # Return the quantized tensor and all other original arguments to replace the input.
@@ -523,13 +523,13 @@ class DynamicInputQuantizer:
 
             candidates = self._candidates_for_layer(layer_name, module)
             q_quantized, q_indices = self._quantize_input_tensor(
-                query, input_layer_name("query_input"), candidates
+                query, input_layer_name("query_input"), candidates, module
             )
             k_quantized, _ = self._quantize_input_tensor(
-                key, input_layer_name("key_input"), candidates
+                key, input_layer_name("key_input"), candidates, module
             )
             v_quantized, _ = self._quantize_input_tensor(
-                value, input_layer_name("value_input"), candidates
+                value, input_layer_name("value_input"), candidates, module
             )
             self._set_module_input_quant_state(module, candidates, q_indices)
 
@@ -554,8 +554,8 @@ class DynamicInputQuantizer:
 
         module.rounding = 'nearest'
 
-    def _quantize_input_tensor(self, tensor, layer_name, candidates):
-        quantized, best_indices = self._select_best_format(tensor, layer_name, candidates)
+    def _quantize_input_tensor(self, tensor, layer_name, candidates, module=None):
+        quantized, best_indices = self._select_best_format(tensor, layer_name, candidates, module)
 
         with torch.no_grad():
             diff = tensor - quantized
@@ -571,7 +571,7 @@ class DynamicInputQuantizer:
 
         return quantized, best_indices
 
-    def _select_best_format(self, tensor, layer_name, candidates):
+    def _select_best_format(self, tensor, layer_name, candidates, module=None):
         """
         Optimized format selection:
         - Iterates through candidates and keeps only the best per-chunk to save VRAM.
@@ -579,6 +579,7 @@ class DynamicInputQuantizer:
         """
         chunk_size = self.chunk_size
         device = tensor.device
+        capture = getattr(module, 'capture_activations', False)
 
         ref_chunked, original_shape, pad_len = chunk_tensor_by_context(
             tensor, chunk_size
@@ -590,26 +591,31 @@ class DynamicInputQuantizer:
         # Iterative selection buffers
         best_errors = torch.full((total_chunks,), float('inf'), device=device)
         best_qs = torch.zeros_like(ref_chunks)
+        best_unscaled_qs = torch.zeros_like(ref_chunks) if capture else None
         best_indices = torch.zeros(total_chunks, dtype=torch.long, device=device)
+        best_scales = torch.zeros_like(ref_chunks) if capture else None
 
         for i, fmt in enumerate(candidates):
             if fmt == 'fp32':
-                # FP32 is already handled as inf error in the default best_errors, 
-                # but if it's the only candidate or we want to support it:
                 continue
 
             try:
-                # quantize_tensor is already CUDA-accelerated.
-                q_tensor, _ = quantize_tensor(
-                    tensor,
+                # Optimized path: quantize the pre-chunked tensor.
+                # This ensures the codec's chunks perfectly align with our logical chunks.
+                # It is also much faster than re-chunking the full tensor for every format.
+                q_res = quantize_tensor(
+                    ref_chunks,
                     q_type=fmt,
                     mode='chunk',
                     chunk_size=chunk_size,
+                    return_unscaled=capture,
+                    return_scale=capture,
                 )
                 
-                # Reshape q_tensor to match ref_chunks using standardized utility
-                q_chunked_tmp, _, _ = chunk_tensor_by_context(q_tensor, chunk_size)
-                q_chunks = q_chunked_tmp.reshape(-1, chunk_size)
+                if capture:
+                    q_chunks, q_unscaled, _, scale_b, _ = q_res
+                else:
+                    q_chunks, _ = q_res
 
                 diff = ref_chunks - q_chunks
                 err = diff.pow(2).mean(dim=1)
@@ -620,17 +626,28 @@ class DynamicInputQuantizer:
                     best_errors[mask] = err[mask]
                     best_qs[mask] = q_chunks[mask]
                     best_indices[mask] = i
+                    if capture:
+                        best_unscaled_qs[mask] = q_unscaled[mask]
+                        best_scales[mask] = scale_b[mask]
                 
                 # Cleanup intermediate tensors
-                del q_tensor, q_chunked_tmp, q_chunks, diff, err, mask
+                del q_res, q_chunks, diff, err, mask
+                if capture: del q_unscaled, scale_b
                 
-            except Exception as e:
-                # Skip failed formats
+            except Exception:
                 continue
 
         # Reconstruct the quantized tensor from best chunks
         q_reshaped = best_qs.view(num_contexts, num_chunks, chunk_size)
         quantized_tensor = unchunk_tensor_by_context(q_reshaped, original_shape, pad_len)
+
+        # Populate activation capture fields if enabled
+        if capture:
+            u_reshaped = best_unscaled_qs.view(num_contexts, num_chunks, chunk_size)
+            module.last_quant_input_unscaled = unchunk_tensor_by_context(u_reshaped, original_shape, pad_len).detach()
+            module.last_quant_input = quantized_tensor.detach()
+            s_reshaped = best_scales.view(num_contexts, num_chunks, chunk_size)
+            module.last_quant_input_scale = unchunk_tensor_by_context(s_reshaped, original_shape, pad_len).detach()
 
         # Update layer-wise format selection statistics (stay on GPU)
         if layer_name not in self.layer_stats:
