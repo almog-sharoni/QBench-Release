@@ -65,7 +65,7 @@ with tab_cache:
                   delta=f"-{off_chip}" if off_chip else None, delta_color="inverse")
         m4.metric("Flagged",        flagged,
                   delta=f"-{flagged}" if flagged else None, delta_color="inverse")
-        m5.metric("Cache Size",     f"{latest.get('cache_size_M', '?')}M  ×{num_banks} banks")
+        m5.metric("Cache Size",     f"{latest.get('cache_size_M', '?')}M  /{num_banks} banks")
 
         st.markdown(
             f"<p class='dashboard-filter-note'>metadata_bits={int(latest.get('metadata_bits') or 0)} &nbsp;·&nbsp; "

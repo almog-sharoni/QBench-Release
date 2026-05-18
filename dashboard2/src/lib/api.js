@@ -88,7 +88,12 @@ export function fetchRunLog(name, tail) {
   return fetchJSON(`${BASE}/run-launcher/logs/${encodeURIComponent(name)}${q}`)
 }
 
-// Win Rate Analysis
+// Presets
+export function loadPresets() { return fetchJSON(`${BASE}/presets`) }
+export function savePresets(presets) {
+  return fetchJSON(`${BASE}/presets`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(presets) })
+}
+
 export function analyzeWinRates(quant_map_json) {
   return fetchJSON(`${BASE}/analyze/win-rates`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quant_map_json }) })
 }

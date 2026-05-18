@@ -90,6 +90,19 @@ void launch_decode_chunk(
     int                  e, int m, int is_signed,
     void*                stream);
 
+void launch_search_and_quantize_chunk(
+    const float* x,
+    const int*   cands_e,
+    const int*   cands_m,
+    const int*   cands_sgn,
+    int          num_candidates,
+    int64_t*     best_indices,
+    float*       best_scales,
+    float*       out,
+    float*       out_unscaled,
+    int          N,
+    void*        stream);
+
 
 // ----------------------------------------------------------------------------
 // Channel mode

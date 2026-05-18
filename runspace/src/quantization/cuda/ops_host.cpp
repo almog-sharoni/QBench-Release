@@ -435,6 +435,65 @@ roundtrip_channel(torch::Tensor x, int channel_dim,
 
 
 // ============================================================================
+// Dynamic format search
+// ============================================================================
+
+static std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+search_best_chunk_format(torch::Tensor x,
+                         std::vector<int> cands_e,
+                         std::vector<int> cands_m,
+                         std::vector<int> cands_sgn,
+                         bool return_capture)
+{
+    TORCH_CHECK(x.is_cuda() && x.scalar_type() == torch::kFloat32 && x.is_contiguous(),
+                "search_best_chunk_format: x must be contiguous CUDA float32");
+    
+    int num_candidates = (int)cands_e.size();
+    TORCH_CHECK(num_candidates > 0 && 
+                cands_m.size() == num_candidates && 
+                cands_sgn.size() == num_candidates,
+                "search_best_chunk_format: candidate vectors must be same size > 0");
+
+    const int N = (int)x.numel();
+    constexpr int CHUNK = 128;
+    const int n_chunks = (N + CHUNK - 1) / CHUNK;
+    auto opts = x.options();
+
+    auto best_indices = torch::empty({n_chunks}, opts.dtype(torch::kInt64));
+    auto best_scales  = torch::empty({n_chunks}, opts.dtype(torch::kFloat32));
+    auto out          = torch::empty({N}, opts.dtype(torch::kFloat32));
+    torch::Tensor out_unscaled;
+
+    if (return_capture) {
+        out_unscaled = torch::empty({N}, opts.dtype(torch::kFloat32));
+    } else {
+        out_unscaled = torch::empty({0}, opts.dtype(torch::kFloat32));
+    }
+
+    if (N == 0) return {best_indices, best_scales, out, out_unscaled};
+
+    // Copy candidates to device
+    auto c_e = torch::tensor(cands_e, torch::device(torch::kCUDA).dtype(torch::kInt32));
+    auto c_m = torch::tensor(cands_m, torch::device(torch::kCUDA).dtype(torch::kInt32));
+    auto c_s = torch::tensor(cands_sgn, torch::device(torch::kCUDA).dtype(torch::kInt32));
+
+    qbench_lp::launch_search_and_quantize_chunk(
+        x.data_ptr<float>(),
+        c_e.data_ptr<int>(),
+        c_m.data_ptr<int>(),
+        c_s.data_ptr<int>(),
+        num_candidates,
+        best_indices.data_ptr<int64_t>(),
+        best_scales.data_ptr<float>(),
+        out.data_ptr<float>(),
+        return_capture ? out_unscaled.data_ptr<float>() : nullptr,
+        N,
+        current_stream_ptr());
+
+    return {best_indices, best_scales, out, out_unscaled};
+}
+
+// ============================================================================
 // Helpers exposed to Python
 // ============================================================================
 
@@ -505,6 +564,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, mod) {
             py::arg("e"), py::arg("m"),
             py::arg("is_signed") = true,
             "Channel-mode round trip. Returns (input_fp8, scale_b, scale_p, max_val).");
+
+    mod.def("search_best_chunk_format", &search_best_chunk_format,
+            py::arg("x"), py::arg("cands_e"), py::arg("cands_m"), py::arg("cands_sgn"),
+            py::arg("return_capture") = false,
+            "Fused search and quantize for chunk-mode dynamic quantization.");
 
     mod.def("n_per_word",     &n_per_word_py,
             py::arg("e"), py::arg("m"),
