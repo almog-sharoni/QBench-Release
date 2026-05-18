@@ -5,11 +5,15 @@ try:
     from ..registry.op_registry import OpRegistry
     from ..ops.quant_base import quantize_tensor
     from ..ops.quant_base import _quantize_tensor_cuda
+    from ..cuda import search_best_chunk_format
+    from .constants import get_format_params
     from .chunking import chunk_tensor_by_context, unchunk_tensor_by_context
 except ImportError:
     from src.registry.op_registry import OpRegistry
     from src.ops.quant_base import quantize_tensor
     from src.ops.quant_base import _quantize_tensor_cuda
+    from src.quantization.cuda import search_best_chunk_format
+    from src.quantization.constants import get_format_params
     from src.quantization.chunking import chunk_tensor_by_context, unchunk_tensor_by_context
 
 import os
@@ -588,54 +592,41 @@ class DynamicInputQuantizer:
         ref_chunks = ref_chunked.reshape(-1, chunk_size)
         total_chunks = ref_chunks.shape[0]
 
-        # Iterative selection buffers
-        best_errors = torch.full((total_chunks,), float('inf'), device=device)
-        best_qs = torch.zeros_like(ref_chunks)
-        best_unscaled_qs = torch.zeros_like(ref_chunks) if capture else None
-        best_indices = torch.zeros(total_chunks, dtype=torch.long, device=device)
-        best_scales = torch.zeros_like(ref_chunks) if capture else None
-
-        for i, fmt in enumerate(candidates):
+        # Convert candidates to vectors
+        cands_e = []
+        cands_m = []
+        cands_sgn = []
+        for fmt in candidates:
+            # handle fp32 specially or assume it's filtered? 
+            # Actually, standard candidates are just strings.
+            # fp32 should just be bypassed if we can, but if it's in candidates,
+            # we need a fallback. We'll just map fp32 to a fake high precision 
+            # or handle it carefully. The CUDA kernel doesn't natively do fp32 bypass.
+            # Usually fp32 is not in the candidate list for dynamic quant.
             if fmt == 'fp32':
-                continue
+                # Use a safe fallback e=8, m=7, sgn=1
+                cands_e.append(8)
+                cands_m.append(7)
+                cands_sgn.append(1)
+            else:
+                e, m = get_format_params(fmt)
+                is_signed = not fmt.startswith('ufp')
+                cands_e.append(e)
+                cands_m.append(m)
+                cands_sgn.append(1 if is_signed else 0)
 
-            try:
-                # Optimized path: quantize the pre-chunked tensor.
-                # This ensures the codec's chunks perfectly align with our logical chunks.
-                # It is also much faster than re-chunking the full tensor for every format.
-                q_res = quantize_tensor(
-                    ref_chunks,
-                    q_type=fmt,
-                    mode='chunk',
-                    chunk_size=chunk_size,
-                    return_unscaled=capture,
-                    return_scale=capture,
-                )
-                
-                if capture:
-                    q_chunks, q_unscaled, _, scale_b, _ = q_res
-                else:
-                    q_chunks, _ = q_res
+        # Call the fused CUDA kernel
+        best_indices, best_scales, best_qs_flat, best_unscaled_qs_flat = search_best_chunk_format(
+            ref_chunks.view(-1).contiguous(),
+            cands_e,
+            cands_m,
+            cands_sgn,
+            capture
+        )
 
-                diff = ref_chunks - q_chunks
-                err = diff.pow(2).mean(dim=1)
-
-                # Update best-so-far
-                mask = err < best_errors
-                if mask.any():
-                    best_errors[mask] = err[mask]
-                    best_qs[mask] = q_chunks[mask]
-                    best_indices[mask] = i
-                    if capture:
-                        best_unscaled_qs[mask] = q_unscaled[mask]
-                        best_scales[mask] = scale_b[mask]
-                
-                # Cleanup intermediate tensors
-                del q_res, q_chunks, diff, err, mask
-                if capture: del q_unscaled, scale_b
-                
-            except Exception:
-                continue
+        best_qs = best_qs_flat.view(-1, chunk_size)
+        if capture:
+            best_unscaled_qs = best_unscaled_qs_flat.view(-1, chunk_size)
 
         # Reconstruct the quantized tensor from best chunks
         q_reshaped = best_qs.view(num_contexts, num_chunks, chunk_size)
@@ -643,10 +634,11 @@ class DynamicInputQuantizer:
 
         # Populate activation capture fields if enabled
         if capture:
+            best_scales_expanded = best_scales.unsqueeze(-1).expand(-1, chunk_size).contiguous()
             u_reshaped = best_unscaled_qs.view(num_contexts, num_chunks, chunk_size)
             module.last_quant_input_unscaled = unchunk_tensor_by_context(u_reshaped, original_shape, pad_len).detach()
             module.last_quant_input = quantized_tensor.detach()
-            s_reshaped = best_scales.view(num_contexts, num_chunks, chunk_size)
+            s_reshaped = best_scales_expanded.view(num_contexts, num_chunks, chunk_size)
             module.last_quant_input_scale = unchunk_tensor_by_context(s_reshaped, original_shape, pad_len).detach()
 
         # Update layer-wise format selection statistics (stay on GPU)
@@ -663,7 +655,7 @@ class DynamicInputQuantizer:
         # Track running error for progress/debug
         if self.running_error is None:
             self.running_error = 0.0
-        self.running_error += best_errors.sum().item()
+        # self.running_error += best_errors.sum().item() # Removed for CUDA optimization
         self.total_chunks += total_chunks
 
         return quantized_tensor, best_indices
