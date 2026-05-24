@@ -11,7 +11,7 @@ This experiment evaluates model accuracy under a bandwidth-aware mixed-precision
 2. **Compute Time Cycle Modeling**
    - Sums compute cycles of parent operations and their collapsed child operations (activations, normalization, pooling, softmax) to model pipeline execution.
    - Calculates memory transfer cycles under bandwidth constraints (configurable via `--bandwidth`).
-   - Weights are transferred at target bit precision, while input/output activations are transferred at 8-bit precision.
+   - Weights are transferred at target bit precision, while input/output activations are transferred at the current off-chip bit precision (fractional bytes `b_bits / 8.0` per element).
    - Core runtime is modeled as `max(compute_cycles, transfer_cycles)`.
 
 3. **Dynamic Precision Selection (Off-Chip)**
@@ -45,7 +45,7 @@ This experiment evaluates model accuracy under a bandwidth-aware mixed-precision
 
 ### Options:
 - `--model_name`: Model name (e.g. `resnet18`) or path to a YAML file containing a list of models.
-- `--bandwidth`: Elements transferred per cycle (default: `1.0`).
+- `--bandwidth`: Memory bandwidth in bytes/cycle (default: `1.0`).
 - `--limit_batches`: Number of evaluation batches (default: `-1` for all).
 - `--device`: Target execution device (`cuda` or `cpu`).
 - `--batch_size`: Batch size for evaluation (default: `128`).
