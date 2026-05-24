@@ -28,7 +28,8 @@ from runspace.experiments.asic_cache_simulation.simulate_cache import (
     analyze_model,
     evaluate_stay,
     get_footprint_elements,
-    round_to_banks
+    round_to_banks,
+    fmt_elems
 )
 
 # ============================================================
@@ -386,7 +387,7 @@ def main():
 
     # 2. Setup results tracking structures
     cache_sizes = [0.0, 2.0, 4.0]  # Cache sizes in Millions of elements
-    min_bits_list = [2, 3, 4, 5, 6, 7]  # We sweep starting min_bits from 2 to 7
+    min_bits_list = [2]  # We sweep starting min_bits = 2 only
     results_data = {min_bits: {cs: [] for cs in cache_sizes} for min_bits in min_bits_list}
 
     # Cache simulations for all cache sizes (run only once per cache size!)
@@ -541,9 +542,9 @@ def main():
     if global_min_acc == 100.0:
         global_min_acc, global_max_acc = 0.0, 100.0
 
-    # Margins for same scaling
-    xlim_min = global_min_cycles * 0.9
-    xlim_max = global_max_cycles * 1.1
+    # Margins for same scaling with log scale
+    xlim_min = 10 ** (math.floor(math.log10(global_min_cycles)) - 0.2)
+    xlim_max = 10 ** (math.ceil(math.log10(global_max_cycles)) + 0.2)
     ylim_min = max(0.0, global_min_acc - 5.0)
     ylim_max = min(100.0, global_max_acc + 5.0)
 
@@ -564,17 +565,18 @@ def main():
             
             plt.plot(cycles, accs, marker='o', label=label, color=color, linewidth=2)
             
-            # Annotate points with bit-width b
+            # Annotate points with bit-width b and cycles
             for b, acc, cyc in points:
-                plt.annotate(f"{b}b", (cyc, acc), textcoords="offset points", 
+                plt.annotate(f"{b}b\n{fmt_elems(cyc)}", (cyc, acc), textcoords="offset points", 
                              xytext=(0, 10), ha='center', fontsize=8, color=color, weight='bold')
                 
         plt.title(f"Accuracy vs. Compute Time (Starting Min Bits = {min_bits})\nBandwidth = {args.bandwidth} elements/cycle")
-        plt.xlabel("Compute Time (Cycles)")
+        plt.xlabel("Compute Time (Cycles - Log Scale)")
         plt.ylabel("Top-1 Accuracy (%)")
+        plt.xscale('log')
         plt.xlim(xlim_min, xlim_max)
         plt.ylim(ylim_min, ylim_max)
-        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.grid(True, which="both", linestyle='--', alpha=0.6)
         plt.legend()
         plt.tight_layout()
         plot_path = os.path.join(output_dir, f"accuracy_vs_compute_time_min_bits_{min_bits}.png")
