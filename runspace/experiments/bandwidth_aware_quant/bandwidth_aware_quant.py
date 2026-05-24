@@ -8,6 +8,7 @@ os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib'
 import math
 import argparse
 import json
+import yaml
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
@@ -359,7 +360,7 @@ def create_bandwidth_aware_state_dict(model, cache_sim_map, layer_actual_bits, c
 
 def main():
     parser = argparse.ArgumentParser(description="Recreation of bandwidth-aware quantization sweeps.")
-    parser.add_argument("--model_name", type=str, default="resnet18", help="Model name")
+    parser.add_argument("--model_name", type=str, default="resnet18", help="Model name or path to a YAML file with a list of models")
     parser.add_argument("--weights", type=str, default="DEFAULT", help="Model weights")
     parser.add_argument("--dataset_name", type=str, default="imagenet", help="Dataset name")
     parser.add_argument("--dataset_path", type=str, default="/data/imagenet/val", help="Dataset path")
@@ -376,339 +377,349 @@ def main():
         print("CUDA is requested but not available. Falling back to cpu.")
         args.device = "cpu"
 
-    output_dir = args.output_dir or os.path.join(PROJECT_ROOT, "runspace/experiments/bandwidth_aware_quant/results", args.model_name)
-    os.makedirs(output_dir, exist_ok=True)
-
-    print(f"Starting Bandwidth-Aware mixed-precision quantization experiment for {args.model_name}")
-    print(f"Results will be stored in: {output_dir}")
+    # Resolve models list
+    models_to_run = []
+    if args.model_name.endswith('.yaml') or args.model_name.endswith('.yml'):
+        with open(args.model_name, 'r') as f:
+            yaml_content = yaml.safe_load(f)
+            if isinstance(yaml_content, list):
+                for item in yaml_content:
+                    if isinstance(item, dict):
+                        models_to_run.append((item.get('name'), item.get('weights', 'DEFAULT')))
+                    elif isinstance(item, str):
+                        models_to_run.append((item, 'DEFAULT'))
+            elif isinstance(yaml_content, dict):
+                models_to_run.append((yaml_content.get('name'), yaml_content.get('weights', 'DEFAULT')))
+    else:
+        models_to_run.append((args.model_name, args.weights))
 
     runner = Runner(device=args.device)
 
-    # 1. Load the reference FP32 model and obtain weight state dict
-    ref_config = {
-        'model': {'name': args.model_name, 'weights': args.weights},
-        'adapter': {'type': 'generic', 'quantized_ops': []},
-        'dataset': {
-            'name': args.dataset_name, 'path': args.dataset_path,
-            'batch_size': args.batch_size, 'num_workers': args.num_workers,
-        },
-    }
-    model_order_dir = os.path.join(output_dir, "ref_fp32_loader")
-    os.makedirs(model_order_dir, exist_ok=True)
-    model, _, _ = runner.prepare_model_with_materialized_weights(config=ref_config, output_dir=model_order_dir)
-    model.to(args.device)
-
-    # 2. Setup results tracking structures
-    cache_sizes = [0.0, 2.0, 4.0]  # Cache sizes in Millions of elements
-    min_bits_list = [2]  # We sweep starting min_bits = 2 only
-    results_data = {min_bits: {cs: [] for cs in cache_sizes} for min_bits in min_bits_list}
-
-    # Cache simulations for all cache sizes (run only once per cache size!)
-    cache_sims = {}
-    for cs in cache_sizes:
-        print(f"\n--- Running cache simulation for Cache Size: {cs}MB ---")
-        sim_layers, cache_sim_map = run_cache_simulation(args.model_name, cs, batch_size=1, device=args.device)
-        cache_sims[cs] = (sim_layers, cache_sim_map)
-        
-        # Log summary of stay decisions
-        on_chip_cnt = sum(1 for stay in cache_sim_map.values() if stay)
-        off_chip_cnt = len(cache_sim_map) - on_chip_cnt
-        print(f"Cache {cs}MB: {on_chip_cnt} layers stay on-chip, {off_chip_cnt} layers stream off-chip.")
-
-    # 3. Sweep loops
-    # To optimize execution, we can group runs by (cache_size, b_bits).
-    # Since accuracy of a run is fully determined by (cache_size, b_bits), we can evaluate
-    # each unique pair of (cache_size, b_bits) once and store it.
-    unique_runs = []
-    for cs in cache_sizes:
-        for b in range(2, 9):
-            unique_runs.append((cs, b))
-
-    # Sort runs to keep cache size changes minimal (saves reloading models frequently)
-    unique_runs = sorted(unique_runs, key=lambda x: (x[0], x[1]))
-
-    evaluated_points = {}  # (cache_size, b_bits) -> (accuracy, cycles)
-
-    temp_weights_dir = os.path.join(output_dir, "temp_weights")
-    os.makedirs(temp_weights_dir, exist_ok=True)
-
-    for cs, b in unique_runs:
+    for model_name, model_weights in models_to_run:
         print(f"\n============================================================")
-        print(f"Evaluating Cache: {cs}MB | Bit-Width of Off-Chip Layers: {b}-bits")
+        print(f"RUNNING BANDWIDTH-AWARE EXPERIMENT FOR MODEL: {model_name}")
         print(f"============================================================")
-        
-        sim_layers, cache_sim_map = cache_sims[cs]
-        
-        # 3.1. Compute execution runtime (cycles) and obtain layer-specific actual bits
-        cycles, layer_actual_bits = compute_model_runtime(sim_layers, b, bandwidth=args.bandwidth)
-        print(f"Calculated compute time: {cycles:,} cycles")
 
-        # 3.2. Quantize model weights based on stay status and actual bit-width
-        print("Quantizing model weights...")
-        q_state_dict, _ = create_bandwidth_aware_state_dict(model, cache_sim_map, layer_actual_bits=layer_actual_bits, chunk_size=128)
-        
-        # Save quantized weights to temporary file
-        temp_weights_path = os.path.join(temp_weights_dir, f"weights_cs_{cs}_b_{b}.pt")
-        torch.save(q_state_dict, temp_weights_path)
-        
-        # 3.3. Inject cache sim map and actual bits to global attributes of both classes
-        if DIQ1 is not None:
-            DIQ1._global_cache_sim_map = cache_sim_map
-            DIQ1._global_layer_actual_bits = layer_actual_bits
-        if DIQ2 is not None:
-            DIQ2._global_cache_sim_map = cache_sim_map
-            DIQ2._global_layer_actual_bits = layer_actual_bits
+        # Resolve output directory for this model
+        if args.output_dir:
+            if len(models_to_run) > 1:
+                model_output_dir = os.path.join(args.output_dir, model_name)
+            else:
+                model_output_dir = args.output_dir
+        else:
+            model_output_dir = os.path.join(PROJECT_ROOT, "runspace/experiments/bandwidth_aware_quant/results", model_name)
 
-        # 3.4. Build evaluation config
-        eval_config = {
-            'model': {'name': args.model_name, 'weights': os.path.abspath(temp_weights_path)},
-            'adapter': {
-                'type': 'generic',
-                'quantized_ops': ['-1'],
-                'input_quantization': False,
-            },
-            'evaluation': {
-                'mode': 'evaluate',
-                'max_batches': args.limit_batches,
-                'dynamic_input_quant': {
-                    'enabled': True,
-                    'chunk_size': 128,
-                    'candidate_formats': get_input_formats_for_bits(b),
-                    'use_cache_sim_db': False,
-                }
-            },
+        os.makedirs(model_output_dir, exist_ok=True)
+
+        print(f"Results will be stored in: {model_output_dir}")
+
+        # 1. Load the reference FP32 model and obtain weight state dict
+        ref_config = {
+            'model': {'name': model_name, 'weights': model_weights},
+            'adapter': {'type': 'generic', 'quantized_ops': []},
             'dataset': {
-                'name': args.dataset_name,
-                'path': args.dataset_path,
-                'batch_size': args.batch_size,
-                'num_workers': args.num_workers,
-            }
+                'name': args.dataset_name, 'path': args.dataset_path,
+                'batch_size': args.batch_size, 'num_workers': args.num_workers,
+            },
         }
+        model_order_dir = os.path.join(model_output_dir, "ref_fp32_loader")
+        os.makedirs(model_order_dir, exist_ok=True)
+        model, _, _ = runner.prepare_model_with_materialized_weights(config=ref_config, output_dir=model_order_dir)
+        model.to(args.device)
 
-        # 3.5. Run accuracy evaluation
-        try:
-            print("Running evaluation forward pass...")
-            eval_results = runner.run_single(eval_config, output_root=output_dir)
-            acc1 = eval_results.get('acc1', 0.0)
-            acc5 = eval_results.get('acc5', 0.0)
-            print(f"Accuracy results: Top-1 Acc = {acc1:.3f}%, Top-5 Acc = {acc5:.3f}%")
-        except Exception as e:
-            print(f"Error during evaluation: {e}")
-            acc1 = 0.0
-            acc5 = 0.0
-            import traceback
-            traceback.print_exc()
+        # 2. Setup results tracking structures
+        cache_sizes = [0.0, 2.0, 4.0]  # Cache sizes in Millions of elements
+        min_bits_list = [2]  # We sweep starting min_bits = 2 only
+        results_data = {min_bits: {cs: [] for cs in cache_sizes} for min_bits in min_bits_list}
 
-        # Save evaluated point
-        evaluated_points[(cs, b)] = (acc1, cycles)
-
-        # Cleanup temporary weight file
-        if os.path.exists(temp_weights_path):
-            try:
-                os.remove(temp_weights_path)
-            except OSError:
-                pass
-
-    # 4. Map evaluated points to the results_data sweeps structure
-    # For a given starting min_bits threshold:
-    # We sweep b from min_bits to 8.
-    for min_bits in min_bits_list:
+        # Cache simulations for all cache sizes (run only once per cache size!)
+        cache_sims = {}
         for cs in cache_sizes:
-            for b in range(min_bits, 9):
-                acc1, cycles = evaluated_points[(cs, b)]
-                results_data[min_bits][cs].append((b, acc1, cycles))
+            print(f"\n--- Running cache simulation for Cache Size: {cs}MB ---")
+            sim_layers, cache_sim_map = run_cache_simulation(model_name, cs, batch_size=1, device=args.device)
+            cache_sims[cs] = (sim_layers, cache_sim_map)
+            
+            # Log summary of stay decisions
+            on_chip_cnt = sum(1 for stay in cache_sim_map.values() if stay)
+            off_chip_cnt = len(cache_sim_map) - on_chip_cnt
+            print(f"Cache {cs}MB: {on_chip_cnt} layers stay on-chip, {off_chip_cnt} layers stream off-chip.")
 
-    # 5. Save results to JSON file
-    results_path = os.path.join(output_dir, "bandwidth_aware_quant_results.json")
-    serializable_results = {
-        'model_name': args.model_name,
-        'min_bits_sweeps': {
-            str(mb): {
-                str(cs): [{'b': p[0], 'accuracy': p[1], 'cycles': p[2]} for p in points]
-                for cs, points in cache_data.items()
+        # 3. Sweep loops
+        unique_runs = []
+        for cs in cache_sizes:
+            for b in range(2, 9):
+                unique_runs.append((cs, b))
+
+        # Sort runs to keep cache size changes minimal (saves reloading models frequently)
+        unique_runs = sorted(unique_runs, key=lambda x: (x[0], x[1]))
+
+        evaluated_points = {}  # (cache_size, b_bits) -> (accuracy, cycles)
+
+        temp_weights_dir = os.path.join(model_output_dir, "temp_weights")
+        os.makedirs(temp_weights_dir, exist_ok=True)
+
+        for cs, b in unique_runs:
+            print(f"\n============================================================")
+            print(f"Evaluating Cache: {cs}MB | Bit-Width of Off-Chip Layers: {b}-bits")
+            print(f"============================================================")
+            
+            sim_layers, cache_sim_map = cache_sims[cs]
+            
+            # 3.1. Compute execution runtime (cycles) and obtain layer-specific actual bits
+            cycles, layer_actual_bits = compute_model_runtime(sim_layers, b, bandwidth=args.bandwidth)
+            print(f"Calculated compute time: {cycles:,} cycles")
+
+            # 3.2. Quantize model weights based on stay status and actual bit-width
+            print("Quantizing model weights...")
+            q_state_dict, _ = create_bandwidth_aware_state_dict(model, cache_sim_map, layer_actual_bits=layer_actual_bits, chunk_size=128)
+            
+            # Save quantized weights to temporary file
+            temp_weights_path = os.path.join(temp_weights_dir, f"weights_cs_{cs}_b_{b}.pt")
+            torch.save(q_state_dict, temp_weights_path)
+            
+            # 3.3. Inject cache sim map and actual bits to global attributes of both classes
+            if DIQ1 is not None:
+                DIQ1._global_cache_sim_map = cache_sim_map
+                DIQ1._global_layer_actual_bits = layer_actual_bits
+            if DIQ2 is not None:
+                DIQ2._global_cache_sim_map = cache_sim_map
+                DIQ2._global_layer_actual_bits = layer_actual_bits
+
+            # 3.4. Build evaluation config
+            eval_config = {
+                'model': {'name': model_name, 'weights': os.path.abspath(temp_weights_path)},
+                'adapter': {
+                    'type': 'generic',
+                    'quantized_ops': ['-1'],
+                    'input_quantization': False,
+                },
+                'evaluation': {
+                    'mode': 'evaluate',
+                    'max_batches': args.limit_batches,
+                    'dynamic_input_quant': {
+                        'enabled': True,
+                        'chunk_size': 128,
+                        'candidate_formats': get_input_formats_for_bits(b),
+                        'use_cache_sim_db': False,
+                    }
+                },
+                'dataset': {
+                    'name': args.dataset_name,
+                    'path': args.dataset_path,
+                    'batch_size': args.batch_size,
+                    'num_workers': args.num_workers,
+                }
             }
-            for mb, cache_data in results_data.items()
+
+            # 3.5. Run accuracy evaluation
+            try:
+                print("Running evaluation forward pass...")
+                eval_results = runner.run_single(eval_config, output_root=model_output_dir)
+                acc1 = eval_results.get('acc1', 0.0)
+                acc5 = eval_results.get('acc5', 0.0)
+                print(f"Accuracy results: Top-1 Acc = {acc1:.3f}%, Top-5 Acc = {acc5:.3f}%")
+            except Exception as e:
+                print(f"Error during evaluation: {e}")
+                acc1 = 0.0
+                acc5 = 0.0
+                import traceback
+                traceback.print_exc()
+
+            # Save evaluated point
+            evaluated_points[(cs, b)] = (acc1, cycles)
+
+            # Cleanup temporary weight file
+            if os.path.exists(temp_weights_path):
+                try:
+                    os.remove(temp_weights_path)
+                except OSError:
+                    pass
+
+        # 4. Map evaluated points to the results_data sweeps structure
+        for min_bits in min_bits_list:
+            for cs in cache_sizes:
+                for b in range(min_bits, 9):
+                    acc1, cycles = evaluated_points[(cs, b)]
+                    results_data[min_bits][cs].append((b, acc1, cycles))
+
+        # 5. Save results to JSON file
+        results_path = os.path.join(model_output_dir, "bandwidth_aware_quant_results.json")
+        serializable_results = {
+            'model_name': model_name,
+            'min_bits_sweeps': {
+                str(mb): {
+                    str(cs): [{'b': p[0], 'accuracy': p[1], 'cycles': p[2]} for p in points]
+                    for cs, points in cache_data.items()
+                }
+                for mb, cache_data in results_data.items()
+            }
         }
-    }
-    with open(results_path, 'w') as f:
-        json.dump(serializable_results, f, indent=4)
-    print(f"\nAll results saved to {results_path}")
+        with open(results_path, 'w') as f:
+            json.dump(serializable_results, f, indent=4)
+        print(f"\nAll results saved to {results_path}")
 
-    # 6. Generate plots for each starting min_bits threshold
-    print("\n--- Generating plots for each starting min_bits threshold ---")
-    colors = {0.0: 'red', 2.0: 'blue', 4.0: 'green'}
-    
-    # Enforce same scale: find global min/max across all min_bits and cache sizes
-    global_min_cycles = float('inf')
-    global_max_cycles = float('-inf')
-    global_min_acc = 100.0
-    global_max_acc = 0.0
-
-    for min_bits, cache_data in results_data.items():
-        for cs, points in cache_data.items():
-            for b, acc, cyc in points:
-                global_min_cycles = min(global_min_cycles, cyc)
-                global_max_cycles = max(global_max_cycles, cyc)
-                global_min_acc = min(global_min_acc, acc)
-                global_max_acc = max(global_max_acc, acc)
-
-    if global_min_cycles == float('inf'):
-        global_min_cycles, global_max_cycles = 0, 1000000
-    if global_min_acc == 100.0:
-        global_min_acc, global_max_acc = 0.0, 100.0
-
-    # Margins for same scaling with log scale
-    xlim_min = 10 ** (math.floor(math.log10(global_min_cycles)) - 0.2)
-    xlim_max = 10 ** (math.ceil(math.log10(global_max_cycles)) + 0.2)
-    ylim_min = max(0.0, global_min_acc - 5.0)
-    ylim_max = min(100.0, global_max_acc + 5.0)
-
-    # Plot configuration
-    linestyles = {0.0: '-', 2.0: '-', 4.0: '--'}
-    markers = {0.0: 'o', 2.0: 's', 4.0: '^'}
-    
-    # Horizontal jittering factors on log scale to visually separate overlapping lines (2MB & 4MB)
-    jitter = {0.0: 1.0, 2.0: 0.98, 4.0: 1.02}
-    
-    for min_bits, cache_data in results_data.items():
-        plt.figure(figsize=(12, 7))
+        # 6. Generate plots for each starting min_bits threshold
+        print("\n--- Generating plots for each starting min_bits threshold ---")
+        colors = {0.0: 'red', 2.0: 'blue', 4.0: 'green'}
         
-        for cs, points in cache_data.items():
-            if not points:
-                continue
-            # Sort points by bit width b
-            points = sorted(points, key=lambda x: x[0])
-            bits = [p[0] for p in points]
-            accs = [p[1] for p in points]
-            cycles = [p[2] for p in points]
+        global_min_cycles = float('inf')
+        global_max_cycles = float('-inf')
+        global_min_acc = 100.0
+        global_max_acc = 0.0
+
+        for min_bits, cache_data in results_data.items():
+            for cs, points in cache_data.items():
+                for b, acc, cyc in points:
+                    global_min_cycles = min(global_min_cycles, cyc)
+                    global_max_cycles = max(global_max_cycles, cyc)
+                    global_min_acc = min(global_min_acc, acc)
+                    global_max_acc = max(global_max_acc, acc)
+
+        if global_min_cycles == float('inf'):
+            global_min_cycles, global_max_cycles = 0, 1000000
+        if global_min_acc == 100.0:
+            global_min_acc, global_max_acc = 0.0, 100.0
+
+        xlim_min = 10 ** (math.floor(math.log10(global_min_cycles)) - 0.2)
+        xlim_max = 10 ** (math.ceil(math.log10(global_max_cycles)) + 0.2)
+        ylim_min = max(0.0, global_min_acc - 5.0)
+        ylim_max = min(100.0, global_max_acc + 5.0)
+
+        # Plot configuration
+        linestyles = {0.0: '-', 2.0: '-', 4.0: '--'}
+        markers = {0.0: 'o', 2.0: 's', 4.0: '^'}
+        jitter = {0.0: 1.0, 2.0: 0.98, 4.0: 1.02}
+
+        for min_bits, cache_data in results_data.items():
+            plt.figure(figsize=(12, 7))
             
-            # Apply visual jittering to cycle count (X-coordinate) for plotting only
-            j_factor = jitter.get(cs, 1.0)
-            plot_cycles = [cyc * j_factor for cyc in cycles]
-            
-            label = f"Cache {cs}MB"
-            color = colors.get(cs, 'black')
-            linestyle = linestyles.get(cs, '-')
-            marker = markers.get(cs, 'o')
-            
-            plt.plot(plot_cycles, accs, marker=marker, label=label, color=color, 
-                     linestyle=linestyle, linewidth=2, markersize=8)
-            
-            # Group points by unique coordinate to avoid overlapping annotations at the same point
-            unique_coords = []
-            for idx, (b, acc, cyc) in enumerate(points):
-                p_cyc = plot_cycles[idx]
-                found = False
+            for cs, points in cache_data.items():
+                if not points:
+                    continue
+                points = sorted(points, key=lambda x: x[0])
+                bits = [p[0] for p in points]
+                accs = [p[1] for p in points]
+                cycles = [p[2] for p in points]
+                
+                j_factor = jitter.get(cs, 1.0)
+                plot_cycles = [cyc * j_factor for cyc in cycles]
+                
+                label = f"Cache {cs}MB"
+                color = colors.get(cs, 'black')
+                linestyle = linestyles.get(cs, '-')
+                marker = markers.get(cs, 'o')
+                
+                plt.plot(plot_cycles, accs, marker=marker, label=label, color=color, 
+                         linestyle=linestyle, linewidth=2, markersize=8)
+                
+                unique_coords = []
+                for idx, (b, acc, cyc) in enumerate(points):
+                    p_cyc = plot_cycles[idx]
+                    found = False
+                    for group in unique_coords:
+                        if abs(group['cycles'] - cyc) < 1e-2 and abs(group['acc'] - acc) < 1e-3:
+                            group['bits'].append(b)
+                            group['indices'].append(idx)
+                            found = True
+                            break
+                    if not found:
+                        unique_coords.append({
+                            'cycles': cyc,
+                            'plot_cycles': p_cyc,
+                            'acc': acc,
+                            'bits': [b],
+                            'indices': [idx]
+                        })
+                
                 for group in unique_coords:
-                    if abs(group['cycles'] - cyc) < 1e-2 and abs(group['acc'] - acc) < 1e-3:
-                        group['bits'].append(b)
-                        group['indices'].append(idx)
-                        found = True
-                        break
-                if not found:
-                    unique_coords.append({
-                        'cycles': cyc,
-                        'plot_cycles': p_cyc,
-                        'acc': acc,
-                        'bits': [b],
-                        'indices': [idx]
-                    })
-            
-            for group in unique_coords:
-                group_bits = sorted(group['bits'])
-                acc = group['acc']
-                cyc = group['cycles']
-                p_cyc = group['plot_cycles']
-                
-                if len(group_bits) > 1:
-                    bw_text = f"{group_bits[0]}-{group_bits[-1]}"
-                    b_val = group_bits[0]
-                else:
-                    bw_text = f"{group_bits[0]}"
-                    b_val = group_bits[0]
-                
-                cyc_text = fmt_elems(cyc)
-                
-                # Determine alignment and offset based on cache size and bit value to prevent overlaps
-                if cs == 0.0:
-                    if b_val == 2:
-                        cfg_bw = {'xy': (10, 5), 'ha': 'left', 'va': 'bottom'}
-                        cfg_cyc = {'xy': (10, -8), 'ha': 'left', 'va': 'top'}
-                    elif b_val in (3, 4, 5):
+                    group_bits = sorted(group['bits'])
+                    acc = group['acc']
+                    cyc = group['cycles']
+                    p_cyc = group['plot_cycles']
+                    
+                    if len(group_bits) > 1:
+                        bw_text = f"{group_bits[0]}-{group_bits[-1]}"
+                        b_val = group_bits[0]
+                    else:
+                        bw_text = f"{group_bits[0]}"
+                        b_val = group_bits[0]
+                    
+                    cyc_text = fmt_elems(cyc)
+                    
+                    if cs == 0.0:
+                        if b_val == 2:
+                            cfg_bw = {'xy': (10, 5), 'ha': 'left', 'va': 'bottom'}
+                            cfg_cyc = {'xy': (10, -8), 'ha': 'left', 'va': 'top'}
+                        elif b_val in (3, 4, 5):
+                            cfg_bw = {'xy': (-10, 8), 'ha': 'right', 'va': 'bottom'}
+                            cfg_cyc = {'xy': (-10, -2), 'ha': 'right', 'va': 'top'}
+                        elif b_val == 6:
+                            cfg_bw = {'xy': (10, -5), 'ha': 'left', 'va': 'top'}
+                            cfg_cyc = {'xy': (10, -18), 'ha': 'left', 'va': 'top'}
+                        elif b_val == 7:
+                            cfg_bw = {'xy': (-10, 8), 'ha': 'right', 'va': 'bottom'}
+                            cfg_cyc = {'xy': (-10, -2), 'ha': 'right', 'va': 'top'}
+                        else:  # b_val == 8
+                            cfg_bw = {'xy': (10, 8), 'ha': 'left', 'va': 'bottom'}
+                            cfg_cyc = {'xy': (10, -2), 'ha': 'left', 'va': 'top'}
+                    elif cs == 2.0:
                         cfg_bw = {'xy': (-10, 8), 'ha': 'right', 'va': 'bottom'}
                         cfg_cyc = {'xy': (-10, -2), 'ha': 'right', 'va': 'top'}
-                    elif b_val == 6:
-                        cfg_bw = {'xy': (10, -5), 'ha': 'left', 'va': 'top'}
-                        cfg_cyc = {'xy': (10, -18), 'ha': 'left', 'va': 'top'}
-                    elif b_val == 7:
-                        cfg_bw = {'xy': (-10, 8), 'ha': 'right', 'va': 'bottom'}
-                        cfg_cyc = {'xy': (-10, -2), 'ha': 'right', 'va': 'top'}
-                    else:  # b_val == 8
+                    elif cs == 4.0:
                         cfg_bw = {'xy': (10, 8), 'ha': 'left', 'va': 'bottom'}
                         cfg_cyc = {'xy': (10, -2), 'ha': 'left', 'va': 'top'}
-                elif cs == 2.0:
-                    # Above-left and below-left
-                    cfg_bw = {'xy': (-10, 8), 'ha': 'right', 'va': 'bottom'}
-                    cfg_cyc = {'xy': (-10, -2), 'ha': 'right', 'va': 'top'}
-                elif cs == 4.0:
-                    # Above-right and below-right
-                    cfg_bw = {'xy': (10, 8), 'ha': 'left', 'va': 'bottom'}
-                    cfg_cyc = {'xy': (10, -2), 'ha': 'left', 'va': 'top'}
-                else:
-                    cfg_bw = {'xy': (0, 10), 'ha': 'center', 'va': 'bottom'}
-                    cfg_cyc = {'xy': (0, -10), 'ha': 'center', 'va': 'top'}
-                
-                # 1. Bit-width label (in curve color, bold)
-                plt.annotate(
-                    bw_text, 
-                    (p_cyc, acc), 
-                    textcoords="offset points", 
-                    xytext=cfg_bw['xy'], 
-                    ha=cfg_bw['ha'], 
-                    va=cfg_bw['va'],
-                    fontsize=9, 
-                    color=color, 
-                    weight='bold'
-                )
-                # 2. Cycles label (in charcoal gray, regular weight)
-                plt.annotate(
-                    cyc_text, 
-                    (p_cyc, acc), 
-                    textcoords="offset points", 
-                    xytext=cfg_cyc['xy'], 
-                    ha=cfg_cyc['ha'], 
-                    va=cfg_cyc['va'],
-                    fontsize=8.5, 
-                    color='#495057', 
-                    weight='normal'
-                )
-                
-        # Add descriptive text box explaining the values in the empty bottom-left corner
-        plt.text(0.05, 0.05, 
-                 "Note: Numbers near the bullets represent the bit-width (b) of off-chip layers.\n"
-                 "Cycle counts (e.g., 44.9k, 10.1M) are shown in gray below/next to the bit-width labels.",
-                 transform=plt.gca().transAxes, ha='left', va='bottom', fontsize=9.5, color='#2c3e50',
-                 bbox=dict(boxstyle='round,pad=0.5', facecolor='#f8f9fa', edgecolor='#ced4da', alpha=0.9))
+                    else:
+                        cfg_bw = {'xy': (0, 10), 'ha': 'center', 'va': 'bottom'}
+                        cfg_cyc = {'xy': (0, -10), 'ha': 'center', 'va': 'top'}
+                    
+                    plt.annotate(
+                        bw_text, 
+                        (p_cyc, acc), 
+                        textcoords="offset points", 
+                        xytext=cfg_bw['xy'], 
+                        ha=cfg_bw['ha'], 
+                        va=cfg_bw['va'],
+                        fontsize=9, 
+                        color=color, 
+                        weight='bold'
+                    )
+                    plt.annotate(
+                        cyc_text, 
+                        (p_cyc, acc), 
+                        textcoords="offset points", 
+                        xytext=cfg_cyc['xy'], 
+                        ha=cfg_cyc['ha'], 
+                        va=cfg_cyc['va'],
+                        fontsize=8.5, 
+                        color='#495057', 
+                        weight='normal'
+                    )
+                    
+            plt.text(0.05, 0.05, 
+                     "Note: Numbers near the bullets represent the bit-width (b) of off-chip layers.\n"
+                     "Cycle counts (e.g., 44.9k, 10.1M) are shown in gray below/next to the bit-width labels.",
+                     transform=plt.gca().transAxes, ha='left', va='bottom', fontsize=9.5, color='#2c3e50',
+                     bbox=dict(boxstyle='round,pad=0.5', facecolor='#f8f9fa', edgecolor='#ced4da', alpha=0.9))
 
-        plt.title(f"Accuracy vs. Compute Time (Starting Min Bits = {min_bits})\nBandwidth = {args.bandwidth} elements/cycle")
-        plt.xlabel("Compute Time (Cycles - Log Scale)")
-        plt.ylabel("Top-1 Accuracy (%)")
-        plt.xscale('log')
-        plt.xlim(xlim_min, xlim_max)
-        plt.ylim(ylim_min, ylim_max)
-        plt.grid(True, which="both", linestyle='--', alpha=0.6)
-        plt.legend()
-        plt.tight_layout()
-        plot_path = os.path.join(output_dir, f"accuracy_vs_compute_time_min_bits_{min_bits}.png")
-        plt.savefig(plot_path, dpi=300)  # High resolution
-        plt.close()
-        print(f"Saved plot: {plot_path}")
+            plt.title(f"Accuracy vs. Compute Time (Starting Min Bits = {min_bits})\nBandwidth = {args.bandwidth} elements/cycle")
+            plt.xlabel("Compute Time (Cycles - Log Scale)")
+            plt.ylabel("Top-1 Accuracy (%)")
+            plt.xscale('log')
+            plt.xlim(xlim_min, xlim_max)
+            plt.ylim(ylim_min, ylim_max)
+            plt.grid(True, which="both", linestyle='--', alpha=0.6)
+            plt.legend()
+            plt.tight_layout()
+            plot_path = os.path.join(model_output_dir, f"accuracy_vs_compute_time_min_bits_{min_bits}.png")
+            plt.savefig(plot_path, dpi=300)  # High resolution
+            plt.close()
+            print(f"Saved plot: {plot_path}")
 
-    # Cleanup temp directory
-    try:
-        os.rmdir(temp_weights_dir)
-    except OSError:
-        pass
+        # Cleanup temp directory
+        try:
+            os.rmdir(temp_weights_dir)
+        except OSError:
+            pass
 
     print(f"\nDone! Recreated bandwidth_aware_quant experiment complete.")
 
