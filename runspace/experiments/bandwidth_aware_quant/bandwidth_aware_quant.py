@@ -501,7 +501,7 @@ def main():
                         'chunk_size': 128,
                         'candidate_formats': get_input_formats_for_bits(b),
                         'use_cache_sim_db': False,
-                        'unsigned_input_sources': ['relu', 'relu6', 'softmax', 'sigmoid', 'hardsigmoid', 'quantrelu', 'quantsoftmax'],
+                        'unsigned_input_sources': ['relu', 'relu6', 'softmax', 'quantrelu', 'quantsoftmax'],
                     }
                 },
                 'dataset': {
