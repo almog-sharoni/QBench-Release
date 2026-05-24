@@ -202,7 +202,7 @@ def run_cache_simulation(model_name, cache_size_M, batch_size=1, num_banks=16, m
     return results, cache_sim_map
 
 
-def compute_model_runtime(layers_with_stay_status, b_bits):
+def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
     """
     Compute model total runtime (execution cycles) under bandwidth-constrained conditions.
     Accumulates cycles across parent operations and all of their collapsed operations.
@@ -240,7 +240,7 @@ def compute_model_runtime(layers_with_stay_status, b_bits):
             collapsed_out_elems = collapsed.get('output_elems', 0)
             compute_cycles += math.ceil(collapsed_out_elems / 128)
             
-        # 2. Memory transfer cycles (assuming 1.0 elements/cycle bandwidth)
+        # 2. Memory transfer cycles (assuming 1.0 elements/cycle bandwidth by default)
         if stay_on_chip:
             transfer_cycles = 0
         else:
@@ -257,7 +257,7 @@ def compute_model_runtime(layers_with_stay_status, b_bits):
             # Output transfer
             output_transfer = layer.get('output_elems', 0)
             
-            transfer_cycles = weight_transfer + input_transfer + output_transfer
+            transfer_cycles = (weight_transfer + input_transfer + output_transfer) / bandwidth
             
         # Runtime is max(compute, transfer)
         layer_runtime = max(compute_cycles, transfer_cycles)
@@ -354,6 +354,7 @@ def main():
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of evaluation batches (-1 = all)")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     parser.add_argument("--device", type=str, default="cuda", help="Execution device")
+    parser.add_argument("--bandwidth", type=float, default=1.0, help="Memory bandwidth in elements/cycle")
     args = parser.parse_args()
 
     # Verify CUDA availability
@@ -425,7 +426,7 @@ def main():
         sim_layers, cache_sim_map = cache_sims[cs]
         
         # 3.1. Compute execution runtime (cycles)
-        cycles = compute_model_runtime(sim_layers, b)
+        cycles = compute_model_runtime(sim_layers, b, bandwidth=args.bandwidth)
         print(f"Calculated compute time: {cycles:,} cycles")
 
         # 3.2. Quantize model weights based on stay status and bit width
@@ -521,6 +522,31 @@ def main():
     print("\n--- Generating plots for each starting min_bits threshold ---")
     colors = {0.0: 'red', 2.0: 'blue', 4.0: 'green'}
     
+    # Enforce same scale: find global min/max across all min_bits and cache sizes
+    global_min_cycles = float('inf')
+    global_max_cycles = float('-inf')
+    global_min_acc = 100.0
+    global_max_acc = 0.0
+
+    for min_bits, cache_data in results_data.items():
+        for cs, points in cache_data.items():
+            for b, acc, cyc in points:
+                global_min_cycles = min(global_min_cycles, cyc)
+                global_max_cycles = max(global_max_cycles, cyc)
+                global_min_acc = min(global_min_acc, acc)
+                global_max_acc = max(global_max_acc, acc)
+
+    if global_min_cycles == float('inf'):
+        global_min_cycles, global_max_cycles = 0, 1000000
+    if global_min_acc == 100.0:
+        global_min_acc, global_max_acc = 0.0, 100.0
+
+    # Margins for same scaling
+    xlim_min = global_min_cycles * 0.9
+    xlim_max = global_max_cycles * 1.1
+    ylim_min = max(0.0, global_min_acc - 5.0)
+    ylim_max = min(100.0, global_max_acc + 5.0)
+
     for min_bits, cache_data in results_data.items():
         plt.figure(figsize=(10, 6))
         
@@ -543,9 +569,11 @@ def main():
                 plt.annotate(f"{b}b", (cyc, acc), textcoords="offset points", 
                              xytext=(0, 10), ha='center', fontsize=8, color=color, weight='bold')
                 
-        plt.title(f"Accuracy vs. Compute Time (Starting Min Bits = {min_bits})")
+        plt.title(f"Accuracy vs. Compute Time (Starting Min Bits = {min_bits})\nBandwidth = {args.bandwidth} elements/cycle")
         plt.xlabel("Compute Time (Cycles)")
         plt.ylabel("Top-1 Accuracy (%)")
+        plt.xlim(xlim_min, xlim_max)
+        plt.ylim(ylim_min, ylim_max)
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.legend()
         plt.tight_layout()
