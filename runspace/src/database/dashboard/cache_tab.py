@@ -100,7 +100,20 @@ with tab_cache:
 
             # ── Layer table ───────────────────────────────────────────────────
             st.markdown("#### Layer Details")
-            layers_df = pd.DataFrame(layers)
+            
+            # Format collapsed layers into name and type columns for display
+            formatted_layers = []
+            for layer in layers:
+                layer_copy = dict(layer)
+                collapsed = layer.get('collapsed_layers', [])
+                if collapsed:
+                    collapsed_names = ", ".join(c['name'] for c in collapsed)
+                    collapsed_types = ", ".join(c['type'] for c in collapsed)
+                    layer_copy['name'] = f"{layer['name']} (+ {collapsed_names})"
+                    layer_copy['type'] = f"{layer['type']} (+ {collapsed_types})"
+                formatted_layers.append(layer_copy)
+            
+            layers_df = pd.DataFrame(formatted_layers)
 
             display_cols = [c for c in [
                 'name', 'type', 'stay_on_chip', 'rule', 'reason',

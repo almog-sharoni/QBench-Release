@@ -18,21 +18,27 @@ def get_footprint_elements(num_elements: int, metadata_bits: int) -> int:
     """
     Calculate total element-equivalent footprint including metadata overhead.
 
-    Each FP8 element is 8 bits, so 16 elements form one 128-bit chunk.
-    Metadata bytes (ceil(metadata_bits/8)) are counted as element-equivalents
-    (1 byte = 1 FP8 element).
+    Tensors are allocated in 128-element chunks. If a tensor uses any part
+    of a chunk, it occupies the full chunk.
+
+    Metadata bytes are counted as element-equivalents (1 byte = 1 FP8 element)
+    and are also computed per chunk.
     """
     if num_elements <= 0:
         return 0
-    num_chunks = math.ceil(num_elements / 16)          # 16 FP8 elements per 128-bit chunk
+    chunk_size = 128
+    num_chunks = math.ceil(num_elements / chunk_size)
+    chunk_elems = num_chunks * chunk_size
     metadata_elems = math.ceil(num_chunks * metadata_bits / 8)
-    return num_elements + metadata_elems
+    return chunk_elems + metadata_elems
 
 
 def round_to_banks(size_elems: int, bank_size: int) -> int:
     """Round up to the nearest bank boundary (in elements)."""
     if size_elems <= 0:
         return 0
+    if bank_size <= 0:
+        return size_elems
     return math.ceil(size_elems / bank_size) * bank_size
 
 
@@ -71,6 +77,7 @@ def _next_layer_viable(next_layer: dict, metadata_bits: int, bank_size: int,
     ctx = {
         'input_banked':   ni, 'output_banked': no, 'weight_banked': nw,
         'cache_elements': cache_elements, 'bank_size': bank_size,
+        'jump_back_size_in_banks': next_layer.get('jump_back_size_in_banks', 0),
     }
     layer_type = next_layer.get('type', '__default__')
     rule_keys  = LAYER_RULES.get(layer_type, LAYER_RULES['__default__'])
@@ -113,9 +120,39 @@ def evaluate_stay(layer: dict, ctx: dict,
     return False, 0, False, 'FLAGGED'
 
 
+def is_collapsible(layer_type: str) -> bool:
+    """Check if the layer is an activation, layer norm, or softmax that should be collapsed."""
+    _COLLAPSIBLE_TYPES = {
+        # Norm types
+        'QuantLayerNorm','LayerNorm', 'BatchNorm1d', 'BatchNorm2d', 'BatchNorm3d', 'GroupNorm',
+        # Softmax types
+        'Softmax', 'QuantSoftmax',
+    }
+    if layer_type in _COLLAPSIBLE_TYPES:
+        return True
+    
+    # Check if registered as an activation in OpRegistry
+    try:
+        if OpRegistry.is_activation(layer_type):
+            return True
+    except Exception:
+        pass
+
+    # Fallback to standard activation name patterns
+    act_names = {'relu', 'relu6', 'gelu', 'silu', 'hardswish', 'hardsigmoid', 'tanh', 'sigmoid', 'softmax'}
+    cleaned_type = layer_type.lower()
+    if cleaned_type.startswith("quant"):
+        cleaned_type = cleaned_type[5:]
+    if cleaned_type in act_names:
+        return True
+    
+    return False
+
+
 # ---------------------------------------------------------------------------
 
-def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapter_cfg: dict = None):
+def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapter_cfg: dict = None,
+                  cache_elements: int = 0, bank_size: int = 0, metadata_bits: int = 0):
     """Trace model to get layer element counts in execution order."""
     import torch.nn.functional as F
     import yaml
@@ -207,10 +244,24 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
             }
             if isinstance(module, nn.Conv2d):
                 ks = module.kernel_size
-                info['in_channels']  = module.in_channels
-                info['out_channels'] = module.out_channels
-                info['kernel_size']  = ks[0] if isinstance(ks, tuple) else ks
-                info['groups']       = module.groups
+                if isinstance(ks, tuple):
+                    filter_height, filter_width = ks
+                else:
+                    filter_height = filter_width = ks
+                in_t = input[0] if isinstance(input[0], torch.Tensor) else None
+                out_t = output   if isinstance(output,   torch.Tensor) else None
+
+                info['in_channels']            = module.in_channels
+                info['out_channels']           = module.out_channels
+                info['filter_height']          = filter_height
+                info['filter_width']           = filter_width
+                info['kernel_size']            = ks[0] if isinstance(ks, tuple) else ks
+                info['groups']                 = module.groups
+                info['input_channel_height']   = in_t.shape[-2] if in_t is not None and in_t.ndim >= 4 else 0
+                info['input_channel_width']    = in_t.shape[-1] if in_t is not None and in_t.ndim >= 4 else 0
+                info['output_channel_height']  = out_t.shape[-2] if out_t is not None and out_t.ndim >= 4 else 0
+                info['output_channel_width']   = out_t.shape[-1] if out_t is not None and out_t.ndim >= 4 else 0
+                info['jump_back_size_in_banks'] = round_to_banks(info['filter_width'] * info['in_channels'] * (info['input_channel_width'])//128 * 128, bank_size)
             elif isinstance(module, nn.Linear):
                 info['in_features']  = module.in_features
                 info['out_features'] = module.out_features
@@ -295,6 +346,24 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
         for h in hooks:
             h.remove()
 
+    collapsed_order = []
+    for layer in execution_order:
+        if is_collapsible(layer['type']) and collapsed_order:
+            prev_layer = collapsed_order[-1]
+            prev_layer['output_elems'] = layer['output_elems']
+            prev_layer['weight_elems'] += layer.get('weight_elems', 0)
+            if 'collapsed_layers' not in prev_layer:
+                prev_layer['collapsed_layers'] = []
+            prev_layer['collapsed_layers'].append({
+                'name': layer['name'],
+                'type': layer['type'],
+                'weight_elems': layer.get('weight_elems', 0),
+                'output_elems': layer['output_elems']
+            })
+        else:
+            collapsed_order.append(layer)
+    execution_order = collapsed_order
+
     return execution_order
 
 
@@ -343,6 +412,14 @@ def run_simulation(args):
     cache_elements = int(args.cache_size * 1_000_000)
     bank_size      = cache_elements // args.num_banks   # elements per bank
 
+    adapter_override = {}
+    if args.fold_layers is not None:
+        adapter_override['fold_layers'] = args.fold_layers
+    if args.fold_input_norm is not None:
+        adapter_override['fold_input_norm'] = args.fold_input_norm
+    if args.quantize_first_layer is not None:
+        adapter_override['quantize_first_layer'] = args.quantize_first_layer
+
     # Resolve and load models to run
     models_to_run = []
     is_yaml = args.model_name.endswith('.yaml') or args.model_name.endswith('.yml') or os.path.isfile(args.model_name)
@@ -372,11 +449,11 @@ def run_simulation(args):
                 if 'model' in cfg and isinstance(cfg['model'], dict):
                     model_cfg = cfg['model']
                     name = model_cfg.get('name', args.model_name)
-                    adapter_cfg = cfg.get('adapter', {})
+                    adapter_cfg = dict(cfg.get('adapter', {}), **adapter_override)
                 else:
                     model_cfg = cfg
                     name = cfg.get('name', args.model_name)
-                    adapter_cfg = {}
+                    adapter_cfg = dict({}, **adapter_override)
                 
                 models_to_run.append({
                     'config_path': args.model_name,
@@ -390,14 +467,14 @@ def run_simulation(args):
                 'config_path': None,
                 'name': args.model_name,
                 'model_cfg': {'name': args.model_name, 'weights': None},
-                'adapter_cfg': {}
+                'adapter_cfg': dict({}, **adapter_override)
             })
     else:
         models_to_run.append({
             'config_path': None,
             'name': args.model_name,
             'model_cfg': {'name': args.model_name, 'weights': None},
-            'adapter_cfg': {}
+            'adapter_cfg': dict({'type': 'generic', 'build_quantized': True}, **adapter_override)
         })
 
     total_models = len(models_to_run)
@@ -417,7 +494,8 @@ def run_simulation(args):
         print(f"\n[{idx}/{total_models}] Simulating model: {model_display_name}" + (f" (from config: {config_path})" if config_path else ""))
 
         try:
-            layers = analyze_model(model_cfg, args.batch_size, args.device, adapter_cfg)
+            layers = analyze_model(model_cfg, args.batch_size, args.device, adapter_cfg,
+                                   cache_elements, bank_size, args.metadata_bits)
         except Exception as e:
             print(f"Error: Failed to analyze model {model_display_name}: {e}")
             import traceback
@@ -454,6 +532,15 @@ def run_simulation(args):
                 'next_xin_banked': next_xin_banked,
                 'cache_elements':  cache_elements,
                 'bank_size':       bank_size,
+                'filter_height':   layer.get('filter_height', 0),
+                'filter_width':    layer.get('filter_width', 0),
+                'in_channels':     layer.get('in_channels', 0),
+                'out_channels':    layer.get('out_channels', 0),
+                'input_channel_height':  layer.get('input_channel_height', 0),
+                'input_channel_width':   layer.get('input_channel_width', 0),
+                'output_channel_height': layer.get('output_channel_height', 0),
+                'output_channel_width':  layer.get('output_channel_width', 0),
+                'jump_back_size_in_banks': layer.get('jump_back_size_in_banks', 0),
             }
 
             stay_on_chip, perm_elems, possible, rule_name = evaluate_stay(
@@ -473,6 +560,14 @@ def run_simulation(args):
                 'next_xin_banks':   next_xin_banked // bank_size,
                 'next_layer_name':  next_layer['name'] if next_layer else None,
                 'total_required':   output_banked + next_xin_banked,
+                'filter_height':    layer.get('filter_height', 0),
+                'filter_width':     layer.get('filter_width', 0),
+                'in_channels':      layer.get('in_channels', 0),
+                'out_channels':     layer.get('out_channels', 0),
+                'input_channel_height':  layer.get('input_channel_height', 0),
+                'input_channel_width':   layer.get('input_channel_width', 0),
+                'output_channel_height': layer.get('output_channel_height', 0),
+                'output_channel_width':  layer.get('output_channel_width', 0),
                 'stay_on_chip':     stay_on_chip,
                 'rule':             rule_name,
                 'reason': (
@@ -480,6 +575,7 @@ def run_simulation(args):
                     else f"no rule fits (flagged)" if rule_name == 'FLAGGED'
                     else f"{rule_name} — output to external"
                 ),
+                'collapsed_layers': layer.get('collapsed_layers', []),
             })
 
         # --- Console output ---
@@ -577,6 +673,21 @@ if __name__ == "__main__":
     parser.add_argument("--metadata_bits", type=int,   default=0)
     parser.add_argument("--batch_size",    type=int,   default=1)
     parser.add_argument("--device",        type=str,   default="cuda")
+    parser.add_argument("--fold_layers", action="store_true", dest="fold_layers",
+                        default=True,
+                        help="Fold batchnorm/conv layers during model build")
+    parser.add_argument("--no_fold_layers", action="store_false", dest="fold_layers",
+                        help="Disable layer folding during model build")
+    parser.add_argument("--fold_input_norm", action="store_true", dest="fold_input_norm",
+                        default=True,
+                        help="Fold input normalization into the first layer")
+    parser.add_argument("--no_fold_input_norm", action="store_false", dest="fold_input_norm",
+                        help="Disable folding of input normalization")
+    parser.add_argument("--quantize_first_layer", action="store_true", dest="quantize_first_layer",
+                        default=True,
+                        help="Quantize the first layer's input/weights")
+    parser.add_argument("--no_quantize_first_layer", action="store_false", dest="quantize_first_layer",
+                        help="Disable quantization of the first layer")
     args = parser.parse_args()
 
     run_simulation(args)

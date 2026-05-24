@@ -446,8 +446,16 @@ class GenericAdapter(BaseAdapter):
 
             if (
                 isinstance(mod_curr, (nn.Conv2d, nn.Linear)) and 
-                isinstance(mod_next, (nn.BatchNorm2d, nn.BatchNorm1d)) and
-                type(mod_next).__name__ != 'BatchNormAct2d'
+                isinstance(mod_next, nn.BatchNorm2d) and
+                type(mod_next) is not nn.BatchNorm2d
+            ):
+                self._fold_conv_bn_subclass(name_curr, mod_curr, name_next, mod_next, model)
+                i += 2
+                continue
+
+            if (
+                isinstance(mod_curr, (nn.Conv2d, nn.Linear)) and 
+                isinstance(mod_next, (nn.BatchNorm2d, nn.BatchNorm1d))
             ):
                 modules_to_fuse.append([name_curr, name_next])
                 i += 2
@@ -457,6 +465,51 @@ class GenericAdapter(BaseAdapter):
 
         if modules_to_fuse:
             torch.quantization.fuse_modules(model, modules_to_fuse, inplace=True)
+
+    def _fold_conv_bn_subclass(self, conv_name, conv, bn_name, bn_mod, model):
+        if not isinstance(conv, nn.Conv2d):
+            return
+
+        eps = bn_mod.eps
+        bn_weight = bn_mod.weight
+        bn_bias = bn_mod.bias
+        running_mean = bn_mod.running_mean
+        running_var = bn_mod.running_var
+
+        if bn_weight is None:
+            return
+
+        with torch.no_grad():
+            inv_std = 1.0 / torch.sqrt(running_var + eps)
+            scale = bn_weight * inv_std
+            shift = bn_bias - bn_weight * running_mean * inv_std
+
+            scale_reshaped = scale.view(-1, 1, 1, 1)
+            conv.weight.copy_(conv.weight * scale_reshaped)
+
+            if conv.bias is None:
+                conv.bias = nn.Parameter(torch.zeros(conv.out_channels, device=conv.weight.device))
+            conv.bias.copy_(conv.bias * scale + shift)
+
+        parent_name = '.'.join(bn_name.split('.')[:-1])
+        child_attr = bn_name.split('.')[-1]
+        parent = model.get_submodule(parent_name)
+
+        drop_mod = getattr(bn_mod, 'drop', nn.Identity())
+        act_mod = getattr(bn_mod, 'act', nn.Identity())
+
+        if not isinstance(drop_mod, nn.Identity) and not isinstance(act_mod, nn.Identity):
+            replacement = nn.Sequential()
+            replacement.add_module('drop', drop_mod)
+            replacement.add_module('act', act_mod)
+        elif not isinstance(drop_mod, nn.Identity):
+            replacement = drop_mod
+        elif not isinstance(act_mod, nn.Identity):
+            replacement = act_mod
+        else:
+            replacement = nn.Identity()
+
+        setattr(parent, child_attr, replacement)
 
     def _fold_input_normalization(self, model: nn.Module):
         """

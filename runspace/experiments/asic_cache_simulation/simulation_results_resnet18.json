@@ -8,10 +8,10 @@
     "bank_size": 125000,
     "metadata_bits": 0,
     "batch_size": 1,
-    "timestamp": "2026-05-20T11:08:20.881732Z"
+    "timestamp": "2026-05-24T11:09:37.321780Z"
   },
   "summary": {
-    "total_layers": 48,
+    "total_layers": 31,
     "quantize_count": 0,
     "flagged_count": 0
   },
@@ -20,35 +20,34 @@
       "name": "conv1",
       "type": "QuantConv2d",
       "input_elems": 150528,
-      "weight_elems": 9408,
+      "weight_elems": 9472,
       "output_elems": 802816,
       "output_banked": 875000,
       "perm_elems": 1000000,
       "next_xin_banked": 875000,
       "footprint_banks": 7,
       "next_xin_banks": 7,
-      "next_layer_name": "relu",
-      "total_required": 1750000,
-      "stay_on_chip": true,
-      "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
-    },
-    {
-      "name": "relu",
-      "type": "QuantReLU",
-      "input_elems": 802816,
-      "weight_elems": 0,
-      "output_elems": 802816,
-      "output_banked": 875000,
-      "perm_elems": 875000,
-      "next_xin_banked": 875000,
-      "footprint_banks": 7,
-      "next_xin_banks": 7,
       "next_layer_name": "maxpool",
       "total_required": 1750000,
+      "filter_height": 7,
+      "filter_width": 7,
+      "in_channels": 3,
+      "out_channels": 64,
+      "input_channel_height": 224,
+      "input_channel_width": 224,
+      "output_channel_height": 112,
+      "output_channel_width": 112,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "conv_output_dominated",
+      "reason": "conv_output_dominated",
+      "collapsed_layers": [
+        {
+          "name": "relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 802816
+        }
+      ]
     },
     {
       "name": "maxpool",
@@ -63,9 +62,18 @@
       "next_xin_banks": 2,
       "next_layer_name": "layer1.0.conv1",
       "total_required": 500000,
+      "filter_height": 0,
+      "filter_width": 0,
+      "in_channels": 0,
+      "out_channels": 0,
+      "input_channel_height": 0,
+      "input_channel_width": 0,
+      "output_channel_height": 0,
+      "output_channel_width": 0,
       "stay_on_chip": true,
       "rule": "global_fit",
-      "reason": "global_fit"
+      "reason": "global_fit",
+      "collapsed_layers": []
     },
     {
       "name": "layer1.0.conv1",
@@ -78,28 +86,27 @@
       "next_xin_banked": 250000,
       "footprint_banks": 2,
       "next_xin_banks": 2,
-      "next_layer_name": "layer1.0.relu",
-      "total_required": 500000,
-      "stay_on_chip": true,
-      "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
-    },
-    {
-      "name": "layer1.0.relu",
-      "type": "QuantReLU",
-      "input_elems": 200704,
-      "weight_elems": 0,
-      "output_elems": 200704,
-      "output_banked": 250000,
-      "perm_elems": 250000,
-      "next_xin_banked": 250000,
-      "footprint_banks": 2,
-      "next_xin_banks": 2,
       "next_layer_name": "layer1.0.conv2",
       "total_required": 500000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 64,
+      "out_channels": 64,
+      "input_channel_height": 56,
+      "input_channel_width": 56,
+      "output_channel_height": 56,
+      "output_channel_width": 56,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "conv_output_dominated",
+      "reason": "conv_output_dominated",
+      "collapsed_layers": [
+        {
+          "name": "layer1.0.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 200704
+        }
+      ]
     },
     {
       "name": "layer1.0.conv2",
@@ -114,9 +121,18 @@
       "next_xin_banks": 2,
       "next_layer_name": "add",
       "total_required": 500000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 64,
+      "out_channels": 64,
+      "input_channel_height": 56,
+      "input_channel_width": 56,
+      "output_channel_height": 56,
+      "output_channel_width": 56,
       "stay_on_chip": true,
       "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
+      "reason": "conv_output_dominated",
+      "collapsed_layers": []
     },
     {
       "name": "add",
@@ -129,28 +145,27 @@
       "next_xin_banked": 250000,
       "footprint_banks": 2,
       "next_xin_banks": 2,
-      "next_layer_name": "layer1.0.relu",
-      "total_required": 500000,
-      "stay_on_chip": true,
-      "rule": "residual",
-      "reason": "residual"
-    },
-    {
-      "name": "layer1.0.relu",
-      "type": "QuantReLU",
-      "input_elems": 200704,
-      "weight_elems": 0,
-      "output_elems": 200704,
-      "output_banked": 250000,
-      "perm_elems": 250000,
-      "next_xin_banked": 250000,
-      "footprint_banks": 2,
-      "next_xin_banks": 2,
       "next_layer_name": "layer1.1.conv1",
       "total_required": 500000,
+      "filter_height": 0,
+      "filter_width": 0,
+      "in_channels": 0,
+      "out_channels": 0,
+      "input_channel_height": 0,
+      "input_channel_width": 0,
+      "output_channel_height": 0,
+      "output_channel_width": 0,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "residual",
+      "reason": "residual",
+      "collapsed_layers": [
+        {
+          "name": "layer1.0.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 200704
+        }
+      ]
     },
     {
       "name": "layer1.1.conv1",
@@ -163,28 +178,27 @@
       "next_xin_banked": 250000,
       "footprint_banks": 2,
       "next_xin_banks": 2,
-      "next_layer_name": "layer1.1.relu",
-      "total_required": 500000,
-      "stay_on_chip": true,
-      "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
-    },
-    {
-      "name": "layer1.1.relu",
-      "type": "QuantReLU",
-      "input_elems": 200704,
-      "weight_elems": 0,
-      "output_elems": 200704,
-      "output_banked": 250000,
-      "perm_elems": 250000,
-      "next_xin_banked": 250000,
-      "footprint_banks": 2,
-      "next_xin_banks": 2,
       "next_layer_name": "layer1.1.conv2",
       "total_required": 500000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 64,
+      "out_channels": 64,
+      "input_channel_height": 56,
+      "input_channel_width": 56,
+      "output_channel_height": 56,
+      "output_channel_width": 56,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "conv_output_dominated",
+      "reason": "conv_output_dominated",
+      "collapsed_layers": [
+        {
+          "name": "layer1.1.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 200704
+        }
+      ]
     },
     {
       "name": "layer1.1.conv2",
@@ -199,9 +213,18 @@
       "next_xin_banks": 2,
       "next_layer_name": "add_1",
       "total_required": 500000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 64,
+      "out_channels": 64,
+      "input_channel_height": 56,
+      "input_channel_width": 56,
+      "output_channel_height": 56,
+      "output_channel_width": 56,
       "stay_on_chip": true,
       "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
+      "reason": "conv_output_dominated",
+      "collapsed_layers": []
     },
     {
       "name": "add_1",
@@ -214,28 +237,27 @@
       "next_xin_banked": 250000,
       "footprint_banks": 2,
       "next_xin_banks": 2,
-      "next_layer_name": "layer1.1.relu",
-      "total_required": 500000,
-      "stay_on_chip": true,
-      "rule": "residual",
-      "reason": "residual"
-    },
-    {
-      "name": "layer1.1.relu",
-      "type": "QuantReLU",
-      "input_elems": 200704,
-      "weight_elems": 0,
-      "output_elems": 200704,
-      "output_banked": 250000,
-      "perm_elems": 250000,
-      "next_xin_banked": 250000,
-      "footprint_banks": 2,
-      "next_xin_banks": 2,
       "next_layer_name": "layer2.0.conv1",
       "total_required": 500000,
+      "filter_height": 0,
+      "filter_width": 0,
+      "in_channels": 0,
+      "out_channels": 0,
+      "input_channel_height": 0,
+      "input_channel_width": 0,
+      "output_channel_height": 0,
+      "output_channel_width": 0,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "residual",
+      "reason": "residual",
+      "collapsed_layers": [
+        {
+          "name": "layer1.1.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 200704
+        }
+      ]
     },
     {
       "name": "layer2.0.conv1",
@@ -248,28 +270,27 @@
       "next_xin_banked": 125000,
       "footprint_banks": 1,
       "next_xin_banks": 1,
-      "next_layer_name": "layer2.0.relu",
-      "total_required": 250000,
-      "stay_on_chip": true,
-      "rule": "conv_input_dominated",
-      "reason": "conv_input_dominated"
-    },
-    {
-      "name": "layer2.0.relu",
-      "type": "QuantReLU",
-      "input_elems": 100352,
-      "weight_elems": 0,
-      "output_elems": 100352,
-      "output_banked": 125000,
-      "perm_elems": 125000,
-      "next_xin_banked": 125000,
-      "footprint_banks": 1,
-      "next_xin_banks": 1,
       "next_layer_name": "layer2.0.conv2",
       "total_required": 250000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 64,
+      "out_channels": 128,
+      "input_channel_height": 56,
+      "input_channel_width": 56,
+      "output_channel_height": 28,
+      "output_channel_width": 28,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "conv_input_dominated",
+      "reason": "conv_input_dominated",
+      "collapsed_layers": [
+        {
+          "name": "layer2.0.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 100352
+        }
+      ]
     },
     {
       "name": "layer2.0.conv2",
@@ -284,9 +305,18 @@
       "next_xin_banks": 2,
       "next_layer_name": "layer2.0.downsample.0",
       "total_required": 375000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 128,
+      "out_channels": 128,
+      "input_channel_height": 28,
+      "input_channel_width": 28,
+      "output_channel_height": 28,
+      "output_channel_width": 28,
       "stay_on_chip": true,
       "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
+      "reason": "conv_output_dominated",
+      "collapsed_layers": []
     },
     {
       "name": "layer2.0.downsample.0",
@@ -301,9 +331,18 @@
       "next_xin_banks": 1,
       "next_layer_name": "add_2",
       "total_required": 250000,
+      "filter_height": 1,
+      "filter_width": 1,
+      "in_channels": 64,
+      "out_channels": 128,
+      "input_channel_height": 56,
+      "input_channel_width": 56,
+      "output_channel_height": 28,
+      "output_channel_width": 28,
       "stay_on_chip": true,
       "rule": "conv_input_dominated",
-      "reason": "conv_input_dominated"
+      "reason": "conv_input_dominated",
+      "collapsed_layers": []
     },
     {
       "name": "add_2",
@@ -316,28 +355,27 @@
       "next_xin_banked": 125000,
       "footprint_banks": 1,
       "next_xin_banks": 1,
-      "next_layer_name": "layer2.0.relu",
-      "total_required": 250000,
-      "stay_on_chip": true,
-      "rule": "residual",
-      "reason": "residual"
-    },
-    {
-      "name": "layer2.0.relu",
-      "type": "QuantReLU",
-      "input_elems": 100352,
-      "weight_elems": 0,
-      "output_elems": 100352,
-      "output_banked": 125000,
-      "perm_elems": 125000,
-      "next_xin_banked": 125000,
-      "footprint_banks": 1,
-      "next_xin_banks": 1,
       "next_layer_name": "layer2.1.conv1",
       "total_required": 250000,
+      "filter_height": 0,
+      "filter_width": 0,
+      "in_channels": 0,
+      "out_channels": 0,
+      "input_channel_height": 0,
+      "input_channel_width": 0,
+      "output_channel_height": 0,
+      "output_channel_width": 0,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "residual",
+      "reason": "residual",
+      "collapsed_layers": [
+        {
+          "name": "layer2.0.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 100352
+        }
+      ]
     },
     {
       "name": "layer2.1.conv1",
@@ -350,28 +388,27 @@
       "next_xin_banked": 125000,
       "footprint_banks": 1,
       "next_xin_banks": 1,
-      "next_layer_name": "layer2.1.relu",
-      "total_required": 250000,
-      "stay_on_chip": true,
-      "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
-    },
-    {
-      "name": "layer2.1.relu",
-      "type": "QuantReLU",
-      "input_elems": 100352,
-      "weight_elems": 0,
-      "output_elems": 100352,
-      "output_banked": 125000,
-      "perm_elems": 125000,
-      "next_xin_banked": 125000,
-      "footprint_banks": 1,
-      "next_xin_banks": 1,
       "next_layer_name": "layer2.1.conv2",
       "total_required": 250000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 128,
+      "out_channels": 128,
+      "input_channel_height": 28,
+      "input_channel_width": 28,
+      "output_channel_height": 28,
+      "output_channel_width": 28,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "conv_output_dominated",
+      "reason": "conv_output_dominated",
+      "collapsed_layers": [
+        {
+          "name": "layer2.1.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 100352
+        }
+      ]
     },
     {
       "name": "layer2.1.conv2",
@@ -386,9 +423,18 @@
       "next_xin_banks": 1,
       "next_layer_name": "add_3",
       "total_required": 250000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 128,
+      "out_channels": 128,
+      "input_channel_height": 28,
+      "input_channel_width": 28,
+      "output_channel_height": 28,
+      "output_channel_width": 28,
       "stay_on_chip": true,
       "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
+      "reason": "conv_output_dominated",
+      "collapsed_layers": []
     },
     {
       "name": "add_3",
@@ -401,28 +447,27 @@
       "next_xin_banked": 125000,
       "footprint_banks": 1,
       "next_xin_banks": 1,
-      "next_layer_name": "layer2.1.relu",
-      "total_required": 250000,
-      "stay_on_chip": true,
-      "rule": "residual",
-      "reason": "residual"
-    },
-    {
-      "name": "layer2.1.relu",
-      "type": "QuantReLU",
-      "input_elems": 100352,
-      "weight_elems": 0,
-      "output_elems": 100352,
-      "output_banked": 125000,
-      "perm_elems": 125000,
-      "next_xin_banked": 125000,
-      "footprint_banks": 1,
-      "next_xin_banks": 1,
       "next_layer_name": "layer3.0.conv1",
       "total_required": 250000,
+      "filter_height": 0,
+      "filter_width": 0,
+      "in_channels": 0,
+      "out_channels": 0,
+      "input_channel_height": 0,
+      "input_channel_width": 0,
+      "output_channel_height": 0,
+      "output_channel_width": 0,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "residual",
+      "reason": "residual",
+      "collapsed_layers": [
+        {
+          "name": "layer2.1.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 100352
+        }
+      ]
     },
     {
       "name": "layer3.0.conv1",
@@ -435,28 +480,27 @@
       "next_xin_banked": 125000,
       "footprint_banks": 1,
       "next_xin_banks": 1,
-      "next_layer_name": "layer3.0.relu",
-      "total_required": 250000,
-      "stay_on_chip": true,
-      "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
-    },
-    {
-      "name": "layer3.0.relu",
-      "type": "QuantReLU",
-      "input_elems": 50176,
-      "weight_elems": 0,
-      "output_elems": 50176,
-      "output_banked": 125000,
-      "perm_elems": 125000,
-      "next_xin_banked": 125000,
-      "footprint_banks": 1,
-      "next_xin_banks": 1,
       "next_layer_name": "layer3.0.conv2",
       "total_required": 250000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 128,
+      "out_channels": 256,
+      "input_channel_height": 28,
+      "input_channel_width": 28,
+      "output_channel_height": 14,
+      "output_channel_width": 14,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "conv_output_dominated",
+      "reason": "conv_output_dominated",
+      "collapsed_layers": [
+        {
+          "name": "layer3.0.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 50176
+        }
+      ]
     },
     {
       "name": "layer3.0.conv2",
@@ -471,9 +515,18 @@
       "next_xin_banks": 1,
       "next_layer_name": "layer3.0.downsample.0",
       "total_required": 250000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 256,
+      "out_channels": 256,
+      "input_channel_height": 14,
+      "input_channel_width": 14,
+      "output_channel_height": 14,
+      "output_channel_width": 14,
       "stay_on_chip": true,
       "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
+      "reason": "conv_output_dominated",
+      "collapsed_layers": []
     },
     {
       "name": "layer3.0.downsample.0",
@@ -488,9 +541,18 @@
       "next_xin_banks": 1,
       "next_layer_name": "add_4",
       "total_required": 250000,
+      "filter_height": 1,
+      "filter_width": 1,
+      "in_channels": 128,
+      "out_channels": 256,
+      "input_channel_height": 28,
+      "input_channel_width": 28,
+      "output_channel_height": 14,
+      "output_channel_width": 14,
       "stay_on_chip": true,
       "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
+      "reason": "conv_output_dominated",
+      "collapsed_layers": []
     },
     {
       "name": "add_4",
@@ -503,28 +565,27 @@
       "next_xin_banked": 125000,
       "footprint_banks": 1,
       "next_xin_banks": 1,
-      "next_layer_name": "layer3.0.relu",
-      "total_required": 250000,
-      "stay_on_chip": true,
-      "rule": "residual",
-      "reason": "residual"
-    },
-    {
-      "name": "layer3.0.relu",
-      "type": "QuantReLU",
-      "input_elems": 50176,
-      "weight_elems": 0,
-      "output_elems": 50176,
-      "output_banked": 125000,
-      "perm_elems": 125000,
-      "next_xin_banked": 125000,
-      "footprint_banks": 1,
-      "next_xin_banks": 1,
       "next_layer_name": "layer3.1.conv1",
       "total_required": 250000,
+      "filter_height": 0,
+      "filter_width": 0,
+      "in_channels": 0,
+      "out_channels": 0,
+      "input_channel_height": 0,
+      "input_channel_width": 0,
+      "output_channel_height": 0,
+      "output_channel_width": 0,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "residual",
+      "reason": "residual",
+      "collapsed_layers": [
+        {
+          "name": "layer3.0.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 50176
+        }
+      ]
     },
     {
       "name": "layer3.1.conv1",
@@ -537,28 +598,27 @@
       "next_xin_banked": 125000,
       "footprint_banks": 1,
       "next_xin_banks": 1,
-      "next_layer_name": "layer3.1.relu",
-      "total_required": 250000,
-      "stay_on_chip": true,
-      "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
-    },
-    {
-      "name": "layer3.1.relu",
-      "type": "QuantReLU",
-      "input_elems": 50176,
-      "weight_elems": 0,
-      "output_elems": 50176,
-      "output_banked": 125000,
-      "perm_elems": 125000,
-      "next_xin_banked": 125000,
-      "footprint_banks": 1,
-      "next_xin_banks": 1,
       "next_layer_name": "layer3.1.conv2",
       "total_required": 250000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 256,
+      "out_channels": 256,
+      "input_channel_height": 14,
+      "input_channel_width": 14,
+      "output_channel_height": 14,
+      "output_channel_width": 14,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "conv_output_dominated",
+      "reason": "conv_output_dominated",
+      "collapsed_layers": [
+        {
+          "name": "layer3.1.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 50176
+        }
+      ]
     },
     {
       "name": "layer3.1.conv2",
@@ -573,9 +633,18 @@
       "next_xin_banks": 1,
       "next_layer_name": "add_5",
       "total_required": 250000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 256,
+      "out_channels": 256,
+      "input_channel_height": 14,
+      "input_channel_width": 14,
+      "output_channel_height": 14,
+      "output_channel_width": 14,
       "stay_on_chip": true,
       "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
+      "reason": "conv_output_dominated",
+      "collapsed_layers": []
     },
     {
       "name": "add_5",
@@ -588,28 +657,27 @@
       "next_xin_banked": 125000,
       "footprint_banks": 1,
       "next_xin_banks": 1,
-      "next_layer_name": "layer3.1.relu",
-      "total_required": 250000,
-      "stay_on_chip": true,
-      "rule": "residual",
-      "reason": "residual"
-    },
-    {
-      "name": "layer3.1.relu",
-      "type": "QuantReLU",
-      "input_elems": 50176,
-      "weight_elems": 0,
-      "output_elems": 50176,
-      "output_banked": 125000,
-      "perm_elems": 125000,
-      "next_xin_banked": 125000,
-      "footprint_banks": 1,
-      "next_xin_banks": 1,
       "next_layer_name": "layer4.0.conv1",
       "total_required": 250000,
+      "filter_height": 0,
+      "filter_width": 0,
+      "in_channels": 0,
+      "out_channels": 0,
+      "input_channel_height": 0,
+      "input_channel_width": 0,
+      "output_channel_height": 0,
+      "output_channel_width": 0,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "residual",
+      "reason": "residual",
+      "collapsed_layers": [
+        {
+          "name": "layer3.1.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 50176
+        }
+      ]
     },
     {
       "name": "layer4.0.conv1",
@@ -622,28 +690,27 @@
       "next_xin_banked": 125000,
       "footprint_banks": 1,
       "next_xin_banks": 1,
-      "next_layer_name": "layer4.0.relu",
-      "total_required": 250000,
-      "stay_on_chip": true,
-      "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
-    },
-    {
-      "name": "layer4.0.relu",
-      "type": "QuantReLU",
-      "input_elems": 25088,
-      "weight_elems": 0,
-      "output_elems": 25088,
-      "output_banked": 125000,
-      "perm_elems": 125000,
-      "next_xin_banked": 125000,
-      "footprint_banks": 1,
-      "next_xin_banks": 1,
       "next_layer_name": "layer4.0.conv2",
       "total_required": 250000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 256,
+      "out_channels": 512,
+      "input_channel_height": 14,
+      "input_channel_width": 14,
+      "output_channel_height": 7,
+      "output_channel_width": 7,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "conv_output_dominated",
+      "reason": "conv_output_dominated",
+      "collapsed_layers": [
+        {
+          "name": "layer4.0.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 25088
+        }
+      ]
     },
     {
       "name": "layer4.0.conv2",
@@ -658,9 +725,18 @@
       "next_xin_banks": 1,
       "next_layer_name": "layer4.0.downsample.0",
       "total_required": 250000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 512,
+      "out_channels": 512,
+      "input_channel_height": 7,
+      "input_channel_width": 7,
+      "output_channel_height": 7,
+      "output_channel_width": 7,
       "stay_on_chip": true,
       "rule": "global_fit",
-      "reason": "global_fit"
+      "reason": "global_fit",
+      "collapsed_layers": []
     },
     {
       "name": "layer4.0.downsample.0",
@@ -675,9 +751,18 @@
       "next_xin_banks": 1,
       "next_layer_name": "add_6",
       "total_required": 250000,
+      "filter_height": 1,
+      "filter_width": 1,
+      "in_channels": 256,
+      "out_channels": 512,
+      "input_channel_height": 14,
+      "input_channel_width": 14,
+      "output_channel_height": 7,
+      "output_channel_width": 7,
       "stay_on_chip": true,
       "rule": "conv_output_dominated",
-      "reason": "conv_output_dominated"
+      "reason": "conv_output_dominated",
+      "collapsed_layers": []
     },
     {
       "name": "add_6",
@@ -690,28 +775,27 @@
       "next_xin_banked": 125000,
       "footprint_banks": 1,
       "next_xin_banks": 1,
-      "next_layer_name": "layer4.0.relu",
-      "total_required": 250000,
-      "stay_on_chip": true,
-      "rule": "residual",
-      "reason": "residual"
-    },
-    {
-      "name": "layer4.0.relu",
-      "type": "QuantReLU",
-      "input_elems": 25088,
-      "weight_elems": 0,
-      "output_elems": 25088,
-      "output_banked": 125000,
-      "perm_elems": 125000,
-      "next_xin_banked": 125000,
-      "footprint_banks": 1,
-      "next_xin_banks": 1,
       "next_layer_name": "layer4.1.conv1",
       "total_required": 250000,
+      "filter_height": 0,
+      "filter_width": 0,
+      "in_channels": 0,
+      "out_channels": 0,
+      "input_channel_height": 0,
+      "input_channel_width": 0,
+      "output_channel_height": 0,
+      "output_channel_width": 0,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "residual",
+      "reason": "residual",
+      "collapsed_layers": [
+        {
+          "name": "layer4.0.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 25088
+        }
+      ]
     },
     {
       "name": "layer4.1.conv1",
@@ -724,28 +808,27 @@
       "next_xin_banked": 125000,
       "footprint_banks": 1,
       "next_xin_banks": 1,
-      "next_layer_name": "layer4.1.relu",
-      "total_required": 250000,
-      "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
-    },
-    {
-      "name": "layer4.1.relu",
-      "type": "QuantReLU",
-      "input_elems": 25088,
-      "weight_elems": 0,
-      "output_elems": 25088,
-      "output_banked": 125000,
-      "perm_elems": 125000,
-      "next_xin_banked": 125000,
-      "footprint_banks": 1,
-      "next_xin_banks": 1,
       "next_layer_name": "layer4.1.conv2",
       "total_required": 250000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 512,
+      "out_channels": 512,
+      "input_channel_height": 7,
+      "input_channel_width": 7,
+      "output_channel_height": 7,
+      "output_channel_width": 7,
       "stay_on_chip": true,
       "rule": "global_fit",
-      "reason": "global_fit"
+      "reason": "global_fit",
+      "collapsed_layers": [
+        {
+          "name": "layer4.1.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 25088
+        }
+      ]
     },
     {
       "name": "layer4.1.conv2",
@@ -760,9 +843,18 @@
       "next_xin_banks": 1,
       "next_layer_name": "add_7",
       "total_required": 250000,
+      "filter_height": 3,
+      "filter_width": 3,
+      "in_channels": 512,
+      "out_channels": 512,
+      "input_channel_height": 7,
+      "input_channel_width": 7,
+      "output_channel_height": 7,
+      "output_channel_width": 7,
       "stay_on_chip": true,
       "rule": "global_fit",
-      "reason": "global_fit"
+      "reason": "global_fit",
+      "collapsed_layers": []
     },
     {
       "name": "add_7",
@@ -775,28 +867,27 @@
       "next_xin_banked": 125000,
       "footprint_banks": 1,
       "next_xin_banks": 1,
-      "next_layer_name": "layer4.1.relu",
-      "total_required": 250000,
-      "stay_on_chip": true,
-      "rule": "residual",
-      "reason": "residual"
-    },
-    {
-      "name": "layer4.1.relu",
-      "type": "QuantReLU",
-      "input_elems": 25088,
-      "weight_elems": 0,
-      "output_elems": 25088,
-      "output_banked": 125000,
-      "perm_elems": 125000,
-      "next_xin_banked": 125000,
-      "footprint_banks": 1,
-      "next_xin_banks": 1,
       "next_layer_name": "avgpool",
       "total_required": 250000,
+      "filter_height": 0,
+      "filter_width": 0,
+      "in_channels": 0,
+      "out_channels": 0,
+      "input_channel_height": 0,
+      "input_channel_width": 0,
+      "output_channel_height": 0,
+      "output_channel_width": 0,
       "stay_on_chip": true,
-      "rule": "global_fit",
-      "reason": "global_fit"
+      "rule": "residual",
+      "reason": "residual",
+      "collapsed_layers": [
+        {
+          "name": "layer4.1.relu",
+          "type": "QuantReLU",
+          "weight_elems": 0,
+          "output_elems": 25088
+        }
+      ]
     },
     {
       "name": "avgpool",
@@ -811,16 +902,25 @@
       "next_xin_banks": 1,
       "next_layer_name": "fc",
       "total_required": 250000,
+      "filter_height": 0,
+      "filter_width": 0,
+      "in_channels": 0,
+      "out_channels": 0,
+      "input_channel_height": 0,
+      "input_channel_width": 0,
+      "output_channel_height": 0,
+      "output_channel_width": 0,
       "stay_on_chip": true,
       "rule": "global_fit",
-      "reason": "global_fit"
+      "reason": "global_fit",
+      "collapsed_layers": []
     },
     {
       "name": "fc",
       "type": "QuantLinear",
       "input_elems": 512,
       "weight_elems": 512000,
-      "output_elems": 1000,
+      "output_elems": 1024,
       "output_banked": 125000,
       "perm_elems": 125000,
       "next_xin_banked": 0,
@@ -828,9 +928,18 @@
       "next_xin_banks": 0,
       "next_layer_name": null,
       "total_required": 125000,
+      "filter_height": 0,
+      "filter_width": 0,
+      "in_channels": 0,
+      "out_channels": 0,
+      "input_channel_height": 0,
+      "input_channel_width": 0,
+      "output_channel_height": 0,
+      "output_channel_width": 0,
       "stay_on_chip": true,
       "rule": "global_fit",
-      "reason": "global_fit"
+      "reason": "global_fit",
+      "collapsed_layers": []
     }
   ],
   "off_chip_layers": [],
@@ -860,20 +969,20 @@
       "on_chip": true,
       "xin_from_cache": true,
       "applies_to": "QuantConv2d, Conv2d",
-      "stay_condition": "xout + weights + 1 bank \u2264 cache",
+      "stay_condition": "xout + weights + 1 bank + jumpback \u2264 cache",
       "permanents": "weights + xout",
       "pipeline_banks": 1,
-      "notes": "xout is the larger tensor; xin is written onto xout's space. 1 bank overhead for read/write pipeline boundary."
+      "notes": "xout is the larger tensor; xin is written onto xout's space. 1 bank + jumpback overhead for read/write pipeline boundary."
     },
     {
       "name": "conv_input_dominated",
       "on_chip": true,
       "xin_from_cache": true,
       "applies_to": "QuantConv2d, Conv2d",
-      "stay_condition": "xin + weights + 1 bank \u2264 cache",
+      "stay_condition": "xin + weights + 1 bank + scaled_jumpback \u2264 cache",
       "permanents": "weights + xin",
       "pipeline_banks": 1,
-      "notes": "xin is the larger tensor; xout is written onto xin's space. 1 bank overhead for read/write pipeline boundary."
+      "notes": "xin is the larger tensor; xout is written onto xin's space. 1 bank + scaled jumpback (scaled by input/output ratio) overhead for read/write pipeline boundary."
     },
     {
       "name": "pool",
