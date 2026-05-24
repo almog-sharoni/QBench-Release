@@ -548,8 +548,22 @@ def main():
     ylim_min = max(0.0, global_min_acc - 5.0)
     ylim_max = min(100.0, global_max_acc + 5.0)
 
+    # Plot configuration
+    linestyles = {0.0: '-', 2.0: '-', 4.0: '--'}
+    markers = {0.0: 'o', 2.0: 's', 4.0: '^'}
+    
+    # Horizontal jittering factors on log scale to visually separate overlapping lines (2MB & 4MB)
+    jitter = {0.0: 1.0, 2.0: 0.98, 4.0: 1.02}
+    
+    # Custom text label offsets and alignments depending on cache size to avoid label overlaps
+    offsets = {
+        0.0: {'xy': (-15, 10), 'ha': 'right', 'va': 'bottom'},
+        2.0: {'xy': (15, 12), 'ha': 'left', 'va': 'bottom'},
+        4.0: {'xy': (15, -18), 'ha': 'left', 'va': 'top'}
+    }
+
     for min_bits, cache_data in results_data.items():
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(12, 7))
         
         for cs, points in cache_data.items():
             if not points:
@@ -560,15 +574,33 @@ def main():
             accs = [p[1] for p in points]
             cycles = [p[2] for p in points]
             
+            # Apply visual jittering to cycle count (X-coordinate) for plotting only
+            j_factor = jitter.get(cs, 1.0)
+            plot_cycles = [cyc * j_factor for cyc in cycles]
+            
             label = f"Cache {cs}MB"
             color = colors.get(cs, 'black')
+            linestyle = linestyles.get(cs, '-')
+            marker = markers.get(cs, 'o')
             
-            plt.plot(cycles, accs, marker='o', label=label, color=color, linewidth=2)
+            plt.plot(plot_cycles, accs, marker=marker, label=label, color=color, 
+                     linestyle=linestyle, linewidth=2, markersize=8)
             
-            # Annotate points with bit-width b and cycles
-            for b, acc, cyc in points:
-                plt.annotate(f"{b}b\n{fmt_elems(cyc)}", (cyc, acc), textcoords="offset points", 
-                             xytext=(0, 10), ha='center', fontsize=8, color=color, weight='bold')
+            # Annotate points with bit-width b and original cycles
+            align_cfg = offsets.get(cs, {'xy': (0, 10), 'ha': 'center', 'va': 'bottom'})
+            for idx, (b, acc, cyc) in enumerate(points):
+                # Use jittered X-coordinate for plotting label position
+                plt.annotate(
+                    f"{b}b\n{fmt_elems(cyc)}", 
+                    (plot_cycles[idx], acc), 
+                    textcoords="offset points", 
+                    xytext=align_cfg['xy'], 
+                    ha=align_cfg['ha'], 
+                    va=align_cfg['va'],
+                    fontsize=8, 
+                    color=color, 
+                    weight='bold'
+                )
                 
         plt.title(f"Accuracy vs. Compute Time (Starting Min Bits = {min_bits})\nBandwidth = {args.bandwidth} elements/cycle")
         plt.xlabel("Compute Time (Cycles - Log Scale)")
@@ -580,7 +612,7 @@ def main():
         plt.legend()
         plt.tight_layout()
         plot_path = os.path.join(output_dir, f"accuracy_vs_compute_time_min_bits_{min_bits}.png")
-        plt.savefig(plot_path, dpi=150)
+        plt.savefig(plot_path, dpi=300)  # High resolution
         plt.close()
         print(f"Saved plot: {plot_path}")
 
