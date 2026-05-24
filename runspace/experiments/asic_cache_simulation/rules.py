@@ -12,7 +12,8 @@
 #   'stay'          : (ctx) -> bool  — capacity check for this rule
 #
 # ctx fields (all in bank-aligned elements unless noted):
-#   input_banked, output_banked, weight_banked, cache_elements, bank_size
+#   input_banked, output_banked, weight_banked, cache_elements, bank_size,
+#   jump_back_size_in_banks (for conv layers; read/write pipeline overhead)
 #
 # LAYER_RULES: dict of layer_type -> ordered list of rule keys to try.
 #   '__default__' is the fallback for any type not explicitly listed.
@@ -61,13 +62,16 @@ RULES = {
         'on_chip':        True,
         'xin_from_cache': True,
         'ctx_guard':      lambda ctx: ctx['output_banked'] >= ctx['input_banked'],
-        'stay_condition': 'xout + weights + 1 bank ≤ cache',
+        'stay_condition': 'xout + weights + 1 bank + jumpback ≤ cache',
         'permanents':     'weights + xout',
         'pipeline_banks': 1,
-        'notes':          'xout is the larger tensor; xin is written onto xout\'s space. 1 bank overhead for read/write pipeline boundary.',
+        'notes':          'xout is the larger tensor; xin is written onto xout\'s space. 1 bank + jumpback overhead for read/write pipeline boundary.',
         'perm':  lambda ctx: ctx['weight_banked'] + ctx['output_banked'],
         'stay':  lambda ctx: (
-            ctx['output_banked'] + 1 * ctx['bank_size'] + ctx['weight_banked']
+            ctx['output_banked'] 
+            + 1 * ctx['bank_size']
+            + ctx['jump_back_size_in_banks']  # new jumpback aware calc
+            + ctx['weight_banked']
             <= ctx['cache_elements']
         ),
     },
@@ -76,13 +80,16 @@ RULES = {
         'on_chip':        True,
         'xin_from_cache': True,
         'ctx_guard':      lambda ctx: ctx['input_banked'] > ctx['output_banked'],
-        'stay_condition': 'xin + weights + 1 bank ≤ cache',
+        'stay_condition': 'xin + weights + 1 bank + scaled_jumpback ≤ cache',
         'permanents':     'weights + xin',
         'pipeline_banks': 1,
-        'notes':          'xin is the larger tensor; xout is written onto xin\'s space. 1 bank overhead for read/write pipeline boundary.',
+        'notes':          'xin is the larger tensor; xout is written onto xin\'s space. 1 bank + scaled jumpback (scaled by input/output ratio) overhead for read/write pipeline boundary.',
         'perm':  lambda ctx: ctx['weight_banked'] + ctx['input_banked'],
         'stay':  lambda ctx: (
-            ctx['input_banked'] + 1 * ctx['bank_size'] + ctx['weight_banked']
+            ctx['input_banked'] 
+            + 1 * ctx['bank_size'] 
+            + ctx['jump_back_size_in_banks'] * (ctx['input_banked'] / ctx['output_banked'])  #new jumpback aware calc
+            + ctx['weight_banked']
             <= ctx['cache_elements']
         ),
     },
@@ -151,6 +158,19 @@ RULES = {
             <= ctx['cache_elements']
         ),
     },
+    'mul': {
+        'on_chip':        True,
+        'xin_from_cache': True,
+        'stay_condition': 'xin + 3 banks <= cache',
+        'permanents':     'xin',
+        'notes':          'xin in cache, weights streamed in, xout is computed and streamed out.',
+        'perm':  lambda ctx: ctx['input_banked'],
+        'stay':  lambda ctx: (
+            ctx['input_banked'] + 3 * ctx['bank_size']
+            <= ctx['cache_elements']
+        ),
+    },
+
 }
 
 
@@ -169,6 +189,7 @@ LAYER_RULES = {
     'QuantAvgPool2d':    ['global_fit', 'pool', 'fallback'],
     'QuantMaxPool1d':    ['global_fit', 'pool', 'fallback'],
     'QuantAvgPool1d':    ['global_fit', 'pool', 'fallback'],
+    'QuantMul':          ['mul', 'fallback'],
     'QuantMatMul':       ['global_fit', 'fallback'],
     'QuantSoftmax':      ['global_fit', 'fallback'],
     'LayerNorm':         ['global_fit', 'fallback'],

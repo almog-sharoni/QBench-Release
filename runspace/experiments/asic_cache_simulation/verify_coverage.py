@@ -46,6 +46,9 @@ _MHA_DECOMPOSED_TYPES = {
 _CONTAINER_TYPES = {
     'Encoder', 'EncoderBlock', 'MLPBlock',            # torchvision ViT
     'MobileViTBlock', 'InvertedResidual', 'MV2Block', # MobileViT
+    'BasicBlock', 'Bottleneck',                       # ResNet blocks
+    'Attention', 'Block', 'BottleneckBlock', 'ClassifierHead',
+    'ConvNormAct', 'Mlp', 'MobileVitBlock', 'SelectAdaptivePool2d',
 }
 
 
@@ -85,7 +88,11 @@ def run_verification(model_name: str, batch_size: int = 1, device: str = 'cpu'):
 
     # --- captured ops ---
     captured = analyze_model(model_name, batch_size, device)
-    cap_types: dict[str, int] = collections.Counter(layer['type'] for layer in captured)
+    cap_types: dict[str, int] = collections.Counter()
+    for layer in captured:
+        cap_types[layer['type']] += 1
+        for collapsed in layer.get('collapsed_layers', []):
+            cap_types[collapsed['type']] += 1
 
     # --- report: captured ops ---
     print(f"\nCaptured ops ({sum(cap_types.values())} total):")
@@ -119,9 +126,9 @@ def run_verification(model_name: str, batch_size: int = 1, device: str = 'cpu'):
         elif t in _CONTAINER_TYPES:
             status    = '  ctnr   '
             cap_str   = '-'
-        elif t in cap_types:
+        elif t in cap_types or f"Quant{t}" in cap_types:
             status    = '  ✓      '
-            cap_str   = str(cap_types[t])
+            cap_str   = str(cap_types.get(t, 0) + cap_types.get(f"Quant{t}", 0))
         else:
             status    = '  ✗      '
             cap_str   = '0'
