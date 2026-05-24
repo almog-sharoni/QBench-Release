@@ -207,12 +207,16 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
     """
     Compute model total runtime (execution cycles) under bandwidth-constrained conditions.
     Accumulates cycles across parent operations and all of their collapsed operations.
+    Also determines the actual bit-width used for each layer under the bandwidth limit.
+    Returns (total_runtime, layer_actual_bits).
     """
     total_runtime = 0.0
     prev_stay_on_chip = False  # Track if the previous layer's output stayed on-chip
+    layer_actual_bits = {}
     
     for idx, layer in enumerate(layers_with_stay_status):
         stay_on_chip = layer.get('stay_on_chip', False)
+        lname = layer['name']
         
         # 1. Compute cycles
         l_type = layer['type']
@@ -241,37 +245,46 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
             collapsed_out_elems = collapsed.get('output_elems', 0)
             compute_cycles += math.ceil(collapsed_out_elems / 128)
             
-        # 2. Memory transfer cycles (assuming 1.0 elements/cycle bandwidth by default)
         if stay_on_chip:
-            transfer_cycles = 0
+            layer_actual_bits[lname] = 8
+            total_runtime += compute_cycles
+            prev_stay_on_chip = True
+            continue
+            
+        # 2. Memory transfer cycles under bandwidth limit (bandwidth)
+        # Input transfer: if first layer or previous layer was off-chip
+        if idx == 0 or not prev_stay_on_chip:
+            input_transfer = layer.get('input_elems', 0)
         else:
-            # Off-chip layer transfers weights, inputs (if needed), and outputs
-            # Weights are quantized to b_bits
-            weight_transfer = layer.get('weight_elems', 0) * (b_bits / 8.0)
+            input_transfer = 0
             
-            # Input transfer: if first layer or previous layer was off-chip
-            if idx == 0 or not prev_stay_on_chip:
-                input_transfer = layer.get('input_elems', 0)
-            else:
-                input_transfer = 0
-                
-            # Output transfer
-            output_transfer = layer.get('output_elems', 0)
-            
+        output_transfer = layer.get('output_elems', 0)
+        
+        # Helper to calculate runtime for a given bit-width k
+        def get_runtime_for_k(k):
+            weight_transfer = layer.get('weight_elems', 0) * (k / 8.0)
             transfer_cycles = (weight_transfer + input_transfer + output_transfer) / bandwidth
+            return max(compute_cycles, transfer_cycles)
             
-        # Runtime is max(compute, transfer)
-        layer_runtime = max(compute_cycles, transfer_cycles)
-        total_runtime += layer_runtime
+        target_runtime = get_runtime_for_k(b_bits)
+        
+        # Find the largest k in [b_bits, 8] that gives the same runtime as target_runtime
+        actual_k = b_bits
+        for k in range(b_bits + 1, 9):
+            if abs(get_runtime_for_k(k) - target_runtime) < 1e-5:
+                actual_k = k
+                
+        layer_actual_bits[lname] = actual_k
+        total_runtime += target_runtime
         
         # Save stay status for the next layer's input check
-        prev_stay_on_chip = stay_on_chip
+        prev_stay_on_chip = False
         
-    return total_runtime
+    return total_runtime, layer_actual_bits
 
 
-def create_bandwidth_aware_state_dict(model, cache_sim_map, b_bits, chunk_size=128):
-    """Reassemble state dict with weights quantized based on stay_on_chip status and target bit-width."""
+def create_bandwidth_aware_state_dict(model, cache_sim_map, layer_actual_bits, chunk_size=128):
+    """Reassemble state dict with weights quantized based on stay_on_chip status and layer actual bit-width."""
     state_dict = model.state_dict()
     quant_map = {}
     
@@ -307,7 +320,7 @@ def create_bandwidth_aware_state_dict(model, cache_sim_map, b_bits, chunk_size=1
                 w_slice = w_in_proj[start:end].contiguous()
                 
                 # Determine bits and candidates
-                bits = 8 if stay_on_chip else b_bits
+                bits = layer_actual_bits.get(vname, 8 if stay_on_chip else 8)
                 formats = SIGNED_FORMATS_BY_BITS.get(bits, [])
                 best_fmt = get_best_weight_format(w_slice, formats, chunk_size=chunk_size)
                 
@@ -328,7 +341,7 @@ def create_bandwidth_aware_state_dict(model, cache_sim_map, b_bits, chunk_size=1
                 w = state_dict[weight_key]
                 
                 # Determine bits and candidates
-                bits = 8 if stay_on_chip else b_bits
+                bits = layer_actual_bits.get(name, 8 if stay_on_chip else 8)
                 formats = SIGNED_FORMATS_BY_BITS.get(bits, [])
                 best_fmt = get_best_weight_format(w, formats, chunk_size=chunk_size)
                 
@@ -426,23 +439,25 @@ def main():
         
         sim_layers, cache_sim_map = cache_sims[cs]
         
-        # 3.1. Compute execution runtime (cycles)
-        cycles = compute_model_runtime(sim_layers, b, bandwidth=args.bandwidth)
+        # 3.1. Compute execution runtime (cycles) and obtain layer-specific actual bits
+        cycles, layer_actual_bits = compute_model_runtime(sim_layers, b, bandwidth=args.bandwidth)
         print(f"Calculated compute time: {cycles:,} cycles")
 
-        # 3.2. Quantize model weights based on stay status and bit width
+        # 3.2. Quantize model weights based on stay status and actual bit-width
         print("Quantizing model weights...")
-        q_state_dict, _ = create_bandwidth_aware_state_dict(model, cache_sim_map, b_bits=b, chunk_size=128)
+        q_state_dict, _ = create_bandwidth_aware_state_dict(model, cache_sim_map, layer_actual_bits=layer_actual_bits, chunk_size=128)
         
         # Save quantized weights to temporary file
         temp_weights_path = os.path.join(temp_weights_dir, f"weights_cs_{cs}_b_{b}.pt")
         torch.save(q_state_dict, temp_weights_path)
         
-        # 3.3. Inject cache sim map to global attributes of both classes
+        # 3.3. Inject cache sim map and actual bits to global attributes of both classes
         if DIQ1 is not None:
             DIQ1._global_cache_sim_map = cache_sim_map
+            DIQ1._global_layer_actual_bits = layer_actual_bits
         if DIQ2 is not None:
             DIQ2._global_cache_sim_map = cache_sim_map
+            DIQ2._global_layer_actual_bits = layer_actual_bits
 
         # 3.4. Build evaluation config
         eval_config = {
@@ -555,13 +570,6 @@ def main():
     # Horizontal jittering factors on log scale to visually separate overlapping lines (2MB & 4MB)
     jitter = {0.0: 1.0, 2.0: 0.98, 4.0: 1.02}
     
-    # Custom text label offsets and alignments depending on cache size to avoid label overlaps
-    offsets = {
-        0.0: {'xy': (-15, 10), 'ha': 'right', 'va': 'bottom'},
-        2.0: {'xy': (15, 12), 'ha': 'left', 'va': 'bottom'},
-        4.0: {'xy': (15, -18), 'ha': 'left', 'va': 'top'}
-    }
-
     for min_bits, cache_data in results_data.items():
         plt.figure(figsize=(12, 7))
         
@@ -586,22 +594,102 @@ def main():
             plt.plot(plot_cycles, accs, marker=marker, label=label, color=color, 
                      linestyle=linestyle, linewidth=2, markersize=8)
             
-            # Annotate points with bit-width b and original cycles
-            align_cfg = offsets.get(cs, {'xy': (0, 10), 'ha': 'center', 'va': 'bottom'})
+            # Group points by unique coordinate to avoid overlapping annotations at the same point
+            unique_coords = []
             for idx, (b, acc, cyc) in enumerate(points):
-                # Use jittered X-coordinate for plotting label position
+                p_cyc = plot_cycles[idx]
+                found = False
+                for group in unique_coords:
+                    if abs(group['cycles'] - cyc) < 1e-2 and abs(group['acc'] - acc) < 1e-3:
+                        group['bits'].append(b)
+                        group['indices'].append(idx)
+                        found = True
+                        break
+                if not found:
+                    unique_coords.append({
+                        'cycles': cyc,
+                        'plot_cycles': p_cyc,
+                        'acc': acc,
+                        'bits': [b],
+                        'indices': [idx]
+                    })
+            
+            for group in unique_coords:
+                group_bits = sorted(group['bits'])
+                acc = group['acc']
+                cyc = group['cycles']
+                p_cyc = group['plot_cycles']
+                
+                if len(group_bits) > 1:
+                    bw_text = f"{group_bits[0]}-{group_bits[-1]}"
+                    b_val = group_bits[0]
+                else:
+                    bw_text = f"{group_bits[0]}"
+                    b_val = group_bits[0]
+                
+                cyc_text = fmt_elems(cyc)
+                
+                # Determine alignment and offset based on cache size and bit value to prevent overlaps
+                if cs == 0.0:
+                    if b_val == 2:
+                        cfg_bw = {'xy': (10, 5), 'ha': 'left', 'va': 'bottom'}
+                        cfg_cyc = {'xy': (10, -8), 'ha': 'left', 'va': 'top'}
+                    elif b_val in (3, 4, 5):
+                        cfg_bw = {'xy': (-10, 8), 'ha': 'right', 'va': 'bottom'}
+                        cfg_cyc = {'xy': (-10, -2), 'ha': 'right', 'va': 'top'}
+                    elif b_val == 6:
+                        cfg_bw = {'xy': (10, -5), 'ha': 'left', 'va': 'top'}
+                        cfg_cyc = {'xy': (10, -18), 'ha': 'left', 'va': 'top'}
+                    elif b_val == 7:
+                        cfg_bw = {'xy': (-10, 8), 'ha': 'right', 'va': 'bottom'}
+                        cfg_cyc = {'xy': (-10, -2), 'ha': 'right', 'va': 'top'}
+                    else:  # b_val == 8
+                        cfg_bw = {'xy': (10, 8), 'ha': 'left', 'va': 'bottom'}
+                        cfg_cyc = {'xy': (10, -2), 'ha': 'left', 'va': 'top'}
+                elif cs == 2.0:
+                    # Above-left and below-left
+                    cfg_bw = {'xy': (-10, 8), 'ha': 'right', 'va': 'bottom'}
+                    cfg_cyc = {'xy': (-10, -2), 'ha': 'right', 'va': 'top'}
+                elif cs == 4.0:
+                    # Above-right and below-right
+                    cfg_bw = {'xy': (10, 8), 'ha': 'left', 'va': 'bottom'}
+                    cfg_cyc = {'xy': (10, -2), 'ha': 'left', 'va': 'top'}
+                else:
+                    cfg_bw = {'xy': (0, 10), 'ha': 'center', 'va': 'bottom'}
+                    cfg_cyc = {'xy': (0, -10), 'ha': 'center', 'va': 'top'}
+                
+                # 1. Bit-width label (in curve color, bold)
                 plt.annotate(
-                    f"{b}b\n{fmt_elems(cyc)}", 
-                    (plot_cycles[idx], acc), 
+                    bw_text, 
+                    (p_cyc, acc), 
                     textcoords="offset points", 
-                    xytext=align_cfg['xy'], 
-                    ha=align_cfg['ha'], 
-                    va=align_cfg['va'],
-                    fontsize=8, 
+                    xytext=cfg_bw['xy'], 
+                    ha=cfg_bw['ha'], 
+                    va=cfg_bw['va'],
+                    fontsize=9, 
                     color=color, 
                     weight='bold'
                 )
+                # 2. Cycles label (in charcoal gray, regular weight)
+                plt.annotate(
+                    cyc_text, 
+                    (p_cyc, acc), 
+                    textcoords="offset points", 
+                    xytext=cfg_cyc['xy'], 
+                    ha=cfg_cyc['ha'], 
+                    va=cfg_cyc['va'],
+                    fontsize=8.5, 
+                    color='#495057', 
+                    weight='normal'
+                )
                 
+        # Add descriptive text box explaining the values in the empty bottom-left corner
+        plt.text(0.05, 0.05, 
+                 "Note: Numbers near the bullets represent the bit-width (b) of off-chip layers.\n"
+                 "Cycle counts (e.g., 44.9k, 10.1M) are shown in gray below/next to the bit-width labels.",
+                 transform=plt.gca().transAxes, ha='left', va='bottom', fontsize=9.5, color='#2c3e50',
+                 bbox=dict(boxstyle='round,pad=0.5', facecolor='#f8f9fa', edgecolor='#ced4da', alpha=0.9))
+
         plt.title(f"Accuracy vs. Compute Time (Starting Min Bits = {min_bits})\nBandwidth = {args.bandwidth} elements/cycle")
         plt.xlabel("Compute Time (Cycles - Log Scale)")
         plt.ylabel("Top-1 Accuracy (%)")
