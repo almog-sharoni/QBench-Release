@@ -261,10 +261,11 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
             
         output_transfer = layer.get('output_elems', 0)
         
-        # Helper to calculate runtime for a given bit-width k
         def get_runtime_for_k(k):
-            weight_transfer = layer.get('weight_elems', 0) * (k / 8.0)
-            transfer_cycles = (weight_transfer + input_transfer + output_transfer) / bandwidth
+            weight_transfer = math.ceil(layer.get('weight_elems', 0) * k / 8.0)
+            input_transfer_bytes = math.ceil(input_transfer * b_bits / 8.0)
+            output_transfer_bytes = math.ceil(output_transfer * b_bits / 8.0)
+            transfer_cycles = (weight_transfer + input_transfer_bytes + output_transfer_bytes) / bandwidth
             return max(compute_cycles, transfer_cycles)
             
         target_runtime = get_runtime_for_k(b_bits)
@@ -369,7 +370,7 @@ def main():
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of evaluation batches (-1 = all)")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     parser.add_argument("--device", type=str, default="cuda", help="Execution device")
-    parser.add_argument("--bandwidth", type=float, default=1.0, help="Memory bandwidth in elements/cycle")
+    parser.add_argument("--bandwidth", type=float, default=1.0, help="Memory bandwidth in bytes/cycle")
     args = parser.parse_args()
 
     # Verify CUDA availability
@@ -697,13 +698,14 @@ def main():
                     )
                     
             plt.text(0.05, 0.05, 
-                     "Note: Numbers near the bullets represent the bit-width (b) of off-chip layers.\n"
-                     "Cycle counts (e.g., 44.9k, 10.1M) are shown in gray below/next to the bit-width labels.",
+                     f"Note: Numbers near the bullets represent the bit-width (b) of off-chip layers.\n"
+                     f"Memory Bandwidth = {args.bandwidth} bytes/cycle.\n"
+                     f"Cycle counts (e.g., 44.9k, 10.1M) are shown in gray below/next to the bit-width labels.",
                      transform=plt.gca().transAxes, ha='left', va='bottom', fontsize=9.5, color='#2c3e50',
                      bbox=dict(boxstyle='round,pad=0.5', facecolor='#f8f9fa', edgecolor='#ced4da', alpha=0.9))
 
-            plt.title(f"Accuracy vs. Compute Time (Starting Min Bits = {min_bits})\nBandwidth = {args.bandwidth} elements/cycle")
-            plt.xlabel("Compute Time (Cycles - Log Scale)")
+            plt.title(f"Accuracy vs. Compute Time (Starting Min Bits = {min_bits})\nMemory Bandwidth = {args.bandwidth} bytes/cycle")
+            plt.xlabel(f"Compute Time (Cycles - Log Scale) @ Bandwidth = {args.bandwidth} bytes/cycle")
             plt.ylabel("Top-1 Accuracy (%)")
             plt.xscale('log')
             plt.xlim(xlim_min, xlim_max)
