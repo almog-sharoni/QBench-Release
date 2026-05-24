@@ -10,6 +10,7 @@
 #include <c10/cuda/CUDAStream.h>
 #include <vector>
 #include <tuple>
+#include <utility>
 
 namespace py = pybind11;
 
@@ -36,6 +37,25 @@ static inline void check_em(int e, int m, int is_signed, const char* who) {
 
 static inline void* current_stream_ptr() {
     return static_cast<void*>(at::cuda::getCurrentCUDAStream().stream());
+}
+
+static inline std::pair<int64_t, int64_t>
+chunk_context_dims_from_shape(const std::vector<int64_t>& shape) {
+    const int nd = (int)shape.size();
+    if (nd <= 1) {
+        int64_t numel = 1;
+        for (auto d : shape) numel *= d;
+        return {1, numel};
+    }
+
+    int64_t contexts = 1;
+    for (int d = 0; d < nd - 1; ++d) contexts *= shape[d];
+    return {contexts, shape.back()};
+}
+
+static inline std::pair<int64_t, int64_t>
+chunk_context_dims(torch::Tensor x) {
+    return chunk_context_dims_from_shape(x.sizes().vec());
 }
 
 
@@ -114,6 +134,10 @@ decode_tensor(torch::Tensor data, torch::Tensor scale,
 // ============================================================================
 // Chunk mode
 // ============================================================================
+//
+// Chunk mode pads/chunks each logical context independently. The context is
+// every index except the last dimension, so a chunk can never straddle two
+// different rows/positions/heads/channels in the tensor's native layout.
 
 static std::tuple<torch::Tensor, torch::Tensor>
 encode_chunk(torch::Tensor x, int e, int m, bool is_signed)
@@ -124,11 +148,10 @@ encode_chunk(torch::Tensor x, int e, int m, bool is_signed)
     check_em(e, m, sgn, "encode_chunk");
 
     constexpr int CHUNK = 128;
-    const int64_t B     = (x.dim() > 1) ? x.size(0) : 1;
-    const int64_t M     = (B > 0) ? (x.numel() / B) : 0;
-    const int64_t pad   = (CHUNK - (M % CHUNK)) % CHUNK;
-    const int64_t M_pad = M + pad;
-    const int64_t N_pad = B * M_pad;
+    auto [contexts, context_len] = chunk_context_dims(x);
+    const int64_t pad   = (CHUNK - (context_len % CHUNK)) % CHUNK;
+    const int64_t K_pad = context_len + pad;
+    const int64_t N_pad = contexts * K_pad;
     const int n_chunks  = (int)(N_pad / CHUNK);
     const int npw       = n_per_word_em(e, m, sgn);
     const int wpc       = (CHUNK + npw - 1) / npw;
@@ -142,7 +165,7 @@ encode_chunk(torch::Tensor x, int e, int m, bool is_signed)
     if (pad == 0) {
         x_padded = x;
     } else {
-        auto x_2d = x.reshape({B, M});
+        auto x_2d = x.reshape({contexts, context_len});
         x_padded  = torch::constant_pad_nd(x_2d, {0, pad}, /*value=*/0.0).contiguous();
     }
 
@@ -170,11 +193,10 @@ decode_chunk(torch::Tensor data, torch::Tensor scales,
     TORCH_CHECK(nd >= 1, "decode_chunk: original_shape must have at least one dim");
     int64_t numel = 1;
     for (auto d : original_shape) numel *= d;
-    const int64_t B     = (nd > 1) ? original_shape[0] : 1;
-    const int64_t M     = (B > 0) ? (numel / B) : 0;
-    const int64_t pad   = (CHUNK - (M % CHUNK)) % CHUNK;
-    const int64_t M_pad = M + pad;
-    const int64_t N_pad = B * M_pad;
+    auto [contexts, context_len] = chunk_context_dims_from_shape(original_shape);
+    const int64_t pad   = (CHUNK - (context_len % CHUNK)) % CHUNK;
+    const int64_t K_pad = context_len + pad;
+    const int64_t N_pad = contexts * K_pad;
     const int n_chunks  = (int)(N_pad / CHUNK);
     const int npw       = n_per_word_em(e, m, sgn);
     const int wpc       = (CHUNK + npw - 1) / npw;
@@ -205,7 +227,7 @@ decode_chunk(torch::Tensor data, torch::Tensor scales,
         scales.data_ptr<float>(),
         padded.data_ptr<float>(),
         (int)N_pad, e, m, sgn, current_stream_ptr());
-    return padded.reshape({B, M_pad}).slice(1, 0, M).contiguous().reshape(original_shape);
+    return padded.reshape({contexts, K_pad}).slice(1, 0, context_len).contiguous().reshape(original_shape);
 }
 
 
@@ -367,31 +389,32 @@ roundtrip_chunk(torch::Tensor x, int e, int m, bool is_signed,
                 bool needs_scale_b)
 {
     constexpr int CHUNK = 128;
-    const int64_t B = (x.dim() > 1) ? x.size(0) : 1;
-    const int64_t M = (B > 0) ? (x.numel() / B) : 0;
-    const int64_t n_chunks_per_batch = (M + CHUNK - 1) / CHUNK;
+    auto [contexts, context_len] = chunk_context_dims(x);
+    const int64_t n_chunks_per_context = (context_len + CHUNK - 1) / CHUNK;
 
     auto enc       = encode_chunk(x, e, m, is_signed);
     auto& data     = std::get<0>(enc);
     auto& scales   = std::get<1>(enc);
     auto input_fp8 = decode_chunk(data, scales, x.sizes().vec(),
                                   e, m, is_signed);
-    auto scale_p   = scales.view({B, n_chunks_per_batch, (int64_t)1});
+    auto scale_p   = scales.view({contexts, n_chunks_per_context, (int64_t)1});
 
     torch::Tensor scale_b;
     if (needs_scale_b) {
-        auto expanded = scale_p.expand({B, n_chunks_per_batch, (int64_t)CHUNK})
+        auto expanded = scale_p.expand({contexts, n_chunks_per_context, (int64_t)CHUNK})
                                .contiguous()
-                               .reshape({B, n_chunks_per_batch * CHUNK});
-        if (expanded.size(-1) != M) {
-            expanded = expanded.slice(1, 0, M).contiguous();
+                               .reshape({contexts, n_chunks_per_context * CHUNK});
+        if (expanded.size(-1) != context_len) {
+            expanded = expanded.slice(1, 0, context_len).contiguous();
         }
         scale_b = expanded.reshape(x.sizes());
     } else {
         scale_b = scale_p;
     }
 
-    auto max_val = scale_p.max();
+    auto max_val = scales.numel() > 0
+        ? scale_p.max()
+        : torch::ones({}, x.options().dtype(torch::kFloat32));
     return {input_fp8, scale_b, scale_p, max_val};
 }
 
@@ -453,7 +476,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, mod) {
             py::arg("e"), py::arg("m"),
             py::arg("is_signed") = true,
             "Chunk-mode decode. Returns float32 tensor in `original_shape` "
-            "(per-batch padding is truncated internally).");
+            "(per-context padding is truncated internally).");
 
     mod.def("encode_channel", &encode_channel,
             py::arg("x"), py::arg("channel_dim"),

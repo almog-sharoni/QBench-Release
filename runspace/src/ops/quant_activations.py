@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from runspace.src.registry.op_registry import OpRegistry
 from runspace.src.ops.quant_base import quantize_tensor, QuantizedLayerMixin
+from runspace.src.quantization.quantizer import round_fractional_part
 
 
 @OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True)
@@ -96,7 +97,10 @@ class QuantSiLU(nn.SiLU, QuantizedLayerMixin):
         # Force LUT[255] = A
         lut_values[255] = A
         
-        self.register_buffer('piecewise_lut', lut_values)
+        # Enforce 17-bit precision (1s, 8e, 8m)
+        lut_values = round_fractional_part(lut_values)
+
+        self.register_buffer('piecewise_lut', lut_values, persistent=False)
 
     def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
         if not getattr(self, 'input_quantization', True):
@@ -126,9 +130,100 @@ class QuantSiLU(nn.SiLU, QuantizedLayerMixin):
         
         if self.capture_activations:
             self.last_quant_input = input.detach()
-            self.last_quant_output_unscaled = output_quant.detach()
+            self.last_quant_output_unscaled = y.detach()
 
-        return self.quantize_output(output_quant)
+        return self.quantize_output(y)
+
+
+@OpRegistry.register("QuantHardswish", original_cls=nn.Hardswish, is_activation=True)
+class QuantHardswish(nn.Hardswish, QuantizedLayerMixin):
+    """
+    Quantized Hardswish using a piecewise approximation with a small LUT.
+    """
+    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, A: float = 4.0, **kwargs):
+        super().__init__(inplace=inplace)
+        self.capture_activations = False
+        self.quantization_bias = quantization_bias
+        self.last_quant_output_unscaled = None
+        self.A = A
+        self.build_piecewise_lut(A)
+        
+    def build_piecewise_lut(self, A):
+        L = 256
+        i = torch.arange(L, dtype=torch.float32)
+        x_i = -A + ((i + 0.5) / L) * (2 * A)
+        lut_values = nn.functional.hardswish(x_i)
+        # Force exact boundaries
+        lut_values[0] = 0.0
+        lut_values[255] = A
+
+        # Enforce 17-bit precision (1s, 8e, 8m)
+        lut_values = round_fractional_part(lut_values)
+
+        self.register_buffer('piecewise_lut', lut_values, persistent=False)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if not getattr(self, 'input_quantization', True):
+            return nn.functional.hardswish(input, inplace=self.inplace)
+        x = input
+        A = self.A
+        t = (x + A) / (2 * A)
+        t = torch.clamp(t, 0.0, 1.0)
+        i = torch.floor(t * 255.0).long()
+        y_lut = self.piecewise_lut[i]
+        y = torch.where(x <= -A, 0.0,
+                        torch.where(x >= A, x, y_lut))
+        if self.capture_activations:
+            self.last_quant_input = input.detach()
+            self.last_quant_output_unscaled = y.detach()
+        return self.quantize_output(y)
+
+
+@OpRegistry.register("QuantHardsigmoid", original_cls=nn.Hardsigmoid, is_activation=True)
+class QuantHardsigmoid(nn.Hardsigmoid, QuantizedLayerMixin):
+    """
+    Quantized Hardsigmoid using a piecewise approximation with a small LUT.
+    """
+    def __init__(self, inplace: bool = False, q_type="fp8_e4m3", quantization_bias: int = None, quant_mode: str = "tensor", chunk_size: int = None, A: float = 4.0, **kwargs):
+        super().__init__(inplace=inplace)
+        self.capture_activations = False
+        self.quantization_bias = quantization_bias
+        self.last_quant_output_unscaled = None
+        self.A = A
+        self.build_piecewise_lut(A)
+        
+    def build_piecewise_lut(self, A):
+        L = 256
+        i = torch.arange(L, dtype=torch.float32)
+        x_i = -A + ((i + 0.5) / L) * (2 * A)
+        lut_values = nn.functional.hardsigmoid(x_i)
+        # Force exact boundaries
+        lut_values[0] = 0.0
+        lut_values[255] = 1.0
+
+        # Enforce 17-bit precision (1s, 8e, 8m)
+        lut_values = round_fractional_part(lut_values)
+
+        self.register_buffer('piecewise_lut', lut_values, persistent=False)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if not getattr(self, 'input_quantization', True):
+            return nn.functional.hardsigmoid(input, inplace=self.inplace)
+        x = input
+        A = self.A
+        t = (x + A) / (2 * A)
+        t = torch.clamp(t, 0.0, 1.0)
+        i = torch.floor(t * 255.0).long()
+        y_lut = self.piecewise_lut[i]
+        
+        # Hardsigmoid saturates to 0.0 at -A and 1.0 at +A (assuming A >= 3)
+        y = torch.where(x <= -A, 0.0,
+                        torch.where(x >= A, 1.0, y_lut))
+        
+        if self.capture_activations:
+            self.last_quant_input = input.detach()
+            self.last_quant_output_unscaled = y.detach()
+        return self.quantize_output(y)
 
 
 @OpRegistry.register("QuantGELU", original_cls=nn.GELU, is_activation=True, compliance_status="FP32 activation")
@@ -170,6 +265,9 @@ class QuantGELU(nn.GELU, QuantizedLayerMixin):
         lut_values[0] = 0.0
         # Force LUT[255] = A
         lut_values[255] = A
+
+        # Enforce 17-bit precision (1s, 8e, 8m)
+        lut_values = round_fractional_part(lut_values)
 
         # persistent=False: the LUT is fully determined by A, regenerated each
         # __init__. Excluding it from state_dict prevents load-mismatch errors

@@ -101,23 +101,23 @@ with tab_cache:
             # ── Layer table ───────────────────────────────────────────────────
             st.markdown("#### Layer Details")
             layers_df = pd.DataFrame(layers)
-            fmt_cols = ['input_elems', 'weight_elems', 'output_elems',
-                        'output_banked', 'next_xin_banked', 'perm_elems']
-            layers_fmt = layers_df.copy()
-            for col in fmt_cols:
-                if col in layers_fmt.columns:
-                    layers_fmt[col] = layers_fmt[col].apply(
-                        lambda n: _fmt_e(n) if pd.notna(n) else ""
-                    )
 
             display_cols = [c for c in [
                 'name', 'type', 'stay_on_chip', 'rule', 'reason',
                 'input_elems', 'weight_elems', 'output_elems',
                 'output_banked', 'next_xin_banked', 'next_layer_name',
-            ] if c in layers_fmt.columns]
+            ] if c in layers_df.columns]
+
+            # Scale element counts to Thousands (K) to keep the table clean 
+            # while ensuring numeric sorting works correctly.
+            layers_viz = layers_df[display_cols].copy()
+            num_cols = ['input_elems', 'weight_elems', 'output_elems', 'output_banked', 'next_xin_banked']
+            for col in num_cols:
+                if col in layers_viz.columns:
+                    layers_viz[col] = layers_viz[col].astype(float) / 1000.0
 
             st.dataframe(
-                layers_fmt[display_cols],
+                layers_viz,
                 width='stretch',
                 height=500,
                 column_config={
@@ -126,11 +126,11 @@ with tab_cache:
                     'stay_on_chip':    st.column_config.CheckboxColumn("On Chip",  width="small"),
                     'rule':            st.column_config.TextColumn("Rule",         width="medium"),
                     'reason':          st.column_config.TextColumn("Reason",       width="large"),
-                    'input_elems':     st.column_config.TextColumn("Input",        width="small"),
-                    'weight_elems':    st.column_config.TextColumn("Weights",      width="small"),
-                    'output_elems':    st.column_config.TextColumn("Output",       width="small"),
-                    'output_banked':   st.column_config.TextColumn("Banked",       width="small"),
-                    'next_xin_banked': st.column_config.TextColumn("Next Xin",    width="small"),
+                    'input_elems':     st.column_config.NumberColumn("Input (K)",    format="%.1f K", width="small"),
+                    'weight_elems':    st.column_config.NumberColumn("Weights (K)",  format="%.1f K", width="small"),
+                    'output_elems':    st.column_config.NumberColumn("Output (K)",   format="%.1f K", width="small"),
+                    'output_banked':   st.column_config.NumberColumn("Banked (K)",   format="%.1f K", width="small"),
+                    'next_xin_banked': st.column_config.NumberColumn("Next Xin (K)", format="%.1f K", width="small"),
                     'next_layer_name': st.column_config.TextColumn("Next Layer",   width="large"),
                 },
             )

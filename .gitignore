@@ -27,3 +27,4 @@ systemd/
 
 pyrightconfig.json
 qbench_sandbox
+/runspace/database/**

@@ -39,7 +39,7 @@ class FeatureMatchingAdapter(GenericAdapter):
         quantization_type: str = DEFAULT_QUANTIZATION_TYPE,
         quantized_ops: list = None,
         excluded_ops: list = None,
-        quantize_first_layer: bool = False,
+        quantize_first_layer: bool = True,
         weight_quantization: bool = True,
         input_quantization: bool = False,
         output_quantization: bool = False,
@@ -57,6 +57,10 @@ class FeatureMatchingAdapter(GenericAdapter):
         build_quantized: bool = True,
         quantize_components: list = None,
         strict_format_check: bool = False,
+        fold_layers: bool = True,
+        fold_input_norm: bool = True,
+        input_mean: list = None,
+        input_std: list = None,
     ):
         self._pipeline_name = pipeline_name
         self._model_cfg = model_cfg
@@ -91,11 +95,21 @@ class FeatureMatchingAdapter(GenericAdapter):
             build_quantized=build_quantized,
             target_module_prefixes=target_prefixes,
             strict_format_check=strict_format_check,
+            fold_layers=fold_layers,
+            fold_input_norm=fold_input_norm,
+            input_mean=input_mean,
+            input_std=input_std,
         )
 
     def build_model(self, quantized: bool = False) -> nn.Module:
         backbone = load_pipeline(self._pipeline_name, self._model_cfg)
         model = FeatureMatchingPipeline(backbone)
+
+        if self.fold_layers:
+            self._fold_layers(model)
+
+        if self.fold_input_norm:
+            self._fold_input_normalization(model)
 
         if quantized:
             self._replace_layers(model)

@@ -78,7 +78,7 @@ class Runner:
 
         layer_cfg = quant_cfg.get('layers', adapter_cfg.get('layers'))
         has_layer_overrides = isinstance(layer_cfg, dict) and len(layer_cfg) > 0
-        quantize_first_layer = bool(adapter_cfg.get('quantize_first_layer', False))
+        quantize_first_layer = bool(adapter_cfg.get('quantize_first_layer', True))
 
         explicit_build_quantized = adapter_cfg.get('build_quantized')
         if explicit_build_quantized is None:
@@ -578,7 +578,9 @@ class Runner:
                 continue
 
         try:
-            model.load_state_dict(state_dict, strict=True, assign=True)
+            # We use strict=False to allow missing buffers (like piecewise_lut) 
+            # while still validating the important parameters later in _assert_state_dict_loaded.
+            model.load_state_dict(state_dict, strict=False, assign=True)
         except TypeError:
             # Older PyTorch fallback.
             for module in model.modules():
@@ -864,6 +866,7 @@ class Runner:
         adapter_cfg = ref_cfg.setdefault('adapter', {})
         adapter_cfg['input_quantization'] = False
         adapter_cfg['weight_quantization'] = False
+        adapter_cfg['fold_input_norm'] = False
         
         # 2. Set global format to fp32
         quant_cfg = ref_cfg.setdefault('quantization', {})
@@ -1120,6 +1123,7 @@ class Runner:
                 ref_pose_auc_10=_fm_val('ref_pose_auc_10'),
                 ref_pose_auc_20=_fm_val('ref_pose_auc_20'),
                 config_json=self._to_json_string(exp_cfg.get('config_json') or config),
+                cli_command=" ".join(sys.argv),
             )
             return None
 
@@ -1136,11 +1140,8 @@ class Runner:
         input_quant = result.get('input_quant') or result.get('dynamic_input_quant') or {}
 
         mse = metrics_cfg.get('mse')
-        l1 = metrics_cfg.get('l1')
         if mse is None:
             mse = input_quant.get('norm_mse', result.get('dyn_norm_mse'))
-        if l1 is None:
-            l1 = input_quant.get('norm_l1', result.get('dyn_norm_l1'))
 
         quant_map_json = None
         if not weights_are_fp32:
@@ -1175,12 +1176,13 @@ class Runner:
             'experiment_type': experiment_type,
             'status': result.get('status', 'SUCCESS'),
             'mse': float(mse) if mse is not None else None,
-            'l1': float(l1) if l1 is not None else None,
+            'l1': None,
             'certainty': float(metrics_cfg.get('certainty', result.get('certainty', 0.0)) or 0.0),
             'quant_map_json': quant_map_json,
             'input_map_json': input_map_json,
             'output_map_json': output_map_json,
             'config_json': self._to_json_string(exp_cfg.get('config_json') or config),
+            'cli_command': " ".join(sys.argv),
         }
         db.log_run(**payload)
         return payload
@@ -1231,7 +1233,7 @@ class Runner:
           {
             enabled: bool,
             mode: dynamic|uniform|input_only,
-            metric: mse|l1,           # dynamic
+            metric: mse,              # dynamic
             format: fp*_e*m*,         # uniform/input_only
             chunk_size: int,
             candidate_formats: [...], # dynamic optional
@@ -1280,7 +1282,7 @@ class Runner:
             candidate_formats = input_quant_cfg.get('candidate_formats')
             if isinstance(candidate_formats, str):
                 candidate_formats = [f.strip() for f in candidate_formats.split(',') if f.strip()]
-            metric = input_quant_cfg.get('metric', 'mse')
+            metric = 'mse'
             quantizer = DynamicInputQuantizer(
                 model=model,
                 metric=metric,
@@ -1291,9 +1293,10 @@ class Runner:
                 use_unsigned_input_candidates=input_quant_cfg.get('dynamic_unsigned_input_candidates', True),
                 use_cache_sim_db=input_quant_cfg.get('use_cache_sim_db', False),
                 model_name=input_quant_cfg.get('model_name'),
+                skip_depthwise_input_quant=input_quant_cfg.get('skip_depthwise_input_quant', False),
             )
             quantizer.register_hooks()
-            print(f"Input quantization enabled: mode=dynamic metric={metric} chunk_size={chunk_size}")
+            print(f"Input quantization enabled: mode=dynamic metric=MSE chunk_size={chunk_size}")
             return quantizer
 
         if mode == 'uniform':
@@ -1350,9 +1353,7 @@ class Runner:
         stats = {
             'mode': mode,
             'chunk_size': int(input_quant_cfg.get('chunk_size', 128)),
-            'norm_l1': final_stats.get('norm_l1', 0.0),
             'norm_mse': final_stats.get('norm_mse', 0.0),
-            'total_l1': final_stats.get('total_l1', 0.0),
             'total_mse': final_stats.get('total_mse', 0.0),
             'layer_stats': layer_stats,
         }
@@ -1395,9 +1396,7 @@ class Runner:
             total_batches = loader_len
 
         input_only_stats = {
-            'sum_l1_err': 0.0,
             'sum_mse_err': 0.0,
-            'sum_l1_norm': 0.0,
             'sum_l2_norm': 0.0,
         }
 
@@ -1436,9 +1435,7 @@ class Runner:
                             chunk_size=chunk_size,
                         )
                         diff = inputs - q_inputs
-                        input_only_stats['sum_l1_err'] += diff.abs().sum().item()
                         input_only_stats['sum_mse_err'] += diff.pow(2).sum().item()
-                        input_only_stats['sum_l1_norm'] += inputs.abs().sum().item()
                         input_only_stats['sum_l2_norm'] += inputs.pow(2).sum().item()
                         inputs = q_inputs
 
@@ -1472,10 +1469,6 @@ class Runner:
             and normalized_input_quant_cfg.get('enabled', False)
             and normalized_input_quant_cfg.get('mode') == 'input_only'
         ):
-            norm_l1 = (
-                input_only_stats['sum_l1_err'] / input_only_stats['sum_l1_norm']
-                if input_only_stats['sum_l1_norm'] > 0 else 0.0
-            )
             norm_mse = (
                 input_only_stats['sum_mse_err'] / input_only_stats['sum_l2_norm']
                 if input_only_stats['sum_l2_norm'] > 0 else 0.0
@@ -1484,9 +1477,7 @@ class Runner:
                 'mode': 'input_only',
                 'format': normalized_input_quant_cfg.get('format'),
                 'chunk_size': int(normalized_input_quant_cfg.get('chunk_size', 128)),
-                'norm_l1': norm_l1,
                 'norm_mse': norm_mse,
-                'total_l1': input_only_stats['sum_l1_err'],
                 'total_mse': input_only_stats['sum_mse_err'],
                 'layer_stats': {},
             }
@@ -1600,6 +1591,12 @@ class Runner:
         )
         dataset_cfg['model_name'] = model_name
         self._resolve_paths(dataset_cfg, ('path', 'pairs_file', 'root'))
+
+        # If adapter is already created (unlikely here but possible), check its fold_input_norm
+        # Otherwise, check the config directly.
+        adapter_cfg_resolved = config.get('adapter', {})
+        fold_input_norm = adapter_cfg_resolved.get('fold_input_norm', True)
+        dataset_cfg['skip_normalization'] = fold_input_norm
 
         # Cap num_workers to avoid exhausting fds or RAM during long sequential runs.
         # On unified-memory hosts (e.g. GB10: CPU+GPU share one LPDDR5X pool),
@@ -1802,7 +1799,6 @@ class Runner:
             'input_comp_red': 0.0,
             'input_comp_share': 0.0,
             'dyn_metric': None,
-            'dyn_norm_l1': 0.0,
             'dyn_norm_mse': 0.0,
             'fm_num_keypoints': 0.0,
             'fm_mean_score': 0.0,
@@ -1830,7 +1826,6 @@ class Runner:
         results['input_quant'] = stats
         if stats.get('mode') == 'dynamic':
             results['dyn_metric'] = stats.get('metric')
-            results['dyn_norm_l1'] = stats.get('norm_l1', 0.0)
             results['dyn_norm_mse'] = stats.get('norm_mse', 0.0)
 
     def run_single(
@@ -1970,18 +1965,27 @@ class Runner:
                 
                 # Build structured reference model using a proper config to ensure 
                 # identical structure (folding, ops) to the quantized model.
-                print(f"Building structured reference model (FP32 baseline)...")
+                print(f"Building structured reference model (FP32 baseline; input normalization is not folded)...")
                 ref_config = self._build_reference_config(config)
                 
-                # We use a sub-directory for the reference to avoid overwriting the main config/weights
-                ref_output_dir = os.path.join(output_dir, "reference_fp32")
+                # Use a distinct reference cache because this FP32 baseline keeps
+                # input normalization outside the model, unlike older folded refs.
+                ref_output_dir = os.path.join(output_dir, "reference_fp32_unfolded_input_norm")
                 os.makedirs(ref_output_dir, exist_ok=True)
+                ref_config.setdefault('experiment', {})
+                ref_materialize_cfg = ref_config['experiment'].setdefault('materialize_weights', {})
+                ref_materialize_cfg['force_rebuild'] = True
                 
-                ref_model, _, _ = self.prepare_model_with_materialized_weights(
+                ref_model, ref_adapter, _ = self.prepare_model_with_materialized_weights(
                     config=ref_config,
                     output_dir=ref_output_dir
                 )
                 # Note: prepare_model_with_materialized_weights already moved ref_model to self.device
+                ref_input_normalization = bool(config.get('adapter', {}).get('fold_input_norm', True))
+                ref_input_mean = getattr(ref_adapter, 'input_mean', None) if ref_input_normalization else None
+                ref_input_std = getattr(ref_adapter, 'input_std', None) if ref_input_normalization else None
+                if ref_input_normalization:
+                    print("Reference model will receive normalized inputs during comparison.")
 
                 eval_cfg = config.get('evaluation', {})
                 comparator = LayerComparator(
@@ -1995,6 +1999,9 @@ class Runner:
                     save_histograms=eval_cfg.get('save_histograms', False),
                     save_visualizations=eval_cfg.get('save_visualizations', False),
                     num_viz_samples=eval_cfg.get('num_viz_samples', 5),
+                    ref_input_normalization=ref_input_normalization,
+                    ref_input_mean=ref_input_mean,
+                    ref_input_std=ref_input_std,
                 )
                 
                 # Determine number of batches
@@ -2067,6 +2074,7 @@ class Runner:
             if 'model' in locals(): del model
             if 'ref_model' in locals(): del ref_model
             if 'adapter' in locals(): del adapter
+            if 'ref_adapter' in locals(): del ref_adapter
             if 'evaluator' in locals(): del evaluator
             if 'ref_evaluator' in locals(): del ref_evaluator
             if 'comparator' in locals(): del comparator

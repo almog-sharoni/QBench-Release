@@ -24,6 +24,10 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from runspace.src.ops.quant_base import quantize_tensor
+from runspace.src.quantization.chunking import (
+    count_context_chunks,
+    unchunk_tensor_by_context,
+)
 # from runspace.src.quantization.quantizer import quantize_fp_generic_i32 as quantize_i32
 from runspace.src.quantization.constants import get_quantization_bias
 # Late import
@@ -93,6 +97,11 @@ def get_args():
         default=1e-7,
         help="Absolute tolerance used by --verify_saved_weights checks.",
     )
+
+    parser.add_argument("--fold_input_norm", action="store_true", default=True,
+                        help="Fold input normalization into first layer weights and quantize first layer")
+    parser.add_argument("--no_fold_input_norm", action="store_false", dest="fold_input_norm",
+                        help="Disable input normalization folding and first layer quantization")
 
     return parser.parse_args()
 
@@ -444,10 +453,7 @@ def create_quantized_state_dict(model, layer_results_map, args, metric, use_chun
             if len(current_formats) < total_chunks:
                 w_dequant_flat[len(current_formats):] = w_chunked_flat[len(current_formats):]
             w_dequant_chunked = w_dequant_flat.view(batch_size, num_chunks, chunk_size_)
-            flat = w_dequant_chunked.view(batch_size, -1)
-            if pad_len > 0:
-                flat = flat[:, :-pad_len]
-            return flat.view(original_shape)
+            return unchunk_tensor_by_context(w_dequant_chunked, original_shape, pad_len)
         elif best_type:
             w_dequant, _ = get_quantized_tensor_sim(w, best_type, chunk_size=args.weight_chunk_size)
             return w_dequant
@@ -613,10 +619,7 @@ def _apply_chunk_format_map(tensor, chunk_formats, chunk_size):
         w_dequant_flat[len(current_formats):] = w_chunked_flat[len(current_formats):]
 
     w_dequant_chunked = w_dequant_flat.view(batch_size, num_chunks, chunk_size_)
-    flat = w_dequant_chunked.view(batch_size, -1)
-    if pad_len > 0:
-        flat = flat[:, :-pad_len]
-    return flat.view(original_shape)
+    return unchunk_tensor_by_context(w_dequant_chunked, original_shape, pad_len)
 
 
 def verify_quantized_weights_file(weights_path, quant_map, args, atol=1e-7):
@@ -1554,7 +1557,7 @@ def _analyze_weight_tensor(w, layer_name, args, metrics_to_calc, qt_options, lay
 
     record['numel'] = w.numel()
     if args.weight_chunk_size:
-        record['num_chunks'] = (w.numel() + args.weight_chunk_size - 1) // args.weight_chunk_size
+        record['num_chunks'] = count_context_chunks(w, args.weight_chunk_size)
 
     max_val_global = record['max_val']
     metric_chunk_errors = {m: {} for m in metrics_to_calc}
