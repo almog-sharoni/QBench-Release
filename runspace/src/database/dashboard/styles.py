@@ -257,6 +257,20 @@ def inject_global_styles():
         min-width: fit-content;
     }
 
+    /* ── Suppress full-page-rerun content fade ──────────────────────────────
+       During full reruns (DB switch, navigation), Streamlit reduces opacity
+       on parent containers. Child opacity:1 cannot override a parent's opacity,
+       so we must target the parent containers directly.
+    */
+    [data-testid="stMain"],
+    [data-testid="stAppViewContainer"] > section,
+    [data-testid="stMainBlockContainer"],
+    .block-container {
+        opacity: 1 !important;
+        transition: none !important;
+        animation: none !important;
+    }
+
     /* ── Suppress fragment auto-refresh "breathing" animation ──────────────
        Streamlit temporarily sets opacity: 0.33 + a transition on fragment
        containers whenever run_every fires. This makes content pulse white.
