@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from runspace.src.registry.op_registry import OpRegistry
 from runspace.src.ops.quant_base import QuantizedLayerMixin
 from runspace.src.ops.quant_arithmetic import _QuantArithmeticBase
+from runspace.src.ops.quant_softmax import QuantSoftmax
 
 
 def _simple_nms(scores, nms_radius: int):
@@ -114,15 +115,22 @@ class ObservedL2Norm(nn.Module):
 # ---------------------------------------------------------------------------
 
 @OpRegistry.register("ObservedSimpleNMS", replaces="simple_nms",
-                     init_from_args={"radius": "nms_radius"}, quantized=False)
-class ObservedSimpleNMS(nn.Module):
-    """NMS via repeated max_pool2d (stageB8). Pure max-selection — no arithmetic."""
-    def __init__(self, radius: int = 4):
+                     init_from_args={"radius": "nms_radius"}, quantized=True)
+class ObservedSimpleNMS(nn.Module, QuantizedLayerMixin):
+    """NMS via repeated max_pool2d (stageB8). Pure max-selection — values pass through unchanged."""
+    def __init__(self, radius: int = 4, q_type: str = "fp8_e4m3",
+                 quant_mode: str = "tensor", chunk_size: int | None = None):
         super().__init__()
         self.radius = radius
+        self.q_type = q_type
+        self.quant_mode = quant_mode
+        self.chunk_size = chunk_size
+        self.capture_activations = False
 
     def forward(self, scores: torch.Tensor) -> torch.Tensor:
-        return _simple_nms(scores, self.radius)
+        scores_q = self.quantize_input(scores)
+        out = _simple_nms(scores_q, self.radius)
+        return self.quantize_output(out)
 
 
 # ---------------------------------------------------------------------------
@@ -162,12 +170,68 @@ class ObservedGridSample(nn.Module):
 # SuperGlue ops
 # ===========================================================================
 
-def _log_sinkhorn_iterations(Z, log_mu, log_nu, iters: int):
+def _log_sinkhorn_iterationsv1(Z, log_mu, log_nu, iters: int):
     u, v = torch.zeros_like(log_mu), torch.zeros_like(log_nu)
     for _ in range(iters):
         u = log_mu - torch.logsumexp(Z + v.unsqueeze(1), dim=2)
         v = log_nu - torch.logsumexp(Z + u.unsqueeze(2), dim=1)
     return Z + u.unsqueeze(2) + v.unsqueeze(1)
+
+_LN2 = float(torch.log(torch.tensor(2.0)).item())
+
+
+def _log2sumexp2(x: torch.Tensor, dim: int) -> torch.Tensor:
+    """Numerically-stable log2(sum(2**x)) along ``dim``.
+
+    Mirrors torch.logsumexp but in base 2 — exercises exp2/log2 in place
+    of exp/log, which is hardware-friendlier on FP8 accelerators.
+    """
+    m = x.amax(dim=dim, keepdim=True)
+    return (m + torch.log2(torch.exp2(x - m).sum(dim=dim, keepdim=True))).squeeze(dim)
+
+
+def _log_sinkhorn_iterationsv2(Z, log_mu, log_nu, iters: int):
+    """log2/exp2 variant — same algorithm as v1, but the inner logsumexp
+    runs in base 2 (exp2/log2). Inputs and outputs stay in natural-log
+    space so the caller's ``Z - norm`` math is unchanged."""
+    Z2 = Z / _LN2
+    log_mu_2 = log_mu / _LN2
+    log_nu_2 = log_nu / _LN2
+    u = torch.zeros_like(log_mu_2)
+    v = torch.zeros_like(log_nu_2)
+    for _ in range(iters):
+        u = log_mu_2 - _log2sumexp2(Z2 + v.unsqueeze(1), dim=2)
+        v = log_nu_2 - _log2sumexp2(Z2 + u.unsqueeze(2), dim=1)
+    Z2_out = Z2 + u.unsqueeze(2) + v.unsqueeze(1)
+    return Z2_out * _LN2
+
+
+def _log_sinkhorn_iterationsv3(Z, log_mu, log_nu, iters: int):
+    """Max (log-MAP / Viterbi-style) variant — replaces logsumexp with
+    a hard max. Cheapest option, no exp/log in the inner loop. Matches
+    the saturating arg-max semantics of low-bit logsumexp approximations."""
+    u = torch.zeros_like(log_mu)
+    v = torch.zeros_like(log_nu)
+    for _ in range(iters):
+        u = log_mu - (Z + v.unsqueeze(1)).amax(dim=2)
+        v = log_nu - (Z + u.unsqueeze(2)).amax(dim=1)
+    return Z + u.unsqueeze(2) + v.unsqueeze(1)
+
+
+def _log_sinkhorn_iterationsv4(Z, log_mu, log_nu, iters: int):
+    """Sum (linear-space) variant — exponentiate up front, run plain
+    multiplicative Sinkhorn with a sum normalizer (no logsumexp inside
+    the loop), and convert back to log-space at the end."""
+    K = torch.exp(Z)
+    mu = torch.exp(log_mu)
+    nu = torch.exp(log_nu)
+    eps = K.new_tensor(1e-30)
+    u = torch.ones_like(mu)
+    v = torch.ones_like(nu)
+    for _ in range(iters):
+        u = mu / (K * v.unsqueeze(1)).sum(dim=2).clamp(min=eps)
+        v = nu / (K * u.unsqueeze(2)).sum(dim=1).clamp(min=eps)
+    return torch.log((K * u.unsqueeze(2) * v.unsqueeze(1)).clamp(min=eps))
 
 
 def _arange_like(x, dim: int):
@@ -287,13 +351,14 @@ class ObservedDescMatmul(_QuantArithmeticBase):
 
 # --- FP32-required op --------------------------------------------------------
 
-@OpRegistry.register("ObservedSinkhorn", replaces="log_optimal_transport",
+@OpRegistry.register("ObservedSinkhornV1", replaces="log_optimal_transport",
+                     variant="v1", default=True,
                      init_from_args={"iters": "iters"}, compliance_status="FP32 required",
-                     quantized=False)
-class ObservedSinkhorn(nn.Module):
+                     quantized=True)  # quantized=True to prevent FP8 quantization of the output, which causes NaNs
+class ObservedSinkhornV1(nn.Module):
     """Differentiable optimal transport via Sinkhorn in log-space.
 
-    Iterative logsumexp — needs FP32 precision.
+    Iterative logsumexp — needs FP32 precision. Baseline variant.
     """
     def __init__(self, iters: int = 100):
         super().__init__()
@@ -316,10 +381,108 @@ class ObservedSinkhorn(nn.Module):
         log_nu = torch.cat([norm.expand(n), ms.log()[None] + norm])
         log_mu, log_nu = log_mu[None].expand(b, -1), log_nu[None].expand(b, -1)
 
-        Z = _log_sinkhorn_iterations(couplings, log_mu, log_nu, self.iters)
+        Z = _log_sinkhorn_iterationsv1(couplings, log_mu, log_nu, self.iters)
         return Z - norm
 
 
+@OpRegistry.register("ObservedSinkhornV2", replaces="log_optimal_transport",
+                     variant="v2",
+                     init_from_args={"iters": "iters"}, compliance_status="FP32 required",
+                     quantized=True)
+class ObservedSinkhornV2(nn.Module):
+    """Differentiable optimal transport via Sinkhorn in log-space.
+
+    Iterative logsumexp — needs FP32 precision. Baseline variant.
+    """
+    def __init__(self, iters: int = 100):
+        super().__init__()
+        self.iters = iters
+
+    def forward(self, scores: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
+        b, m, n = scores.shape
+        one = scores.new_tensor(1)
+        ms, ns = (m*one).to(scores), (n*one).to(scores)
+
+        bins0 = alpha.expand(b, m, 1)
+        bins1 = alpha.expand(b, 1, n)
+        alpha_e = alpha.expand(b, 1, 1)
+
+        couplings = torch.cat([torch.cat([scores, bins0], -1),
+                               torch.cat([bins1, alpha_e], -1)], 1)
+
+        norm = -(ms + ns).log()
+        log_mu = torch.cat([norm.expand(m), ns.log()[None] + norm])
+        log_nu = torch.cat([norm.expand(n), ms.log()[None] + norm])
+        log_mu, log_nu = log_mu[None].expand(b, -1), log_nu[None].expand(b, -1)
+
+        Z = _log_sinkhorn_iterationsv2(couplings, log_mu, log_nu, self.iters)
+        return Z - norm
+
+@OpRegistry.register("ObservedSinkhornV3", replaces="log_optimal_transport",
+                     variant="v3",
+                     init_from_args={"iters": "iters"}, compliance_status="FP32 required",
+                     quantized=True)
+class ObservedSinkhornV3(nn.Module):
+    """Differentiable optimal transport via Sinkhorn in log-space.
+
+    Iterative logsumexp — needs FP32 precision. Baseline variant.
+    """
+    def __init__(self, iters: int = 100):
+        super().__init__()
+        self.iters = iters
+
+    def forward(self, scores: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
+        b, m, n = scores.shape
+        one = scores.new_tensor(1)
+        ms, ns = (m*one).to(scores), (n*one).to(scores)
+
+        bins0 = alpha.expand(b, m, 1)
+        bins1 = alpha.expand(b, 1, n)
+        alpha_e = alpha.expand(b, 1, 1)
+
+        couplings = torch.cat([torch.cat([scores, bins0], -1),
+                               torch.cat([bins1, alpha_e], -1)], 1)
+
+        norm = -(ms + ns).log()
+        log_mu = torch.cat([norm.expand(m), ns.log()[None] + norm])
+        log_nu = torch.cat([norm.expand(n), ms.log()[None] + norm])
+        log_mu, log_nu = log_mu[None].expand(b, -1), log_nu[None].expand(b, -1)
+
+        Z = _log_sinkhorn_iterationsv3(couplings, log_mu, log_nu, self.iters)
+        return Z - norm
+
+@OpRegistry.register("ObservedSinkhornV4", replaces="log_optimal_transport",
+                     variant="v4",
+                     init_from_args={"iters": "iters"}, compliance_status="FP32 required",
+                     quantized=True)
+class ObservedSinkhornV4(nn.Module):
+    """Differentiable optimal transport via Sinkhorn in log-space.
+
+    Iterative logsumexp — needs FP32 precision. Baseline variant.
+    """
+    def __init__(self, iters: int = 100):
+        super().__init__()
+        self.iters = iters
+
+    def forward(self, scores: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
+        b, m, n = scores.shape
+        one = scores.new_tensor(1)
+        ms, ns = (m*one).to(scores), (n*one).to(scores)
+
+        bins0 = alpha.expand(b, m, 1)
+        bins1 = alpha.expand(b, 1, n)
+        alpha_e = alpha.expand(b, 1, 1)
+
+        couplings = torch.cat([torch.cat([scores, bins0], -1),
+                               torch.cat([bins1, alpha_e], -1)], 1)
+
+        norm = -(ms + ns).log()
+        log_mu = torch.cat([norm.expand(m), ns.log()[None] + norm])
+        log_nu = torch.cat([norm.expand(n), ms.log()[None] + norm])
+        log_mu, log_nu = log_mu[None].expand(b, -1), log_nu[None].expand(b, -1)
+
+        Z = _log_sinkhorn_iterationsv4(couplings, log_mu, log_nu, self.iters)
+        return Z - norm
 # --- Match selection --------------------------------------------------------
 
 @OpRegistry.register("ObservedMatchSelect", compliance_status="FP32 activation", quantized=False)
@@ -361,15 +524,16 @@ class ObservedAttention(nn.Module):
     def __init__(self, q_type="fp8_e4m3", quantization_bias: int = None,
                  quant_mode="chunk", chunk_size=None):
         super().__init__()
-        print(f"[ObservedAttention quant] attention: q_type={q_type}, quantization_bias={quantization_bias}, quant_mode={quant_mode}, chunk_size={chunk_size}")
         kw = dict(q_type=q_type, quantization_bias=quantization_bias,
                   quant_mode=quant_mode, chunk_size=chunk_size)
         self.attn_scores = ObservedAttentionScores(**kw)
         self.attn_apply = ObservedAttentionApply(**kw)
+        self.softmax = QuantSoftmax(dim=-1, q_type=q_type,
+                                    quant_mode=quant_mode, chunk_size=chunk_size)
 
     def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor):
         s = self.attn_scores(query, key)
-        p = F.softmax(s, dim=-1)
+        p = self.softmax(s)
         return self.attn_apply(p, value), p
 
 

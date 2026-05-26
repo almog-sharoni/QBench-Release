@@ -13,7 +13,7 @@ from runspace.src.quantization.quantizer import round_fractional_part
 
 
 @OpRegistry.register("QuantReLU", original_cls=nn.ReLU, is_activation=True)
-class QuantReLU(nn.ReLU, QuantizedLayerMixin):
+class QuantReLU(nn.ReLU,QuantizedLayerMixin):
     """
     Quantized ReLU using LUT.
     """
