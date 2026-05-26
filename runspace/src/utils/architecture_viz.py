@@ -13,8 +13,143 @@ from ..ops.quant_mha import (
     DecomposedQkvAttention as RuntimeDecomposedQkvAttention,
     ScaledDotProduct as RuntimeScaledDotProduct,
 )
+from ..ops.quant_base import QuantizedLayerMixin
 
 metadata_registry = {}
+
+
+_LOW_LEVEL_GRAPH_NODE_LABELS = {
+    "abs",
+    "add",
+    "and",
+    "amax",
+    "cat",
+    "clamp",
+    "contiguous",
+    "detach",
+    "div",
+    "eq",
+    "exp",
+    "exp2",
+    "flatten",
+    "floor",
+    "getitem",
+    "int",
+    "log",
+    "log2",
+    "lshift",
+    "max",
+    "mean",
+    "min",
+    "mul",
+    "ne",
+    "or",
+    "permute",
+    "pow",
+    "reciprocal",
+    "reshape",
+    "rshift",
+    "rsqrt",
+    "sqrt",
+    "squeeze",
+    "sub",
+    "sum",
+    "transpose",
+    "unbind",
+    "unsqueeze",
+    "view",
+    "where",
+    "zeroslike",
+    "zeros_like",
+}
+
+_MISSING = object()
+
+
+def _normalize_graph_label(label):
+    return re.sub(r'[^a-z0-9]+', '', str(label or '').strip().lower())
+
+
+def _is_low_level_graph_node(label, var_name=None, module_args=None):
+    if var_name or module_args:
+        return False
+    return _normalize_graph_label(label).strip('_') in _LOW_LEVEL_GRAPH_NODE_LABELS
+
+
+def _model_has_cuda_quantized_runtime(model):
+    return any(
+        isinstance(module, QuantizedLayerMixin)
+        and (
+            getattr(module, 'input_quantization', False)
+            or getattr(module, 'output_quantization', False)
+        )
+        for module in model.modules()
+    )
+
+
+def _model_has_cuda_tensors(model):
+    return any(tensor.is_cuda for tensor in itertools.chain(model.parameters(), model.buffers()))
+
+
+def _select_torchview_device(model):
+    if _model_has_cuda_tensors(model):
+        return 'cuda'
+
+    if _model_has_cuda_quantized_runtime(model):
+        if torch.cuda.is_available():
+            return 'cuda'
+        raise RuntimeError(
+            "Quantized graph tracing requires CUDA because quantize_tensor's "
+            "standard path does not have a CPU backend."
+        )
+
+    return 'cpu'
+
+
+def _set_temporary_attr(module, attr, value, restorations):
+    old_value = module.__dict__.get(attr, _MISSING)
+    restorations.append((module, attr, old_value))
+    setattr(module, attr, value)
+
+
+def _restore_temporary_attrs(restorations):
+    for module, attr, old_value in reversed(restorations):
+        if old_value is _MISSING:
+            try:
+                delattr(module, attr)
+            except AttributeError:
+                pass
+        else:
+            setattr(module, attr, old_value)
+
+
+def _replace_quantized_runtime_for_graph(model):
+    restorations = []
+
+    def graph_layer_norm_forward(self, input):
+        return torch.nn.functional.layer_norm(
+            input,
+            self.normalized_shape,
+            self.weight,
+            self.bias,
+            self.eps,
+        )
+
+    for module in model.modules():
+        if isinstance(module, QuantizedLayerMixin):
+            _set_temporary_attr(module, 'input_quantization', False, restorations)
+            _set_temporary_attr(module, 'output_quantization', False, restorations)
+            _set_temporary_attr(module, 'capture_activations', False, restorations)
+
+        if type(module).__name__ == 'QuantLayerNorm':
+            _set_temporary_attr(
+                module,
+                'forward',
+                graph_layer_norm_forward.__get__(module, module.__class__),
+                restorations,
+            )
+
+    return restorations
 
 
 class ViTEncoderBlockWrapper(nn.Module):
@@ -27,6 +162,7 @@ class ViTEncoderBlockWrapper(nn.Module):
         super().__init__()
         for name, child in block.named_children():
             setattr(self, name, child)
+        self.dropout = getattr(block, 'dropout', nn.Identity())
         self.residual_add_1 = QuantAdd(q_type=q_type, quantization_bias=quantization_bias)
         self.residual_add_2 = QuantAdd(q_type=q_type, quantization_bias=quantization_bias)
 
@@ -276,6 +412,7 @@ def generate_hierarchical_json(model, input_size, model_name="Root", depth=3):
     # --- Hack to expose variable names to TorchView ---
     restoration_list = []
     graph_module_restorations = _replace_attention_helpers_for_graph(model)
+    quant_runtime_restorations = _replace_quantized_runtime_for_graph(model)
     global metadata_registry
     metadata_registry.clear()
     
@@ -308,13 +445,13 @@ def generate_hierarchical_json(model, input_size, model_name="Root", depth=3):
         print("Warning: Variable name extraction failed", e)
 
     try:
-        # Use CPU tracing for robustness.
-        # Some models/custom modules can end up with meta tensors during torchview
-        # tracing, which then breaks subsequent device moves.
+        # CPU tracing is the default for robustness. Quantized QBench modules
+        # use the CUDA codec at runtime, so keep those traces on CUDA.
+        trace_device = _select_torchview_device(model)
         graph = draw_graph(
             model,
             input_size=input_size,
-            device='cpu',
+            device=trace_device,
             expand_nested=True,
             depth=depth,
             hide_module_functions=True,
@@ -325,6 +462,7 @@ def generate_hierarchical_json(model, input_size, model_name="Root", depth=3):
         # Restore old class names
         for module, old_cls in restoration_list:
             module.__class__ = old_cls
+        _restore_temporary_attrs(quant_runtime_restorations)
         for parent, name, original_module in reversed(graph_module_restorations):
             setattr(parent, name, original_module)
     
@@ -379,6 +517,8 @@ def generate_hierarchical_json(model, input_size, model_name="Root", depth=3):
                 continue
                 
             n_label, i_s, o_s, var_name, module_args = clean_label(node.get_label())
+            if _is_low_level_graph_node(n_label, var_name, module_args):
+                continue
                 
             # Formatting color. We explicitly check for Quant in the class name itself!
             is_quantized = "Quant" in n_label or "quant" in (var_name or "").lower()
@@ -451,18 +591,71 @@ def generate_hierarchical_json(model, input_size, model_name="Root", depth=3):
     process_subgraph(pydot_graph)
     
     # Process edges
+    visible_node_ids = {
+        element["data"]["id"]
+        for element in elements
+        if element.get("data", {}).get("type") == "node"
+    }
+    raw_edges = [
+        (
+            edge.get_source().strip('"'),
+            edge.get_destination().strip('"'),
+        )
+        for edge in pydot_graph.get_edges()
+    ]
+    incoming = {}
+    outgoing = {}
+    for src, dst in raw_edges:
+        outgoing.setdefault(src, set()).add(dst)
+        incoming.setdefault(dst, set()).add(src)
+
+    def visible_upstream(node_id, seen=None):
+        if node_id in visible_node_ids:
+            return {node_id}
+        if seen is None:
+            seen = set()
+        if node_id in seen:
+            return set()
+        seen.add(node_id)
+        result = set()
+        for pred in incoming.get(node_id, ()):
+            result.update(visible_upstream(pred, seen.copy()))
+        return result
+
+    def visible_downstream(node_id, seen=None):
+        if node_id in visible_node_ids:
+            return {node_id}
+        if seen is None:
+            seen = set()
+        if node_id in seen:
+            return set()
+        seen.add(node_id)
+        result = set()
+        for succ in outgoing.get(node_id, ()):
+            result.update(visible_downstream(succ, seen.copy()))
+        return result
+
     edge_idx = 0
-    for edge in pydot_graph.get_edges():
-        src = edge.get_source().strip('"')
-        dst = edge.get_destination().strip('"')
-        elements.append({
-            "data": {
-                "id": f"e{edge_idx}",
-                "source": src,
-                "target": dst
-            }
-        })
-        edge_idx += 1
+    emitted_edges = set()
+    for src, dst in raw_edges:
+        srcs = visible_upstream(src)
+        dsts = visible_downstream(dst)
+        for visible_src in sorted(srcs):
+            for visible_dst in sorted(dsts):
+                if visible_src == visible_dst:
+                    continue
+                edge_key = (visible_src, visible_dst)
+                if edge_key in emitted_edges:
+                    continue
+                emitted_edges.add(edge_key)
+                elements.append({
+                    "data": {
+                        "id": f"e{edge_idx}",
+                        "source": visible_src,
+                        "target": visible_dst
+                    }
+                })
+                edge_idx += 1
         
     return json.dumps(elements)
 

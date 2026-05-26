@@ -86,15 +86,16 @@ def get_model_from_name(model_name, quantized=True):
     try:
         if quantized:
             print(f"  Loading quantized {model_name} via GenericAdapter...")
-            # We quantize all supported layers to show them as Green in the graph
+            # Replace supported layers with Quant* modules so they render as
+            # quantized, but avoid tracing activation quantization kernels.
             adapter = GenericAdapter(
                 model_name=model_name,
                 quantized_ops=["all"],
-                input_quantization=True,
+                input_quantization=False,
                 enable_fx_quantization=False,  # keep module hierarchy intact for torchview
+                skip_calibration=True,
             )
-            model = adapter.build_model(quantized=True)
-            return model
+            return adapter.model
         else:
             # Try torchvision models
             from torchvision import models
