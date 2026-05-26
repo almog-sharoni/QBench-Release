@@ -1887,7 +1887,7 @@ else:
     - **Drop**: Accuracy loss relative to FP32 reference
     """)
     st.sidebar.markdown("---")
-    @st.fragment(run_every=10)
+    @st.fragment(run_every=30)
     def _render_experiment_result_tables():
         df = get_runs(DB_PATH, selected_run_limit)
         df = preprocess_runs_df(df)
@@ -1908,7 +1908,12 @@ else:
         models = sorted(df['model_name'].unique())
         expr_types = sorted(df['experiment_type'].unique())
         render_dashboard_intro()
-        st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')} · {len(df)} rows")
+        _ts_col, _refresh_col = st.columns([6, 1])
+        _ts_col.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')} · {len(df)} rows")
+        if _refresh_col.button("🔄 Refresh", key="exp_table_refresh", width='stretch'):
+            get_runs.clear()
+            get_fm_runs.clear()
+            rerun_current_fragment()
         st.markdown("---")
 
         # Render Tables
@@ -2108,7 +2113,7 @@ else:
                 # Action buttons — appear based on what's available in selected rows.
                 selected_run_rows = []
                 if len(selected_indices) >= 1:
-                    orig_indices = [display_df.index[j] for j in selected_indices]
+                    orig_indices = [display_df.index[j] for j in selected_indices if j < len(display_df)]
                     selected_run_rows = [filtered_df.loc[idx].to_dict() for idx in orig_indices]
 
                 selected_count = len(selected_indices)
@@ -2126,7 +2131,7 @@ else:
                     st.info("Select one or more rows to unlock run details, comparison charts, and deletion tools.")
 
                 st.markdown("#### Actions")
-                if len(selected_indices) == 1:
+                if len(selected_indices) == 1 and selected_indices[0] < len(display_df):
                     orig_idx = display_df.index[selected_indices[0]]
                     run_row = filtered_df.loc[orig_idx].to_dict()
                     weight_map_json, input_map_json, _ = _resolve_maps_for_display(run_row)
@@ -2239,7 +2244,7 @@ else:
 
                     if run_comparison:
                         with st.spinner(f"Building comparison chart for {num_runs} runs..."):
-                            orig_indices = [display_df.index[j] for j in selected_indices]
+                            orig_indices = [display_df.index[j] for j in selected_indices if j < len(display_df)]
                             selected_df = filtered_df.loc[orig_indices].copy()
 
                             # Create labels
