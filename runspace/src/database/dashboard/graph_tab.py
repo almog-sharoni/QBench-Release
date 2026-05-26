@@ -10,8 +10,15 @@ with tab_graph:
     if _graph_renderer_fn is None:
         st.info("No experiment runs found in the database. The graph viewer requires at least one run to initialize.")
     else:
-        all_models_for_graph = sorted(cache_sim_df['model_name'].dropna().unique().tolist()) \
-            if 'cache_sim_df' in dir() and not cache_sim_df.empty else []
+        models_config_path = os.path.join(
+            PROJECT_ROOT,
+            "runspace/src/database/dashboard/models.yaml",
+        )
+        all_models_for_graph = get_architecture_graph_model_options(
+            DB_PATH,
+            FM_DB_PATH,
+            models_config_path,
+        )
 
         col_gm, col_gg, col_gr = st.columns([3, 1, 1])
         graph_model = col_gm.selectbox(
@@ -47,6 +54,7 @@ with tab_graph:
                         st.success("Loaded cached graph.")
                 except Exception as exc:
                     st.error(f"Failed to load graph for `{graph_model}`: {exc}")
+                    st.exception(exc)
 
         cached_json  = st.session_state.get('_graph_tab_json')
         cached_meta  = st.session_state.get('_graph_tab_meta')
