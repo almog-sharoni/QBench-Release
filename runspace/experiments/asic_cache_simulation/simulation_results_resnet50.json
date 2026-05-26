@@ -8,7 +8,8 @@
     "bank_size": 125000,
     "metadata_bits": 0,
     "batch_size": 1,
-    "timestamp": "2026-05-24T11:16:18.317527Z"
+    "bandwidth": 1.0,
+    "timestamp": "2026-05-26T08:01:57.909901Z"
   },
   "summary": {
     "total_layers": 72,
@@ -38,6 +39,7 @@
       "output_channel_height": 112,
       "output_channel_width": 112,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -45,9 +47,31 @@
           "name": "relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 802816
+          "output_elems": 802816,
+          "input_shapes": [
+            [
+              1,
+              64,
+              112,
+              112
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            112,
+            112
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1605633.0,
+      "total_cycles": 1605633.0
     },
     {
       "name": "maxpool",
@@ -71,9 +95,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 6272.0,
+      "total_cycles": 6272.0
     },
     {
       "name": "layer1.0.conv1",
@@ -97,6 +130,7 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -104,9 +138,31 @@
           "name": "layer1.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              64,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 200705.0,
+      "total_cycles": 200705.0
     },
     {
       "name": "layer1.0.conv2",
@@ -130,6 +186,7 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -137,9 +194,31 @@
           "name": "layer1.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              64,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1003521.0,
+      "total_cycles": 1003521.0
     },
     {
       "name": "layer1.0.conv3",
@@ -163,9 +242,18 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 802817.0,
+      "total_cycles": 802817.0
     },
     {
       "name": "layer1.0.downsample.0",
@@ -189,9 +277,18 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 802817.0,
+      "total_cycles": 802817.0
     },
     {
       "name": "add",
@@ -215,6 +312,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -222,9 +320,31 @@
           "name": "layer1.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 802816
+          "output_elems": 802816,
+          "input_shapes": [
+            [
+              1,
+              256,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 6272.0,
+      "total_cycles": 6272.0
     },
     {
       "name": "layer1.1.conv1",
@@ -248,6 +368,7 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -255,9 +376,31 @@
           "name": "layer1.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              64,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer1.1.conv2",
@@ -281,6 +424,7 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -288,9 +432,31 @@
           "name": "layer1.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              64,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1003521.0,
+      "total_cycles": 1003521.0
     },
     {
       "name": "layer1.1.conv3",
@@ -314,9 +480,18 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 802817.0,
+      "total_cycles": 802817.0
     },
     {
       "name": "add_1",
@@ -340,6 +515,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -347,9 +523,31 @@
           "name": "layer1.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 802816
+          "output_elems": 802816,
+          "input_shapes": [
+            [
+              1,
+              256,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 6272.0,
+      "total_cycles": 6272.0
     },
     {
       "name": "layer1.2.conv1",
@@ -373,6 +571,7 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -380,9 +579,31 @@
           "name": "layer1.2.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              64,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer1.2.conv2",
@@ -406,6 +627,7 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -413,9 +635,31 @@
           "name": "layer1.2.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              64,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1003521.0,
+      "total_cycles": 1003521.0
     },
     {
       "name": "layer1.2.conv3",
@@ -439,9 +683,18 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 802817.0,
+      "total_cycles": 802817.0
     },
     {
       "name": "add_2",
@@ -465,6 +718,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -472,9 +726,31 @@
           "name": "layer1.2.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 802816
+          "output_elems": 802816,
+          "input_shapes": [
+            [
+              1,
+              256,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 6272.0,
+      "total_cycles": 6272.0
     },
     {
       "name": "layer2.0.conv1",
@@ -498,6 +774,7 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -505,9 +782,31 @@
           "name": "layer2.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 401408
+          "output_elems": 401408,
+          "input_shapes": [
+            [
+              1,
+              128,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 802817.0,
+      "total_cycles": 802817.0
     },
     {
       "name": "layer2.0.conv2",
@@ -531,6 +830,7 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -538,9 +838,31 @@
           "name": "layer2.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              128,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer2.0.conv3",
@@ -564,9 +886,18 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer2.0.downsample.0",
@@ -590,9 +921,18 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 802817.0,
+      "total_cycles": 802817.0
     },
     {
       "name": "add_3",
@@ -616,6 +956,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -623,9 +964,31 @@
           "name": "layer2.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 401408
+          "output_elems": 401408,
+          "input_shapes": [
+            [
+              1,
+              512,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 3136.0,
+      "total_cycles": 3136.0
     },
     {
       "name": "layer2.1.conv1",
@@ -649,6 +1012,7 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -656,9 +1020,31 @@
           "name": "layer2.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              128,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer2.1.conv2",
@@ -682,6 +1068,7 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -689,9 +1076,31 @@
           "name": "layer2.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              128,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer2.1.conv3",
@@ -715,9 +1124,18 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "add_4",
@@ -741,6 +1159,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -748,9 +1167,31 @@
           "name": "layer2.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 401408
+          "output_elems": 401408,
+          "input_shapes": [
+            [
+              1,
+              512,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 3136.0,
+      "total_cycles": 3136.0
     },
     {
       "name": "layer2.2.conv1",
@@ -774,6 +1215,7 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -781,9 +1223,31 @@
           "name": "layer2.2.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              128,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer2.2.conv2",
@@ -807,6 +1271,7 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -814,9 +1279,31 @@
           "name": "layer2.2.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              128,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer2.2.conv3",
@@ -840,9 +1327,18 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "add_5",
@@ -866,6 +1362,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -873,9 +1370,31 @@
           "name": "layer2.2.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 401408
+          "output_elems": 401408,
+          "input_shapes": [
+            [
+              1,
+              512,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 3136.0,
+      "total_cycles": 3136.0
     },
     {
       "name": "layer2.3.conv1",
@@ -899,6 +1418,7 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -906,9 +1426,31 @@
           "name": "layer2.3.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              128,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer2.3.conv2",
@@ -932,6 +1474,7 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -939,9 +1482,31 @@
           "name": "layer2.3.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              128,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer2.3.conv3",
@@ -965,9 +1530,18 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "add_6",
@@ -991,6 +1565,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -998,9 +1573,31 @@
           "name": "layer2.3.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 401408
+          "output_elems": 401408,
+          "input_shapes": [
+            [
+              1,
+              512,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 3136.0,
+      "total_cycles": 3136.0
     },
     {
       "name": "layer3.0.conv1",
@@ -1024,6 +1621,7 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -1031,9 +1629,31 @@
           "name": "layer3.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              256,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 802817.0,
+      "total_cycles": 802817.0
     },
     {
       "name": "layer3.0.conv2",
@@ -1057,6 +1677,7 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -1064,9 +1685,31 @@
           "name": "layer3.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer3.0.conv3",
@@ -1090,9 +1733,18 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer3.0.downsample.0",
@@ -1116,9 +1768,18 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 802817.0,
+      "total_cycles": 802817.0
     },
     {
       "name": "add_7",
@@ -1142,6 +1803,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1149,9 +1811,31 @@
           "name": "layer3.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              1024,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            1024,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1568.0,
+      "total_cycles": 1568.0
     },
     {
       "name": "layer3.1.conv1",
@@ -1175,6 +1859,7 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -1182,9 +1867,31 @@
           "name": "layer3.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer3.1.conv2",
@@ -1208,6 +1915,7 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -1215,9 +1923,31 @@
           "name": "layer3.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer3.1.conv3",
@@ -1241,9 +1971,18 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "add_8",
@@ -1267,6 +2006,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1274,9 +2014,31 @@
           "name": "layer3.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              1024,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            1024,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1568.0,
+      "total_cycles": 1568.0
     },
     {
       "name": "layer3.2.conv1",
@@ -1300,6 +2062,7 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -1307,9 +2070,31 @@
           "name": "layer3.2.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer3.2.conv2",
@@ -1333,6 +2118,7 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -1340,9 +2126,31 @@
           "name": "layer3.2.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer3.2.conv3",
@@ -1366,9 +2174,18 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "add_9",
@@ -1392,6 +2209,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1399,9 +2217,31 @@
           "name": "layer3.2.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              1024,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            1024,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1568.0,
+      "total_cycles": 1568.0
     },
     {
       "name": "layer3.3.conv1",
@@ -1425,6 +2265,7 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -1432,9 +2273,31 @@
           "name": "layer3.3.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer3.3.conv2",
@@ -1458,6 +2321,7 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -1465,9 +2329,31 @@
           "name": "layer3.3.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer3.3.conv3",
@@ -1491,9 +2377,18 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "add_10",
@@ -1517,6 +2412,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1524,9 +2420,31 @@
           "name": "layer3.3.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              1024,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            1024,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1568.0,
+      "total_cycles": 1568.0
     },
     {
       "name": "layer3.4.conv1",
@@ -1550,6 +2468,7 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -1557,9 +2476,31 @@
           "name": "layer3.4.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer3.4.conv2",
@@ -1583,6 +2524,7 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -1590,9 +2532,31 @@
           "name": "layer3.4.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer3.4.conv3",
@@ -1616,9 +2580,18 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "add_11",
@@ -1642,6 +2615,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1649,9 +2623,31 @@
           "name": "layer3.4.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              1024,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            1024,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1568.0,
+      "total_cycles": 1568.0
     },
     {
       "name": "layer3.5.conv1",
@@ -1675,6 +2671,7 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -1682,9 +2679,31 @@
           "name": "layer3.5.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer3.5.conv2",
@@ -1708,6 +2727,7 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -1715,9 +2735,31 @@
           "name": "layer3.5.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer3.5.conv3",
@@ -1741,9 +2783,18 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "add_12",
@@ -1767,6 +2818,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1774,9 +2826,31 @@
           "name": "layer3.5.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              1024,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            1024,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1568.0,
+      "total_cycles": 1568.0
     },
     {
       "name": "layer4.0.conv1",
@@ -1800,6 +2874,7 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -1807,9 +2882,31 @@
           "name": "layer4.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              512,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 802817.0,
+      "total_cycles": 802817.0
     },
     {
       "name": "layer4.0.conv2",
@@ -1833,6 +2930,7 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -1840,9 +2938,31 @@
           "name": "layer4.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 25088
+          "output_elems": 25088,
+          "input_shapes": [
+            [
+              1,
+              512,
+              7,
+              7
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            7,
+            7
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer4.0.conv3",
@@ -1866,9 +2986,18 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer4.0.downsample.0",
@@ -1892,9 +3021,18 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 802817.0,
+      "total_cycles": 802817.0
     },
     {
       "name": "add_13",
@@ -1918,6 +3056,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1925,9 +3064,31 @@
           "name": "layer4.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              2048,
+              7,
+              7
+            ]
+          ],
+          "output_shape": [
+            1,
+            2048,
+            7,
+            7
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 784.0,
+      "total_cycles": 784.0
     },
     {
       "name": "layer4.1.conv1",
@@ -1951,6 +3112,7 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -1958,9 +3120,31 @@
           "name": "layer4.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 25088
+          "output_elems": 25088,
+          "input_shapes": [
+            [
+              1,
+              512,
+              7,
+              7
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            7,
+            7
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer4.1.conv2",
@@ -1984,6 +3168,7 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -1991,9 +3176,31 @@
           "name": "layer4.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 25088
+          "output_elems": 25088,
+          "input_shapes": [
+            [
+              1,
+              512,
+              7,
+              7
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            7,
+            7
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer4.1.conv3",
@@ -2017,9 +3224,18 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "add_14",
@@ -2043,6 +3259,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -2050,9 +3267,31 @@
           "name": "layer4.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              2048,
+              7,
+              7
+            ]
+          ],
+          "output_shape": [
+            1,
+            2048,
+            7,
+            7
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 784.0,
+      "total_cycles": 784.0
     },
     {
       "name": "layer4.2.conv1",
@@ -2076,6 +3315,7 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -2083,9 +3323,31 @@
           "name": "layer4.2.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 25088
+          "output_elems": 25088,
+          "input_shapes": [
+            [
+              1,
+              512,
+              7,
+              7
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            7,
+            7
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "layer4.2.conv2",
@@ -2109,6 +3371,7 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -2116,9 +3379,31 @@
           "name": "layer4.2.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 25088
+          "output_elems": 25088,
+          "input_shapes": [
+            [
+              1,
+              512,
+              7,
+              7
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            7,
+            7
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer4.2.conv3",
@@ -2142,9 +3427,18 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 401409.0,
+      "total_cycles": 401409.0
     },
     {
       "name": "add_15",
@@ -2168,6 +3462,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -2175,9 +3470,31 @@
           "name": "layer4.2.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              2048,
+              7,
+              7
+            ]
+          ],
+          "output_shape": [
+            1,
+            2048,
+            7,
+            7
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 784.0,
+      "total_cycles": 784.0
     },
     {
       "name": "avgpool",
@@ -2201,9 +3518,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 784.0,
+      "total_cycles": 784.0
     },
     {
       "name": "fc",
@@ -2227,9 +3553,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 16001.0,
+      "total_cycles": 768000.0
     }
   ],
   "off_chip_layers": [],
