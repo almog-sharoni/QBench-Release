@@ -149,7 +149,189 @@ def is_collapsible(layer_type: str) -> bool:
     return False
 
 
+def is_registry_activation(layer_type: str) -> bool:
+    """Check whether a layer type is marked as activation in OpRegistry."""
+    try:
+        if OpRegistry.is_activation(layer_type):
+            return True
+        for original_cls, quantized_cls in OpRegistry.get_supported_ops().items():
+            if (
+                quantized_cls.__name__ == layer_type
+                and OpRegistry.is_activation(quantized_cls.__name__)
+            ):
+                return True
+            if (
+                original_cls.__name__ == layer_type
+                and OpRegistry.is_activation(quantized_cls.__name__)
+            ):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 # ---------------------------------------------------------------------------
+
+COMPUTE_PU_WIDTH = 128
+
+
+def _cycles_for_ops(num_ops: float) -> int:
+    if num_ops <= 0:
+        return 0
+    return math.ceil(num_ops / COMPUTE_PU_WIDTH)
+
+
+def _cycles_for_reduction_outputs(num_outputs: int, reduction_dim: float) -> int:
+    if num_outputs <= 0 or reduction_dim <= 0:
+        return 0
+    chunks_per_output = math.ceil(reduction_dim / COMPUTE_PU_WIDTH)
+    return int(num_outputs) * chunks_per_output + 1
+
+
+def _numel_from_shape(shape) -> int:
+    if not shape:
+        return 0
+    return math.prod(shape)
+
+
+def _collect_tensor_shapes(value) -> list[tuple]:
+    shapes = []
+    if isinstance(value, torch.Tensor):
+        shapes.append(tuple(value.shape))
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            shapes.extend(_collect_tensor_shapes(item))
+    return shapes
+
+
+def _compute_layer_cycles(layer: dict) -> float:
+    """Compute cycles with 128-wide chunks, including collapsed children."""
+    l_type = layer['type']
+    if is_registry_activation(l_type):
+        return 0.0
+
+    compute_cycles = 0
+
+    if 'Conv' in l_type:
+        in_c = layer.get('in_channels', 0)
+        groups = layer.get('groups', 1)
+        fh = layer.get('filter_height', 0)
+        fw = layer.get('filter_width', 0)
+        output_elems = layer.get('output_elems', 0)
+        reduction_dim = (in_c / groups) * fh * fw if groups else 0
+        compute_cycles = _cycles_for_reduction_outputs(output_elems, reduction_dim)
+    elif 'Linear' in l_type:
+        in_features = layer.get('in_features', 0)
+        out_features = layer.get('out_features', 0)
+        weight_elems = layer.get('weight_elems', 0)
+        if not in_features and out_features:
+            in_features = weight_elems / out_features
+        output_elems = layer.get('output_elems', 0)
+        compute_cycles = _cycles_for_reduction_outputs(output_elems, in_features)
+        if compute_cycles == 0 and weight_elems:
+            compute_cycles = _cycles_for_reduction_outputs(out_features or 1, in_features or weight_elems)
+    elif l_type in ('QuantMatMul', 'QuantBMM'):
+        input_shapes = layer.get('input_shapes', [])
+        output_shape = layer.get('output_shape')
+        output_elems = layer.get('output_elems', _numel_from_shape(output_shape))
+        reduction_dim = input_shapes[0][-1] if input_shapes and input_shapes[0] else 0
+        compute_cycles = _cycles_for_reduction_outputs(output_elems, reduction_dim)
+    elif l_type in ('QuantAdd', 'QuantSub', 'QuantMul', 'QuantDiv', 'Residual'):
+        compute_cycles = _cycles_for_ops(layer.get('output_elems', 0))
+    elif l_type == 'QuantCat':
+        compute_cycles = 0
+    else:
+        in_elems = layer.get('input_elems', 0)
+        out_elems = layer.get('output_elems', 0)
+        compute_cycles = _cycles_for_ops(max(in_elems, out_elems))
+
+    for collapsed in layer.get('collapsed_layers', []):
+        if is_registry_activation(collapsed.get('type', '')):
+            continue
+        collapsed_out_elems = collapsed.get('output_elems', 0)
+        compute_cycles += _cycles_for_ops(collapsed_out_elems)
+
+    return float(compute_cycles)
+
+
+def optimize_layer_bits(layer: dict, bandwidth: float,
+                        need_input_transfer: bool,
+                        need_weight_transfer: bool,
+                        need_output_transfer: bool,
+                        min_bits: int = 3, max_bits: int = 8):
+    """
+    Layer-wide bit-width optimization for BW-limited transfers.
+
+    Starting from *max_bits* for every transferred component, if the layer is
+    overall BW-limited (total_transfer > compute), all transferred components are
+    reduced by 1 bit simultaneously. Repeats until the layer becomes compute-
+    limited or all transferred components reach *min_bits*.
+
+    Returns
+    -------
+    input_bits : int
+    weight_bits : int
+    output_bits : int
+    total_cycles : float   – max(compute_cycles, total_transfer_cycles)
+    """
+    compute = _compute_layer_cycles(layer)
+
+    def _transfer_cycles(name, bits):
+        elems = 0
+        if name == 'weight':
+            if not need_weight_transfer:
+                return 0.0
+            elems = layer.get('weight_elems', 0)
+        elif name == 'input':
+            if not need_input_transfer:
+                return 0.0
+            elems = layer.get('input_elems', 0)
+        elif name == 'output':
+            if not need_output_transfer:
+                return 0.0
+            elems = layer.get('output_elems', 0)
+        if elems <= 0:
+            return 0.0
+        num_chunks = math.ceil(elems / 128)
+        bytes_per_chunk = 16 * bits
+        return (num_chunks * bytes_per_chunk) / bandwidth
+
+    input_bits = max_bits
+    weight_bits = max_bits
+    output_bits = max_bits
+
+    while True:
+        w_t = _transfer_cycles('weight', weight_bits)
+        i_t = _transfer_cycles('input', input_bits)
+        o_t = _transfer_cycles('output', output_bits)
+        total_transfer = w_t + i_t + o_t
+
+        if total_transfer <= compute:
+            break
+
+        reduced = False
+        if need_weight_transfer and weight_bits > min_bits:
+            weight_bits -= 1
+            reduced = True
+        if need_input_transfer and input_bits > min_bits:
+            input_bits -= 1
+            reduced = True
+        if need_output_transfer and output_bits > min_bits:
+            output_bits -= 1
+            reduced = True
+
+        if not reduced:
+            break
+
+    total_transfer = (
+        _transfer_cycles('weight', weight_bits) +
+        _transfer_cycles('input', input_bits) +
+        _transfer_cycles('output', output_bits)
+    )
+    total_cycles = max(compute, total_transfer)
+
+    return input_bits, weight_bits, output_bits, total_cycles
+
 
 def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapter_cfg: dict = None,
                   cache_elements: int = 0, bank_size: int = 0, metadata_bits: int = 0):
@@ -241,6 +423,8 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'weight_elems': module.weight.numel() if getattr(module, 'weight', None) is not None else 0,
                 'input_elems':  input[0].numel() if isinstance(input[0], torch.Tensor) else 0,
                 'output_elems': output.numel()   if isinstance(output,   torch.Tensor) else 0,
+                'input_shapes': _collect_tensor_shapes(input),
+                'output_shape': tuple(output.shape) if isinstance(output, torch.Tensor) else None,
             }
             if isinstance(module, nn.Conv2d):
                 ks = module.kernel_size
@@ -273,6 +457,8 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'weight_elems': 0,
                 'input_elems':  input[0].numel() if isinstance(input[0], torch.Tensor) else 0,
                 'output_elems': output.numel()   if isinstance(output,   torch.Tensor) else 0,
+                'input_shapes': _collect_tensor_shapes(input),
+                'output_shape': tuple(output.shape) if isinstance(output, torch.Tensor) else None,
             })
         elif isinstance(module, _NORM_TYPES):
             in_t  = input[0] if isinstance(input[0], torch.Tensor) else None
@@ -284,6 +470,8 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'weight_elems': wt,
                 'input_elems':  in_t.numel()  if in_t  is not None else 0,
                 'output_elems': out_t.numel() if out_t is not None else 0,
+                'input_shapes': _collect_tensor_shapes(input),
+                'output_shape': tuple(output.shape) if isinstance(output, torch.Tensor) else None,
             })
 
     def residual_hook_fn(module, input, output):
@@ -294,6 +482,8 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
             'weight_elems':   0,
             'input_elems':    skip.numel() if skip is not None else 0,
             'output_elems':   output.numel() if isinstance(output, torch.Tensor) else 0,
+            'input_shapes':    _collect_tensor_shapes(input),
+            'output_shape':    tuple(output.shape) if isinstance(output, torch.Tensor) else None,
             'has_downsample': module.downsample is not None,
         })
 
@@ -358,7 +548,9 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'name': layer['name'],
                 'type': layer['type'],
                 'weight_elems': layer.get('weight_elems', 0),
-                'output_elems': layer['output_elems']
+                'output_elems': layer['output_elems'],
+                'input_shapes': layer.get('input_shapes', []),
+                'output_shape': layer.get('output_shape'),
             })
         else:
             collapsed_order.append(layer)
@@ -507,6 +699,7 @@ def run_simulation(args):
             continue
 
         results = []
+        prev_stay_on_chip = False
 
         for i, layer in enumerate(layers):
             next_layer = layers[i + 1] if i + 1 < len(layers) else None
@@ -547,6 +740,18 @@ def run_simulation(args):
                 layer, ctx, next_layer, args.metadata_bits, bank_size, cache_elements
             )
 
+            rule_xin_from_cache = RULES.get(rule_name, {}).get('xin_from_cache', True)
+            need_input = (i == 0 or not prev_stay_on_chip or not rule_xin_from_cache)
+            need_output = not stay_on_chip
+            in_b, w_b, out_b, cycle_count = optimize_layer_bits(
+                layer, args.bandwidth, need_input, True, need_output, min_bits=3
+            )
+            compute_cycles = _compute_layer_cycles(layer)
+
+            input_bw_limited  = need_input  and in_b < 8
+            weight_bw_limited = True         and w_b < 8
+            output_bw_limited = need_output and out_b < 8
+
             results.append({
                 'name':             layer['name'],
                 'type':             layer['type'],
@@ -569,6 +774,7 @@ def run_simulation(args):
                 'output_channel_height': layer.get('output_channel_height', 0),
                 'output_channel_width':  layer.get('output_channel_width', 0),
                 'stay_on_chip':     stay_on_chip,
+                'xin_from_cache':   rule_xin_from_cache,
                 'rule':             rule_name,
                 'reason': (
                     rule_name if stay_on_chip
@@ -576,15 +782,27 @@ def run_simulation(args):
                     else f"{rule_name} — output to external"
                 ),
                 'collapsed_layers': layer.get('collapsed_layers', []),
+                'input_bits':       in_b,
+                'weight_bits':      w_b,
+                'output_bits':      out_b,
+                'input_bw_limited':   input_bw_limited,
+                'weight_bw_limited':  weight_bw_limited,
+                'output_bw_limited':  output_bw_limited,
+                'compute_cycles':   compute_cycles,
+                'total_cycles':     cycle_count,
             })
+            prev_stay_on_chip = stay_on_chip
 
         # --- Console output ---
         COL = 11
+        BWCOL = 6
         header = (
             f"{'Layer Name':<45} | {'Type':<14}"
             f" | {'Input':>{COL}} | {'Weights':>{COL}}"
             f" | {'Output':>{COL}} | {'Banked':>{COL}}"
-            f" | {'NextXin':>{COL}} | {'OnChip':<7} | Reason"
+            f" | {'NextXin':>{COL}} | {'OnChip':<7}"
+            f" | {'inB':>{BWCOL}} | {'wB':>{BWCOL}} | {'outB':>{BWCOL}}"
+            f" | Reason"
         )
         sep = "-" * len(header)
         print(f"\n{header}\n{sep}")
@@ -599,7 +817,9 @@ def run_simulation(args):
                 f" | {fmt_elems(res['output_elems']):>{COL}}"
                 f" | {fmt_elems(res['output_banked']):>{COL}}"
                 f" | {fmt_elems(res['next_xin_banked']):>{COL}}"
-                f" | {on_chip_str:<7} | {res['reason']}"
+                f" | {on_chip_str:<7}"
+                f" | {res['input_bits']:>{BWCOL}} | {res['weight_bits']:>{BWCOL}} | {res['output_bits']:>{BWCOL}}"
+                f" | {res['reason']}"
             )
             if not res['stay_on_chip'] and res['rule'] != 'FLAGGED':
                 quantize_count += 1
@@ -625,6 +845,7 @@ def run_simulation(args):
                 'bank_size':      bank_size,
                 'metadata_bits':  args.metadata_bits,
                 'batch_size':     args.batch_size,
+                'bandwidth':      args.bandwidth,
                 'timestamp':      datetime.utcnow().isoformat() + 'Z',
             },
             'summary': {
@@ -673,6 +894,8 @@ if __name__ == "__main__":
     parser.add_argument("--metadata_bits", type=int,   default=0)
     parser.add_argument("--batch_size",    type=int,   default=1)
     parser.add_argument("--device",        type=str,   default="cuda")
+    parser.add_argument("--bandwidth",     type=float, default=1.0,
+                        help="Memory bandwidth in bytes/cycle for BW-limitation analysis")
     parser.add_argument("--fold_layers", action="store_true", dest="fold_layers",
                         default=True,
                         help="Fold batchnorm/conv layers during model build")

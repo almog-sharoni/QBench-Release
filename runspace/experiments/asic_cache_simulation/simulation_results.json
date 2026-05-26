@@ -8,7 +8,8 @@
     "bank_size": 125000,
     "metadata_bits": 0,
     "batch_size": 1,
-    "timestamp": "2026-05-24T11:16:21.698550Z"
+    "bandwidth": 1.0,
+    "timestamp": "2026-05-26T08:02:10.871779Z"
   },
   "summary": {
     "total_layers": 123,
@@ -38,6 +39,7 @@
       "output_channel_height": 128,
       "output_channel_width": 128,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -45,9 +47,31 @@
           "name": "stem.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 262144
+          "output_elems": 262144,
+          "input_shapes": [
+            [
+              1,
+              16,
+              128,
+              128
+            ]
+          ],
+          "output_shape": [
+            1,
+            16,
+            128,
+            128
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 262145.0,
+      "total_cycles": 262145.0
     },
     {
       "name": "stages.0.0.conv1_1x1.conv",
@@ -71,6 +95,7 @@
       "output_channel_height": 128,
       "output_channel_width": 128,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -78,9 +103,31 @@
           "name": "stages.0.0.conv1_1x1.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 1048576
+          "output_elems": 1048576,
+          "input_shapes": [
+            [
+              1,
+              64,
+              128,
+              128
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            128,
+            128
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1048577.0,
+      "total_cycles": 1048577.0
     },
     {
       "name": "stages.0.0.conv2_kxk.conv",
@@ -104,6 +151,7 @@
       "output_channel_height": 128,
       "output_channel_width": 128,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -111,9 +159,31 @@
           "name": "stages.0.0.conv2_kxk.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 1048576
+          "output_elems": 1048576,
+          "input_shapes": [
+            [
+              1,
+              64,
+              128,
+              128
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            128,
+            128
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1048577.0,
+      "total_cycles": 1048577.0
     },
     {
       "name": "stages.0.0.conv3_1x1.conv",
@@ -137,9 +207,18 @@
       "output_channel_height": 128,
       "output_channel_width": 128,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 524289.0,
+      "total_cycles": 524289.0
     },
     {
       "name": "stages.1.0.conv1_1x1.conv",
@@ -163,6 +242,7 @@
       "output_channel_height": 128,
       "output_channel_width": 128,
       "stay_on_chip": false,
+      "xin_from_cache": true,
       "rule": "conv_stream_xin_out",
       "reason": "conv_stream_xin_out \u2014 output to external",
       "collapsed_layers": [
@@ -170,9 +250,31 @@
           "name": "stages.1.0.conv1_1x1.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 2097152
+          "output_elems": 2097152,
+          "input_shapes": [
+            [
+              1,
+              128,
+              128,
+              128
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            128,
+            128
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 7,
+      "output_bits": 7,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": true,
+      "compute_cycles": 2097153.0,
+      "total_cycles": 2097153.0
     },
     {
       "name": "stages.1.0.conv2_kxk.conv",
@@ -196,6 +298,7 @@
       "output_channel_height": 64,
       "output_channel_width": 64,
       "stay_on_chip": true,
+      "xin_from_cache": false,
       "rule": "stream_xin_keep_xout",
       "reason": "stream_xin_keep_xout",
       "collapsed_layers": [
@@ -203,9 +306,31 @@
           "name": "stages.1.0.conv2_kxk.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 524288
+          "output_elems": 524288,
+          "input_shapes": [
+            [
+              1,
+              128,
+              64,
+              64
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            64,
+            64
+          ]
         }
-      ]
+      ],
+      "input_bits": 3,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "input_bw_limited": true,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 524289.0,
+      "total_cycles": 786864.0
     },
     {
       "name": "stages.1.0.conv3_1x1.conv",
@@ -229,9 +354,18 @@
       "output_channel_height": 64,
       "output_channel_width": 64,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 262145.0,
+      "total_cycles": 262145.0
     },
     {
       "name": "stages.1.1.conv1_1x1.conv",
@@ -255,6 +389,7 @@
       "output_channel_height": 64,
       "output_channel_width": 64,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -262,9 +397,31 @@
           "name": "stages.1.1.conv1_1x1.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 1048576
+          "output_elems": 1048576,
+          "input_shapes": [
+            [
+              1,
+              256,
+              64,
+              64
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            64,
+            64
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1048577.0,
+      "total_cycles": 1048577.0
     },
     {
       "name": "stages.1.1.conv2_kxk.conv",
@@ -288,6 +445,7 @@
       "output_channel_height": 64,
       "output_channel_width": 64,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -295,9 +453,31 @@
           "name": "stages.1.1.conv2_kxk.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 1048576
+          "output_elems": 1048576,
+          "input_shapes": [
+            [
+              1,
+              256,
+              64,
+              64
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            64,
+            64
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1048577.0,
+      "total_cycles": 1048577.0
     },
     {
       "name": "stages.1.1.conv3_1x1.conv",
@@ -321,9 +501,18 @@
       "output_channel_height": 64,
       "output_channel_width": 64,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 524289.0,
+      "total_cycles": 524289.0
     },
     {
       "name": "add",
@@ -347,9 +536,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 2048.0,
+      "total_cycles": 2048.0
     },
     {
       "name": "stages.1.2.conv1_1x1.conv",
@@ -373,6 +571,7 @@
       "output_channel_height": 64,
       "output_channel_width": 64,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -380,9 +579,31 @@
           "name": "stages.1.2.conv1_1x1.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 1048576
+          "output_elems": 1048576,
+          "input_shapes": [
+            [
+              1,
+              256,
+              64,
+              64
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            64,
+            64
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1048577.0,
+      "total_cycles": 1048577.0
     },
     {
       "name": "stages.1.2.conv2_kxk.conv",
@@ -406,6 +627,7 @@
       "output_channel_height": 64,
       "output_channel_width": 64,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -413,9 +635,31 @@
           "name": "stages.1.2.conv2_kxk.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 1048576
+          "output_elems": 1048576,
+          "input_shapes": [
+            [
+              1,
+              256,
+              64,
+              64
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            64,
+            64
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1048577.0,
+      "total_cycles": 1048577.0
     },
     {
       "name": "stages.1.2.conv3_1x1.conv",
@@ -439,9 +683,18 @@
       "output_channel_height": 64,
       "output_channel_width": 64,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 524289.0,
+      "total_cycles": 524289.0
     },
     {
       "name": "add_1",
@@ -465,9 +718,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 2048.0,
+      "total_cycles": 2048.0
     },
     {
       "name": "stages.2.0.conv1_1x1.conv",
@@ -491,6 +753,7 @@
       "output_channel_height": 64,
       "output_channel_width": 64,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -498,9 +761,31 @@
           "name": "stages.2.0.conv1_1x1.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 1048576
+          "output_elems": 1048576,
+          "input_shapes": [
+            [
+              1,
+              256,
+              64,
+              64
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            64,
+            64
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1048577.0,
+      "total_cycles": 1048577.0
     },
     {
       "name": "stages.2.0.conv2_kxk.conv",
@@ -524,6 +809,7 @@
       "output_channel_height": 32,
       "output_channel_width": 32,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -531,9 +817,31 @@
           "name": "stages.2.0.conv2_kxk.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 262144
+          "output_elems": 262144,
+          "input_shapes": [
+            [
+              1,
+              256,
+              32,
+              32
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            32,
+            32
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 262145.0,
+      "total_cycles": 262145.0
     },
     {
       "name": "stages.2.0.conv3_1x1.conv",
@@ -557,9 +865,18 @@
       "output_channel_height": 32,
       "output_channel_width": 32,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 196609.0,
+      "total_cycles": 196609.0
     },
     {
       "name": "stages.2.1.conv_kxk.conv",
@@ -583,6 +900,7 @@
       "output_channel_height": 32,
       "output_channel_width": 32,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -590,9 +908,31 @@
           "name": "stages.2.1.conv_kxk.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 98304
+          "output_elems": 98304,
+          "input_shapes": [
+            [
+              1,
+              96,
+              32,
+              32
+            ]
+          ],
+          "output_shape": [
+            1,
+            96,
+            32,
+            32
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 688129.0,
+      "total_cycles": 688129.0
     },
     {
       "name": "stages.2.1.conv_1x1",
@@ -616,6 +956,7 @@
       "output_channel_height": 32,
       "output_channel_width": 32,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -623,9 +964,29 @@
           "name": "stages.2.1.transformer.0.norm1",
           "type": "QuantLayerNorm",
           "weight_elems": 144,
-          "output_elems": 147456
+          "output_elems": 147456,
+          "input_shapes": [
+            [
+              4,
+              256,
+              144
+            ]
+          ],
+          "output_shape": [
+            4,
+            256,
+            144
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 148609.0,
+      "total_cycles": 148609.0
     },
     {
       "name": "stages.2.1.transformer.0.attn.qkv",
@@ -649,9 +1010,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 884737.0,
+      "total_cycles": 884737.0
     },
     {
       "name": "mul_6",
@@ -675,9 +1045,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "mul",
       "reason": "mul",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1152.0,
+      "total_cycles": 1152.0
     },
     {
       "name": "matmul",
@@ -701,6 +1080,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -708,9 +1088,31 @@
           "name": "stages.2.1.transformer.0.attn.softmax",
           "type": "QuantSoftmax",
           "weight_elems": 0,
-          "output_elems": 1048576
+          "output_elems": 1048576,
+          "input_shapes": [
+            [
+              4,
+              4,
+              256,
+              256
+            ]
+          ],
+          "output_shape": [
+            4,
+            4,
+            256,
+            256
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1048577.0,
+      "total_cycles": 1048577.0
     },
     {
       "name": "matmul_1",
@@ -734,9 +1136,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 294913.0,
+      "total_cycles": 294913.0
     },
     {
       "name": "stages.2.1.transformer.0.attn.proj",
@@ -760,9 +1171,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 294913.0,
+      "total_cycles": 294913.0
     },
     {
       "name": "add_2",
@@ -786,6 +1206,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -793,9 +1214,29 @@
           "name": "stages.2.1.transformer.0.norm2",
           "type": "QuantLayerNorm",
           "weight_elems": 144,
-          "output_elems": 147456
+          "output_elems": 147456,
+          "input_shapes": [
+            [
+              4,
+              256,
+              144
+            ]
+          ],
+          "output_shape": [
+            4,
+            256,
+            144
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 2304.0,
+      "total_cycles": 2304.0
     },
     {
       "name": "stages.2.1.transformer.0.mlp.fc1",
@@ -819,6 +1260,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -826,9 +1268,29 @@
           "name": "stages.2.1.transformer.0.mlp.act",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 294912
+          "output_elems": 294912,
+          "input_shapes": [
+            [
+              4,
+              256,
+              288
+            ]
+          ],
+          "output_shape": [
+            4,
+            256,
+            288
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 589825.0,
+      "total_cycles": 589825.0
     },
     {
       "name": "stages.2.1.transformer.0.mlp.fc2",
@@ -852,9 +1314,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 442369.0,
+      "total_cycles": 442369.0
     },
     {
       "name": "add_3",
@@ -878,6 +1349,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -885,9 +1357,29 @@
           "name": "stages.2.1.transformer.1.norm1",
           "type": "QuantLayerNorm",
           "weight_elems": 144,
-          "output_elems": 147456
+          "output_elems": 147456,
+          "input_shapes": [
+            [
+              4,
+              256,
+              144
+            ]
+          ],
+          "output_shape": [
+            4,
+            256,
+            144
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 2304.0,
+      "total_cycles": 2304.0
     },
     {
       "name": "stages.2.1.transformer.1.attn.qkv",
@@ -911,9 +1403,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 884737.0,
+      "total_cycles": 884737.0
     },
     {
       "name": "mul_7",
@@ -937,9 +1438,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "mul",
       "reason": "mul",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1152.0,
+      "total_cycles": 1152.0
     },
     {
       "name": "matmul_2",
@@ -963,6 +1473,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -970,9 +1481,31 @@
           "name": "stages.2.1.transformer.1.attn.softmax",
           "type": "QuantSoftmax",
           "weight_elems": 0,
-          "output_elems": 1048576
+          "output_elems": 1048576,
+          "input_shapes": [
+            [
+              4,
+              4,
+              256,
+              256
+            ]
+          ],
+          "output_shape": [
+            4,
+            4,
+            256,
+            256
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1048577.0,
+      "total_cycles": 1048577.0
     },
     {
       "name": "matmul_3",
@@ -996,9 +1529,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 294913.0,
+      "total_cycles": 294913.0
     },
     {
       "name": "stages.2.1.transformer.1.attn.proj",
@@ -1022,9 +1564,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 294913.0,
+      "total_cycles": 294913.0
     },
     {
       "name": "add_4",
@@ -1048,6 +1599,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1055,9 +1607,29 @@
           "name": "stages.2.1.transformer.1.norm2",
           "type": "QuantLayerNorm",
           "weight_elems": 144,
-          "output_elems": 147456
+          "output_elems": 147456,
+          "input_shapes": [
+            [
+              4,
+              256,
+              144
+            ]
+          ],
+          "output_shape": [
+            4,
+            256,
+            144
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 2304.0,
+      "total_cycles": 2304.0
     },
     {
       "name": "stages.2.1.transformer.1.mlp.fc1",
@@ -1081,6 +1653,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -1088,9 +1661,29 @@
           "name": "stages.2.1.transformer.1.mlp.act",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 294912
+          "output_elems": 294912,
+          "input_shapes": [
+            [
+              4,
+              256,
+              288
+            ]
+          ],
+          "output_shape": [
+            4,
+            256,
+            288
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 589825.0,
+      "total_cycles": 589825.0
     },
     {
       "name": "stages.2.1.transformer.1.mlp.fc2",
@@ -1114,9 +1707,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 442369.0,
+      "total_cycles": 442369.0
     },
     {
       "name": "add_5",
@@ -1140,6 +1742,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1147,9 +1750,29 @@
           "name": "stages.2.1.norm",
           "type": "QuantLayerNorm",
           "weight_elems": 144,
-          "output_elems": 147456
+          "output_elems": 147456,
+          "input_shapes": [
+            [
+              4,
+              256,
+              144
+            ]
+          ],
+          "output_shape": [
+            4,
+            256,
+            144
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 2304.0,
+      "total_cycles": 2304.0
     },
     {
       "name": "stages.2.1.conv_proj.conv",
@@ -1173,6 +1796,7 @@
       "output_channel_height": 32,
       "output_channel_width": 32,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -1180,9 +1804,31 @@
           "name": "stages.2.1.conv_proj.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 98304
+          "output_elems": 98304,
+          "input_shapes": [
+            [
+              1,
+              96,
+              32,
+              32
+            ]
+          ],
+          "output_shape": [
+            1,
+            96,
+            32,
+            32
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 196609.0,
+      "total_cycles": 196609.0
     },
     {
       "name": "cat",
@@ -1206,9 +1852,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 0.0,
+      "total_cycles": 0.0
     },
     {
       "name": "stages.2.1.conv_fusion.conv",
@@ -1232,6 +1887,7 @@
       "output_channel_height": 32,
       "output_channel_width": 32,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -1239,9 +1895,31 @@
           "name": "stages.2.1.conv_fusion.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 98304
+          "output_elems": 98304,
+          "input_shapes": [
+            [
+              1,
+              96,
+              32,
+              32
+            ]
+          ],
+          "output_shape": [
+            1,
+            96,
+            32,
+            32
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 1376257.0,
+      "total_cycles": 1376257.0
     },
     {
       "name": "stages.3.0.conv1_1x1.conv",
@@ -1265,6 +1943,7 @@
       "output_channel_height": 32,
       "output_channel_width": 32,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -1272,9 +1951,31 @@
           "name": "stages.3.0.conv1_1x1.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 393216
+          "output_elems": 393216,
+          "input_shapes": [
+            [
+              1,
+              384,
+              32,
+              32
+            ]
+          ],
+          "output_shape": [
+            1,
+            384,
+            32,
+            32
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 393217.0,
+      "total_cycles": 393217.0
     },
     {
       "name": "stages.3.0.conv2_kxk.conv",
@@ -1298,6 +1999,7 @@
       "output_channel_height": 16,
       "output_channel_width": 16,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -1305,9 +2007,31 @@
           "name": "stages.3.0.conv2_kxk.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 98304
+          "output_elems": 98304,
+          "input_shapes": [
+            [
+              1,
+              384,
+              16,
+              16
+            ]
+          ],
+          "output_shape": [
+            1,
+            384,
+            16,
+            16
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 98305.0,
+      "total_cycles": 98305.0
     },
     {
       "name": "stages.3.0.conv3_1x1.conv",
@@ -1331,9 +2055,18 @@
       "output_channel_height": 16,
       "output_channel_width": 16,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 98305.0,
+      "total_cycles": 98305.0
     },
     {
       "name": "stages.3.1.conv_kxk.conv",
@@ -1357,6 +2090,7 @@
       "output_channel_height": 16,
       "output_channel_width": 16,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -1364,9 +2098,31 @@
           "name": "stages.3.1.conv_kxk.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 32768
+          "output_elems": 32768,
+          "input_shapes": [
+            [
+              1,
+              128,
+              16,
+              16
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            16,
+            16
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 294913.0,
+      "total_cycles": 294913.0
     },
     {
       "name": "stages.3.1.conv_1x1",
@@ -1390,6 +2146,7 @@
       "output_channel_height": 16,
       "output_channel_width": 16,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -1397,9 +2154,29 @@
           "name": "stages.3.1.transformer.0.norm1",
           "type": "QuantLayerNorm",
           "weight_elems": 192,
-          "output_elems": 49152
+          "output_elems": 49152,
+          "input_shapes": [
+            [
+              4,
+              64,
+              192
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            192
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 49537.0,
+      "total_cycles": 49537.0
     },
     {
       "name": "stages.3.1.transformer.0.attn.qkv",
@@ -1423,9 +2200,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 294913.0,
+      "total_cycles": 294913.0
     },
     {
       "name": "mul_18",
@@ -1449,9 +2235,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "mul",
       "reason": "mul",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 384.0,
+      "total_cycles": 384.0
     },
     {
       "name": "matmul_4",
@@ -1475,6 +2270,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -1482,9 +2278,31 @@
           "name": "stages.3.1.transformer.0.attn.softmax",
           "type": "QuantSoftmax",
           "weight_elems": 0,
-          "output_elems": 65536
+          "output_elems": 65536,
+          "input_shapes": [
+            [
+              4,
+              4,
+              64,
+              64
+            ]
+          ],
+          "output_shape": [
+            4,
+            4,
+            64,
+            64
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 65537.0,
+      "total_cycles": 65537.0
     },
     {
       "name": "matmul_5",
@@ -1508,9 +2326,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 49153.0,
+      "total_cycles": 49153.0
     },
     {
       "name": "stages.3.1.transformer.0.attn.proj",
@@ -1534,9 +2361,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 98305.0,
+      "total_cycles": 98305.0
     },
     {
       "name": "add_6",
@@ -1560,6 +2396,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1567,9 +2404,29 @@
           "name": "stages.3.1.transformer.0.norm2",
           "type": "QuantLayerNorm",
           "weight_elems": 192,
-          "output_elems": 49152
+          "output_elems": 49152,
+          "input_shapes": [
+            [
+              4,
+              64,
+              192
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            192
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 768.0,
+      "total_cycles": 768.0
     },
     {
       "name": "stages.3.1.transformer.0.mlp.fc1",
@@ -1593,6 +2450,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -1600,9 +2458,29 @@
           "name": "stages.3.1.transformer.0.mlp.act",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 98304
+          "output_elems": 98304,
+          "input_shapes": [
+            [
+              4,
+              64,
+              384
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            384
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 196609.0,
+      "total_cycles": 196609.0
     },
     {
       "name": "stages.3.1.transformer.0.mlp.fc2",
@@ -1626,9 +2504,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 147457.0,
+      "total_cycles": 147457.0
     },
     {
       "name": "add_7",
@@ -1652,6 +2539,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1659,9 +2547,29 @@
           "name": "stages.3.1.transformer.1.norm1",
           "type": "QuantLayerNorm",
           "weight_elems": 192,
-          "output_elems": 49152
+          "output_elems": 49152,
+          "input_shapes": [
+            [
+              4,
+              64,
+              192
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            192
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 768.0,
+      "total_cycles": 768.0
     },
     {
       "name": "stages.3.1.transformer.1.attn.qkv",
@@ -1685,9 +2593,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 294913.0,
+      "total_cycles": 294913.0
     },
     {
       "name": "mul_19",
@@ -1711,9 +2628,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "mul",
       "reason": "mul",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 384.0,
+      "total_cycles": 384.0
     },
     {
       "name": "matmul_6",
@@ -1737,6 +2663,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -1744,9 +2671,31 @@
           "name": "stages.3.1.transformer.1.attn.softmax",
           "type": "QuantSoftmax",
           "weight_elems": 0,
-          "output_elems": 65536
+          "output_elems": 65536,
+          "input_shapes": [
+            [
+              4,
+              4,
+              64,
+              64
+            ]
+          ],
+          "output_shape": [
+            4,
+            4,
+            64,
+            64
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 65537.0,
+      "total_cycles": 65537.0
     },
     {
       "name": "matmul_7",
@@ -1770,9 +2719,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 49153.0,
+      "total_cycles": 49153.0
     },
     {
       "name": "stages.3.1.transformer.1.attn.proj",
@@ -1796,9 +2754,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 98305.0,
+      "total_cycles": 98305.0
     },
     {
       "name": "add_8",
@@ -1822,6 +2789,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1829,9 +2797,29 @@
           "name": "stages.3.1.transformer.1.norm2",
           "type": "QuantLayerNorm",
           "weight_elems": 192,
-          "output_elems": 49152
+          "output_elems": 49152,
+          "input_shapes": [
+            [
+              4,
+              64,
+              192
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            192
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 768.0,
+      "total_cycles": 768.0
     },
     {
       "name": "stages.3.1.transformer.1.mlp.fc1",
@@ -1855,6 +2843,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -1862,9 +2851,29 @@
           "name": "stages.3.1.transformer.1.mlp.act",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 98304
+          "output_elems": 98304,
+          "input_shapes": [
+            [
+              4,
+              64,
+              384
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            384
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 196609.0,
+      "total_cycles": 196609.0
     },
     {
       "name": "stages.3.1.transformer.1.mlp.fc2",
@@ -1888,9 +2897,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 147457.0,
+      "total_cycles": 147457.0
     },
     {
       "name": "add_9",
@@ -1914,6 +2932,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -1921,9 +2940,29 @@
           "name": "stages.3.1.transformer.2.norm1",
           "type": "QuantLayerNorm",
           "weight_elems": 192,
-          "output_elems": 49152
+          "output_elems": 49152,
+          "input_shapes": [
+            [
+              4,
+              64,
+              192
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            192
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 768.0,
+      "total_cycles": 768.0
     },
     {
       "name": "stages.3.1.transformer.2.attn.qkv",
@@ -1947,9 +2986,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 294913.0,
+      "total_cycles": 294913.0
     },
     {
       "name": "mul_20",
@@ -1973,9 +3021,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "mul",
       "reason": "mul",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 384.0,
+      "total_cycles": 384.0
     },
     {
       "name": "matmul_8",
@@ -1999,6 +3056,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -2006,9 +3064,31 @@
           "name": "stages.3.1.transformer.2.attn.softmax",
           "type": "QuantSoftmax",
           "weight_elems": 0,
-          "output_elems": 65536
+          "output_elems": 65536,
+          "input_shapes": [
+            [
+              4,
+              4,
+              64,
+              64
+            ]
+          ],
+          "output_shape": [
+            4,
+            4,
+            64,
+            64
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 65537.0,
+      "total_cycles": 65537.0
     },
     {
       "name": "matmul_9",
@@ -2032,9 +3112,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 49153.0,
+      "total_cycles": 49153.0
     },
     {
       "name": "stages.3.1.transformer.2.attn.proj",
@@ -2058,9 +3147,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 98305.0,
+      "total_cycles": 98305.0
     },
     {
       "name": "add_10",
@@ -2084,6 +3182,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -2091,9 +3190,29 @@
           "name": "stages.3.1.transformer.2.norm2",
           "type": "QuantLayerNorm",
           "weight_elems": 192,
-          "output_elems": 49152
+          "output_elems": 49152,
+          "input_shapes": [
+            [
+              4,
+              64,
+              192
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            192
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 768.0,
+      "total_cycles": 768.0
     },
     {
       "name": "stages.3.1.transformer.2.mlp.fc1",
@@ -2117,6 +3236,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -2124,9 +3244,29 @@
           "name": "stages.3.1.transformer.2.mlp.act",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 98304
+          "output_elems": 98304,
+          "input_shapes": [
+            [
+              4,
+              64,
+              384
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            384
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 196609.0,
+      "total_cycles": 196609.0
     },
     {
       "name": "stages.3.1.transformer.2.mlp.fc2",
@@ -2150,9 +3290,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 147457.0,
+      "total_cycles": 147457.0
     },
     {
       "name": "add_11",
@@ -2176,6 +3325,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -2183,9 +3333,29 @@
           "name": "stages.3.1.transformer.3.norm1",
           "type": "QuantLayerNorm",
           "weight_elems": 192,
-          "output_elems": 49152
+          "output_elems": 49152,
+          "input_shapes": [
+            [
+              4,
+              64,
+              192
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            192
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 768.0,
+      "total_cycles": 768.0
     },
     {
       "name": "stages.3.1.transformer.3.attn.qkv",
@@ -2209,9 +3379,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 294913.0,
+      "total_cycles": 294913.0
     },
     {
       "name": "mul_21",
@@ -2235,9 +3414,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "mul",
       "reason": "mul",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 384.0,
+      "total_cycles": 384.0
     },
     {
       "name": "matmul_10",
@@ -2261,6 +3449,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -2268,9 +3457,31 @@
           "name": "stages.3.1.transformer.3.attn.softmax",
           "type": "QuantSoftmax",
           "weight_elems": 0,
-          "output_elems": 65536
+          "output_elems": 65536,
+          "input_shapes": [
+            [
+              4,
+              4,
+              64,
+              64
+            ]
+          ],
+          "output_shape": [
+            4,
+            4,
+            64,
+            64
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 65537.0,
+      "total_cycles": 65537.0
     },
     {
       "name": "matmul_11",
@@ -2294,9 +3505,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 49153.0,
+      "total_cycles": 49153.0
     },
     {
       "name": "stages.3.1.transformer.3.attn.proj",
@@ -2320,9 +3540,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 98305.0,
+      "total_cycles": 98305.0
     },
     {
       "name": "add_12",
@@ -2346,6 +3575,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -2353,9 +3583,29 @@
           "name": "stages.3.1.transformer.3.norm2",
           "type": "QuantLayerNorm",
           "weight_elems": 192,
-          "output_elems": 49152
+          "output_elems": 49152,
+          "input_shapes": [
+            [
+              4,
+              64,
+              192
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            192
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 768.0,
+      "total_cycles": 768.0
     },
     {
       "name": "stages.3.1.transformer.3.mlp.fc1",
@@ -2379,6 +3629,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -2386,9 +3637,29 @@
           "name": "stages.3.1.transformer.3.mlp.act",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 98304
+          "output_elems": 98304,
+          "input_shapes": [
+            [
+              4,
+              64,
+              384
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            384
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 196609.0,
+      "total_cycles": 196609.0
     },
     {
       "name": "stages.3.1.transformer.3.mlp.fc2",
@@ -2412,9 +3683,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 147457.0,
+      "total_cycles": 147457.0
     },
     {
       "name": "add_13",
@@ -2438,6 +3718,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -2445,9 +3726,29 @@
           "name": "stages.3.1.norm",
           "type": "QuantLayerNorm",
           "weight_elems": 192,
-          "output_elems": 49152
+          "output_elems": 49152,
+          "input_shapes": [
+            [
+              4,
+              64,
+              192
+            ]
+          ],
+          "output_shape": [
+            4,
+            64,
+            192
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 768.0,
+      "total_cycles": 768.0
     },
     {
       "name": "stages.3.1.conv_proj.conv",
@@ -2471,6 +3772,7 @@
       "output_channel_height": 16,
       "output_channel_width": 16,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -2478,9 +3780,31 @@
           "name": "stages.3.1.conv_proj.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 32768
+          "output_elems": 32768,
+          "input_shapes": [
+            [
+              1,
+              128,
+              16,
+              16
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            16,
+            16
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 65537.0,
+      "total_cycles": 65537.0
     },
     {
       "name": "cat_1",
@@ -2504,9 +3828,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 0.0,
+      "total_cycles": 0.0
     },
     {
       "name": "stages.3.1.conv_fusion.conv",
@@ -2530,6 +3863,7 @@
       "output_channel_height": 16,
       "output_channel_width": 16,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -2537,9 +3871,31 @@
           "name": "stages.3.1.conv_fusion.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 32768
+          "output_elems": 32768,
+          "input_shapes": [
+            [
+              1,
+              128,
+              16,
+              16
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            16,
+            16
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 589825.0,
+      "total_cycles": 589825.0
     },
     {
       "name": "stages.4.0.conv1_1x1.conv",
@@ -2563,6 +3919,7 @@
       "output_channel_height": 16,
       "output_channel_width": 16,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -2570,9 +3927,31 @@
           "name": "stages.4.0.conv1_1x1.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 131072
+          "output_elems": 131072,
+          "input_shapes": [
+            [
+              1,
+              512,
+              16,
+              16
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            16,
+            16
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 131073.0,
+      "total_cycles": 131073.0
     },
     {
       "name": "stages.4.0.conv2_kxk.conv",
@@ -2596,6 +3975,7 @@
       "output_channel_height": 8,
       "output_channel_width": 8,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
       "collapsed_layers": [
@@ -2603,9 +3983,31 @@
           "name": "stages.4.0.conv2_kxk.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 32768
+          "output_elems": 32768,
+          "input_shapes": [
+            [
+              1,
+              512,
+              8,
+              8
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            8,
+            8
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 32769.0,
+      "total_cycles": 32769.0
     },
     {
       "name": "stages.4.0.conv3_1x1.conv",
@@ -2629,9 +4031,18 @@
       "output_channel_height": 8,
       "output_channel_width": 8,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 40961.0,
+      "total_cycles": 40961.0
     },
     {
       "name": "stages.4.1.conv_kxk.conv",
@@ -2655,6 +4066,7 @@
       "output_channel_height": 8,
       "output_channel_width": 8,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -2662,9 +4074,31 @@
           "name": "stages.4.1.conv_kxk.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 10240
+          "output_elems": 10240,
+          "input_shapes": [
+            [
+              1,
+              160,
+              8,
+              8
+            ]
+          ],
+          "output_shape": [
+            1,
+            160,
+            8,
+            8
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 122881.0,
+      "total_cycles": 122881.0
     },
     {
       "name": "stages.4.1.conv_1x1",
@@ -2688,6 +4122,7 @@
       "output_channel_height": 8,
       "output_channel_width": 8,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -2695,9 +4130,29 @@
           "name": "stages.4.1.transformer.0.norm1",
           "type": "QuantLayerNorm",
           "weight_elems": 240,
-          "output_elems": 15360
+          "output_elems": 15360,
+          "input_shapes": [
+            [
+              4,
+              16,
+              240
+            ]
+          ],
+          "output_shape": [
+            4,
+            16,
+            240
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 6,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 30841.0,
+      "total_cycles": 30841.0
     },
     {
       "name": "stages.4.1.transformer.0.attn.qkv",
@@ -2721,9 +4176,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 92161.0,
+      "total_cycles": 92161.0
     },
     {
       "name": "mul_32",
@@ -2747,9 +4211,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "mul",
       "reason": "mul",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 120.0,
+      "total_cycles": 120.0
     },
     {
       "name": "matmul_12",
@@ -2773,6 +4246,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -2780,9 +4254,31 @@
           "name": "stages.4.1.transformer.0.attn.softmax",
           "type": "QuantSoftmax",
           "weight_elems": 0,
-          "output_elems": 4096
+          "output_elems": 4096,
+          "input_shapes": [
+            [
+              4,
+              4,
+              16,
+              16
+            ]
+          ],
+          "output_shape": [
+            4,
+            4,
+            16,
+            16
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 4097.0,
+      "total_cycles": 4097.0
     },
     {
       "name": "matmul_13",
@@ -2806,9 +4302,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 15361.0,
+      "total_cycles": 15361.0
     },
     {
       "name": "stages.4.1.transformer.0.attn.proj",
@@ -2832,9 +4337,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 30721.0,
+      "total_cycles": 30721.0
     },
     {
       "name": "add_14",
@@ -2858,6 +4372,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -2865,9 +4380,29 @@
           "name": "stages.4.1.transformer.0.norm2",
           "type": "QuantLayerNorm",
           "weight_elems": 240,
-          "output_elems": 15360
+          "output_elems": 15360,
+          "input_shapes": [
+            [
+              4,
+              16,
+              240
+            ]
+          ],
+          "output_shape": [
+            4,
+            16,
+            240
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 7,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 240.0,
+      "total_cycles": 240.0
     },
     {
       "name": "stages.4.1.transformer.0.mlp.fc1",
@@ -2891,6 +4426,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -2898,9 +4434,29 @@
           "name": "stages.4.1.transformer.0.mlp.act",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 30720
+          "output_elems": 30720,
+          "input_shapes": [
+            [
+              4,
+              16,
+              480
+            ]
+          ],
+          "output_shape": [
+            4,
+            16,
+            480
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 61441.0,
+      "total_cycles": 61441.0
     },
     {
       "name": "stages.4.1.transformer.0.mlp.fc2",
@@ -2924,9 +4480,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 61441.0,
+      "total_cycles": 61441.0
     },
     {
       "name": "add_15",
@@ -2950,6 +4515,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -2957,9 +4523,29 @@
           "name": "stages.4.1.transformer.1.norm1",
           "type": "QuantLayerNorm",
           "weight_elems": 240,
-          "output_elems": 15360
+          "output_elems": 15360,
+          "input_shapes": [
+            [
+              4,
+              16,
+              240
+            ]
+          ],
+          "output_shape": [
+            4,
+            16,
+            240
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 7,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 240.0,
+      "total_cycles": 240.0
     },
     {
       "name": "stages.4.1.transformer.1.attn.qkv",
@@ -2983,9 +4569,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 92161.0,
+      "total_cycles": 92161.0
     },
     {
       "name": "mul_33",
@@ -3009,9 +4604,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "mul",
       "reason": "mul",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 120.0,
+      "total_cycles": 120.0
     },
     {
       "name": "matmul_14",
@@ -3035,6 +4639,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -3042,9 +4647,31 @@
           "name": "stages.4.1.transformer.1.attn.softmax",
           "type": "QuantSoftmax",
           "weight_elems": 0,
-          "output_elems": 4096
+          "output_elems": 4096,
+          "input_shapes": [
+            [
+              4,
+              4,
+              16,
+              16
+            ]
+          ],
+          "output_shape": [
+            4,
+            4,
+            16,
+            16
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 4097.0,
+      "total_cycles": 4097.0
     },
     {
       "name": "matmul_15",
@@ -3068,9 +4695,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 15361.0,
+      "total_cycles": 15361.0
     },
     {
       "name": "stages.4.1.transformer.1.attn.proj",
@@ -3094,9 +4730,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 30721.0,
+      "total_cycles": 30721.0
     },
     {
       "name": "add_16",
@@ -3120,6 +4765,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -3127,9 +4773,29 @@
           "name": "stages.4.1.transformer.1.norm2",
           "type": "QuantLayerNorm",
           "weight_elems": 240,
-          "output_elems": 15360
+          "output_elems": 15360,
+          "input_shapes": [
+            [
+              4,
+              16,
+              240
+            ]
+          ],
+          "output_shape": [
+            4,
+            16,
+            240
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 7,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 240.0,
+      "total_cycles": 240.0
     },
     {
       "name": "stages.4.1.transformer.1.mlp.fc1",
@@ -3153,6 +4819,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -3160,9 +4827,29 @@
           "name": "stages.4.1.transformer.1.mlp.act",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 30720
+          "output_elems": 30720,
+          "input_shapes": [
+            [
+              4,
+              16,
+              480
+            ]
+          ],
+          "output_shape": [
+            4,
+            16,
+            480
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 61441.0,
+      "total_cycles": 61441.0
     },
     {
       "name": "stages.4.1.transformer.1.mlp.fc2",
@@ -3186,9 +4873,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 61441.0,
+      "total_cycles": 61441.0
     },
     {
       "name": "add_17",
@@ -3212,6 +4908,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -3219,9 +4916,29 @@
           "name": "stages.4.1.transformer.2.norm1",
           "type": "QuantLayerNorm",
           "weight_elems": 240,
-          "output_elems": 15360
+          "output_elems": 15360,
+          "input_shapes": [
+            [
+              4,
+              16,
+              240
+            ]
+          ],
+          "output_shape": [
+            4,
+            16,
+            240
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 7,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 240.0,
+      "total_cycles": 240.0
     },
     {
       "name": "stages.4.1.transformer.2.attn.qkv",
@@ -3245,9 +4962,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 92161.0,
+      "total_cycles": 92161.0
     },
     {
       "name": "mul_34",
@@ -3271,9 +4997,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "mul",
       "reason": "mul",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 120.0,
+      "total_cycles": 120.0
     },
     {
       "name": "matmul_16",
@@ -3297,6 +5032,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -3304,9 +5040,31 @@
           "name": "stages.4.1.transformer.2.attn.softmax",
           "type": "QuantSoftmax",
           "weight_elems": 0,
-          "output_elems": 4096
+          "output_elems": 4096,
+          "input_shapes": [
+            [
+              4,
+              4,
+              16,
+              16
+            ]
+          ],
+          "output_shape": [
+            4,
+            4,
+            16,
+            16
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 4097.0,
+      "total_cycles": 4097.0
     },
     {
       "name": "matmul_17",
@@ -3330,9 +5088,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 15361.0,
+      "total_cycles": 15361.0
     },
     {
       "name": "stages.4.1.transformer.2.attn.proj",
@@ -3356,9 +5123,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 30721.0,
+      "total_cycles": 30721.0
     },
     {
       "name": "add_18",
@@ -3382,6 +5158,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -3389,9 +5166,29 @@
           "name": "stages.4.1.transformer.2.norm2",
           "type": "QuantLayerNorm",
           "weight_elems": 240,
-          "output_elems": 15360
+          "output_elems": 15360,
+          "input_shapes": [
+            [
+              4,
+              16,
+              240
+            ]
+          ],
+          "output_shape": [
+            4,
+            16,
+            240
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 7,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 240.0,
+      "total_cycles": 240.0
     },
     {
       "name": "stages.4.1.transformer.2.mlp.fc1",
@@ -3415,6 +5212,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
       "collapsed_layers": [
@@ -3422,9 +5220,29 @@
           "name": "stages.4.1.transformer.2.mlp.act",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 30720
+          "output_elems": 30720,
+          "input_shapes": [
+            [
+              4,
+              16,
+              480
+            ]
+          ],
+          "output_shape": [
+            4,
+            16,
+            480
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 61441.0,
+      "total_cycles": 61441.0
     },
     {
       "name": "stages.4.1.transformer.2.mlp.fc2",
@@ -3448,9 +5266,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 61441.0,
+      "total_cycles": 61441.0
     },
     {
       "name": "add_19",
@@ -3474,6 +5301,7 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "residual",
       "reason": "residual",
       "collapsed_layers": [
@@ -3481,9 +5309,29 @@
           "name": "stages.4.1.norm",
           "type": "QuantLayerNorm",
           "weight_elems": 240,
-          "output_elems": 15360
+          "output_elems": 15360,
+          "input_shapes": [
+            [
+              4,
+              16,
+              240
+            ]
+          ],
+          "output_shape": [
+            4,
+            16,
+            240
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 7,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 240.0,
+      "total_cycles": 240.0
     },
     {
       "name": "stages.4.1.conv_proj.conv",
@@ -3507,6 +5355,7 @@
       "output_channel_height": 8,
       "output_channel_width": 8,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -3514,9 +5363,31 @@
           "name": "stages.4.1.conv_proj.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 10240
+          "output_elems": 10240,
+          "input_shapes": [
+            [
+              1,
+              160,
+              8,
+              8
+            ]
+          ],
+          "output_shape": [
+            1,
+            160,
+            8,
+            8
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 20481.0,
+      "total_cycles": 20481.0
     },
     {
       "name": "cat_2",
@@ -3540,9 +5411,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 0.0,
+      "total_cycles": 0.0
     },
     {
       "name": "stages.4.1.conv_fusion.conv",
@@ -3566,6 +5446,7 @@
       "output_channel_height": 8,
       "output_channel_width": 8,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -3573,9 +5454,31 @@
           "name": "stages.4.1.conv_fusion.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 10240
+          "output_elems": 10240,
+          "input_shapes": [
+            [
+              1,
+              160,
+              8,
+              8
+            ]
+          ],
+          "output_shape": [
+            1,
+            160,
+            8,
+            8
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 4,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 235521.0,
+      "total_cycles": 235521.0
     },
     {
       "name": "final_conv.conv",
@@ -3599,6 +5502,7 @@
       "output_channel_height": 8,
       "output_channel_width": 8,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
       "collapsed_layers": [
@@ -3606,9 +5510,31 @@
           "name": "final_conv.bn",
           "type": "QuantSiLU",
           "weight_elems": 0,
-          "output_elems": 40960
+          "output_elems": 40960,
+          "input_shapes": [
+            [
+              1,
+              640,
+              8,
+              8
+            ]
+          ],
+          "output_shape": [
+            1,
+            640,
+            8,
+            8
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 6,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 81921.0,
+      "total_cycles": 81921.0
     },
     {
       "name": "head.global_pool.pool",
@@ -3632,9 +5558,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "compute_cycles": 320.0,
+      "total_cycles": 320.0
     },
     {
       "name": "head.fc",
@@ -3658,9 +5593,18 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "compute_cycles": 5001.0,
+      "total_cycles": 240000.0
     }
   ],
   "off_chip_layers": [

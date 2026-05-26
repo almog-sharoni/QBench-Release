@@ -6,7 +6,7 @@
   weights: DEFAULT
 - name: efficientnet_b0
   weights: DEFAULT
-- name: vit_b_16
-  weights: DEFAULT
 - name: mobilevit_s
+  weights: DEFAULT
+- name: vit_b_16
   weights: DEFAULT

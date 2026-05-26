@@ -675,11 +675,16 @@ class RunDatabase:
                 timestamp TEXT,
                 layers_json TEXT,
                 off_chip_layers_json TEXT,
-                rules_json TEXT
+                rules_json TEXT,
+                bandwidth REAL DEFAULT 1.0
             )
         ''')
         try:
             cursor.execute("ALTER TABLE cache_simulations ADD COLUMN rules_json TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE cache_simulations ADD COLUMN bandwidth REAL DEFAULT 1.0")
         except sqlite3.OperationalError:
             pass
 
@@ -700,8 +705,8 @@ class RunDatabase:
                 INSERT INTO cache_simulations (
                     model_name, cache_size_M, num_banks, bank_size, metadata_bits, batch_size,
                     total_layers, off_chip_count, flagged_count, timestamp,
-                    layers_json, off_chip_layers_json, rules_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    layers_json, off_chip_layers_json, rules_json, bandwidth
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 meta.get('model'),
                 meta.get('cache_size_M'),
@@ -716,6 +721,7 @@ class RunDatabase:
                 json.dumps(sim_data.get('layers', [])),
                 json.dumps(sim_data.get('off_chip_layers', [])),
                 json.dumps(sim_data.get('rules', [])),
+                meta.get('bandwidth', 1.0),
             ))
             conn.commit()
             print(f"[CacheSim] Stored simulation for {meta.get('model')} to DB.")

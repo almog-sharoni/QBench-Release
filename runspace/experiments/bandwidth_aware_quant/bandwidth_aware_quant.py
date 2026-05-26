@@ -30,8 +30,14 @@ from runspace.experiments.asic_cache_simulation.simulate_cache import (
     evaluate_stay,
     get_footprint_elements,
     round_to_banks,
-    fmt_elems
+    fmt_elems,
+    optimize_layer_bits
 )
+
+try:
+    from runspace.experiments.asic_cache_simulation.rules import RULES
+except ImportError:
+    RULES = {}
 
 # ============================================================
 # DynamicInputQuantizer Monkey-Patch Setup
@@ -53,7 +59,7 @@ except ImportError:
     DIQ2 = None
 
 def patched_candidates_for_layer(self, layer_name, module=None):
-    """Silent custom candidates picker that defaults missing layers to stay_on_chip=True (FP8)."""
+    """Silent custom candidates picker that uses per-layer input bit-width for off-chip layers."""
     is_unsigned = (
         self.use_unsigned_input_candidates
         and (
@@ -65,33 +71,38 @@ def patched_candidates_for_layer(self, layer_name, module=None):
         and self._module_uses_unsigned_input(module)
     )
 
-    # Silence warnings: default missing layers (e.g. activations, pooling, residuals) to stays_on_chip=True (FP8)
     stays_on_chip = self.cache_sim_map.get(layer_name, True)
 
     if stays_on_chip:
         return self.unsigned_all_fp8_formats if is_unsigned else self.all_fp8_formats
 
+    input_bits = self.layer_input_bits_map.get(layer_name, 8)
+    candidates = get_input_formats_for_bits(input_bits)
+
     if is_unsigned:
-        return self.unsigned_candidate_formats
+        return self._make_unsigned_candidates(candidates)
 
     if self.restrict_post_relu_ufp:
+        ufp_for_bits = [f for f in candidates if f.startswith('ufp')]
+        non_ufp_for_bits = [f for f in candidates if not f.startswith('ufp')]
         if layer_name in self.post_relu_layers:
-            return self.ufp_candidates or self._make_unsigned_candidates(self.non_ufp_candidates)
-        return self.non_ufp_candidates or self.ufp_candidates
+            return ufp_for_bits or self._make_unsigned_candidates(non_ufp_for_bits)
+        return non_ufp_for_bits or ufp_for_bits
 
-    return self.candidate_formats
+    return candidates
 
 for DIQ in (DIQ1, DIQ2):
     if DIQ is not None:
         # Override candidates method
         DIQ._candidates_for_layer = patched_candidates_for_layer
         
-        # Override init to load global map
+        # Override init to load global maps
         _orig_init = DIQ.__init__
         def make_new_init(orig_init):
             def new_init(self, *args, **kwargs):
                 orig_init(self, *args, **kwargs)
                 self.cache_sim_map = getattr(self.__class__, '_global_cache_sim_map', {})
+                self.layer_input_bits_map = getattr(self.__class__, '_global_layer_input_bits_map', {})
             return new_init
         DIQ.__init__ = make_new_init(_orig_init)
 
@@ -195,9 +206,11 @@ def run_cache_simulation(model_name, cache_size_M, batch_size=1, num_banks=16, m
         stay_on_chip, perm_elems, possible, rule_name = evaluate_stay(
             layer, ctx, next_layer, metadata_bits, bank_size, cache_elements
         )
+        xin_from_cache = RULES.get(rule_name, {}).get('xin_from_cache', True)
         
         layer_copy = dict(layer)
         layer_copy['stay_on_chip'] = stay_on_chip
+        layer_copy['xin_from_cache'] = xin_from_cache
         results.append(layer_copy)
         cache_sim_map[layer['name']] = stay_on_chip
         
@@ -206,87 +219,55 @@ def run_cache_simulation(model_name, cache_size_M, batch_size=1, num_banks=16, m
 
 def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
     """
-    Compute model total runtime (execution cycles) under bandwidth-constrained conditions.
-    Accumulates cycles across parent operations and all of their collapsed operations.
-    Also determines the actual bit-width used for each layer under the bandwidth limit.
-    Returns (total_runtime, layer_actual_bits).
+    Compute model total runtime (execution cycles) under bandwidth-constrained
+    conditions using layer-wide transfer bit-width optimization.
+
+    For each layer, total transfer cycles are checked against compute cycles.
+    If the layer is BW-limited, every transferred component for that layer is
+    reduced by 1 bit together (floor = b_bits) until the layer is compute-
+    limited or all transferred components hit the floor. On-chip layers still
+    optimize weights because weights are always streamed in.
+
+    Returns
+    -------
+    total_runtime : float
+    layer_input_bits : dict  layer_name -> input bit-width
+    layer_weight_bits : dict layer_name -> weight bit-width
+    layer_output_bits : dict layer_name -> output bit-width
     """
     total_runtime = 0.0
-    prev_stay_on_chip = False  # Track if the previous layer's output stayed on-chip
-    layer_actual_bits = {}
+    prev_stay_on_chip = False
+    layer_input_bits = {}
+    layer_weight_bits = {}
+    layer_output_bits = {}
     
     for idx, layer in enumerate(layers_with_stay_status):
         stay_on_chip = layer.get('stay_on_chip', False)
         lname = layer['name']
+        xin_from_cache = layer.get('xin_from_cache', True)
         
-        # 1. Compute cycles
-        l_type = layer['type']
-        compute_cycles = 0
+        need_input_transfer = (idx == 0 or not prev_stay_on_chip or not xin_from_cache)
+        need_weight_transfer = True
+        need_output_transfer = not stay_on_chip
         
-        if l_type == 'Conv2d':
-            out_c = layer.get('out_channels', 0)
-            in_c = layer.get('in_channels', 0)
-            groups = layer.get('groups', 1)
-            fh = layer.get('filter_height', 0)
-            fw = layer.get('filter_width', 0)
-            oh = layer.get('output_channel_height', 0)
-            ow = layer.get('output_channel_width', 0)
-            macs = out_c * (in_c / groups) * fh * fw * oh * ow
-            compute_cycles = math.ceil(macs / 128)
-        elif l_type == 'Linear':
-            weight_elems = layer.get('weight_elems', 0)
-            macs = weight_elems * 1  # batch_size is 1
-            compute_cycles = math.ceil(macs / 128)
-        else:
-            out_elems = layer.get('output_elems', 0)
-            compute_cycles = math.ceil(out_elems / 128)
-            
-        # Add collapsed child compute cycles
-        for collapsed in layer.get('collapsed_layers', []):
-            collapsed_out_elems = collapsed.get('output_elems', 0)
-            compute_cycles += math.ceil(collapsed_out_elems / 128)
-            
-        if stay_on_chip:
-            layer_actual_bits[lname] = 8
-            total_runtime += compute_cycles
-            prev_stay_on_chip = True
-            continue
-            
-        # 2. Memory transfer cycles under bandwidth limit (bandwidth)
-        # Input transfer: if first layer or previous layer was off-chip
-        if idx == 0 or not prev_stay_on_chip:
-            input_transfer = layer.get('input_elems', 0)
-        else:
-            input_transfer = 0
-            
-        output_transfer = layer.get('output_elems', 0)
+        in_b, w_b, out_b, cycles = optimize_layer_bits(
+            layer, bandwidth,
+            need_input_transfer, need_weight_transfer, need_output_transfer,
+            min_bits=b_bits
+        )
         
-        def get_runtime_for_k(k):
-            weight_transfer = math.ceil(layer.get('weight_elems', 0) * k / 8.0)
-            input_transfer_bytes = math.ceil(input_transfer * b_bits / 8.0)
-            output_transfer_bytes = math.ceil(output_transfer * b_bits / 8.0)
-            transfer_cycles = (weight_transfer + input_transfer_bytes + output_transfer_bytes) / bandwidth
-            return max(compute_cycles, transfer_cycles)
-            
-        target_runtime = get_runtime_for_k(b_bits)
+        layer_input_bits[lname] = in_b
+        layer_weight_bits[lname] = w_b
+        layer_output_bits[lname] = out_b
+        total_runtime += cycles
         
-        # Find the largest k in [b_bits, 8] that gives the same runtime as target_runtime
-        actual_k = b_bits
-        for k in range(b_bits + 1, 9):
-            if abs(get_runtime_for_k(k) - target_runtime) < 1e-5:
-                actual_k = k
-                
-        layer_actual_bits[lname] = actual_k
-        total_runtime += target_runtime
+        prev_stay_on_chip = stay_on_chip
         
-        # Save stay status for the next layer's input check
-        prev_stay_on_chip = False
-        
-    return total_runtime, layer_actual_bits
+    return total_runtime, layer_input_bits, layer_weight_bits, layer_output_bits
 
 
-def create_bandwidth_aware_state_dict(model, cache_sim_map, layer_actual_bits, chunk_size=128):
-    """Reassemble state dict with weights quantized based on stay_on_chip status and layer actual bit-width."""
+def create_bandwidth_aware_state_dict(model, cache_sim_map, per_layer_weight_bits, chunk_size=128):
+    """Reassemble state dict with weights quantized based on per-layer weight bit-width."""
     state_dict = model.state_dict()
     quant_map = {}
     
@@ -318,11 +299,9 @@ def create_bandwidth_aware_state_dict(model, cache_sim_map, layer_actual_bits, c
         for proj_key, (start, end) in slices.items():
             vname = proj_map.get(proj_key)
             if vname and vname in cache_sim_map:
-                stay_on_chip = cache_sim_map[vname]
                 w_slice = w_in_proj[start:end].contiguous()
                 
-                # Determine bits and candidates
-                bits = layer_actual_bits.get(vname, 8 if stay_on_chip else 8)
+                bits = per_layer_weight_bits.get(vname, 8)
                 formats = SIGNED_FORMATS_BY_BITS.get(bits, [])
                 best_fmt = get_best_weight_format(w_slice, formats, chunk_size=chunk_size)
                 
@@ -337,13 +316,11 @@ def create_bandwidth_aware_state_dict(model, cache_sim_map, layer_actual_bits, c
     # 2. For all other layers in cache_sim_map
     for name, module in model.named_modules():
         if name in cache_sim_map and name not in handled_names:
-            stay_on_chip = cache_sim_map[name]
             weight_key = f"{name}.weight"
             if weight_key in state_dict:
                 w = state_dict[weight_key]
                 
-                # Determine bits and candidates
-                bits = layer_actual_bits.get(name, 8 if stay_on_chip else 8)
+                bits = per_layer_weight_bits.get(name, 8)
                 formats = SIGNED_FORMATS_BY_BITS.get(bits, [])
                 best_fmt = get_best_weight_format(w, formats, chunk_size=chunk_size)
                 
@@ -366,7 +343,7 @@ def main():
     parser.add_argument("--dataset_name", type=str, default="imagenet", help="Dataset name")
     parser.add_argument("--dataset_path", type=str, default="/data/imagenet/val", help="Dataset path")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size for accuracy evaluation")
-    parser.add_argument("--num_workers", type=int, default=32, help="Number of workers for dataset loader")
+    parser.add_argument("--num_workers", type=int, default=1, help="Number of workers for dataset loader")
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of evaluation batches (-1 = all)")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     parser.add_argument("--device", type=str, default="cuda", help="Execution device")
@@ -417,7 +394,12 @@ def main():
         # 1. Load the reference FP32 model and obtain weight state dict
         ref_config = {
             'model': {'name': model_name, 'weights': model_weights},
-            'adapter': {'type': 'generic', 'quantized_ops': []},
+            'adapter': {
+                'type': 'generic',
+                'quantized_ops': ['-1'],
+                'weight_quantization': False,
+                'input_quantization': False,
+            },
             'dataset': {
                 'name': args.dataset_name, 'path': args.dataset_path,
                 'batch_size': args.batch_size, 'num_workers': args.num_workers,
@@ -430,7 +412,7 @@ def main():
 
         # 2. Setup results tracking structures
         cache_sizes = [0.0, 2.0, 4.0]  # Cache sizes in Millions of elements
-        min_bits_list = [2]  # We sweep starting min_bits = 2 only
+        min_bits_list = [3]  # We sweep starting min_bits = 3 only
         results_data = {min_bits: {cs: [] for cs in cache_sizes} for min_bits in min_bits_list}
 
         # Cache simulations for all cache sizes (run only once per cache size!)
@@ -445,7 +427,61 @@ def main():
             off_chip_cnt = len(cache_sim_map) - on_chip_cnt
             print(f"Cache {cs}MB: {on_chip_cnt} layers stay on-chip, {off_chip_cnt} layers stream off-chip.")
 
-        # 3. Sweep loops
+        # 3. Evaluate reference FP32 model (no quantization on weights or inputs)
+        #    Compute cycles with 32-bit element transfers (no reduction — min=max=32).
+        print(f"\n--- Evaluating reference FP32 model ---")
+        ref_cycles_per_cs = {}
+        for cs in cache_sizes:
+            sim_layers, cache_sim_map = cache_sims[cs]
+            total_cyc = 0.0
+            prev_stay = False
+            for idx, layer in enumerate(sim_layers):
+                stay = layer.get('stay_on_chip', False)
+                xin_cache = layer.get('xin_from_cache', True)
+                need_in = (idx == 0 or not prev_stay or not xin_cache)
+                need_out = not stay
+                _, _, _, cyc = optimize_layer_bits(
+                    layer, args.bandwidth,
+                    need_in, True, need_out,
+                    min_bits=32, max_bits=32
+                )
+                total_cyc += cyc
+                prev_stay = stay
+            ref_cycles_per_cs[cs] = total_cyc
+            print(f"  Cache {cs}MB reference cycles (32b): {total_cyc:,}")
+
+        ref_eval_config = {
+            'model': {'name': model_name, 'weights': model_weights},
+            'adapter': {
+                'type': 'generic',
+                'quantized_ops': ['-1'],
+                'weight_quantization': False,
+                'input_quantization': False,
+            },
+            'evaluation': {
+                'mode': 'evaluate',
+                'max_batches': args.limit_batches,
+            },
+            'dataset': {
+                'name': args.dataset_name,
+                'path': args.dataset_path,
+                'batch_size': args.batch_size,
+                'num_workers': args.num_workers,
+            }
+        }
+
+        try:
+            print("Running reference FP32 evaluation...")
+            ref_eval_results = runner.run_single(ref_eval_config, output_root=model_output_dir)
+            ref_acc1 = ref_eval_results.get('acc1', 0.0)
+            print(f"Reference FP32: Top-1 Acc = {ref_acc1:.3f}%")
+        except Exception as e:
+            print(f"Error during reference evaluation: {e}")
+            ref_acc1 = 0.0
+            import traceback
+            traceback.print_exc()
+
+        # 4. Sweep loops
         unique_runs = []
         for cs in cache_sizes:
             for b in range(2, 9):
@@ -466,25 +502,25 @@ def main():
             
             sim_layers, cache_sim_map = cache_sims[cs]
             
-            # 3.1. Compute execution runtime (cycles) and obtain layer-specific actual bits
-            cycles, layer_actual_bits = compute_model_runtime(sim_layers, b, bandwidth=args.bandwidth)
+            # 3.1. Compute execution runtime (cycles) and obtain layer-specific transfer bits
+            cycles, layer_input_bits, layer_weight_bits, layer_output_bits = compute_model_runtime(sim_layers, b, bandwidth=args.bandwidth)
             print(f"Calculated compute time: {cycles:,} cycles")
 
-            # 3.2. Quantize model weights based on stay status and actual bit-width
+            # 3.2. Quantize model weights based on per-layer weight bit-width
             print("Quantizing model weights...")
-            q_state_dict, _ = create_bandwidth_aware_state_dict(model, cache_sim_map, layer_actual_bits=layer_actual_bits, chunk_size=128)
+            q_state_dict, _ = create_bandwidth_aware_state_dict(model, cache_sim_map, per_layer_weight_bits=layer_weight_bits, chunk_size=128)
             
             # Save quantized weights to temporary file
             temp_weights_path = os.path.join(temp_weights_dir, f"weights_cs_{cs}_b_{b}.pt")
             torch.save(q_state_dict, temp_weights_path)
             
-            # 3.3. Inject cache sim map and actual bits to global attributes of both classes
+            # 3.3. Inject cache sim map and per-layer input bits to global attributes of both classes
             if DIQ1 is not None:
                 DIQ1._global_cache_sim_map = cache_sim_map
-                DIQ1._global_layer_actual_bits = layer_actual_bits
+                DIQ1._global_layer_input_bits_map = layer_input_bits
             if DIQ2 is not None:
                 DIQ2._global_cache_sim_map = cache_sim_map
-                DIQ2._global_layer_actual_bits = layer_actual_bits
+                DIQ2._global_layer_input_bits_map = layer_input_bits
 
             # 3.4. Build evaluation config
             eval_config = {
@@ -548,6 +584,10 @@ def main():
         results_path = os.path.join(model_output_dir, "bandwidth_aware_quant_results.json")
         serializable_results = {
             'model_name': model_name,
+            'ref_fp32': {
+                'accuracy': ref_acc1,
+                'cycles_per_cache_size': ref_cycles_per_cs,
+            },
             'min_bits_sweeps': {
                 str(mb): {
                     str(cs): [{'b': p[0], 'accuracy': p[1], 'cycles': p[2]} for p in points]
@@ -563,158 +603,246 @@ def main():
         # 6. Generate plots for each starting min_bits threshold
         print("\n--- Generating plots for each starting min_bits threshold ---")
         colors = {0.0: 'red', 2.0: 'blue', 4.0: 'green'}
-        
-        global_min_cycles = float('inf')
-        global_max_cycles = float('-inf')
+
+        # Normalization factor: FP32 0MB cache is the 1.0x speedup baseline.
+        norm = ref_cycles_per_cs.get(0.0, 1.0)
+        if norm <= 0:
+            norm = 1.0
+
+        def normalized_speedup(cycles):
+            if cycles <= 0:
+                return 0.0
+            return norm / cycles
+
+        def find_axis_break(x_values, x_min, x_max):
+            unique_x = sorted(set(round(x, 6) for x in x_values if math.isfinite(x)))
+            if len(unique_x) < 3:
+                return None
+
+            gaps = [(right - left, left, right) for left, right in zip(unique_x, unique_x[1:])]
+            largest_gap, gap_left, gap_right = max(gaps, key=lambda item: item[0])
+            total_span = max(x_max - x_min, 1e-9)
+            if largest_gap < max(0.20, total_span * 0.35):
+                return None
+
+            gap_pad = min(max(largest_gap * 0.08, 0.01), 0.04)
+            left_xlim = (x_min, gap_left + gap_pad)
+            right_xlim = (gap_right - gap_pad, x_max)
+            if left_xlim[1] >= right_xlim[0]:
+                return None
+            return left_xlim, right_xlim
+
+        def draw_axis_break_marks(left_ax, right_ax):
+            d = 0.012
+            kwargs = dict(color='black', clip_on=False, linewidth=1.0)
+            left_ax.plot((1 - d, 1 + d), (-d, +d), transform=left_ax.transAxes, **kwargs)
+            left_ax.plot((1 - d, 1 + d), (1 - d, 1 + d), transform=left_ax.transAxes, **kwargs)
+            right_ax.plot((-d, +d), (-d, +d), transform=right_ax.transAxes, **kwargs)
+            right_ax.plot((-d, +d), (1 - d, 1 + d), transform=right_ax.transAxes, **kwargs)
+
+        def dedup_legend(axes):
+            handles = []
+            labels = []
+            seen = set()
+            for plot_ax in axes:
+                ax_handles, ax_labels = plot_ax.get_legend_handles_labels()
+                for handle, label in zip(ax_handles, ax_labels):
+                    if not label or label.startswith('_') or label in seen:
+                        continue
+                    handles.append(handle)
+                    labels.append(label)
+                    seen.add(label)
+            return handles, labels
+
         global_min_acc = 100.0
         global_max_acc = 0.0
-
+        global_min_norm = float('inf')
+        global_max_norm = float('-inf')
         for min_bits, cache_data in results_data.items():
             for cs, points in cache_data.items():
                 for b, acc, cyc in points:
-                    global_min_cycles = min(global_min_cycles, cyc)
-                    global_max_cycles = max(global_max_cycles, cyc)
+                    nx = normalized_speedup(cyc)
+                    global_min_norm = min(global_min_norm, nx)
+                    global_max_norm = max(global_max_norm, nx)
                     global_min_acc = min(global_min_acc, acc)
                     global_max_acc = max(global_max_acc, acc)
-
-        if global_min_cycles == float('inf'):
-            global_min_cycles, global_max_cycles = 0, 1000000
+        for cs in cache_sizes:
+            rc = ref_cycles_per_cs.get(cs)
+            if rc and rc > 0:
+                nx = normalized_speedup(rc)
+                global_min_norm = min(global_min_norm, nx)
+                global_max_norm = max(global_max_norm, nx)
+        if ref_acc1 > 0:
+            global_min_acc = min(global_min_acc, ref_acc1)
+            global_max_acc = max(global_max_acc, ref_acc1)
         if global_min_acc == 100.0:
             global_min_acc, global_max_acc = 0.0, 100.0
-
-        xlim_min = 10 ** (math.floor(math.log10(global_min_cycles)) - 0.2)
-        xlim_max = 10 ** (math.ceil(math.log10(global_max_cycles)) + 0.2)
+        if global_min_norm == float('inf'):
+            global_min_norm, global_max_norm = 0, 1
         ylim_min = max(0.0, global_min_acc - 5.0)
         ylim_max = min(100.0, global_max_acc + 5.0)
+        xpad = (global_max_norm - global_min_norm) * 0.05
+        xlim_min = max(0.0, global_min_norm - xpad)
+        xlim_max = global_max_norm + xpad
 
-        # Plot configuration
         linestyles = {0.0: '-', 2.0: '-', 4.0: '--'}
         markers = {0.0: 'o', 2.0: 's', 4.0: '^'}
         jitter = {0.0: 1.0, 2.0: 0.98, 4.0: 1.02}
 
         for min_bits, cache_data in results_data.items():
-            plt.figure(figsize=(12, 7))
-            
+            x_values = []
+            for cs in cache_sizes:
+                ref_cyc = ref_cycles_per_cs.get(cs)
+                if ref_cyc is not None and ref_cyc > 0 and ref_acc1 > 0:
+                    x_values.append(normalized_speedup(ref_cyc))
+            for cs, points in cache_data.items():
+                j_factor = jitter.get(cs, 1.0)
+                x_values.extend(normalized_speedup(cyc) * j_factor for _, _, cyc in points)
+
+            axis_break = find_axis_break(x_values, xlim_min, xlim_max)
+            if axis_break:
+                fig, (ax_left, ax_right) = plt.subplots(
+                    1, 2, figsize=(12, 7), sharey=True,
+                    gridspec_kw={'width_ratios': [0.55, 3.5], 'wspace': 0.05}
+                )
+                axes = [ax_left, ax_right]
+                ax_left.set_xlim(*axis_break[0])
+                ax_right.set_xlim(*axis_break[1])
+                ax_left.set_xticks([1.0])
+                ax_left.set_xticklabels(["1.0"])
+                ax_left.spines['right'].set_visible(False)
+                ax_right.spines['left'].set_visible(False)
+                ax_right.tick_params(axis='y', left=False, labelleft=False)
+                draw_axis_break_marks(ax_left, ax_right)
+                print(
+                    f"  Using x-axis break from {axis_break[0][1]:.3f} "
+                    f"to {axis_break[1][0]:.3f}"
+                )
+            else:
+                fig, ax_left = plt.subplots(figsize=(12, 7))
+                axes = [ax_left]
+                ax_left.set_xlim(xlim_min, xlim_max)
+
+            def axis_for_x(x):
+                if len(axes) == 1:
+                    return axes[0]
+                return axes[0] if x <= axis_break[0][1] else axes[1]
+
+            ref_label_added = False
+
+            # FP32 reference diamonds
+            for cs in cache_sizes:
+                ref_cyc = ref_cycles_per_cs.get(cs)
+                if ref_cyc is not None and ref_cyc > 0 and ref_acc1 > 0:
+                    nx = normalized_speedup(ref_cyc)
+                    plot_ax = axis_for_x(nx)
+                    color = colors.get(cs, 'black')
+                    lbl = "Ref FP32" if not ref_label_added else None
+                    ref_label_added = True
+                    plot_ax.scatter([nx], [ref_acc1], marker='D', color=color,
+                                    s=120, zorder=10, edgecolors='black', linewidths=1.5,
+                                    label=lbl)
+                    plot_ax.annotate(
+                        fmt_elems(int(ref_cyc)),
+                        (nx, ref_acc1),
+                        textcoords="offset points",
+                        xytext=(10, -12),
+                        ha='left', va='top',
+                        fontsize=8, color='#495057'
+                    )
+
+            # Sweep curves
             for cs, points in cache_data.items():
                 if not points:
                     continue
                 points = sorted(points, key=lambda x: x[0])
+                cyc_range = f"{fmt_elems(int(min(p[2] for p in points)))}–{fmt_elems(int(max(p[2] for p in points)))}"
+                acc_range = f"{min(p[1] for p in points):.2f}–{max(p[1] for p in points):.2f}%"
+                print(f"  Cache {cs}MB: {len(points)} pts, acc {acc_range}, cyc {cyc_range}")
                 bits = [p[0] for p in points]
                 accs = [p[1] for p in points]
                 cycles = [p[2] for p in points]
-                
+
                 j_factor = jitter.get(cs, 1.0)
-                plot_cycles = [cyc * j_factor for cyc in cycles]
-                
-                label = f"Cache {cs}MB"
+                plot_x = [normalized_speedup(cyc) * j_factor for cyc in cycles]
+
+                label = f"Cache {cs}MB ({cyc_range} cyc)"
                 color = colors.get(cs, 'black')
                 linestyle = linestyles.get(cs, '-')
                 marker = markers.get(cs, 'o')
-                
-                plt.plot(plot_cycles, accs, marker=marker, label=label, color=color, 
-                         linestyle=linestyle, linewidth=2, markersize=8)
-                
+
+                for plot_ax in axes:
+                    plot_ax.plot(plot_x, accs, marker=marker, label=label, color=color,
+                                 linestyle=linestyle, linewidth=2.5, markersize=18,
+                                 markeredgewidth=1.2, markeredgecolor='black')
+
                 unique_coords = []
                 for idx, (b, acc, cyc) in enumerate(points):
-                    p_cyc = plot_cycles[idx]
+                    px = plot_x[idx]
                     found = False
                     for group in unique_coords:
-                        if abs(group['cycles'] - cyc) < 1e-2 and abs(group['acc'] - acc) < 1e-3:
+                        if abs(group['cyc'] - cyc) < 1e-2 and abs(group['acc'] - acc) < 1e-3:
                             group['bits'].append(b)
                             group['indices'].append(idx)
                             found = True
                             break
                     if not found:
                         unique_coords.append({
-                            'cycles': cyc,
-                            'plot_cycles': p_cyc,
-                            'acc': acc,
-                            'bits': [b],
-                            'indices': [idx]
+                            'px': px, 'cyc': cyc, 'acc': acc,
+                            'bits': [b], 'indices': [idx]
                         })
-                
+
                 for group in unique_coords:
                     group_bits = sorted(group['bits'])
                     acc = group['acc']
-                    cyc = group['cycles']
-                    p_cyc = group['plot_cycles']
-                    
+                    px = group['px']
+                    cyc = group['cyc']
+
                     if len(group_bits) > 1:
                         bw_text = f"{group_bits[0]}-{group_bits[-1]}"
                         b_val = group_bits[0]
                     else:
                         bw_text = f"{group_bits[0]}"
                         b_val = group_bits[0]
-                    
-                    cyc_text = fmt_elems(cyc)
-                    
-                    if cs == 0.0:
-                        if b_val == 2:
-                            cfg_bw = {'xy': (10, 5), 'ha': 'left', 'va': 'bottom'}
-                            cfg_cyc = {'xy': (10, -8), 'ha': 'left', 'va': 'top'}
-                        elif b_val in (3, 4, 5):
-                            cfg_bw = {'xy': (-10, 8), 'ha': 'right', 'va': 'bottom'}
-                            cfg_cyc = {'xy': (-10, -2), 'ha': 'right', 'va': 'top'}
-                        elif b_val == 6:
-                            cfg_bw = {'xy': (10, -5), 'ha': 'left', 'va': 'top'}
-                            cfg_cyc = {'xy': (10, -18), 'ha': 'left', 'va': 'top'}
-                        elif b_val == 7:
-                            cfg_bw = {'xy': (-10, 8), 'ha': 'right', 'va': 'bottom'}
-                            cfg_cyc = {'xy': (-10, -2), 'ha': 'right', 'va': 'top'}
-                        else:  # b_val == 8
-                            cfg_bw = {'xy': (10, 8), 'ha': 'left', 'va': 'bottom'}
-                            cfg_cyc = {'xy': (10, -2), 'ha': 'left', 'va': 'top'}
-                    elif cs == 2.0:
-                        cfg_bw = {'xy': (-10, 8), 'ha': 'right', 'va': 'bottom'}
-                        cfg_cyc = {'xy': (-10, -2), 'ha': 'right', 'va': 'top'}
-                    elif cs == 4.0:
-                        cfg_bw = {'xy': (10, 8), 'ha': 'left', 'va': 'bottom'}
-                        cfg_cyc = {'xy': (10, -2), 'ha': 'left', 'va': 'top'}
-                    else:
-                        cfg_bw = {'xy': (0, 10), 'ha': 'center', 'va': 'bottom'}
-                        cfg_cyc = {'xy': (0, -10), 'ha': 'center', 'va': 'top'}
-                    
-                    plt.annotate(
-                        bw_text, 
-                        (p_cyc, acc), 
-                        textcoords="offset points", 
-                        xytext=cfg_bw['xy'], 
-                        ha=cfg_bw['ha'], 
-                        va=cfg_bw['va'],
-                        fontsize=9, 
-                        color=color, 
-                        weight='bold'
-                    )
-                    plt.annotate(
-                        cyc_text, 
-                        (p_cyc, acc), 
-                        textcoords="offset points", 
-                        xytext=cfg_cyc['xy'], 
-                        ha=cfg_cyc['ha'], 
-                        va=cfg_cyc['va'],
-                        fontsize=8.5, 
-                        color='#495057', 
-                        weight='normal'
-                    )
-                    
-            plt.text(0.05, 0.05, 
-                     f"Note: Numbers near the bullets represent the bit-width (b) of off-chip layers.\n"
-                     f"Memory Bandwidth = {args.bandwidth} bytes/cycle.\n"
-                     f"Cycle counts (e.g., 44.9k, 10.1M) are shown in gray below/next to the bit-width labels.",
-                     transform=plt.gca().transAxes, ha='left', va='bottom', fontsize=9.5, color='#2c3e50',
-                     bbox=dict(boxstyle='round,pad=0.5', facecolor='#f8f9fa', edgecolor='#ced4da', alpha=0.9))
 
-            plt.title(f"Accuracy vs. Compute Time (Starting Min Bits = {min_bits})\nMemory Bandwidth = {args.bandwidth} bytes/cycle")
-            plt.xlabel(f"Compute Time (Cycles - Log Scale) @ Bandwidth = {args.bandwidth} bytes/cycle")
-            plt.ylabel("Top-1 Accuracy (%)")
-            plt.xscale('log')
-            plt.xlim(xlim_min, xlim_max)
-            plt.ylim(ylim_min, ylim_max)
-            plt.grid(True, which="both", linestyle='--', alpha=0.6)
-            plt.legend()
-            plt.tight_layout()
-            plot_path = os.path.join(model_output_dir, f"accuracy_vs_compute_time_min_bits_{min_bits}.png")
-            plt.savefig(plot_path, dpi=300)  # High resolution
+                    plot_ax = axis_for_x(px)
+                    plot_ax.text(
+                        px, acc, bw_text,
+                        ha='center', va='center',
+                        fontsize=7.5 if len(bw_text) > 1 else 8.5,
+                        color='white', weight='bold',
+                        zorder=12
+                    )
+
+            axes[-1].text(
+                0.03, 0.05,
+                f"x-axis: time_ref / time  (1.0x = FP32 0MB baseline, higher = faster)\n"
+                f"Memory Bandwidth = {args.bandwidth} bytes/cycle.\n"
+                f"Numbers: bit-width inside markers; sweep cycle ranges in legend.",
+                transform=axes[-1].transAxes, ha='left', va='bottom',
+                fontsize=9.5, color='#2c3e50',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='#f8f9fa',
+                          edgecolor='#ced4da', alpha=0.9)
+            )
+
+            fig.suptitle(
+                f"Accuracy vs. Normalized Speedup vs FP32 0MB (Starting Min Bits = {min_bits})\n"
+                f"Memory Bandwidth = {args.bandwidth} bytes/cycle"
+            )
+            xlabel = f"Normalized Speedup vs FP32 0MB  (1.0x = {fmt_elems(int(norm))} cyc baseline, higher = faster)"
+            if len(axes) == 1:
+                axes[0].set_xlabel(xlabel)
+            else:
+                fig.text(0.5, 0.035, xlabel, ha='center', va='center')
+            axes[0].set_ylabel("Top-1 Accuracy (%)")
+            for plot_ax in axes:
+                plot_ax.set_ylim(ylim_min, ylim_max)
+                plot_ax.grid(True, linestyle='--', alpha=0.6)
+            handles, labels = dedup_legend(axes)
+            axes[-1].legend(handles, labels)
+            fig.tight_layout(rect=[0, 0.06 if len(axes) > 1 else 0, 1, 0.93])
+            plot_path = os.path.join(model_output_dir, f"accuracy_vs_speedup_min_bits_{min_bits}.png")
+            plt.savefig(plot_path, dpi=300)
             plt.close()
             print(f"Saved plot: {plot_path}")
 

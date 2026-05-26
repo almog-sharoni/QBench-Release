@@ -69,6 +69,7 @@ with tab_cache:
 
         st.markdown(
             f"<p class='dashboard-filter-note'>metadata_bits={int(latest.get('metadata_bits') or 0)} &nbsp;·&nbsp; "
+            f"bandwidth={latest.get('bandwidth', 1.0):.1f} B/cyc &nbsp;·&nbsp; "
             f"bank_size={bank_size:,} elem &nbsp;·&nbsp; "
             f"timestamp={latest.get('timestamp', '—')}</p>",
             unsafe_allow_html=True,
@@ -119,6 +120,9 @@ with tab_cache:
                 'name', 'type', 'stay_on_chip', 'rule', 'reason',
                 'input_elems', 'weight_elems', 'output_elems',
                 'output_banked', 'next_xin_banked', 'next_layer_name',
+                'input_bits', 'weight_bits', 'output_bits',
+                'input_bw_limited', 'weight_bw_limited', 'output_bw_limited',
+                'compute_cycles', 'total_cycles',
             ] if c in layers_df.columns]
 
             # Scale element counts to Thousands (K) to keep the table clean 
@@ -128,6 +132,11 @@ with tab_cache:
             for col in num_cols:
                 if col in layers_viz.columns:
                     layers_viz[col] = layers_viz[col].astype(float) / 1000.0
+
+            # Format compute/total cycles as integers for display
+            for col in ['compute_cycles', 'total_cycles']:
+                if col in layers_viz.columns:
+                    layers_viz[col] = layers_viz[col].fillna(0).astype(int)
 
             st.dataframe(
                 layers_viz,
@@ -145,6 +154,14 @@ with tab_cache:
                     'output_banked':   st.column_config.NumberColumn("Banked (K)",   format="%.1f K", width="small"),
                     'next_xin_banked': st.column_config.NumberColumn("Next Xin (K)", format="%.1f K", width="small"),
                     'next_layer_name': st.column_config.TextColumn("Next Layer",   width="large"),
+                    'input_bits':      st.column_config.NumberColumn("in Bits",      format="%d", width="small"),
+                    'weight_bits':     st.column_config.NumberColumn("W Bits",       format="%d", width="small"),
+                    'output_bits':     st.column_config.NumberColumn("out Bits",     format="%d", width="small"),
+                    'input_bw_limited':   st.column_config.CheckboxColumn("xin BW",  width="small"),
+                    'weight_bw_limited':  st.column_config.CheckboxColumn("W BW",    width="small"),
+                    'output_bw_limited':  st.column_config.CheckboxColumn("xout BW", width="small"),
+                    'compute_cycles':  st.column_config.NumberColumn("Comp Cyc",     format="%d", width="small"),
+                    'total_cycles':    st.column_config.NumberColumn("Total Cyc",    format="%d", width="small"),
                 },
             )
 
