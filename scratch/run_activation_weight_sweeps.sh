@@ -24,6 +24,7 @@ RUN_BASELINES="${RUN_BASELINES:-1}"
 RUN_DYNAMIC="${RUN_DYNAMIC:-1}"
 FORCE_RERUN="${FORCE_RERUN:-0}"
 FORCE_RECALC="${FORCE_RECALC:-0}"
+SKIP_INPUT_ERROR_STATS="${SKIP_INPUT_ERROR_STATS:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 
 # The weight experiment logs optimized per-chunk runs as weight_dt=opt_chunk_mse.
@@ -79,6 +80,11 @@ if [[ "$FORCE_RECALC" == "1" ]]; then
   maybe_force_recalc_args+=(--force_recalc)
 fi
 
+maybe_skip_input_error_stats_args=()
+if [[ "$SKIP_INPUT_ERROR_STATS" == "1" ]]; then
+  maybe_skip_input_error_stats_args+=(--skip_input_error_stats)
+fi
+
 run_cmd() {
   printf '\n>>'
   printf ' %q' "$@"
@@ -102,6 +108,7 @@ if [[ "$RUN_ACTIVATIONS" == "1" && "$RUN_BASELINES" == "1" ]]; then
     --unsigned_input_sources "relu,softmax,quantrelu,quantsoftmax" \
     --dynamic_unsigned_input_candidates \
     --fold_input_norm \
+    "${maybe_skip_input_error_stats_args[@]}" \
     "${maybe_force_rerun_args[@]}"
 fi
 

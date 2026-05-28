@@ -197,6 +197,14 @@ def get_args():
         help="Force rebuilding cached materialized weights/checkpoints used by the experiment",
     )
     parser.add_argument(
+        "--skip_input_error_stats",
+        action="store_true",
+        help=(
+            "Skip expensive per-layer input quantization error reductions for "
+            "uniform baseline runs. Accuracy and layer format counts are still logged."
+        ),
+    )
+    parser.add_argument(
         "--experiment_type",
         type=str,
         default=DEFAULT_BASELINE_EXPERIMENT_TYPE,
@@ -336,6 +344,7 @@ def run_baselines(args, device, formats, on_result=None):
                     args.chunk_size,
                     unsigned_input_sources=args.unsigned_input_sources,
                     use_unsigned_input_candidates=args.dynamic_unsigned_input_candidates,
+                    collect_error_stats=not args.skip_input_error_stats,
                 ),
             )
             acc1 = eval_results.get('acc1', 0.0)

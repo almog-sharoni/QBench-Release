@@ -1276,6 +1276,7 @@ class Runner:
             'quant_mode': str(quant_cfg.get('mode', 'chunk') or 'chunk'),
             'unsigned_input_sources': list(unsigned_input_sources),
             'uniform_unsigned_input_candidates': True,
+            'collect_error_stats': bool(quant_cfg.get('collect_error_stats', True)),
         }
 
     def _build_layer_input_quantizer(self, model, input_quant_cfg: Dict[str, Any]):
@@ -1320,9 +1321,14 @@ class Runner:
                 quant_mode=quant_mode,
                 unsigned_input_sources=input_quant_cfg.get('unsigned_input_sources', []),
                 use_unsigned_input_candidates=input_quant_cfg.get('uniform_unsigned_input_candidates', True),
+                collect_error_stats=input_quant_cfg.get('collect_error_stats', True),
             )
             quantizer.register_hooks()
-            print(f"Input quantization enabled: mode=uniform format={fmt} quant_mode={quant_mode} chunk_size={chunk_size}")
+            stats_msg = "on" if input_quant_cfg.get('collect_error_stats', True) else "off"
+            print(
+                f"Input quantization enabled: mode=uniform format={fmt} "
+                f"quant_mode={quant_mode} chunk_size={chunk_size} error_stats={stats_msg}"
+            )
             return quantizer
 
         # input_only is handled in the evaluation loop

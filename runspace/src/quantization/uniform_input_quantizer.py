@@ -34,6 +34,7 @@ class UniformInputQuantizer:
         quant_mode='chunk',
         unsigned_input_sources=None,
         use_unsigned_input_candidates=True,
+        collect_error_stats=True,
     ):
         self.model = model
         self.fmt = fmt
@@ -41,6 +42,7 @@ class UniformInputQuantizer:
         self.chunk_size = chunk_size
         self.quant_mode = quant_mode
         self.use_unsigned_input_candidates = bool(use_unsigned_input_candidates)
+        self.collect_error_stats = bool(collect_error_stats)
         self.unsigned_input_sources = {
             str(source).lower()
             for source in (unsigned_input_sources or [])
@@ -369,12 +371,13 @@ class UniformInputQuantizer:
             module.input_chunk_formats = None
             module.rounding = 'nearest'
 
-            with torch.no_grad():
-                diff = x - x_q
-                self.stats['sum_l1_err'] += diff.abs().sum().item()
-                self.stats['sum_mse_err'] += diff.pow(2).sum().item()
-                self.stats['sum_l1_norm'] += x.abs().sum().item()
-                self.stats['sum_l2_norm'] += x.pow(2).sum().item()
+            if self.collect_error_stats:
+                with torch.no_grad():
+                    diff = x - x_q
+                    self.stats['sum_l1_err'] += diff.abs().sum().item()
+                    self.stats['sum_mse_err'] += diff.pow(2).sum().item()
+                    self.stats['sum_l1_norm'] += x.abs().sum().item()
+                    self.stats['sum_l2_norm'] += x.pow(2).sum().item()
 
             stats = self.layer_stats.setdefault(
                 layer_name,
@@ -406,4 +409,5 @@ class UniformInputQuantizer:
             'total_l1': self.stats['sum_l1_err'],
             'total_mse': self.stats['sum_mse_err'],
             'layer_stats': self.layer_stats,
+            'collect_error_stats': self.collect_error_stats,
         }

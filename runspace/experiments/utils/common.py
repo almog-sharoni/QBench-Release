@@ -242,6 +242,7 @@ def build_uniform_input_quant_cfg(
     enabled=True,
     unsigned_input_sources=None,
     use_unsigned_input_candidates=True,
+    collect_error_stats=True,
 ):
     """Build the uniform layer-input quantizer config used by input quant baselines."""
     if not enabled or str(fmt).strip().lower() == 'fp32':
@@ -257,6 +258,7 @@ def build_uniform_input_quant_cfg(
             else list(unsigned_input_sources or [])
         ),
         'uniform_unsigned_input_candidates': bool(use_unsigned_input_candidates),
+        'collect_error_stats': bool(collect_error_stats),
     }
 
 
