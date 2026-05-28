@@ -96,6 +96,7 @@ def test_runner_synthesizes_uniform_input_quant_config():
         "quant_mode": "chunk",
         "unsigned_input_sources": [],
         "uniform_unsigned_input_candidates": True,
+        "collect_error_stats": True,
     }
 
 
@@ -114,7 +115,28 @@ def test_uniform_input_quant_cfg_carries_unsigned_sources():
         "chunk_size": 128,
         "unsigned_input_sources": ["relu", "softmax"],
         "uniform_unsigned_input_candidates": False,
+        "collect_error_stats": True,
     }
+
+
+def test_uniform_input_quantizer_can_skip_error_stats():
+    model = nn.Sequential(nn.Linear(4, 4))
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt="fp4_e1m2",
+        chunk_size=4,
+        collect_error_stats=False,
+    )
+    quantizer._quantize_with_format = lambda x, fmt: x + 1.0
+
+    hook = quantizer._make_hook("0")
+    hook(model[0], (torch.randn(1, 4),))
+    stats = quantizer.get_final_stats()
+
+    assert stats["collect_error_stats"] is False
+    assert stats["total_mse"] == 0.0
+    assert stats["norm_mse"] == 0.0
+    assert stats["layer_stats"]["0"]["total_chunks"] > 0
 
 
 def test_runner_logs_dynamic_input_map_from_processed_layer_stats():
@@ -337,6 +359,7 @@ if __name__ == "__main__":
     test_materialized_cache_detects_weight_quant_buffers()
     test_runner_synthesizes_uniform_input_quant_config()
     test_uniform_input_quant_cfg_carries_unsigned_sources()
+    test_uniform_input_quantizer_can_skip_error_stats()
     test_runner_logs_dynamic_input_map_from_processed_layer_stats()
     test_dynamic_input_quantizer_uses_unsigned_candidates_after_source_dropout()
     test_dynamic_input_quantizer_targets_actual_consumer_after_softmax_dropout()
