@@ -12,6 +12,7 @@ if PROJECT_ROOT not in sys.path:
 
 from runspace.core.runner import Runner
 from runspace.experiments.utils.common import build_uniform_input_quant_cfg
+from src.ops.quant_arithmetic import QuantAdd
 from src.ops.quant_dropout import QuantDropout
 from src.ops.quant_matmul import QuantMatMul
 from src.quantization.dynamic_input_quantizer import DynamicInputQuantizer
@@ -301,6 +302,36 @@ def test_uniform_input_quantizer_targets_actual_consumer_after_softmax_dropout()
     assert quantizer._effective_format_for_module("out_proj", model.out_proj) == "fp4_e1m2"
 
 
+def test_uniform_input_quantizer_keeps_signed_residual_add_operand():
+    class ResidualAdd(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.relu = nn.ReLU()
+            self.add = QuantAdd()
+
+        def forward(self, signed, unsigned):
+            unsigned = self.relu(unsigned)
+            return self.add(signed, unsigned)
+
+    model = ResidualAdd()
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt="fp4_e1m2",
+        chunk_size=4,
+        unsigned_input_sources=["relu"],
+    )
+
+    assert quantizer.layer_unsigned_input_indices["add"] == {1}
+
+    quantizer._quantize_with_format = lambda x, fmt: x
+    hook = quantizer._make_hook("add")
+    hook(model.add, (torch.randn(1, 4) - 1.0, torch.randn(1, 4)))
+
+    assert model.add.input_q_type == "fp4_e1m2"
+    assert model.add.input1_q_type == "fp4_e1m2"
+    assert model.add.input2_q_type == "ufp4_e1m3"
+
+
 if __name__ == "__main__":
     test_runner_logs_fp32_weight_dt_when_weight_quantization_disabled()
     test_materialized_cache_detects_weight_quant_buffers()
@@ -312,3 +343,4 @@ if __name__ == "__main__":
     test_dynamic_input_quantizer_logs_multihead_attention_inputs()
     test_uniform_input_quantizer_uses_fixed_unsigned_format_after_source_dropout()
     test_uniform_input_quantizer_targets_actual_consumer_after_softmax_dropout()
+    test_uniform_input_quantizer_keeps_signed_residual_add_operand()

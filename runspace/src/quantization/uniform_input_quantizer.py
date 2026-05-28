@@ -58,6 +58,7 @@ class UniformInputQuantizer:
         self.functional_ops = tuple(functional_ops)
         self.hookable_ops = tuple(dict.fromkeys(self.supported_ops + self.functional_ops))
         self.unsigned_passthrough_layers = set()
+        self.layer_unsigned_input_indices = {}
         self.post_unsigned_layers = self._find_post_unsigned_layers()
         self.stats = {
             'sum_l1_err': 0.0,
@@ -129,6 +130,9 @@ class UniformInputQuantizer:
     @staticmethod
     def _is_passthrough_module(module):
         return isinstance(module, (nn.Dropout, nn.Dropout2d, nn.Dropout3d, nn.Identity))
+
+    def _mark_unsigned_input(self, layer_name, input_index=0):
+        self.layer_unsigned_input_indices.setdefault(layer_name, set()).add(int(input_index))
 
     @staticmethod
     def _node_inputs(node):
@@ -202,13 +206,20 @@ class UniformInputQuantizer:
 
                 node_inputs = self._node_inputs(node)
                 if len(node_inputs) > 1:
-                    is_post_unsigned = node_inputs[0].name in unsigned_nodes
+                    unsigned_input_indices = {
+                        idx for idx, inp in enumerate(node_inputs)
+                        if inp.name in unsigned_nodes
+                    }
+                    is_post_unsigned = bool(unsigned_input_indices)
                 else:
-                    is_post_unsigned = any(inp.name in unsigned_nodes for inp in node_inputs)
+                    unsigned_input_indices = {0} if any(inp.name in unsigned_nodes for inp in node_inputs) else set()
+                    is_post_unsigned = bool(unsigned_input_indices)
 
                 if self._module_uses_unsigned_input(module) or is_post_unsigned:
                     layer_name = f"{prefix}.{node.target}" if prefix else str(node.target)
                     post_unsigned.add(layer_name)
+                    for input_index in unsigned_input_indices:
+                        self._mark_unsigned_input(layer_name, input_index)
 
         try:
             if isinstance(self.model, torch.fx.GraphModule):
@@ -261,6 +272,7 @@ class UniformInputQuantizer:
             elif is_compute:
                 if prev_was_unsigned and not self._is_multi_input_module(module):
                     post_unsigned.add(name)
+                    self._mark_unsigned_input(name, 0)
                 elif uses_unsigned_input:
                     post_unsigned.add(name)
                 prev_was_unsigned = False
@@ -294,6 +306,24 @@ class UniformInputQuantizer:
 
         return self.fmt
 
+    def _effective_input_formats_for_module(self, layer_name, module, input_count):
+        formats = [self.fmt for _ in range(input_count)]
+        if not self.use_unsigned_input_candidates:
+            return formats
+
+        unsigned_indices = set(self.layer_unsigned_input_indices.get(layer_name, set()))
+        if not unsigned_indices and (
+            layer_name in self.post_unsigned_layers
+            or layer_name in self.unsigned_passthrough_layers
+            or self._module_uses_unsigned_input(module)
+        ):
+            unsigned_indices.add(0)
+
+        for idx in unsigned_indices:
+            if 0 <= idx < input_count:
+                formats[idx] = self.unsigned_fmt
+        return formats
+
     def _quantize_with_format(self, x, fmt):
         x_q, _ = quantize_tensor(
             x,
@@ -310,6 +340,16 @@ class UniformInputQuantizer:
 
             x = inputs[0]
             fmt = self._effective_format_for_module(layer_name, module)
+            input_formats = None
+            if self._is_multi_input_module(module):
+                tensor_inputs = [arg for arg in inputs if isinstance(arg, torch.Tensor)]
+                input_formats = self._effective_input_formats_for_module(
+                    layer_name,
+                    module,
+                    len(tensor_inputs),
+                )
+                if input_formats:
+                    fmt = input_formats[0]
             x_q = self._quantize_with_format(x, fmt)
 
             if self.quant_mode == 'chunk':
@@ -320,9 +360,12 @@ class UniformInputQuantizer:
             module.input_quantization = True
             module.input_mode = self.quant_mode
             module.input_chunk_size = self.chunk_size if self.quant_mode == 'chunk' else None
-            module.input_q_type = fmt
             if self._is_multi_input_module(module):
-                module.input1_q_type = fmt
+                module.input_q_type = self.fmt
+                for idx, input_fmt in enumerate(input_formats or [fmt], start=1):
+                    setattr(module, f'input{idx}_q_type', input_fmt)
+            else:
+                module.input_q_type = fmt
             module.input_chunk_formats = None
             module.rounding = 'nearest'
 
