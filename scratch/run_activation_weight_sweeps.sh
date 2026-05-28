@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # Run separate activation-input and weight-only quantization sweeps.
-# Baselines use all 4-8 bit fixed formats. Dynamic/optimized runs are split by
-# bit width and use per-chunk selection only.
+# Baselines use all 4-8 bit fixed formats. Activation baselines also include an
+# fp32 reference first so empty DBs can compute accuracy drop. Dynamic/optimized
+# runs are split by bit width and use per-chunk selection only.
 
 MODEL_NAME="${MODEL_NAME:-resnet18}"
 MODELS_FILE="${MODELS_FILE:-}"
@@ -43,6 +44,7 @@ FP6_FORMATS="fp6_e1m4,fp6_e2m3,fp6_e3m2,fp6_e4m1,fp6_e5m0"
 FP5_FORMATS="fp5_e1m3,fp5_e2m2,fp5_e3m1,fp5_e4m0"
 FP4_FORMATS="fp4_e1m2,fp4_e2m1,fp4_e3m0"
 BASELINE_4_8_FORMATS="${FP8_FORMATS},${FP7_FORMATS},${FP6_FORMATS},${FP5_FORMATS},${FP4_FORMATS}"
+ACTIVATION_BASELINE_FORMATS="${ACTIVATION_BASELINE_FORMATS:-fp32,${BASELINE_4_8_FORMATS}}"
 
 BIT_SWEEPS=(
   "8:${FP8_FORMATS}"
@@ -93,7 +95,7 @@ if [[ "$RUN_ACTIVATIONS" == "1" && "$RUN_BASELINES" == "1" ]]; then
     --output_dir "${OUTPUT_ROOT}/activations/baselines_4_8" \
     --chunk_size "$CHUNK_SIZE" \
     --input_size "$INPUT_SIZE" \
-    --baseline_formats "$BASELINE_4_8_FORMATS" \
+    --baseline_formats "$ACTIVATION_BASELINE_FORMATS" \
     --candidate_formats "$BASELINE_4_8_FORMATS" \
     --experiment_type "input_quant_baseline_4_8" \
     --only_baselines \
