@@ -1262,12 +1262,20 @@ class Runner:
         if not fmt or str(fmt).strip().lower() == 'fp32':
             return {}
 
+        unsigned_input_sources = quant_cfg.get('unsigned_input_sources', []) or []
+        if isinstance(unsigned_input_sources, str):
+            unsigned_input_sources = [
+                s.strip() for s in unsigned_input_sources.split(',') if s.strip()
+            ]
+
         return {
             'enabled': True,
             'mode': 'uniform',
             'format': fmt,
             'chunk_size': int(quant_cfg.get('chunk_size', 128) or 128),
             'quant_mode': str(quant_cfg.get('mode', 'chunk') or 'chunk'),
+            'unsigned_input_sources': list(unsigned_input_sources),
+            'uniform_unsigned_input_candidates': True,
         }
 
     def _build_layer_input_quantizer(self, model, input_quant_cfg: Dict[str, Any]):
@@ -1310,6 +1318,8 @@ class Runner:
                 fmt=fmt,
                 chunk_size=chunk_size,
                 quant_mode=quant_mode,
+                unsigned_input_sources=input_quant_cfg.get('unsigned_input_sources', []),
+                use_unsigned_input_candidates=input_quant_cfg.get('uniform_unsigned_input_candidates', True),
             )
             quantizer.register_hooks()
             print(f"Input quantization enabled: mode=uniform format={fmt} quant_mode={quant_mode} chunk_size={chunk_size}")
