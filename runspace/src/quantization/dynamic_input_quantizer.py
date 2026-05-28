@@ -112,6 +112,7 @@ class DynamicInputQuantizer:
         self.unsigned_candidate_formats = self._make_unsigned_candidates(self.candidate_formats)
 
         self.cache_sim_map = {}
+        self.layer_residual_input_bits_map = {}
         if use_cache_sim_db and model_name:
             print(f"Loading cache simulation results from DB for {model_name}")
             try:
@@ -124,6 +125,9 @@ class DynamicInputQuantizer:
                 if sim:
                     for layer in sim.get('layers', []):
                         self.cache_sim_map[layer['name']] = layer.get('stay_on_chip', True)
+                        residual_bits = layer.get('residual_input_bits')
+                        if residual_bits is not None:
+                            self.layer_residual_input_bits_map[layer['name']] = int(residual_bits)
                     print(f"Loaded {len(self.cache_sim_map)} layer statuses from cache sim DB.")
                     if self.cache_sim_map:
                         sample_keys = list(self.cache_sim_map.keys())[:10]
@@ -465,7 +469,21 @@ class DynamicInputQuantizer:
                 f"for {count_skipped_depthwise} depthwise Conv2d layers."
             )
 
-    def _candidates_for_layer(self, layer_name, module=None):
+    def _formats_for_bits(self, bits, unsigned=False):
+        def matches_width(fmt):
+            if not isinstance(fmt, str) or not fmt.startswith(('fp', 'ufp')):
+                return False
+            width = fmt.split('_', 1)[0].lstrip('u')[2:]
+            return width.isdigit() and int(width) == bits
+
+        formats = [fmt for fmt in self.candidate_formats if matches_width(fmt)]
+        if not formats:
+            formats = [fmt for fmt in DEFAULT_DYNAMIC_INPUT_CANDIDATES if matches_width(fmt)]
+        if unsigned:
+            formats = self._make_unsigned_candidates(formats)
+        return formats
+
+    def _candidates_for_layer(self, layer_name, module=None, input_index=0):
         is_unsigned = (
             self.use_unsigned_input_candidates
             and (
@@ -476,6 +494,12 @@ class DynamicInputQuantizer:
             module is not None
             and self._module_uses_unsigned_input(module)
         )
+
+        if input_index == 1 and layer_name in self.layer_residual_input_bits_map:
+            residual_bits = self.layer_residual_input_bits_map[layer_name]
+            candidates = self._formats_for_bits(residual_bits, unsigned=is_unsigned)
+            if candidates:
+                return candidates
 
         stays_on_chip = self.cache_sim_map.get(layer_name)
         if stays_on_chip is None:
@@ -502,10 +526,25 @@ class DynamicInputQuantizer:
             if not isinstance(x, torch.Tensor):
                 return None
 
-            candidates = self._candidates_for_layer(layer_name, module)
+            candidates = self._candidates_for_layer(layer_name, module, input_index=0)
 
             x_quantized, best_indices = self._quantize_input_tensor(x, layer_name, candidates, module)
             self._set_module_input_quant_state(module, candidates, best_indices)
+
+            if (
+                module.__class__.__name__ == "QuantAdd"
+                and len(args) >= 2
+                and isinstance(args[1], torch.Tensor)
+                and layer_name in self.layer_residual_input_bits_map
+            ):
+                residual_candidates = self._candidates_for_layer(layer_name, module, input_index=1)
+                residual_quantized, residual_indices = self._quantize_input_tensor(
+                    args[1], f"{layer_name}.input2", residual_candidates, module
+                )
+                self._set_module_input_quant_state(
+                    module, residual_candidates, residual_indices, input_index=1
+                )
+                return (x_quantized, residual_quantized, *args[2:])
 
             # Return the quantized tensor and all other original arguments to replace the input.
             # This ensures multi-argument ops like QuantAdd(x, other) don't lose 'other'.
@@ -541,7 +580,7 @@ class DynamicInputQuantizer:
 
         return hook_fn
 
-    def _set_module_input_quant_state(self, module, candidates, best_indices):
+    def _set_module_input_quant_state(self, module, candidates, best_indices, input_index=0):
         # Disable a quantized module's built-in input quantization path after the
         # pre-hook has already supplied dynamically quantized inputs.
         module.input_quantization = False
@@ -550,11 +589,21 @@ class DynamicInputQuantizer:
 
         # Store candidates and indices without turning the full tensor into a
         # Python list; that would force a large GPU-CPU sync.
-        module.input_chunk_candidates = candidates
-        module.input_chunk_format_indices = best_indices
+        if input_index == 0:
+            module.input_chunk_candidates = candidates
+            module.input_chunk_format_indices = best_indices
+        else:
+            prefix = f'input{input_index + 1}'
+            setattr(module, f'{prefix}_chunk_candidates', candidates)
+            setattr(module, f'{prefix}_chunk_format_indices', best_indices)
 
         if len(candidates) > 0:
-            module.input_q_type = candidates[0]
+            if input_index > 0:
+                setattr(module, f'input{input_index + 1}_q_type', candidates[0])
+            else:
+                module.input_q_type = candidates[0]
+                if self._is_multi_input_module(module):
+                    setattr(module, 'input1_q_type', candidates[0])
 
         module.rounding = 'nearest'
 
