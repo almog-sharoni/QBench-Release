@@ -1303,6 +1303,7 @@ class Runner:
                 use_cache_sim_db=input_quant_cfg.get('use_cache_sim_db', False),
                 model_name=input_quant_cfg.get('model_name'),
                 skip_depthwise_input_quant=input_quant_cfg.get('skip_depthwise_input_quant', False),
+                input_transfer_map=input_quant_cfg.get('input_transfer_map'),
             )
             quantizer.register_hooks()
             print(f"Input quantization enabled: mode=dynamic metric=MSE chunk_size={chunk_size}")

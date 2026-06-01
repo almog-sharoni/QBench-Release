@@ -27,10 +27,12 @@ FORCE_RECALC="${FORCE_RECALC:-0}"
 SKIP_INPUT_ERROR_STATS="${SKIP_INPUT_ERROR_STATS:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 
-# The weight experiment logs optimized per-chunk runs as weight_dt=opt_chunk_mse.
-# Force those split-by-bit runs by default so 8/7/6/5/4 bit candidate groups all
-# execute even if a previous opt_chunk_mse row exists in the DB.
-WEIGHT_DYNAMIC_FORCE_RERUN="${WEIGHT_DYNAMIC_FORCE_RERUN:-1}"
+# The weight experiment logs optimized per-chunk runs as weight_dt=opt_chunk_mse,
+# so split-by-bit runs use distinct experiment types for dashboard grouping.
+# Defaults to FORCE_RERUN so FORCE_RERUN=0 truly skips reruns; set
+# WEIGHT_DYNAMIC_FORCE_RERUN=1 explicitly to force only these split-by-bit runs
+# (e.g. to overwrite existing pre-fix opt_chunk_mse rows).
+WEIGHT_DYNAMIC_FORCE_RERUN="${WEIGHT_DYNAMIC_FORCE_RERUN:-$FORCE_RERUN}"
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
@@ -162,6 +164,7 @@ if [[ "$RUN_WEIGHTS" == "1" && "$RUN_DYNAMIC" == "1" ]]; then
       --metrics "mse" \
       --weight_chunk_size "$CHUNK_SIZE" \
       --baseline_formats "$formats" \
+      --optimized_experiment_type "weight_quant_optimized_${bit}bit" \
       --run_eval \
       --skip_baselines \
       --skip_layer_wise \

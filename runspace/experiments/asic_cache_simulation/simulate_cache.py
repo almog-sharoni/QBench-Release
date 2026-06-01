@@ -856,7 +856,7 @@ def run_simulation(args):
             rule_xin_from_cache = RULES.get(rule_name, {}).get('xin_from_cache', True)
             need_input = (i == 0 or not prev_stay_on_chip or not rule_xin_from_cache)
             need_output = not stay_on_chip
-            residual_bits = 3
+            residual_bits = int(args.min_bits)
             residual_input_stream_elems = layer.get('residual_input_stream_elems', 0)
             residual_output_elems = layer.get('residual_output_elems', 0)
             fixed_transfers = []
@@ -884,7 +884,7 @@ def run_simulation(args):
                 })
 
             in_b, w_b, out_b, cycle_count = optimize_layer_bits(
-                layer, args.bandwidth, need_input, True, need_output, min_bits=residual_bits,
+                layer, args.bandwidth, need_input, True, need_output, min_bits=args.min_bits,
                 fixed_transfers=fixed_transfers, forced_bits=forced_bits
             )
             compute_cycles = _compute_layer_cycles(layer)
@@ -925,6 +925,7 @@ def run_simulation(args):
                 'output_channel_width':  layer.get('output_channel_width', 0),
                 'stay_on_chip':     stay_on_chip,
                 'xin_from_cache':   rule_xin_from_cache,
+                'need_input_transfer': need_input,
                 'rule':             rule_name,
                 'reason': (
                     rule_name if stay_on_chip
@@ -1002,6 +1003,7 @@ def run_simulation(args):
                 'metadata_bits':  args.metadata_bits,
                 'batch_size':     args.batch_size,
                 'bandwidth':      args.bandwidth,
+                'min_bits':       args.min_bits,
                 'timestamp':      datetime.utcnow().isoformat() + 'Z',
             },
             'summary': {
@@ -1052,6 +1054,8 @@ if __name__ == "__main__":
     parser.add_argument("--device",        type=str,   default="cuda")
     parser.add_argument("--bandwidth",     type=float, default=1.0,
                         help="Memory bandwidth in bytes/cycle for BW-limitation analysis")
+    parser.add_argument("--min_bits",      type=int,   default=3,
+                        help="Minimum transfer bit width used by the bandwidth optimizer")
     parser.add_argument("--fold_layers", action="store_true", dest="fold_layers",
                         default=True,
                         help="Fold batchnorm/conv layers during model build")

@@ -354,6 +354,55 @@ def test_uniform_input_quantizer_keeps_signed_residual_add_operand():
     assert model.add.input2_q_type == "ufp4_e1m3"
 
 
+def test_dynamic_input_quantizer_keeps_signed_residual_add_operand():
+    class ResidualAdd(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.relu = nn.ReLU()
+            self.add = QuantAdd()
+
+        def forward(self, signed, unsigned):
+            unsigned = self.relu(unsigned)
+            return self.add(signed, unsigned)
+
+    model = ResidualAdd()
+    quantizer = DynamicInputQuantizer(
+        model,
+        candidate_formats=["fp4_e1m2", "fp4_e2m1"],
+        unsigned_input_sources=["relu"],
+    )
+
+    assert quantizer.layer_unsigned_input_indices["add"] == {1}
+    assert quantizer._candidates_for_layer("add", model.add, input_index=0) == ["fp4_e1m2", "fp4_e2m1"]
+    assert quantizer._candidates_for_layer("add", model.add, input_index=1) == ["ufp4_e1m3", "ufp4_e2m2"]
+
+    quantizer._select_best_format = (
+        lambda tensor, layer_name, candidates, module=None: (
+            tensor,
+            torch.zeros(1, dtype=torch.long, device=tensor.device),
+        )
+    )
+    hook = quantizer._get_hook("add")
+    hook(model.add, (torch.randn(1, 4) - 1.0, torch.randn(1, 4)))
+
+    assert model.add.input_q_type == "fp4_e1m2"
+    assert model.add.input1_q_type == "fp4_e1m2"
+
+
+def test_dynamic_input_quantizer_ignores_runtime_qtype_mutation_for_candidates():
+    model = nn.Sequential(nn.Linear(4, 4))
+    quantizer = DynamicInputQuantizer(
+        model,
+        candidate_formats=["fp4_e1m2", "fp4_e2m1"],
+        unsigned_input_sources=["relu"],
+    )
+
+    model[0].input_q_type = "ufp4_e1m3"
+
+    assert "0" not in quantizer.post_unsigned_layers
+    assert quantizer._candidates_for_layer("0", model[0], input_index=0) == ["fp4_e1m2", "fp4_e2m1"]
+
+
 if __name__ == "__main__":
     test_runner_logs_fp32_weight_dt_when_weight_quantization_disabled()
     test_materialized_cache_detects_weight_quant_buffers()
@@ -367,3 +416,5 @@ if __name__ == "__main__":
     test_uniform_input_quantizer_uses_fixed_unsigned_format_after_source_dropout()
     test_uniform_input_quantizer_targets_actual_consumer_after_softmax_dropout()
     test_uniform_input_quantizer_keeps_signed_residual_add_operand()
+    test_dynamic_input_quantizer_keeps_signed_residual_add_operand()
+    test_dynamic_input_quantizer_ignores_runtime_qtype_mutation_for_candidates()
