@@ -161,6 +161,7 @@ def compute_threshold_allocations(sim_layers, thresholds, bit_kind, bandwidth):
             layer_weight_bits,
             layer_output_bits,
             _layer_residual_input_bits,
+            _layer_need_input_transfer,
         ) = compute_model_runtime(sim_layers, threshold, bandwidth=bandwidth)
 
         bits_map = get_bits_map(

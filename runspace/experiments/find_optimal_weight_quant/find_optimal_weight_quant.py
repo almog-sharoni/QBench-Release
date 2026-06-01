@@ -76,6 +76,12 @@ def get_args():
     parser.add_argument("--num_workers", type=int, default=32, help="Number of workers")
     parser.add_argument("--weight_chunk_size", type=int, default=128, help="Weight/Input chunk size (blocks). If set, enables chunked quantization.")
     parser.add_argument("--per_chunk_format", action="store_true", help="Enable per-chunk format selection (each chunk gets its own optimal format)")
+    parser.add_argument(
+        "--optimized_experiment_type",
+        type=str,
+        default="weight_quant_optimized",
+        help="Experiment type used when logging optimized weight runs.",
+    )
     parser.add_argument("--plot_layers", action="store_true", help="Generate error bar plots for every single layer (warning: slow)")
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of batches to process (default: -1 for all)")
     parser.add_argument("--baseline_formats", type=str, default=','.join(baseline_formats), help="Comma-separated list of formats to run as baselines (full eval)")
@@ -1330,7 +1336,7 @@ def process_single_model(args, device, metrics, base_root):
                     filtered_configs.append(c)  # baselines already pre-filtered
                     continue
                 weight_dt = out_name.replace('optimized_', 'opt_')
-                if _weight_quant_run_exists(existing_runs, args.model_name, 'weight_quant_optimized', weight_dt):
+                if _weight_quant_run_exists(existing_runs, args.model_name, args.optimized_experiment_type, weight_dt):
                     print(f"[DB] Skipping {out_name} — already in DB")
                 else:
                     filtered_configs.append(c)
@@ -1356,7 +1362,7 @@ def process_single_model(args, device, metrics, base_root):
                     filtered_configs.append(c)  # baselines already pre-filtered
                     continue
                 weight_dt = out_name.replace('optimized_', 'opt_')
-                if _weight_quant_run_exists(existing_runs, args.model_name, 'weight_quant_optimized', weight_dt):
+                if _weight_quant_run_exists(existing_runs, args.model_name, args.optimized_experiment_type, weight_dt):
                     print(f"[DB] Skipping {out_name} — already in DB")
                 else:
                     filtered_configs.append(c)
@@ -1432,7 +1438,7 @@ def process_single_model(args, device, metrics, base_root):
                 experiment_type=(
                     "weight_quant_baseline"
                     if out_name.startswith('baseline_')
-                    else "weight_quant_optimized"
+                    else args.optimized_experiment_type
                 ),
                 weight_dt=weight_dt,
                 acc1=float(res.get('acc1', 0.0) or 0.0),
@@ -1468,41 +1474,6 @@ def process_single_model(args, device, metrics, base_root):
         for idx, run_cfg in enumerate(final_configs, start=1):
             out_name = run_cfg.get('output_name', f'run_{idx}')
             run_cfg['dataset'] = _stable_eval_dataset_cfg(run_cfg.get('dataset', dataset_base))
-            print(f"[Eval] Running {idx}/{total_eval_runs}: {out_name}")
-            res = runner.run_single(run_cfg, output_root=model_dir)
-            results.append(res)
-            try:
-                _log_result_immediately(res)
-            except Exception as log_err:
-                print(f"[DB] Failed to log {out_name}: {log_err}")
-
-        failed = [r for r in results if r.get('status') not in ('SUCCESS', 'NO_QUANT')]
-        if failed:
-            print(f"\n[Evaluation] {len(failed)} run(s) failed:")
-            for r in failed:
-                print(
-                    f"  - {r.get('output_name', '<unknown>')}: "
-                    f"status={r.get('status')} error={r.get('exec_error')}"
-                )
-        
-        # Plot Oracle Heatmaps
-        if tracker:
-            oracle_stats, candidates = tracker.get_stats()
-            tracker.disable()
-            
-            # If candidates were never set (e.g. no oracle runs), we skip
-            if candidates:
-                for run_id, layer_stats in oracle_stats.items():
-                     out_path = os.path.join(model_dir, run_id)
-                     if os.path.exists(out_path):
-                          plot_oracle_heatmap(out_path, layer_stats, candidates, title_suffix=run_id)
-                     else:
-                          # Fallback: try looking in subdirs (e.g. if run_id uses slashes - unlikely here)
-                          pass
-
-        total_eval_runs = len(final_configs)
-        for idx, run_cfg in enumerate(final_configs, start=1):
-            out_name = run_cfg.get('output_name', f'run_{idx}')
             print(f"[Eval] Running {idx}/{total_eval_runs}: {out_name}")
             res = runner.run_single(run_cfg, output_root=model_dir)
             results.append(res)

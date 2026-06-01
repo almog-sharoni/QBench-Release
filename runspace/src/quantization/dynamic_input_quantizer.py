@@ -65,6 +65,7 @@ class DynamicInputQuantizer:
         use_cache_sim_db=False,
         model_name=None,
         skip_depthwise_input_quant=False,
+        input_transfer_map=None,
     ):
         self.model = model
         self.metric = 'mse'
@@ -83,6 +84,7 @@ class DynamicInputQuantizer:
         self.layer_stats = {}
         self.running_error = 0.0
         self.total_chunks = 0
+        self.layer_unsigned_input_indices = {}
 
         self.stats = {
             'sum_mse_err': None,
@@ -113,6 +115,7 @@ class DynamicInputQuantizer:
 
         self.cache_sim_map = {}
         self.layer_residual_input_bits_map = {}
+        self.layer_need_input_transfer_map = dict(input_transfer_map or {})
         if use_cache_sim_db and model_name:
             print(f"Loading cache simulation results from DB for {model_name}")
             try:
@@ -128,6 +131,9 @@ class DynamicInputQuantizer:
                         residual_bits = layer.get('residual_input_bits')
                         if residual_bits is not None:
                             self.layer_residual_input_bits_map[layer['name']] = int(residual_bits)
+                        need_input_transfer = layer.get('need_input_transfer')
+                        if need_input_transfer is not None:
+                            self.layer_need_input_transfer_map[layer['name']] = bool(need_input_transfer)
                     print(f"Loaded {len(self.cache_sim_map)} layer statuses from cache sim DB.")
                     if self.cache_sim_map:
                         sample_keys = list(self.cache_sim_map.keys())[:10]
@@ -172,21 +178,42 @@ class DynamicInputQuantizer:
     def _is_unsigned_format(fmt):
         return isinstance(fmt, str) and fmt.startswith(('ufp', 'uefp'))
 
-    def _module_uses_unsigned_input(self, module):
-        if not self.use_unsigned_input_candidates:
-            return False
+    def _mark_unsigned_input(self, layer_name, input_index=0):
+        self.layer_unsigned_input_indices.setdefault(layer_name, set()).add(int(input_index))
 
-        input_q_type = getattr(module, 'input_q_type', None)
-        if self._is_unsigned_format(input_q_type):
-            return True
+    def _module_unsigned_input_indices(self, module, input_count=None):
+        if not self.use_unsigned_input_candidates:
+            return set()
+
+        indices = set()
+        is_multi_input = self._is_multi_input_module(module)
+
+        if not is_multi_input and self._is_unsigned_format(getattr(module, 'input_q_type', None)):
+            indices.add(0)
 
         for attr_name in dir(module):
             if not attr_name.startswith('input') or not attr_name.endswith('_q_type'):
                 continue
-            if self._is_unsigned_format(getattr(module, attr_name, None)):
-                return True
 
-        return False
+            middle = attr_name[len('input'):-len('_q_type')]
+            if not middle:
+                if not is_multi_input and self._is_unsigned_format(getattr(module, attr_name, None)):
+                    indices.add(0)
+                continue
+
+            if not middle.isdigit():
+                continue
+
+            if self._is_unsigned_format(getattr(module, attr_name, None)):
+                indices.add(int(middle) - 1)
+
+        if input_count is not None:
+            indices = {idx for idx in indices if 0 <= idx < input_count}
+
+        return indices
+
+    def _module_uses_unsigned_input(self, module):
+        return bool(self._module_unsigned_input_indices(module))
 
     def _is_unsigned_source_module(self, module):
         if not self.use_unsigned_input_candidates or not self.unsigned_input_sources:
@@ -323,19 +350,27 @@ class DynamicInputQuantizer:
                     continue
 
                 node_inputs = self._node_inputs(node)
-                
-                # Dynamic pre-hooks quantize the first tensor argument for
-                # multi-input functional ops. Treat only that operand as the
-                # immediate unsigned consumer; do not let the op output become
-                # an unsigned source for downstream layers.
+                static_unsigned_indices = self._module_unsigned_input_indices(
+                    module,
+                    len(node_inputs),
+                )
                 if len(node_inputs) > 1:
-                    is_post_unsigned = node_inputs[0].name in unsigned_nodes
+                    unsigned_input_indices = {
+                        idx for idx, inp in enumerate(node_inputs)
+                        if inp.name in unsigned_nodes
+                    }
                 else:
-                    is_post_unsigned = any(inp.name in unsigned_nodes for inp in node_inputs)
+                    unsigned_input_indices = (
+                        {0} if any(inp.name in unsigned_nodes for inp in node_inputs) else set()
+                    )
+                unsigned_input_indices.update(static_unsigned_indices)
+                is_post_unsigned = bool(unsigned_input_indices)
                 
-                if self._module_uses_unsigned_input(module) or is_post_unsigned:
+                if is_post_unsigned:
                     layer_name = f"{prefix}.{node.target}" if prefix else str(node.target)
                     post_unsigned.add(layer_name)
+                    for input_index in unsigned_input_indices:
+                        self._mark_unsigned_input(layer_name, input_index)
                     modified = True
 
             return modified
@@ -363,6 +398,9 @@ class DynamicInputQuantizer:
         return post_unsigned, traced_any
 
     def _find_post_unsigned_layers(self):
+        if not self.use_unsigned_input_candidates or not self.unsigned_input_sources:
+            return set()
+
         post_unsigned, traced = self._find_post_unsigned_layers_fx()
         if traced:
             return post_unsigned
@@ -391,8 +429,11 @@ class DynamicInputQuantizer:
                 # However, for hybrid quant, it's safer to be conservative.
                 if prev_was_unsigned and not self._is_multi_input_module(module):
                     post_unsigned.add(name)
+                    self._mark_unsigned_input(name, 0)
                 elif uses_unsigned_input:
                     post_unsigned.add(name)
+                    for input_index in self._module_unsigned_input_indices(module):
+                        self._mark_unsigned_input(name, input_index)
                 prev_was_unsigned = False
             elif not isinstance(
                 module,
@@ -410,6 +451,22 @@ class DynamicInputQuantizer:
                 prev_was_unsigned = False
 
         return post_unsigned
+
+    def _layer_uses_unsigned_input(self, layer_name, input_index=0):
+        if not self.use_unsigned_input_candidates:
+            return False
+
+        unsigned_indices = self.layer_unsigned_input_indices.get(layer_name)
+        if unsigned_indices:
+            return int(input_index) in unsigned_indices
+
+        return (
+            int(input_index) == 0
+            and (
+                layer_name in self.post_unsigned_layers
+                or layer_name in self.unsigned_passthrough_layers
+            )
+        )
 
     def register_hooks(self):
         count_dynamic = 0
@@ -430,13 +487,8 @@ class DynamicInputQuantizer:
                 self.hooks.append(module.register_forward_pre_hook(hook))
                 self.hooked_modules.append(module)
                 uses_unsigned_candidates = (
-                    self.use_unsigned_input_candidates
-                    and (
-                        name in self.post_unsigned_layers
-                        or name in self.unsigned_passthrough_layers
-                    )
-                ) or (
-                    self._module_uses_unsigned_input(module)
+                    self._layer_uses_unsigned_input(name, input_index=0)
+                    or bool(self.layer_unsigned_input_indices.get(name))
                 )
                 if uses_unsigned_candidates:
                     count_unsigned_candidate_layers += 1
@@ -484,16 +536,7 @@ class DynamicInputQuantizer:
         return formats
 
     def _candidates_for_layer(self, layer_name, module=None, input_index=0):
-        is_unsigned = (
-            self.use_unsigned_input_candidates
-            and (
-                layer_name in self.post_unsigned_layers
-                or layer_name in self.unsigned_passthrough_layers
-            )
-        ) or (
-            module is not None
-            and self._module_uses_unsigned_input(module)
-        )
+        is_unsigned = self._layer_uses_unsigned_input(layer_name, input_index=input_index)
 
         if input_index == 1 and layer_name in self.layer_residual_input_bits_map:
             residual_bits = self.layer_residual_input_bits_map[layer_name]
@@ -520,22 +563,39 @@ class DynamicInputQuantizer:
 
         return self.candidate_formats
 
+    def _should_quantize_input(self, layer_name, input_index=0):
+        # On-chip-resident inputs are NOT exempt from quantization: the simulated
+        # architecture stores activations at the on-chip width (8-bit) inside the
+        # chip, so they must still be quantized. The need_input_transfer map only
+        # affects the cycle/runtime accounting in compute_model_runtime, not
+        # whether the value is quantized here. Always quantize the primary input;
+        # _candidates_for_layer already supplies 8-bit formats for on-chip layers.
+        return True
+
     def _get_hook(self, layer_name):
         def hook_fn(module, args):
             x = args[0]
             if not isinstance(x, torch.Tensor):
                 return None
 
-            candidates = self._candidates_for_layer(layer_name, module, input_index=0)
-
-            x_quantized, best_indices = self._quantize_input_tensor(x, layer_name, candidates, module)
-            self._set_module_input_quant_state(module, candidates, best_indices)
+            quantize_primary = self._should_quantize_input(layer_name, input_index=0)
+            if quantize_primary:
+                candidates = self._candidates_for_layer(layer_name, module, input_index=0)
+                x_quantized, best_indices = self._quantize_input_tensor(x, layer_name, candidates, module)
+                self._set_module_input_quant_state(module, candidates, best_indices)
+            else:
+                # The input is already resident on-chip for this layer, so do not
+                # model an external-memory transfer quantization for it.
+                module.input_quantization = False
+                module.input_mode = 'fp32'
+                x_quantized = x
 
             if (
                 module.__class__.__name__ == "QuantAdd"
                 and len(args) >= 2
                 and isinstance(args[1], torch.Tensor)
                 and layer_name in self.layer_residual_input_bits_map
+                and self._should_quantize_input(layer_name, input_index=1)
             ):
                 residual_candidates = self._candidates_for_layer(layer_name, module, input_index=1)
                 residual_quantized, residual_indices = self._quantize_input_tensor(

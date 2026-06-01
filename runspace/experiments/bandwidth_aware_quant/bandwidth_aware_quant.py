@@ -62,16 +62,7 @@ except ImportError:
 
 def patched_candidates_for_layer(self, layer_name, module=None, input_index=0):
     """Silent custom candidates picker that uses per-layer input bit-width for off-chip layers."""
-    is_unsigned = (
-        self.use_unsigned_input_candidates
-        and (
-            layer_name in self.post_unsigned_layers
-            or layer_name in self.unsigned_passthrough_layers
-        )
-    ) or (
-        module is not None
-        and self._module_uses_unsigned_input(module)
-    )
+    is_unsigned = self._layer_uses_unsigned_input(layer_name, input_index=input_index)
 
     if input_index == 1:
         residual_bits = self.layer_residual_input_bits_map.get(layer_name)
@@ -80,12 +71,14 @@ def patched_candidates_for_layer(self, layer_name, module=None, input_index=0):
             return self._make_unsigned_candidates(candidates) if is_unsigned else candidates
 
     stays_on_chip = self.cache_sim_map.get(layer_name, True)
-
-    if stays_on_chip:
-        return self.unsigned_all_fp8_formats if is_unsigned else self.all_fp8_formats
-
     input_bits = self.layer_input_bits_map.get(layer_name, 8)
-    candidates = get_input_formats_for_bits(input_bits)
+
+    if input_bits == 8:
+        candidates = get_input_formats_for_bits(8)
+    elif stays_on_chip:
+        return self.unsigned_all_fp8_formats if is_unsigned else self.all_fp8_formats
+    else:
+        candidates = get_input_formats_for_bits(input_bits)
 
     if is_unsigned:
         return self._make_unsigned_candidates(candidates)
@@ -115,6 +108,11 @@ for DIQ in (DIQ1, DIQ2):
                     self.__class__,
                     '_global_layer_residual_input_bits_map',
                     getattr(self, 'layer_residual_input_bits_map', {}),
+                )
+                self.layer_need_input_transfer_map = getattr(
+                    self.__class__,
+                    '_global_layer_need_input_transfer_map',
+                    getattr(self, 'layer_need_input_transfer_map', {}),
                 )
             return new_init
         DIQ.__init__ = make_new_init(_orig_init)
@@ -268,10 +266,12 @@ def run_cache_simulation(model_name, cache_size_M, batch_size=1, num_banks=16, m
             layer, ctx, next_layer, metadata_bits, bank_size, cache_elements
         )
         xin_from_cache = RULES.get(rule_name, {}).get('xin_from_cache', True)
+        need_input_transfer = (i == 0 or not results[-1].get('stay_on_chip', False) or not xin_from_cache)
         
         layer_copy = dict(layer)
         layer_copy['stay_on_chip'] = stay_on_chip
         layer_copy['xin_from_cache'] = xin_from_cache
+        layer_copy['need_input_transfer'] = need_input_transfer
         results.append(layer_copy)
         cache_sim_map[layer['name']] = stay_on_chip
         
@@ -296,6 +296,7 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
     layer_weight_bits : dict layer_name -> weight bit-width
     layer_output_bits : dict layer_name -> output bit-width
     layer_residual_input_bits : dict layer_name -> residual operand bit-width
+    layer_need_input_transfer : dict layer_name -> whether layer input is externally transferred
     """
     total_runtime = 0.0
     prev_stay_on_chip = False
@@ -303,6 +304,7 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
     layer_weight_bits = {}
     layer_output_bits = {}
     layer_residual_input_bits = {}
+    layer_need_input_transfer = {}
     
     for idx, layer in enumerate(layers_with_stay_status):
         stay_on_chip = layer.get('stay_on_chip', False)
@@ -310,9 +312,10 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
         xin_from_cache = layer.get('xin_from_cache', True)
         
         need_input_transfer = (idx == 0 or not prev_stay_on_chip or not xin_from_cache)
+        layer_need_input_transfer[lname] = need_input_transfer
         need_weight_transfer = True
         need_output_transfer = not stay_on_chip
-        residual_bits = 3
+        residual_bits = b_bits
         residual_input_stream_elems = layer.get('residual_input_stream_elems', 0)
         residual_output_elems = layer.get('residual_output_elems', 0)
         fixed_transfers = []
@@ -355,7 +358,14 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
         
         prev_stay_on_chip = stay_on_chip
         
-    return total_runtime, layer_input_bits, layer_weight_bits, layer_output_bits, layer_residual_input_bits
+    return (
+        total_runtime,
+        layer_input_bits,
+        layer_weight_bits,
+        layer_output_bits,
+        layer_residual_input_bits,
+        layer_need_input_transfer,
+    )
 
 
 def create_bandwidth_aware_state_dict(model, cache_sim_map, per_layer_weight_bits, chunk_size=128):
@@ -551,6 +561,7 @@ def main():
                 layer_weight_bits,
                 layer_output_bits,
                 layer_residual_input_bits,
+                layer_need_input_transfer,
             ) = compute_model_runtime(sim_layers, b, bandwidth=args.bandwidth)
             print(f"Calculated compute time: {cycles:,} cycles")
 
@@ -567,10 +578,12 @@ def main():
                 DIQ1._global_cache_sim_map = cache_sim_map
                 DIQ1._global_layer_input_bits_map = layer_input_bits
                 DIQ1._global_layer_residual_input_bits_map = layer_residual_input_bits
+                DIQ1._global_layer_need_input_transfer_map = layer_need_input_transfer
             if DIQ2 is not None:
                 DIQ2._global_cache_sim_map = cache_sim_map
                 DIQ2._global_layer_input_bits_map = layer_input_bits
                 DIQ2._global_layer_residual_input_bits_map = layer_residual_input_bits
+                DIQ2._global_layer_need_input_transfer_map = layer_need_input_transfer
 
             # 3.4. Build evaluation config — mirror the standard hybrid_quant
             # pipeline (Quant wrappers + decomposed MHA + folded input norm) so the
@@ -597,6 +610,7 @@ def main():
                         'enabled': True,
                         'chunk_size': 128,
                         'candidate_formats': get_input_formats_for_bits(b),
+                        'input_transfer_map': layer_need_input_transfer,
                         'use_cache_sim_db': False,
                         'unsigned_input_sources': ['relu', 'relu6', 'softmax', 'quantrelu', 'quantsoftmax','quantrelu6'],
                     }
