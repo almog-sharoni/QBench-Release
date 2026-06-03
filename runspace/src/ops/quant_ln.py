@@ -165,8 +165,10 @@ class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
         # 3.2 quantize 1/n * n_diff_sq
         var_pow2 = self.quantize_input(var_pow2, internal=True)
 
-        # 4.1 calc inv_var
-        inv_var = inv_rsqrt_lut_approx(var_pow2, lut_size=256, eps=1e-12)
+        # 4.1 calc inv_var. Match nn.LayerNorm semantics: 1/sqrt(var + eps).
+        # self.eps (default 1e-5) is the additive variance epsilon; the LUT's own
+        # `eps` is only a clamp floor against log2(0), not the LayerNorm epsilon.
+        inv_var = inv_rsqrt_lut_approx(var_pow2 + self.eps, lut_size=256, eps=1e-12)
 
         # 4.2 quantize inv_var
         inv_var = self.quantize_input(inv_var, internal=True)
