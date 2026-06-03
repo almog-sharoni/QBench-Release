@@ -66,6 +66,8 @@ class DynamicInputQuantizer:
         model_name=None,
         skip_depthwise_input_quant=False,
         input_transfer_map=None,
+        collect_error_stats=True,
+        collect_format_stats=True,
     ):
         self.model = model
         self.metric = 'mse'
@@ -73,6 +75,9 @@ class DynamicInputQuantizer:
         self.restrict_post_relu_ufp = bool(restrict_post_relu_ufp)
         self.use_unsigned_input_candidates = bool(use_unsigned_input_candidates)
         self.skip_depthwise_input_quant = bool(skip_depthwise_input_quant)
+        self.collect_error_stats = bool(collect_error_stats)
+        self.collect_format_stats = bool(collect_format_stats)
+        self._candidate_param_cache = {}
         self.unsigned_input_sources = {
             str(source).lower()
             for source in (unsigned_input_sources or [])
@@ -670,19 +675,47 @@ class DynamicInputQuantizer:
     def _quantize_input_tensor(self, tensor, layer_name, candidates, module=None):
         quantized, best_indices = self._select_best_format(tensor, layer_name, candidates, module)
 
-        with torch.no_grad():
-            diff = tensor - quantized
-            updates = {
-                'sum_mse_err': diff.pow(2).sum(),
-                'sum_l2_norm': tensor.pow(2).sum(),
-            }
-            for key, value in updates.items():
-                if self.stats[key] is None:
-                    self.stats[key] = value.detach()
-                else:
-                    self.stats[key] += value.detach()
+        if self.collect_error_stats:
+            with torch.no_grad():
+                diff = tensor - quantized
+                updates = {
+                    'sum_mse_err': diff.pow(2).sum(),
+                    'sum_l2_norm': tensor.pow(2).sum(),
+                }
+                for key, value in updates.items():
+                    if self.stats[key] is None:
+                        self.stats[key] = value.detach()
+                    else:
+                        self.stats[key] += value.detach()
 
         return quantized, best_indices
+
+    def _candidate_params(self, candidates):
+        key = tuple(candidates)
+        cached = self._candidate_param_cache.get(key)
+        if cached is not None:
+            return cached
+
+        cands_e = []
+        cands_m = []
+        cands_sgn = []
+        for fmt in candidates:
+            # The CUDA kernel does not natively bypass fp32. Map it to a
+            # high-precision FP format for compatibility with older configs.
+            if fmt == 'fp32':
+                cands_e.append(8)
+                cands_m.append(7)
+                cands_sgn.append(1)
+            else:
+                e, m = get_format_params(fmt)
+                is_signed = not fmt.startswith('ufp')
+                cands_e.append(e)
+                cands_m.append(m)
+                cands_sgn.append(1 if is_signed else 0)
+
+        cached = (cands_e, cands_m, cands_sgn)
+        self._candidate_param_cache[key] = cached
+        return cached
 
     def _select_best_format(self, tensor, layer_name, candidates, module=None):
         """
@@ -701,41 +734,43 @@ class DynamicInputQuantizer:
         ref_chunks = ref_chunked.reshape(-1, chunk_size)
         total_chunks = ref_chunks.shape[0]
 
-        # Convert candidates to vectors
-        cands_e = []
-        cands_m = []
-        cands_sgn = []
-        for fmt in candidates:
-            # handle fp32 specially or assume it's filtered? 
-            # Actually, standard candidates are just strings.
-            # fp32 should just be bypassed if we can, but if it's in candidates,
-            # we need a fallback. We'll just map fp32 to a fake high precision 
-            # or handle it carefully. The CUDA kernel doesn't natively do fp32 bypass.
-            # Usually fp32 is not in the candidate list for dynamic quant.
-            if fmt == 'fp32':
-                # Use a safe fallback e=8, m=7, sgn=1
-                cands_e.append(8)
-                cands_m.append(7)
-                cands_sgn.append(1)
+        if len(candidates) == 1:
+            best_indices = torch.zeros(total_chunks, dtype=torch.long, device=device)
+            if capture:
+                best_qs, best_unscaled_qs, _max_val, scale_chunks, _scale_p = quantize_tensor(
+                    ref_chunks.contiguous(),
+                    q_type=candidates[0],
+                    return_unscaled=True,
+                    return_scale=True,
+                    mode='chunk',
+                    chunk_size=chunk_size,
+                )
             else:
-                e, m = get_format_params(fmt)
-                is_signed = not fmt.startswith('ufp')
-                cands_e.append(e)
-                cands_m.append(m)
-                cands_sgn.append(1 if is_signed else 0)
+                best_qs, _max_val = quantize_tensor(
+                    ref_chunks.contiguous(),
+                    q_type=candidates[0],
+                    mode='chunk',
+                    chunk_size=chunk_size,
+                )
+                scale_chunks = None
+        else:
+            cands_e, cands_m, cands_sgn = self._candidate_params(candidates)
 
-        # Call the fused CUDA kernel
-        best_indices, best_scales, best_qs_flat, best_unscaled_qs_flat = search_best_chunk_format(
-            ref_chunks.view(-1).contiguous(),
-            cands_e,
-            cands_m,
-            cands_sgn,
-            capture
-        )
+            # Call the fused CUDA kernel
+            best_indices, best_scales, best_qs_flat, best_unscaled_qs_flat = search_best_chunk_format(
+                ref_chunks.view(-1).contiguous(),
+                cands_e,
+                cands_m,
+                cands_sgn,
+                capture
+            )
 
-        best_qs = best_qs_flat.view(-1, chunk_size)
-        if capture:
-            best_unscaled_qs = best_unscaled_qs_flat.view(-1, chunk_size)
+            best_qs = best_qs_flat.view(-1, chunk_size)
+            if capture:
+                best_unscaled_qs = best_unscaled_qs_flat.view(-1, chunk_size)
+                scale_chunks = best_scales.unsqueeze(-1).expand(-1, chunk_size).contiguous()
+            else:
+                scale_chunks = None
 
         # Reconstruct the quantized tensor from best chunks
         q_reshaped = best_qs.view(num_contexts, num_chunks, chunk_size)
@@ -743,23 +778,23 @@ class DynamicInputQuantizer:
 
         # Populate activation capture fields if enabled
         if capture:
-            best_scales_expanded = best_scales.unsqueeze(-1).expand(-1, chunk_size).contiguous()
             u_reshaped = best_unscaled_qs.view(num_contexts, num_chunks, chunk_size)
             module.last_quant_input_unscaled = unchunk_tensor_by_context(u_reshaped, original_shape, pad_len).detach()
             module.last_quant_input = quantized_tensor.detach()
-            s_reshaped = best_scales_expanded.view(num_contexts, num_chunks, chunk_size)
+            s_reshaped = scale_chunks.view(num_contexts, num_chunks, chunk_size)
             module.last_quant_input_scale = unchunk_tensor_by_context(s_reshaped, original_shape, pad_len).detach()
 
-        # Update layer-wise format selection statistics (stay on GPU)
-        if layer_name not in self.layer_stats:
-            self.layer_stats[layer_name] = {
-                'format_counts_tensor': torch.zeros(len(candidates), dtype=torch.long, device=device),
-                'candidates': candidates
-            }
-        
-        stats = self.layer_stats[layer_name]
-        counts = torch.bincount(best_indices, minlength=len(candidates))
-        stats['format_counts_tensor'] += counts
+        if self.collect_format_stats:
+            # Update layer-wise format selection statistics (stay on GPU).
+            if layer_name not in self.layer_stats:
+                self.layer_stats[layer_name] = {
+                    'format_counts_tensor': torch.zeros(len(candidates), dtype=torch.long, device=device),
+                    'candidates': candidates
+                }
+            
+            stats = self.layer_stats[layer_name]
+            counts = torch.bincount(best_indices, minlength=len(candidates))
+            stats['format_counts_tensor'] += counts
 
         # Track running error for progress/debug
         if self.running_error is None:

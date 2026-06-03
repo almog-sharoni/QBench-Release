@@ -185,14 +185,14 @@ st.sidebar.caption("Data updates on Streamlit reruns. Active run logs refresh in
 
 st.markdown("---")
 
-tab_exp, tab_cache, tab_runner, tab_graph = st.tabs(["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph"])
+tab_exp, tab_cache, tab_runner, tab_graph, tab_chunk = st.tabs(["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph", "🧩 Chunk Layout"])
 
 import streamlit.components.v1 as _dashboard_components
 _dashboard_components.html(
     """
     <script>
     (() => {
-      const labels = ["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph"];
+      const labels = ["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph", "🧩 Chunk Layout"];
       const storageKey = "qbench-dashboard-active-tab";
       const doc = window.parent.document;
 
@@ -1887,6 +1887,236 @@ else:
     - **Drop**: Accuracy loss relative to FP32 reference
     """)
     st.sidebar.markdown("---")
+
+    def _render_baseline_accuracy_dashboard(source_df):
+        plot_df = build_baseline_accuracy_plot_df(source_df)
+        if plot_df is None or plot_df.empty:
+            st.info("No baseline, optimized weight, or dynamic input runs with bit-widths are available for this slice.")
+            return
+
+        available_models = sorted(plot_df["Model"].dropna().unique().tolist())
+        if not available_models:
+            return
+
+        st.markdown(
+            """
+            <div class="dashboard-section-title">
+                <div>
+                    <h3>Baseline Accuracy by Bit Width</h3>
+                    <p>Acc1 for every baseline datatype variant, split by weight and input quantization.</p>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        plot_model_key = "baseline_accuracy_plot_models"
+        if plot_model_key in st.session_state:
+            st.session_state[plot_model_key] = [
+                model for model in st.session_state[plot_model_key]
+                if model in available_models
+            ] or available_models
+
+        selected_plot_models = st.multiselect(
+            "Models for baseline plot",
+            options=available_models,
+            default=available_models,
+            key=plot_model_key,
+        )
+        if not selected_plot_models:
+            st.info("Select at least one model to show the baseline plot.")
+            return
+
+        filtered_plot_df = plot_df[plot_df["Model"].isin(selected_plot_models)].copy()
+        filtered_plot_df["Series"] = filtered_plot_df["Series"].astype(str)
+        filtered_plot_df["Chart"] = filtered_plot_df["Chart"].astype(str)
+        filtered_plot_df["Bits"] = pd.to_numeric(filtered_plot_df["Bits"], errors="coerce")
+        filtered_plot_df["Accuracy (%)"] = pd.to_numeric(filtered_plot_df["Accuracy (%)"], errors="coerce")
+        filtered_plot_df = filtered_plot_df.dropna(subset=["Bits", "Accuracy (%)"])
+        if filtered_plot_df.empty:
+            st.info("No plottable baseline rows remain after the model filter.")
+            return
+
+        accuracy_threshold = st.number_input(
+            "Minimum accuracy (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(st.session_state.get("baseline_accuracy_min_threshold", 0.0)),
+            step=0.1,
+            format="%.1f",
+            key="baseline_accuracy_min_threshold",
+        )
+        filtered_plot_df = filtered_plot_df[
+            filtered_plot_df["Accuracy (%)"] >= float(accuracy_threshold)
+        ].copy()
+        if filtered_plot_df.empty:
+            st.info(f"No baseline points have Acc1 >= {accuracy_threshold:.1f}%.")
+            return
+
+        def _render_family_chart(chart_df, chart_kind, line_series, series_order, series_shapes):
+            chart_df = chart_df[chart_df["Chart"].eq(chart_kind)].copy()
+            if chart_df.empty:
+                st.info(f"No {chart_kind.lower()} runs with bit-widths are available for this slice.")
+                return
+
+            available_series = [name for name in series_order if name in set(chart_df["Series"])]
+            series_key = f"baseline_accuracy_{chart_kind.lower()}_series"
+            if series_key in st.session_state:
+                st.session_state[series_key] = [
+                    name for name in st.session_state[series_key]
+                    if name in available_series
+                ] or available_series
+            selected_series = st.multiselect(
+                f"{chart_kind} series",
+                options=available_series,
+                default=available_series,
+                key=series_key,
+            )
+            if not selected_series:
+                st.info(f"Select at least one {chart_kind.lower()} series.")
+                return
+
+            chart_df = chart_df[chart_df["Series"].isin(selected_series)].copy()
+            bit_values = sorted(chart_df["Bits"].dropna().unique().tolist())
+            bit_domain = [
+                int(min(bit_values)) - 0.5,
+                int(max(bit_values)) + 0.5,
+            ] if bit_values else [0, 1]
+            param_name = f"{chart_kind.lower()}_zoom"
+            format_labels = sorted(chart_df["Format Label"].dropna().astype(str).unique().tolist())
+
+            chart_spec = {
+                "config": {
+                    "view": {"stroke": "transparent"},
+                    "axis": {"labelFontSize": 11, "titleFontSize": 12},
+                    "legend": {"orient": "top", "title": None, "labelLimit": 0},
+                },
+                "facet": {
+                    "row": {
+                        "field": "Model",
+                        "type": "nominal",
+                        "title": None,
+                        "header": {
+                            "labelFontSize": 14,
+                            "labelFontWeight": "bold",
+                            "labelAlign": "left",
+                            "labelAnchor": "start",
+                        },
+                    }
+                },
+                "spec": {
+                    "selection": {
+                        param_name: {
+                            "type": "interval",
+                            "encodings": ["x", "y"],
+                            "bind": "scales",
+                        }
+                    },
+                    "layer": [
+                        {
+                            "transform": [{"filter": f"datum.Series == '{line_series}'"}],
+                            "mark": {"type": "line", "strokeWidth": 2, "opacity": 0.7},
+                            "encoding": {
+                                "x": {
+                                    "field": "Bits",
+                                    "type": "quantitative",
+                                    "scale": {"domain": bit_domain},
+                                    "axis": {"title": "Bits", "tickMinStep": 1},
+                                },
+                                "y": {
+                                    "field": "Accuracy (%)",
+                                    "type": "quantitative",
+                                    "scale": {"zero": False, "nice": True, "padding": 5},
+                                    "axis": {"title": "Acc1 (%)"},
+                                },
+                                "color": {
+                                    "field": "Format Label",
+                                    "type": "nominal",
+                                    "sort": format_labels,
+                                    "scale": {"scheme": "tableau20"},
+                                    "legend": {"title": "Format"},
+                                },
+                                "detail": {"field": "Model", "type": "nominal"},
+                                "order": {"field": "Bits", "type": "quantitative"},
+                            },
+                        },
+                        {
+                            "mark": {
+                                "type": "point",
+                                "filled": True,
+                                "size": 135,
+                                "stroke": "#ffffff",
+                                "strokeWidth": 1,
+                                "opacity": 0.92,
+                            },
+                            "encoding": {
+                                "x": {
+                                    "field": "Bits",
+                                    "type": "quantitative",
+                                    "scale": {"domain": bit_domain},
+                                    "axis": {"title": "Bits", "tickMinStep": 1},
+                                },
+                                "y": {
+                                    "field": "Accuracy (%)",
+                                    "type": "quantitative",
+                                    "scale": {"zero": False, "nice": True, "padding": 5},
+                                    "axis": {"title": "Acc1 (%)"},
+                                },
+                                "color": {
+                                    "field": "Format Label",
+                                    "type": "nominal",
+                                    "sort": format_labels,
+                                    "scale": {"scheme": "tableau20"},
+                                    "legend": {"title": "Format"},
+                                },
+                                "shape": {
+                                    "field": "Series",
+                                    "type": "nominal",
+                                    "sort": series_order,
+                                    "scale": {"domain": series_order, "range": series_shapes},
+                                },
+                                "tooltip": [
+                                    {"field": "Model", "type": "nominal"},
+                                    {"field": "Series", "type": "nominal"},
+                                    {"field": "Variant", "type": "nominal"},
+                                    {"field": "Bits", "type": "quantitative", "format": "d"},
+                                    {"field": "Accuracy (%)", "type": "quantitative", "format": ".3f"},
+                                    {"field": "Weight DT", "type": "nominal"},
+                                    {"field": "Activation DT", "type": "nominal"},
+                                    {"field": "Experiment Type", "type": "nominal"},
+                                    {"field": "Run Date", "type": "nominal"},
+                                ],
+                            },
+                        },
+                    ],
+                    "height": 230,
+                    "width": 820,
+                },
+                "resolve": {"scale": {"y": "independent"}},
+            }
+            st.vega_lite_chart(chart_df, chart_spec, width='stretch')
+
+        weight_tab, input_tab = st.tabs(["Weights", "Inputs"])
+        weight_tab.__enter__()
+        _render_family_chart(
+            filtered_plot_df,
+            "Weights",
+            "Weight opt",
+            ["Weight opt", "Weight baseline"],
+            ["circle", "square"],
+        )
+        weight_tab.__exit__(None, None, None)
+
+        input_tab.__enter__()
+        _render_family_chart(
+            filtered_plot_df,
+            "Inputs",
+            "Input dynamic",
+            ["Input dynamic", "Input baseline"],
+            ["diamond", "triangle-up"],
+        )
+        input_tab.__exit__(None, None, None)
+
     @st.fragment(run_every=30)
     def _render_experiment_result_tables():
         df = get_runs(DB_PATH, selected_run_limit)
@@ -1915,6 +2145,13 @@ else:
             get_fm_runs.clear()
             rerun_current_fragment()
         st.markdown("---")
+
+        baseline_plots_tab, comparison_tables_tab = st.tabs(["Baseline Plots", "Comparison Tables"])
+        baseline_plots_tab.__enter__()
+        _render_baseline_accuracy_dashboard(df)
+        baseline_plots_tab.__exit__(None, None, None)
+
+        comparison_tables_tab.__enter__()
 
         # Render Tables
         for i in range(st.session_state.num_tables):
@@ -2306,6 +2543,7 @@ else:
 
         # Add Table Button
         st.button("➕ Add Table", on_click=add_table)
+        comparison_tables_tab.__exit__(None, None, None)
 
     _render_experiment_result_tables()
 

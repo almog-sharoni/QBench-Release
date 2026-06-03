@@ -8,6 +8,7 @@
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAStream.h>
+#include <algorithm>
 #include <vector>
 #include <tuple>
 #include <utility>
@@ -56,6 +57,81 @@ chunk_context_dims_from_shape(const std::vector<int64_t>& shape) {
 static inline std::pair<int64_t, int64_t>
 chunk_context_dims(torch::Tensor x) {
     return chunk_context_dims_from_shape(x.sizes().vec());
+}
+
+struct ChunkLayout {
+    bool spatial_rows = false;
+    bool packed_spatial_contexts = false;
+    int64_t contexts = 1;
+    int64_t context_len = 1;
+    int64_t pad = 0;
+    int64_t k_pad = 1;
+    int64_t n_pad = 1;
+    int64_t n_chunks = 1;
+    int64_t rows_per_context = 1;
+    int64_t row_width = 1;
+    int64_t rows_per_chunk = 1;
+    int64_t pad_rows = 0;
+    int64_t row_groups = 1;
+    int64_t group_width = 1;
+    int64_t pad_width = 0;
+    int64_t chunks_per_group = 1;
+    int64_t contexts_per_chunk = 1;
+    int64_t pad_contexts = 0;
+    int64_t context_groups = 1;
+};
+
+static inline ChunkLayout
+chunk_layout_from_shape(const std::vector<int64_t>& shape, int64_t chunk)
+{
+    ChunkLayout layout;
+    if ((int)shape.size() >= 4) {
+        layout.spatial_rows = true;
+        layout.contexts = shape[0] * shape[1];
+        layout.row_width = shape.back();
+        layout.rows_per_context = 1;
+        for (int d = 2; d < (int)shape.size() - 1; ++d) {
+            layout.rows_per_context *= shape[d];
+        }
+        layout.context_len = layout.rows_per_context * layout.row_width;
+        if (layout.context_len <= chunk) {
+            layout.spatial_rows = false;
+            layout.packed_spatial_contexts = true;
+            layout.contexts_per_chunk = std::max<int64_t>(1, chunk / std::max<int64_t>(layout.context_len, 1));
+            layout.pad_contexts = (layout.contexts_per_chunk - (layout.contexts % layout.contexts_per_chunk)) %
+                                  layout.contexts_per_chunk;
+            layout.context_groups = (layout.contexts + layout.pad_contexts) / layout.contexts_per_chunk;
+            layout.group_width = layout.contexts_per_chunk * layout.context_len;
+            layout.pad_width = chunk - layout.group_width;
+            layout.k_pad = chunk;
+            layout.n_pad = layout.context_groups * chunk;
+            layout.n_chunks = layout.context_groups;
+            return layout;
+        }
+        layout.rows_per_chunk = std::max<int64_t>(1, chunk / std::max<int64_t>(layout.row_width, 1));
+        layout.rows_per_chunk = std::min(layout.rows_per_chunk, std::max<int64_t>(layout.rows_per_context, 1));
+        layout.pad_rows = (layout.rows_per_chunk - (layout.rows_per_context % layout.rows_per_chunk)) %
+                          layout.rows_per_chunk;
+        const int64_t rows_padded = layout.rows_per_context + layout.pad_rows;
+        layout.row_groups = rows_padded / layout.rows_per_chunk;
+        layout.group_width = layout.rows_per_chunk * layout.row_width;
+        layout.pad_width = (chunk - (layout.group_width % chunk)) % chunk;
+        layout.k_pad = layout.group_width + layout.pad_width;
+        layout.chunks_per_group = layout.k_pad / chunk;
+        layout.pad = layout.pad_rows * layout.row_width + layout.pad_width * layout.row_groups;
+        layout.n_pad = layout.contexts * layout.row_groups * layout.k_pad;
+        layout.n_chunks = layout.n_pad / chunk;
+        return layout;
+    }
+
+    auto dims = chunk_context_dims_from_shape(shape);
+    layout.contexts = dims.first;
+    layout.context_len = dims.second;
+    layout.pad = (chunk - (layout.context_len % chunk)) % chunk;
+    layout.k_pad = layout.context_len + layout.pad;
+    layout.n_pad = layout.contexts * layout.k_pad;
+    layout.n_chunks = layout.n_pad / chunk;
+    return layout;
 }
 
 
@@ -135,9 +211,11 @@ decode_tensor(torch::Tensor data, torch::Tensor scale,
 // Chunk mode
 // ============================================================================
 //
-// Chunk mode pads/chunks each logical context independently. The context is
-// every index except the last dimension, so a chunk can never straddle two
-// different rows/positions/heads/channels in the tensor's native layout.
+// Chunk mode pads/chunks each logical context independently. For N,C,spatial
+// activations, a context is one N*C spatial plane. Whole contexts are packed
+// together when they fit (e.g. 2*7*7 -> 98); larger contexts are split only on
+// spatial-row boundaries (e.g. 14x14 -> 126, 70). Other tensors keep the native
+// "all dims except last" context rule.
 
 static std::tuple<torch::Tensor, torch::Tensor>
 encode_chunk(torch::Tensor x, int e, int m, bool is_signed)
@@ -148,11 +226,9 @@ encode_chunk(torch::Tensor x, int e, int m, bool is_signed)
     check_em(e, m, sgn, "encode_chunk");
 
     constexpr int CHUNK = 128;
-    auto [contexts, context_len] = chunk_context_dims(x);
-    const int64_t pad   = (CHUNK - (context_len % CHUNK)) % CHUNK;
-    const int64_t K_pad = context_len + pad;
-    const int64_t N_pad = contexts * K_pad;
-    const int n_chunks  = (int)(N_pad / CHUNK);
+    auto layout = chunk_layout_from_shape(x.sizes().vec(), CHUNK);
+    const int64_t N_pad = layout.n_pad;
+    const int n_chunks  = (int)layout.n_chunks;
     const int npw       = n_per_word_em(e, m, sgn);
     const int wpc       = (CHUNK + npw - 1) / npw;
     auto      opts      = x.options();
@@ -162,11 +238,31 @@ encode_chunk(torch::Tensor x, int e, int m, bool is_signed)
     if (N_pad == 0) return {data, scales};
 
     torch::Tensor x_padded;
-    if (pad == 0) {
+    if (layout.packed_spatial_contexts) {
+        auto x_ctx = x.reshape({layout.contexts, layout.context_len});
+        if (layout.pad_contexts > 0) {
+            x_ctx = torch::constant_pad_nd(x_ctx, {0, 0, 0, layout.pad_contexts}, /*value=*/0.0);
+        }
+        x_padded = x_ctx.reshape({layout.context_groups, layout.group_width});
+        if (layout.pad_width > 0) {
+            x_padded = torch::constant_pad_nd(x_padded, {0, layout.pad_width}, /*value=*/0.0);
+        }
+        x_padded = x_padded.contiguous();
+    } else if (layout.spatial_rows) {
+        auto x_rows = x.reshape({layout.contexts, layout.rows_per_context, layout.row_width});
+        if (layout.pad_rows > 0) {
+            x_rows = torch::constant_pad_nd(x_rows, {0, 0, 0, layout.pad_rows}, /*value=*/0.0);
+        }
+        x_padded = x_rows.reshape({layout.contexts, layout.row_groups, layout.group_width});
+        if (layout.pad_width > 0) {
+            x_padded = torch::constant_pad_nd(x_padded, {0, layout.pad_width}, /*value=*/0.0);
+        }
+        x_padded = x_padded.contiguous();
+    } else if (layout.pad == 0) {
         x_padded = x;
     } else {
-        auto x_2d = x.reshape({contexts, context_len});
-        x_padded  = torch::constant_pad_nd(x_2d, {0, pad}, /*value=*/0.0).contiguous();
+        auto x_2d = x.reshape({layout.contexts, layout.context_len});
+        x_padded  = torch::constant_pad_nd(x_2d, {0, layout.pad}, /*value=*/0.0).contiguous();
     }
 
     qbench_lp::launch_encode_chunk(
@@ -193,11 +289,9 @@ decode_chunk(torch::Tensor data, torch::Tensor scales,
     TORCH_CHECK(nd >= 1, "decode_chunk: original_shape must have at least one dim");
     int64_t numel = 1;
     for (auto d : original_shape) numel *= d;
-    auto [contexts, context_len] = chunk_context_dims_from_shape(original_shape);
-    const int64_t pad   = (CHUNK - (context_len % CHUNK)) % CHUNK;
-    const int64_t K_pad = context_len + pad;
-    const int64_t N_pad = contexts * K_pad;
-    const int n_chunks  = (int)(N_pad / CHUNK);
+    auto layout = chunk_layout_from_shape(original_shape, CHUNK);
+    const int64_t N_pad = layout.n_pad;
+    const int n_chunks  = (int)layout.n_chunks;
     const int npw       = n_per_word_em(e, m, sgn);
     const int wpc       = (CHUNK + npw - 1) / npw;
     TORCH_CHECK(data.numel()   == (int64_t)n_chunks * wpc,
@@ -211,7 +305,7 @@ decode_chunk(torch::Tensor data, torch::Tensor scales,
         return torch::empty(original_shape, data.options().dtype(torch::kFloat32));
     }
 
-    if (pad == 0) {
+    if (!layout.spatial_rows && !layout.packed_spatial_contexts && layout.pad == 0) {
         auto out = torch::empty(original_shape, data.options().dtype(torch::kFloat32));
         qbench_lp::launch_decode_chunk(
             reinterpret_cast<const std::uint32_t*>(data.data_ptr<int32_t>()),
@@ -227,7 +321,30 @@ decode_chunk(torch::Tensor data, torch::Tensor scales,
         scales.data_ptr<float>(),
         padded.data_ptr<float>(),
         (int)N_pad, e, m, sgn, current_stream_ptr());
-    return padded.reshape({contexts, K_pad}).slice(1, 0, context_len).contiguous().reshape(original_shape);
+    if (layout.spatial_rows) {
+        auto rows = padded.reshape({layout.contexts, layout.row_groups, layout.k_pad})
+                          .slice(2, 0, layout.group_width)
+                          .contiguous()
+                          .reshape({layout.contexts, layout.row_groups * layout.rows_per_chunk,
+                                    layout.row_width})
+                          .slice(1, 0, layout.rows_per_context)
+                          .contiguous();
+        return rows.reshape(original_shape);
+    }
+    if (layout.packed_spatial_contexts) {
+        auto contexts = padded.reshape({layout.context_groups, layout.k_pad})
+                              .slice(1, 0, layout.group_width)
+                              .contiguous()
+                              .reshape({layout.context_groups * layout.contexts_per_chunk,
+                                        layout.context_len})
+                              .slice(0, 0, layout.contexts)
+                              .contiguous();
+        return contexts.reshape(original_shape);
+    }
+    return padded.reshape({layout.contexts, layout.k_pad})
+                 .slice(1, 0, layout.context_len)
+                 .contiguous()
+                 .reshape(original_shape);
 }
 
 
@@ -389,25 +506,60 @@ roundtrip_chunk(torch::Tensor x, int e, int m, bool is_signed,
                 bool needs_scale_b)
 {
     constexpr int CHUNK = 128;
-    auto [contexts, context_len] = chunk_context_dims(x);
-    const int64_t n_chunks_per_context = (context_len + CHUNK - 1) / CHUNK;
+    auto layout = chunk_layout_from_shape(x.sizes().vec(), CHUNK);
+    const int64_t n_chunks_per_context = layout.spatial_rows
+        ? layout.row_groups * layout.chunks_per_group
+        : layout.packed_spatial_contexts
+        ? 1
+        : (layout.context_len + CHUNK - 1) / CHUNK;
+    const int64_t scale_contexts = layout.packed_spatial_contexts
+        ? layout.context_groups
+        : layout.contexts;
 
     auto enc       = encode_chunk(x, e, m, is_signed);
     auto& data     = std::get<0>(enc);
     auto& scales   = std::get<1>(enc);
     auto input_fp8 = decode_chunk(data, scales, x.sizes().vec(),
                                   e, m, is_signed);
-    auto scale_p   = scales.view({contexts, n_chunks_per_context, (int64_t)1});
+    auto scale_p   = scales.view({scale_contexts, n_chunks_per_context, (int64_t)1});
 
     torch::Tensor scale_b;
     if (needs_scale_b) {
-        auto expanded = scale_p.expand({contexts, n_chunks_per_context, (int64_t)CHUNK})
-                               .contiguous()
-                               .reshape({contexts, n_chunks_per_context * CHUNK});
-        if (expanded.size(-1) != context_len) {
-            expanded = expanded.slice(1, 0, context_len).contiguous();
+        if (layout.packed_spatial_contexts) {
+            auto expanded = scale_p.expand({layout.context_groups, (int64_t)1, (int64_t)CHUNK})
+                                   .contiguous()
+                                   .reshape({layout.context_groups, (int64_t)CHUNK})
+                                   .slice(1, 0, layout.group_width)
+                                   .contiguous()
+                                   .reshape({layout.context_groups * layout.contexts_per_chunk,
+                                             layout.context_len})
+                                   .slice(0, 0, layout.contexts)
+                                   .contiguous();
+            scale_b = expanded.reshape(x.sizes());
+        } else if (layout.spatial_rows) {
+            auto expanded = scale_p.view({layout.contexts, layout.row_groups,
+                                          layout.chunks_per_group, (int64_t)1})
+                                   .expand({layout.contexts, layout.row_groups,
+                                            layout.chunks_per_group, (int64_t)CHUNK})
+                                   .contiguous()
+                                   .reshape({layout.contexts, layout.row_groups, layout.k_pad})
+                                   .slice(2, 0, layout.group_width)
+                                   .contiguous()
+                                   .reshape({layout.contexts,
+                                             layout.row_groups * layout.rows_per_chunk,
+                                             layout.row_width})
+                                   .slice(1, 0, layout.rows_per_context)
+                                   .contiguous();
+            scale_b = expanded.reshape(x.sizes());
+        } else {
+            auto expanded = scale_p.expand({layout.contexts, n_chunks_per_context, (int64_t)CHUNK})
+                                   .contiguous()
+                                   .reshape({layout.contexts, n_chunks_per_context * CHUNK});
+            if (expanded.size(-1) != layout.context_len) {
+                expanded = expanded.slice(1, 0, layout.context_len).contiguous();
+            }
+            scale_b = expanded.reshape(x.sizes());
         }
-        scale_b = expanded.reshape(x.sizes());
     } else {
         scale_b = scale_p;
     }

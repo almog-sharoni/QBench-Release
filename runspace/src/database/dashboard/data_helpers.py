@@ -74,6 +74,126 @@ def preprocess_runs_df(df):
     return parsed_df
 
 
+BASELINE_ACCURACY_SERIES_ORDER = [
+    "Weight opt",
+    "Weight baseline",
+    "Input dynamic",
+    "Input baseline",
+]
+BASELINE_ACCURACY_CHART_ORDER = ["Weights", "Inputs"]
+
+
+def _extract_trailing_bit_number(text):
+    if text is None:
+        return None
+
+    normalized = str(text).strip().lower().replace("-", "_")
+    for token in reversed(normalized.split("_")):
+        token = token.strip()
+        if token.endswith("bits"):
+            token = token[:-4]
+        elif token.endswith("bit"):
+            token = token[:-3]
+        if token.isdigit():
+            return int(token)
+    return None
+
+
+def _coerce_positive_bit(value):
+    try:
+        if pd.isna(value):
+            return None
+        bit_value = int(float(value))
+    except Exception:
+        return None
+    return bit_value if bit_value > 0 else None
+
+
+def _baseline_accuracy_series_and_bits(row):
+    exp_type = str(row.get("experiment_type", "") or "").strip().lower()
+
+    if exp_type.startswith("weight_quant_optimized"):
+        return "Weights", "Weight opt", _extract_trailing_bit_number(exp_type)
+
+    if exp_type.startswith("input_quant_dynamic"):
+        return "Inputs", "Input dynamic", _extract_trailing_bit_number(exp_type)
+
+    if exp_type.startswith("input_quant_baseline"):
+        return "Inputs", "Input baseline", _coerce_positive_bit(row.get("a_bits"))
+
+    if exp_type.startswith("weight_quant_baseline"):
+        return "Weights", "Weight baseline", _coerce_positive_bit(row.get("w_bits"))
+
+    return None, None, None
+
+
+def build_baseline_accuracy_plot_df(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    working_df = df.copy()
+    if "w_bits" not in working_df.columns or "a_bits" not in working_df.columns:
+        working_df = preprocess_runs_df(working_df)
+    if working_df is None or working_df.empty or "acc1" not in working_df.columns:
+        return pd.DataFrame()
+
+    if "status" in working_df.columns:
+        status_text = working_df["status"].fillna("").astype(str).str.upper()
+        working_df = working_df[(status_text == "") | (status_text == "SUCCESS")]
+
+    working_df["acc1_numeric"] = pd.to_numeric(working_df["acc1"], errors="coerce")
+    working_df = working_df.dropna(subset=["acc1_numeric"])
+    if working_df.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, run_row in working_df.iterrows():
+        chart_kind, series_name, bit_number = _baseline_accuracy_series_and_bits(run_row)
+        if series_name is None or bit_number is None:
+            continue
+        weight_dt = str(run_row.get("weight_dt", "") or "")
+        activation_dt = str(run_row.get("activation_dt", "") or "")
+        variant = weight_dt if chart_kind == "Weights" else activation_dt
+        is_baseline = "baseline" in series_name.lower()
+
+        rows.append({
+            "Model": str(run_row.get("model_name", "unknown") or "unknown"),
+            "Chart": chart_kind,
+            "Series": series_name,
+            "Bits": int(bit_number),
+            "Accuracy (%)": float(run_row["acc1_numeric"]),
+            "Variant": variant,
+            "Format Label": variant if is_baseline else series_name,
+            "Weight DT": weight_dt,
+            "Activation DT": activation_dt,
+            "Experiment Type": str(run_row.get("experiment_type", "") or ""),
+            "Run Date": str(run_row.get("run_date", "") or ""),
+            "Run Date Sort": pd.to_datetime(run_row.get("run_date"), errors="coerce"),
+            "Run ID": run_row.get("id", None),
+        })
+
+    plot_df = pd.DataFrame(rows)
+    if plot_df.empty:
+        return plot_df
+
+    plot_df["Series"] = pd.Categorical(
+        plot_df["Series"],
+        categories=BASELINE_ACCURACY_SERIES_ORDER,
+        ordered=True,
+    )
+    plot_df["Chart"] = pd.Categorical(
+        plot_df["Chart"],
+        categories=BASELINE_ACCURACY_CHART_ORDER,
+        ordered=True,
+    )
+    plot_df["Run ID Sort"] = pd.to_numeric(plot_df["Run ID"], errors="coerce").fillna(-1)
+    plot_df = plot_df.sort_values(
+        by=["Model", "Chart", "Bits", "Series", "Variant", "Run Date Sort", "Run ID Sort"],
+        ascending=[True, True, True, True, True, False, False],
+    )
+    return plot_df.drop(columns=["Run Date Sort", "Run ID Sort"])
+
+
 def _attach_effective_references(df: pd.DataFrame) -> pd.DataFrame:
     """
     Ensure each row has usable reference metrics even when legacy rows logged
@@ -328,5 +448,3 @@ def _compute_weight_win_rate_views(raw_json):
         "top_chunk_format": top_chunk_format,
     }
     return summary_df, layer_df, layer_chunk_df, meta
-
-

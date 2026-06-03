@@ -1304,6 +1304,8 @@ class Runner:
                 model_name=input_quant_cfg.get('model_name'),
                 skip_depthwise_input_quant=input_quant_cfg.get('skip_depthwise_input_quant', False),
                 input_transfer_map=input_quant_cfg.get('input_transfer_map'),
+                collect_error_stats=input_quant_cfg.get('collect_error_stats', True),
+                collect_format_stats=input_quant_cfg.get('collect_format_stats', True),
             )
             quantizer.register_hooks()
             print(f"Input quantization enabled: mode=dynamic metric=MSE chunk_size={chunk_size}")
@@ -2019,6 +2021,8 @@ class Runner:
                     ref_input_normalization=ref_input_normalization,
                     ref_input_mean=ref_input_mean,
                     ref_input_std=ref_input_std,
+                    compare_mode=eval_cfg.get('compare_mode', 'propagated'),
+                    offload_captures=eval_cfg.get('offload_captures', True),
                 )
                 
                 # Determine number of batches
