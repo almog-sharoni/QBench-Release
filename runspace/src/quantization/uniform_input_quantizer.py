@@ -4,11 +4,11 @@ import torch.nn as nn
 try:
     from ..registry.op_registry import OpRegistry
     from ..ops.quant_base import quantize_tensor
-    from .chunking import count_context_chunks
+    from .chunking import count_context_chunks, chunk_tensor_by_context, unchunk_tensor_by_context
 except ImportError:
     from src.registry.op_registry import OpRegistry
     from src.ops.quant_base import quantize_tensor
-    from src.quantization.chunking import count_context_chunks
+    from src.quantization.chunking import count_context_chunks, chunk_tensor_by_context, unchunk_tensor_by_context
 
 
 class UniformInputQuantizer:
@@ -69,13 +69,23 @@ class UniformInputQuantizer:
             'sum_l2_norm': 0.0,
         }
 
+    def _quantize_context(self, x, fmt):
+        """Per-context fixed-format quant via chunk_tensor_by_context.
+
+        Mirrors the dynamic input quantizer's chunking (one scale per per-context
+        128-chunk) so fixed-format input baselines are directly comparable to the
+        dynamic per-chunk runs. quantize_tensor(mode='chunk') is used only as the
+        codec PE primitive on the already-formed [N,128] rows.
+        """
+        chunked, original_shape, pad_len = chunk_tensor_by_context(x, self.chunk_size)
+        b, nc, cs = chunked.shape
+        deq, _ = quantize_tensor(chunked.reshape(-1, cs), q_type=fmt, mode='chunk', chunk_size=cs)
+        return unchunk_tensor_by_context(deq.view(b, nc, cs), original_shape, pad_len)
+
     def _quantize(self, x):
-        x_q, _ = quantize_tensor(
-            x,
-            q_type=self.fmt,
-            mode=self.quant_mode,
-            chunk_size=self.chunk_size if self.quant_mode == 'chunk' else None,
-        )
+        if self.quant_mode == 'chunk':
+            return self._quantize_context(x, self.fmt)
+        x_q, _ = quantize_tensor(x, q_type=self.fmt, mode=self.quant_mode, chunk_size=None)
         return x_q
 
     @staticmethod
@@ -327,12 +337,9 @@ class UniformInputQuantizer:
         return formats
 
     def _quantize_with_format(self, x, fmt):
-        x_q, _ = quantize_tensor(
-            x,
-            q_type=fmt,
-            mode=self.quant_mode,
-            chunk_size=self.chunk_size if self.quant_mode == 'chunk' else None,
-        )
+        if self.quant_mode == 'chunk':
+            return self._quantize_context(x, fmt)
+        x_q, _ = quantize_tensor(x, q_type=fmt, mode=self.quant_mode, chunk_size=None)
         return x_q
 
     def _make_hook(self, layer_name):

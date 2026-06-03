@@ -16,7 +16,7 @@ NUM_WORKERS="${NUM_WORKERS:-32}"
 LIMIT_BATCHES="${LIMIT_BATCHES:--1}"
 CHUNK_SIZE="${CHUNK_SIZE:-128}"
 INPUT_SIZE="${INPUT_SIZE:-224}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-runspace/experiments/baselines_vs_dynamic_runs}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-runspace/experiments/baselines_vs_dynamic_runs/results}"
 
 RUN_ACTIVATIONS="${RUN_ACTIVATIONS:-1}"
 RUN_WEIGHTS="${RUN_WEIGHTS:-1}"

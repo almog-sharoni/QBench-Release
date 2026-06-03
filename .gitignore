@@ -42,3 +42,4 @@ opencode.jsonc
 .claude/settings.local.json
 .claude/settings.json
 **/backup
+**.pt
