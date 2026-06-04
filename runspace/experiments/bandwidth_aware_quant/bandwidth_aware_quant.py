@@ -60,34 +60,58 @@ try:
 except ImportError:
     DIQ2 = None
 
+CANONICAL_INPUT_FORMATS_BY_BITS = {
+    2: 'fp2_e1m0',
+    3: 'fp3_e1m1',
+    4: 'fp4_e2m1',
+    5: 'fp5_e2m2',
+    6: 'fp6_e3m2',
+    7: 'fp7_e3m3',
+    8: 'fp8_e4m3',
+}
+
 def patched_candidates_for_layer(self, layer_name, module=None, input_index=0):
     """Silent custom candidates picker that uses per-layer input bit-width for off-chip layers."""
-    is_unsigned = (
-        self.use_unsigned_input_candidates
-        and (
-            layer_name in self.post_unsigned_layers
-            or layer_name in self.unsigned_passthrough_layers
-        )
-    ) or (
-        module is not None
-        and self._module_uses_unsigned_input(module)
-    )
+    is_unsigned = self._layer_uses_unsigned_input(layer_name, input_index=input_index)
+    input_format_policy = getattr(self, 'layer_input_format_policy', 'all')
 
     if input_index == 1:
         residual_bits = self.layer_residual_input_bits_map.get(layer_name)
         if residual_bits is not None:
-            candidates = get_input_formats_for_bits(residual_bits)
-            return self._make_unsigned_candidates(candidates) if is_unsigned else candidates
+            candidates = get_input_formats_for_bits(
+                residual_bits,
+                policy=input_format_policy,
+                unsigned=is_unsigned,
+            )
+            return (
+                self._make_unsigned_candidates(candidates)
+                if is_unsigned and input_format_policy != 'typed'
+                else candidates
+            )
 
     stays_on_chip = self.cache_sim_map.get(layer_name, True)
-
-    if stays_on_chip:
-        return self.unsigned_all_fp8_formats if is_unsigned else self.all_fp8_formats
-
     input_bits = self.layer_input_bits_map.get(layer_name, 8)
-    candidates = get_input_formats_for_bits(input_bits)
 
-    if is_unsigned:
+    if input_bits == 8:
+        candidates = get_input_formats_for_bits(
+            8,
+            policy=input_format_policy,
+            unsigned=is_unsigned,
+        )
+    elif stays_on_chip:
+        candidates = get_input_formats_for_bits(
+            8,
+            policy=input_format_policy,
+            unsigned=is_unsigned,
+        )
+    else:
+        candidates = get_input_formats_for_bits(
+            input_bits,
+            policy=input_format_policy,
+            unsigned=is_unsigned,
+        )
+
+    if is_unsigned and input_format_policy != 'typed':
         return self._make_unsigned_candidates(candidates)
 
     if self.restrict_post_relu_ufp:
@@ -116,6 +140,16 @@ for DIQ in (DIQ1, DIQ2):
                     '_global_layer_residual_input_bits_map',
                     getattr(self, 'layer_residual_input_bits_map', {}),
                 )
+                self.layer_need_input_transfer_map = getattr(
+                    self.__class__,
+                    '_global_layer_need_input_transfer_map',
+                    getattr(self, 'layer_need_input_transfer_map', {}),
+                )
+                self.layer_input_format_policy = getattr(
+                    self.__class__,
+                    '_global_layer_input_format_policy',
+                    getattr(self, 'layer_input_format_policy', 'all'),
+                )
             return new_init
         DIQ.__init__ = make_new_init(_orig_init)
 
@@ -124,10 +158,10 @@ for DIQ in (DIQ1, DIQ2):
 # Signed Formats By Bit Width
 # ============================================================
 SIGNED_FORMATS_BY_BITS = {
-    8: ['fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6', 'fp8_e6m1', 'fp8_e7m0'],
-    7: ['fp7_e1m5', 'fp7_e2m4', 'fp7_e3m3', 'fp7_e4m2', 'fp7_e5m1', 'fp7_e6m0'],
-    6: ['fp6_e1m4', 'fp6_e2m3', 'fp6_e3m2', 'fp6_e4m1', 'fp6_e5m0'],
-    5: ['fp5_e1m3', 'fp5_e2m2', 'fp5_e3m1', 'fp5_e4m0'],
+    8: ['fp8_e4m3', 'fp8_e5m2', 'fp8_e3m4', 'fp8_e2m5', 'fp8_e1m6'],# 'fp8_e6m1', 'fp8_e7m0'],
+    7: ['fp7_e1m5', 'fp7_e2m4', 'fp7_e3m3', 'fp7_e4m2'], #'fp7_e5m1', 'fp7_e6m0'],
+    6: ['fp6_e1m4', 'fp6_e2m3', 'fp6_e3m2'], #'fp6_e4m1', 'fp6_e5m0'],
+    5: ['fp5_e1m3', 'fp5_e2m2', 'fp5_e3m1'], #'fp5_e4m0'],
     4: ['fp4_e1m2', 'fp4_e2m1', 'fp4_e3m0'],
     3: ['fp3_e1m1', 'fp3_e2m0'],
     2: ['fp2_e1m0']
@@ -137,8 +171,12 @@ SIGNED_FORMATS_BY_BITS = {
 # Helpers
 # ============================================================
 
-def get_input_formats_for_bits(b):
+def get_input_formats_for_bits(b, policy='all', unsigned=False):
     """Filter input formats to retrieve candidates with exactly b bits."""
+    if policy == 'canonical':
+        fmt = CANONICAL_INPUT_FORMATS_BY_BITS.get(b)
+        return [fmt] if fmt else []
+
     candidates = []
     for fmt in DEFAULT_DYNAMIC_INPUT_CANDIDATES:
         if get_format_bits(fmt) == b:
@@ -148,6 +186,12 @@ def get_input_formats_for_bits(b):
         for fmt in SIGNED_FORMATS_BY_BITS[b]:
             if fmt not in candidates:
                 candidates.append(fmt)
+    if policy == 'typed':
+        if unsigned:
+            typed_candidates = [fmt for fmt in candidates if fmt.startswith('ufp')]
+        else:
+            typed_candidates = [fmt for fmt in candidates if not fmt.startswith('ufp')]
+        return typed_candidates or candidates
     return candidates
 
 
@@ -268,10 +312,12 @@ def run_cache_simulation(model_name, cache_size_M, batch_size=1, num_banks=16, m
             layer, ctx, next_layer, metadata_bits, bank_size, cache_elements
         )
         xin_from_cache = RULES.get(rule_name, {}).get('xin_from_cache', True)
+        need_input_transfer = (i == 0 or not results[-1].get('stay_on_chip', False) or not xin_from_cache)
         
         layer_copy = dict(layer)
         layer_copy['stay_on_chip'] = stay_on_chip
         layer_copy['xin_from_cache'] = xin_from_cache
+        layer_copy['need_input_transfer'] = need_input_transfer
         results.append(layer_copy)
         cache_sim_map[layer['name']] = stay_on_chip
         
@@ -296,6 +342,7 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
     layer_weight_bits : dict layer_name -> weight bit-width
     layer_output_bits : dict layer_name -> output bit-width
     layer_residual_input_bits : dict layer_name -> residual operand bit-width
+    layer_need_input_transfer : dict layer_name -> whether layer input is externally transferred
     """
     total_runtime = 0.0
     prev_stay_on_chip = False
@@ -303,6 +350,7 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
     layer_weight_bits = {}
     layer_output_bits = {}
     layer_residual_input_bits = {}
+    layer_need_input_transfer = {}
     
     for idx, layer in enumerate(layers_with_stay_status):
         stay_on_chip = layer.get('stay_on_chip', False)
@@ -310,9 +358,10 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
         xin_from_cache = layer.get('xin_from_cache', True)
         
         need_input_transfer = (idx == 0 or not prev_stay_on_chip or not xin_from_cache)
+        layer_need_input_transfer[lname] = need_input_transfer
         need_weight_transfer = True
         need_output_transfer = not stay_on_chip
-        residual_bits = 3
+        residual_bits = b_bits
         residual_input_stream_elems = layer.get('residual_input_stream_elems', 0)
         residual_output_elems = layer.get('residual_output_elems', 0)
         fixed_transfers = []
@@ -355,7 +404,14 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
         
         prev_stay_on_chip = stay_on_chip
         
-    return total_runtime, layer_input_bits, layer_weight_bits, layer_output_bits, layer_residual_input_bits
+    return (
+        total_runtime,
+        layer_input_bits,
+        layer_weight_bits,
+        layer_output_bits,
+        layer_residual_input_bits,
+        layer_need_input_transfer,
+    )
 
 
 def create_bandwidth_aware_state_dict(model, cache_sim_map, per_layer_weight_bits, chunk_size=128):
@@ -415,6 +471,19 @@ def main():
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     parser.add_argument("--device", type=str, default="cuda", help="Execution device")
     parser.add_argument("--bandwidth", type=float, default=1.0, help="Memory bandwidth in bytes/cycle")
+    parser.add_argument("--mode", type=str, default="evaluate", choices=["evaluate", "compare"],
+                        help="'evaluate' = accuracy only; 'compare' = layer-by-layer comparison vs FP32 reference")
+    parser.add_argument("--compare_batches", type=int, default=50,
+                        help="Number of batches to use in compare mode (-1 = full dataset)")
+    parser.add_argument("--compare_mode", type=str, default="propagated", choices=["propagated", "isolated"],
+                        help="In compare mode: 'propagated' = cumulative end-to-end divergence per layer; "
+                             "'isolated' = teacher-forced per-layer output error (no inherited drift)")
+    parser.add_argument("--cache_size", type=float, default=None,
+                        help="Pin a single cache size (e.g. 4.0) instead of sweeping [0, 2, 4]")
+    parser.add_argument("--b_bits", type=int, default=None,
+                        help="Pin a single min bit-width (e.g. 8) instead of sweeping 2-8")
+    parser.add_argument("--input_format_policy", choices=["all", "typed", "canonical"], default="all",
+                        help="'all' searches all formats for each bit-width; 'typed' searches signed/unsigned formats separately; 'canonical' uses one balanced format per bit-width.")
     args = parser.parse_args()
 
     # Verify CUDA availability
@@ -466,8 +535,8 @@ def main():
         model.to(args.device)
 
         # 2. Setup results tracking structures
-        cache_sizes = [0.0, 2.0, 4.0]  # Cache sizes in Millions of elements
-        min_bits_list = [3]  # We sweep starting min_bits = 3 only
+        cache_sizes = [args.cache_size] if args.cache_size is not None else [0.0, 2.0, 4.0]
+        min_bits_list = [args.b_bits] if args.b_bits is not None else [3]
         results_data = {min_bits: {cs: [] for cs in cache_sizes} for min_bits in min_bits_list}
 
         # Cache simulations for all cache sizes (run only once per cache size!)
@@ -526,7 +595,8 @@ def main():
         # 4. Sweep loops
         unique_runs = []
         for cs in cache_sizes:
-            for b in range(2, 9):
+            b_range = [min_bits_list[0]] if args.b_bits is not None else range(2, 9)
+            for b in b_range:
                 unique_runs.append((cs, b))
 
         # Sort runs to keep cache size changes minimal (saves reloading models frequently)
@@ -551,6 +621,7 @@ def main():
                 layer_weight_bits,
                 layer_output_bits,
                 layer_residual_input_bits,
+                layer_need_input_transfer,
             ) = compute_model_runtime(sim_layers, b, bandwidth=args.bandwidth)
             print(f"Calculated compute time: {cycles:,} cycles")
 
@@ -567,10 +638,14 @@ def main():
                 DIQ1._global_cache_sim_map = cache_sim_map
                 DIQ1._global_layer_input_bits_map = layer_input_bits
                 DIQ1._global_layer_residual_input_bits_map = layer_residual_input_bits
+                DIQ1._global_layer_need_input_transfer_map = layer_need_input_transfer
+                DIQ1._global_layer_input_format_policy = args.input_format_policy
             if DIQ2 is not None:
                 DIQ2._global_cache_sim_map = cache_sim_map
                 DIQ2._global_layer_input_bits_map = layer_input_bits
                 DIQ2._global_layer_residual_input_bits_map = layer_residual_input_bits
+                DIQ2._global_layer_need_input_transfer_map = layer_need_input_transfer
+                DIQ2._global_layer_input_format_policy = args.input_format_policy
 
             # 3.4. Build evaluation config — mirror the standard hybrid_quant
             # pipeline (Quant wrappers + decomposed MHA + folded input norm) so the
@@ -591,13 +666,18 @@ def main():
                     'quantize_first_layer': True,
                 },
                 'evaluation': {
-                    'mode': 'evaluate',
+                    'mode': args.mode,
                     'max_batches': args.limit_batches,
+                    'compare_batches': args.compare_batches,
+                    'compare_mode': args.compare_mode,
                     'dynamic_input_quant': {
                         'enabled': True,
                         'chunk_size': 128,
-                        'candidate_formats': get_input_formats_for_bits(b),
+                        'candidate_formats': get_input_formats_for_bits(b, policy=args.input_format_policy),
+                        'input_transfer_map': layer_need_input_transfer,
                         'use_cache_sim_db': False,
+                        'collect_error_stats': False,
+                        'collect_format_stats': False,
                         'unsigned_input_sources': ['relu', 'relu6', 'softmax', 'quantrelu', 'quantsoftmax','quantrelu6'],
                     }
                 },
@@ -626,8 +706,8 @@ def main():
             # Save evaluated point
             evaluated_points[(cs, b)] = (acc1, cycles)
 
-            # Cleanup temporary weight file
-            if os.path.exists(temp_weights_path):
+            # Cleanup temporary weight file (skip in compare mode — runner may need it)
+            if args.mode != 'compare' and os.path.exists(temp_weights_path):
                 try:
                     os.remove(temp_weights_path)
                 except OSError:
@@ -636,7 +716,8 @@ def main():
         # 4. Map evaluated points to the results_data sweeps structure
         for min_bits in min_bits_list:
             for cs in cache_sizes:
-                for b in range(min_bits, 9):
+                b_range = [args.b_bits] if args.b_bits is not None else range(min_bits, 9)
+                for b in b_range:
                     acc1, cycles = evaluated_points[(cs, b)]
                     results_data[min_bits][cs].append((b, acc1, cycles))
 

@@ -121,6 +121,9 @@ def _serialize_runtime_config(config, model=None, *, experiment_type=None, activ
     cfg.setdefault('dataset', {})
     if limit_batches is not None:
         cfg['dataset']['limit_batches'] = limit_batches
+    unsigned_input_sources = cfg.get('quantization', {}).get('unsigned_input_sources', [])
+    if isinstance(unsigned_input_sources, str):
+        unsigned_input_sources = [s.strip() for s in unsigned_input_sources.split(',') if s.strip()]
 
     if model is not None:
         first_quant = next(_iter_quantized_modules(model), None)
@@ -134,7 +137,7 @@ def _serialize_runtime_config(config, model=None, *, experiment_type=None, activ
                 'rounding': str(getattr(first_quant, 'rounding', None)),
                 'input_quantization': bool(getattr(first_quant, 'input_quantization', False)),
                 'weight_quantization': bool(getattr(first_quant, 'weight_quantization', False)),
-                'unsigned_input_sources': ["relu", "softmax", "quantrelu", "quantsoftmax"]
+                'unsigned_input_sources': list(unsigned_input_sources or [])
             }
 
     cfg['experiment'] = {
@@ -192,6 +195,14 @@ def get_args():
         "--force_rebuild_weights",
         action="store_true",
         help="Force rebuilding cached materialized weights/checkpoints used by the experiment",
+    )
+    parser.add_argument(
+        "--skip_input_error_stats",
+        action="store_true",
+        help=(
+            "Skip expensive per-layer input quantization error reductions for "
+            "uniform baseline runs. Accuracy and layer format counts are still logged."
+        ),
     )
     parser.add_argument(
         "--experiment_type",
@@ -328,7 +339,13 @@ def run_baselines(args, device, formats, on_result=None):
                 adapter=adapter,
                 max_batches=args.limit_batches,
                 desc=f"Baseline ({fmt})",
-                input_quant_cfg=_build_uniform_input_quant_cfg(fmt, args.chunk_size),
+                input_quant_cfg=_build_uniform_input_quant_cfg(
+                    fmt,
+                    args.chunk_size,
+                    unsigned_input_sources=args.unsigned_input_sources,
+                    use_unsigned_input_candidates=args.dynamic_unsigned_input_candidates,
+                    collect_error_stats=not args.skip_input_error_stats,
+                ),
             )
             acc1 = eval_results.get('acc1', 0.0)
             acc5 = eval_results.get('acc5', 0.0)

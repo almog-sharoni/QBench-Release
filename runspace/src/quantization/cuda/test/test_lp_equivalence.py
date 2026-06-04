@@ -93,12 +93,27 @@ FORMATS_DEFAULT = _SIGNED # dict union; fallback to _SIGNED for Python < 3.9
 FORMATS_DEFAULT.update(_UNSIGNED)
 
 SHAPES_TENSOR  = [(32,),     (8, 16),  (256, 512)]
-SHAPES_CHUNK   = [(128,),    (8, 128), (256, 512), (1, 2, 3), (1, 12, 197, 197), (4, 197, 197)]
+SHAPES_CHUNK   = [(128,),    (8, 128), (256, 512), (1, 2, 3), (1, 12, 197, 197), (1, 1024, 14, 14), (4, 197, 197)]
 SHAPES_CHANNEL = [(8, 128),  (4, 16, 8, 8), (256, 256)]
 CHANNEL_DIM    = 1
 
 
 def _expected_context_chunks(shape, chunk_size=128):
+    if len(shape) >= 4:
+        contexts = shape[0] * shape[1]
+        rows_per_context = 1
+        for size in shape[2:-1]:
+            rows_per_context *= size
+        row_width = shape[-1]
+        context_width = rows_per_context * row_width
+        if context_width <= chunk_size:
+            contexts_per_chunk = max(1, chunk_size // max(context_width, 1))
+            return (contexts + contexts_per_chunk - 1) // contexts_per_chunk
+        rows_per_chunk = max(1, chunk_size // max(row_width, 1))
+        rows_per_chunk = min(rows_per_chunk, max(rows_per_context, 1))
+        row_groups = (rows_per_context + rows_per_chunk - 1) // rows_per_chunk
+        chunks_per_group = (rows_per_chunk * row_width + chunk_size - 1) // chunk_size
+        return contexts * row_groups * chunks_per_group
     if len(shape) <= 1:
         contexts = 1
         context_len = shape[0] if shape else 1

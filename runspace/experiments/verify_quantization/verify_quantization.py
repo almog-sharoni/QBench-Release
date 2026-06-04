@@ -10,7 +10,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from runspace.src.quantization.chunking import chunk_tensor_by_context
+from runspace.src.quantization.chunking import chunk_weight_by_context
 
 def get_format_params(fmt_str):
     """
@@ -173,7 +173,7 @@ def main():
                 all_passed = False
                 continue
             
-            chunked, _, _ = chunk_tensor_by_context(weight, args.chunk_size)
+            chunked, _, _ = chunk_weight_by_context(weight, args.chunk_size)
             
             # Flatten to [contexts*num_chunks, C] to match the formats list.
             chunked_flat = chunked.reshape(-1, args.chunk_size)

@@ -620,6 +620,8 @@ def process_single_model(args, device):
         input_quant_cfg = _build_uniform_input_quant_cfg(
             args.input_format,
             args.input_chunk_size,
+            unsigned_input_sources=args.unsigned_input_sources,
+            use_unsigned_input_candidates=args.dynamic_unsigned_input_candidates,
         )
     else:
         activation_dt_str = f"dyn_input_{args.input_metric}"

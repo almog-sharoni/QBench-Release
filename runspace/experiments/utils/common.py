@@ -236,7 +236,14 @@ def build_weight_map_json(quant_map, layer_types):
     return json.dumps(enriched)
 
 
-def build_uniform_input_quant_cfg(fmt, chunk_size, enabled=True):
+def build_uniform_input_quant_cfg(
+    fmt,
+    chunk_size,
+    enabled=True,
+    unsigned_input_sources=None,
+    use_unsigned_input_candidates=True,
+    collect_error_stats=True,
+):
     """Build the uniform layer-input quantizer config used by input quant baselines."""
     if not enabled or str(fmt).strip().lower() == 'fp32':
         return None
@@ -245,6 +252,13 @@ def build_uniform_input_quant_cfg(fmt, chunk_size, enabled=True):
         'mode': 'uniform',
         'format': fmt,
         'chunk_size': int(chunk_size),
+        'unsigned_input_sources': (
+            [s.strip() for s in unsigned_input_sources.split(',') if s.strip()]
+            if isinstance(unsigned_input_sources, str)
+            else list(unsigned_input_sources or [])
+        ),
+        'uniform_unsigned_input_candidates': bool(use_unsigned_input_candidates),
+        'collect_error_stats': bool(collect_error_stats),
     }
 
 
