@@ -25,8 +25,9 @@ if PROJECT_ROOT not in sys.path:
 
 from runspace.src.ops.quant_base import quantize_tensor
 from runspace.src.quantization.chunking import (
-    count_context_chunks,
-    unchunk_tensor_by_context,
+    chunk_weight_by_context,
+    unchunk_weight_by_context,
+    count_weight_chunks,
 )
 # from runspace.src.quantization.quantizer import quantize_fp_generic_i32 as quantize_i32
 from runspace.src.quantization.constants import get_quantization_bias
@@ -63,7 +64,7 @@ def get_args():
     parser.add_argument("--models_file", type=str, default=None, help="Path to a YAML file containing a list of models to run")
     
     # Validation / Metric Args
-    parser.add_argument("--metrics", type=str, default="l1,mse", help="Comma-separated metrics: l1, mse, sqnr, cosine OR 'all'")
+    parser.add_argument("--metrics", type=str, default="mse", help="Comma-separated metrics: l1, mse, sqnr, cosine OR 'all'")
     
     # Experiment Target
     parser.add_argument("--target", type=str, default="weights", choices=['weights'], help="Target to optimize: 'weights'")
@@ -76,6 +77,12 @@ def get_args():
     parser.add_argument("--num_workers", type=int, default=32, help="Number of workers")
     parser.add_argument("--weight_chunk_size", type=int, default=128, help="Weight/Input chunk size (blocks). If set, enables chunked quantization.")
     parser.add_argument("--per_chunk_format", action="store_true", help="Enable per-chunk format selection (each chunk gets its own optimal format)")
+    parser.add_argument(
+        "--optimized_experiment_type",
+        type=str,
+        default="weight_quant_optimized",
+        help="Experiment type used when logging optimized weight runs.",
+    )
     parser.add_argument("--plot_layers", action="store_true", help="Generate error bar plots for every single layer (warning: slow)")
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of batches to process (default: -1 for all)")
     parser.add_argument("--baseline_formats", type=str, default=','.join(baseline_formats), help="Comma-separated list of formats to run as baselines (full eval)")
@@ -198,14 +205,46 @@ def _log_weight_quant_run(
     runner.log_experiment_result(cfg, result)
 
 
+def _quantize_chunk_blocks(blocks, q_type):
+    """
+    Quantize an already-formed [N, chunk_size] stack of context blocks.
+
+    Each row is one logical chunk (one scale per row). This is the codec PE-level
+    primitive and must only be fed rows that are already a single context chunk
+    (i.e. the output of chunk_tensor_by_context reshaped to [-1, chunk_size]).
+    """
+    deq, _ = quantize_tensor(blocks, q_type=q_type, mode='chunk',
+                             chunk_size=blocks.shape[-1], validate=False)
+    return deq
+
+
+def _quantize_context_chunked(tensor, q_type, chunk_size):
+    """
+    Per-context (per-output-channel) chunked quantization — the mechanism the
+    128-PE hardware uses: it MACs one context at a time, so a 128-wide scale
+    block never spans two contexts. This is the single canonical chunker; weight
+    analysis, baselines and application all go through it so selection and
+    deployment agree.
+    """
+    chunked, original_shape, meta = chunk_weight_by_context(tensor, chunk_size)
+    b, nc, cs = chunked.shape
+    deq = _quantize_chunk_blocks(chunked.reshape(-1, cs), q_type)
+    out = unchunk_weight_by_context(deq.view(b, nc, cs), original_shape, meta)
+    return out.contiguous(), tensor.abs().max().item()
+
+
 def get_quantized_tensor_sim(tensor, q_type, chunk_size=None, chunk_formats=None, mode=None):
     """
     Returns the dequantized tensor (simulated quantization).
     Returns (tensor_dequant, max_val).
     """
     if chunk_size is not None:
-        return quantize_tensor(tensor, q_type=q_type, mode='chunk', chunk_size=chunk_size,
-                               chunk_formats=chunk_formats, validate=False)
+        if chunk_formats is not None:
+            raise NotImplementedError(
+                "get_quantized_tensor_sim: chunk_formats path is gone; use "
+                "_quantize_weight / _apply_chunk_format_map for per-chunk formats."
+            )
+        return _quantize_context_chunked(tensor, q_type, chunk_size)
 
     if mode == 'tensor':
         return quantize_tensor(tensor, q_type=q_type, mode='tensor', validate=False)
@@ -430,7 +469,7 @@ def create_quantized_state_dict(model, layer_results_map, args, metric, use_chun
     def _quantize_weight(w, best_type, chunk_formats):
         """Quantize a single weight tensor; returns dequantized tensor."""
         if chunk_formats:
-            w_chunked, original_shape, pad_len = get_chunked_tensor(w, chunk_size=args.weight_chunk_size)
+            w_chunked, original_shape, meta = chunk_weight_by_context(w, args.weight_chunk_size)
             batch_size, num_chunks, chunk_size_ = w_chunked.shape
             w_chunked_flat = w_chunked.reshape(-1, chunk_size_)
             total_chunks = w_chunked_flat.shape[0]
@@ -443,17 +482,12 @@ def create_quantized_state_dict(model, layer_results_map, args, metric, use_chun
                 if not indices: continue
                 idx_tensor = torch.tensor(indices, device=w.device)
                 target_chunks = w_chunked_flat[idx_tensor]
-                # IMPORTANT: keep chunk semantics (one quantized chunk per row).
-                dq_chunks, _ = get_quantized_tensor_sim(
-                    target_chunks,
-                    fmt,
-                    chunk_size=chunk_size_,
-                )
-                w_dequant_flat[idx_tensor] = dq_chunks
+                # Each row is already one context chunk -> codec PE primitive.
+                w_dequant_flat[idx_tensor] = _quantize_chunk_blocks(target_chunks, fmt)
             if len(current_formats) < total_chunks:
                 w_dequant_flat[len(current_formats):] = w_chunked_flat[len(current_formats):]
             w_dequant_chunked = w_dequant_flat.view(batch_size, num_chunks, chunk_size_)
-            return unchunk_tensor_by_context(w_dequant_chunked, original_shape, pad_len)
+            return unchunk_weight_by_context(w_dequant_chunked, original_shape, meta).contiguous()
         elif best_type:
             w_dequant, _ = get_quantized_tensor_sim(w, best_type, chunk_size=args.weight_chunk_size)
             return w_dequant
@@ -591,7 +625,7 @@ def _apply_chunk_format_map(tensor, chunk_formats, chunk_size):
     Re-apply the chunk-wise format map on a tensor and return the reconstructed
     dequantized tensor (same logic used when creating chunk-quantized weights).
     """
-    w_chunked, original_shape, pad_len = get_chunked_tensor(tensor, chunk_size=chunk_size)
+    w_chunked, original_shape, meta = chunk_weight_by_context(tensor, chunk_size)
     batch_size, num_chunks, chunk_size_ = w_chunked.shape
     w_chunked_flat = w_chunked.reshape(-1, chunk_size_)
     total_chunks = w_chunked_flat.shape[0]
@@ -607,19 +641,14 @@ def _apply_chunk_format_map(tensor, chunk_formats, chunk_size):
             continue
         idx_tensor = torch.tensor(indices, dtype=torch.long, device=w_chunked_flat.device)
         target_chunks = w_chunked_flat[idx_tensor]
-        # Match creation path: quantize each row as one logical chunk.
-        dq_chunks, _ = get_quantized_tensor_sim(
-            target_chunks,
-            fmt,
-            chunk_size=chunk_size_,
-        )
-        w_dequant_flat[idx_tensor] = dq_chunks
+        # Match creation path: each row is already one context chunk.
+        w_dequant_flat[idx_tensor] = _quantize_chunk_blocks(target_chunks, fmt)
 
     if len(current_formats) < total_chunks:
         w_dequant_flat[len(current_formats):] = w_chunked_flat[len(current_formats):]
 
     w_dequant_chunked = w_dequant_flat.view(batch_size, num_chunks, chunk_size_)
-    return unchunk_tensor_by_context(w_dequant_chunked, original_shape, pad_len)
+    return unchunk_weight_by_context(w_dequant_chunked, original_shape, meta).contiguous()
 
 
 def verify_quantized_weights_file(weights_path, quant_map, args, atol=1e-7):
@@ -1330,7 +1359,7 @@ def process_single_model(args, device, metrics, base_root):
                     filtered_configs.append(c)  # baselines already pre-filtered
                     continue
                 weight_dt = out_name.replace('optimized_', 'opt_')
-                if _weight_quant_run_exists(existing_runs, args.model_name, 'weight_quant_optimized', weight_dt):
+                if _weight_quant_run_exists(existing_runs, args.model_name, args.optimized_experiment_type, weight_dt):
                     print(f"[DB] Skipping {out_name} — already in DB")
                 else:
                     filtered_configs.append(c)
@@ -1356,7 +1385,7 @@ def process_single_model(args, device, metrics, base_root):
                     filtered_configs.append(c)  # baselines already pre-filtered
                     continue
                 weight_dt = out_name.replace('optimized_', 'opt_')
-                if _weight_quant_run_exists(existing_runs, args.model_name, 'weight_quant_optimized', weight_dt):
+                if _weight_quant_run_exists(existing_runs, args.model_name, args.optimized_experiment_type, weight_dt):
                     print(f"[DB] Skipping {out_name} — already in DB")
                 else:
                     filtered_configs.append(c)
@@ -1432,7 +1461,7 @@ def process_single_model(args, device, metrics, base_root):
                 experiment_type=(
                     "weight_quant_baseline"
                     if out_name.startswith('baseline_')
-                    else "weight_quant_optimized"
+                    else args.optimized_experiment_type
                 ),
                 weight_dt=weight_dt,
                 acc1=float(res.get('acc1', 0.0) or 0.0),
@@ -1468,41 +1497,6 @@ def process_single_model(args, device, metrics, base_root):
         for idx, run_cfg in enumerate(final_configs, start=1):
             out_name = run_cfg.get('output_name', f'run_{idx}')
             run_cfg['dataset'] = _stable_eval_dataset_cfg(run_cfg.get('dataset', dataset_base))
-            print(f"[Eval] Running {idx}/{total_eval_runs}: {out_name}")
-            res = runner.run_single(run_cfg, output_root=model_dir)
-            results.append(res)
-            try:
-                _log_result_immediately(res)
-            except Exception as log_err:
-                print(f"[DB] Failed to log {out_name}: {log_err}")
-
-        failed = [r for r in results if r.get('status') not in ('SUCCESS', 'NO_QUANT')]
-        if failed:
-            print(f"\n[Evaluation] {len(failed)} run(s) failed:")
-            for r in failed:
-                print(
-                    f"  - {r.get('output_name', '<unknown>')}: "
-                    f"status={r.get('status')} error={r.get('exec_error')}"
-                )
-        
-        # Plot Oracle Heatmaps
-        if tracker:
-            oracle_stats, candidates = tracker.get_stats()
-            tracker.disable()
-            
-            # If candidates were never set (e.g. no oracle runs), we skip
-            if candidates:
-                for run_id, layer_stats in oracle_stats.items():
-                     out_path = os.path.join(model_dir, run_id)
-                     if os.path.exists(out_path):
-                          plot_oracle_heatmap(out_path, layer_stats, candidates, title_suffix=run_id)
-                     else:
-                          # Fallback: try looking in subdirs (e.g. if run_id uses slashes - unlikely here)
-                          pass
-
-        total_eval_runs = len(final_configs)
-        for idx, run_cfg in enumerate(final_configs, start=1):
-            out_name = run_cfg.get('output_name', f'run_{idx}')
             print(f"[Eval] Running {idx}/{total_eval_runs}: {out_name}")
             res = runner.run_single(run_cfg, output_root=model_dir)
             results.append(res)
@@ -1557,7 +1551,7 @@ def _analyze_weight_tensor(w, layer_name, args, metrics_to_calc, qt_options, lay
 
     record['numel'] = w.numel()
     if args.weight_chunk_size:
-        record['num_chunks'] = count_context_chunks(w, args.weight_chunk_size)
+        record['num_chunks'] = count_weight_chunks(w, args.weight_chunk_size)
 
     max_val_global = record['max_val']
     metric_chunk_errors = {m: {} for m in metrics_to_calc}
@@ -1572,8 +1566,8 @@ def _analyze_weight_tensor(w, layer_name, args, metrics_to_calc, qt_options, lay
                 record['metrics'][m][q_type] = err
 
             if args.weight_chunk_size:
-                w_chunked, _, _ = get_chunked_tensor(w, args.weight_chunk_size)
-                w_deq_chunked, _, _ = get_chunked_tensor(w_deq, args.weight_chunk_size)
+                w_chunked, _, _ = chunk_weight_by_context(w, args.weight_chunk_size)
+                w_deq_chunked, _, _ = chunk_weight_by_context(w_deq, args.weight_chunk_size)
                 diff = w_chunked - w_deq_chunked
 
                 for m in metrics_to_calc:
