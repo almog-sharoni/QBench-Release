@@ -901,7 +901,8 @@ with tab_runner:
         values["output_dir"] = r4.text_input("Output dir", value=output_dir, key=f"{prefix}_output_dir")
         return values
 
-    @st.fragment(run_every=3 if st.session_state.get("runner_auto_refresh", True) else None)
+    _runner_refresh_interval = 3 if st.session_state.get("runner_auto_refresh", True) else None
+    @st.fragment(run_every=_runner_refresh_interval)
     def render_run_models_tab_content():
         # Refresh current process and registry
         process = _dashboard_runner_current_process()
@@ -1611,6 +1612,7 @@ with tab_runner:
                 value=True,
                 key="runner_auto_refresh",
                 disabled=not is_running,
+                on_change=st.rerun,
             )
             page_size = st.select_slider(
                 "Lines per page",

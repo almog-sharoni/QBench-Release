@@ -23,7 +23,9 @@ if PROJECT_ROOT not in sys.path:
 from runspace.src.registry.op_registry import OpRegistry
 from runspace.core.runner import Runner
 from runspace.experiments.find_optimal_weight_quant.find_optimal_weight_quant import get_quantized_tensor_sim
+from runspace.experiments.utils.common import build_fp32_runtime_config
 from runspace.experiments.utils.plotting import get_format_bits
+from runspace.src.database.handler import RunDatabase
 
 from runspace.experiments.asic_cache_simulation.simulate_cache import (
     analyze_model,
@@ -58,7 +60,7 @@ try:
 except ImportError:
     DIQ2 = None
 
-def patched_candidates_for_layer(self, layer_name, module=None):
+def patched_candidates_for_layer(self, layer_name, module=None, input_index=0):
     """Silent custom candidates picker that uses per-layer input bit-width for off-chip layers."""
     is_unsigned = (
         self.use_unsigned_input_candidates
@@ -70,6 +72,12 @@ def patched_candidates_for_layer(self, layer_name, module=None):
         module is not None
         and self._module_uses_unsigned_input(module)
     )
+
+    if input_index == 1:
+        residual_bits = self.layer_residual_input_bits_map.get(layer_name)
+        if residual_bits is not None:
+            candidates = get_input_formats_for_bits(residual_bits)
+            return self._make_unsigned_candidates(candidates) if is_unsigned else candidates
 
     stays_on_chip = self.cache_sim_map.get(layer_name, True)
 
@@ -101,8 +109,13 @@ for DIQ in (DIQ1, DIQ2):
         def make_new_init(orig_init):
             def new_init(self, *args, **kwargs):
                 orig_init(self, *args, **kwargs)
-                self.cache_sim_map = getattr(self.__class__, '_global_cache_sim_map', {})
+                self.cache_sim_map = getattr(self.__class__, '_global_cache_sim_map', self.cache_sim_map)
                 self.layer_input_bits_map = getattr(self.__class__, '_global_layer_input_bits_map', {})
+                self.layer_residual_input_bits_map = getattr(
+                    self.__class__,
+                    '_global_layer_residual_input_bits_map',
+                    getattr(self, 'layer_residual_input_bits_map', {}),
+                )
             return new_init
         DIQ.__init__ = make_new_init(_orig_init)
 
@@ -154,6 +167,54 @@ def get_best_weight_format(weight_tensor, formats, chunk_size=128):
         except Exception:
             pass
     return best_fmt if best_fmt else formats[0]
+
+
+def build_bandwidth_fp32_config(args, model_name, weights):
+    """Build the model-load config used to materialize the FP32 reference.
+
+    The adapter is configured to mirror the standard hybrid_quant pipeline so the
+    module graph matches the eval pipeline exactly: Quant wrappers everywhere,
+    decomposed MHA into q_proj/k_proj/v_proj, folded input normalization, first
+    layer wrapped. Quantization is left OFF at the gate level
+    (input_quantization=False, weight_quantization=False) so weights stay FP32 —
+    they are later calibrated per-layer in `create_bandwidth_aware_state_dict`.
+    """
+    config = build_fp32_runtime_config(args, model_name=model_name, weights=weights)
+    adapter_cfg = config.setdefault('adapter', {})
+    adapter_cfg.update({
+        'type': 'generic',
+        'quantized_ops': ['all'],
+        'build_quantized': True,
+        'input_quantization': False,
+        'weight_quantization': False,
+        'fold_input_norm': True,
+        'quantize_first_layer': True,
+    })
+    config.setdefault('evaluation', {})
+    config['evaluation'].update({
+        'mode': 'evaluate',
+        'max_batches': args.limit_batches,
+    })
+    return config
+
+
+def get_cached_fp32_acc1(model_name):
+    """Return cached FP32 top-1 accuracy from the run DB, or None if unavailable."""
+    try:
+        ref_metrics = RunDatabase().get_reference_metrics(model_name)
+    except Exception as exc:
+        print(f"[FP32 ref] Could not read cached reference from DB: {exc}")
+        return None
+
+    if not ref_metrics:
+        return None
+
+    ref_acc1 = float(ref_metrics[0] or 0.0)
+    if ref_acc1 <= 0.0:
+        return None
+
+    print(f"[FP32 ref] Using cached DB reference: Top-1 Acc = {ref_acc1:.3f}%")
+    return ref_acc1
 
 
 def run_cache_simulation(model_name, cache_size_M, batch_size=1, num_banks=16, metadata_bits=0, device="cuda"):
@@ -234,12 +295,14 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
     layer_input_bits : dict  layer_name -> input bit-width
     layer_weight_bits : dict layer_name -> weight bit-width
     layer_output_bits : dict layer_name -> output bit-width
+    layer_residual_input_bits : dict layer_name -> residual operand bit-width
     """
     total_runtime = 0.0
     prev_stay_on_chip = False
     layer_input_bits = {}
     layer_weight_bits = {}
     layer_output_bits = {}
+    layer_residual_input_bits = {}
     
     for idx, layer in enumerate(layers_with_stay_status):
         stay_on_chip = layer.get('stay_on_chip', False)
@@ -249,11 +312,40 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
         need_input_transfer = (idx == 0 or not prev_stay_on_chip or not xin_from_cache)
         need_weight_transfer = True
         need_output_transfer = not stay_on_chip
+        residual_bits = 3
+        residual_input_stream_elems = layer.get('residual_input_stream_elems', 0)
+        residual_output_elems = layer.get('residual_output_elems', 0)
+        fixed_transfers = []
+        forced_bits = {}
+        residual_output_uses_main_stream = (
+            residual_output_elems > 0
+            and need_output_transfer
+            and residual_output_elems == layer.get('output_elems', 0)
+        )
+
+        if residual_output_elems > 0:
+            if residual_output_uses_main_stream:
+                forced_bits['output'] = residual_bits
+            else:
+                fixed_transfers.append({
+                    'name': 'residual_output',
+                    'elems': residual_output_elems,
+                    'bits': residual_bits,
+                })
+        if residual_input_stream_elems > 0:
+            fixed_transfers.append({
+                'name': 'residual_input',
+                'elems': residual_input_stream_elems,
+                'bits': residual_bits,
+            })
+            layer_residual_input_bits[lname] = residual_bits
         
         in_b, w_b, out_b, cycles = optimize_layer_bits(
             layer, bandwidth,
             need_input_transfer, need_weight_transfer, need_output_transfer,
-            min_bits=b_bits
+            min_bits=b_bits,
+            fixed_transfers=fixed_transfers,
+            forced_bits=forced_bits,
         )
         
         layer_input_bits[lname] = in_b
@@ -263,73 +355,48 @@ def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
         
         prev_stay_on_chip = stay_on_chip
         
-    return total_runtime, layer_input_bits, layer_weight_bits, layer_output_bits
+    return total_runtime, layer_input_bits, layer_weight_bits, layer_output_bits, layer_residual_input_bits
 
 
 def create_bandwidth_aware_state_dict(model, cache_sim_map, per_layer_weight_bits, chunk_size=128):
-    """Reassemble state dict with weights quantized based on per-layer weight bit-width."""
-    state_dict = model.state_dict()
+    """Calibrate per-layer weights via the Quant layer's own machinery.
+
+    The model is built with `quantized_ops:['all']`, so each compute layer is a
+    Quant{Conv2d,Linear} wrapper with `weight_fp8`/`weight_scale` buffers, and
+    MHA is already decomposed into separate q_proj/k_proj/v_proj Linear
+    sub-modules whose names match the cache_sim_map keys directly.
+
+    For each layer in `cache_sim_map`:
+      - pick the best signed format among `SIGNED_FORMATS_BY_BITS[bits]`
+      - set the module's q_type and call `calibrate_weights()` to populate
+        `weight_fp8` and `weight_scale` consistently — matching the
+        find_optimal_hybrid_quant pipeline's `_materialize_weight_buffers_from_map`.
+    """
+    modules = dict(model.named_modules())
     quant_map = {}
-    
-    # 1. First, identify if there are MHA virtual layers
-    # MHA virtual names are like '<mha_name>.q_proj', '<mha_name>.k_proj', '<mha_name>.v_proj'
-    # in the cache sim map.
-    mha_parents = {}
-    for lname in cache_sim_map:
-        for suffix in ('.q_proj', '.k_proj', '.v_proj'):
-            if lname.endswith(suffix):
-                parent = lname[:-len(suffix)]
-                mha_parents.setdefault(parent, {})[suffix[1:]] = lname
-                
-    handled_names = set()
-    
-    # Slices for MHA in_proj_weight
-    for mha_name, proj_map in mha_parents.items():
-        in_proj_key = f"{mha_name}.in_proj_weight"
-        if in_proj_key not in state_dict:
+
+    for layer_name in cache_sim_map:
+        module = modules.get(layer_name)
+        if module is None or not hasattr(module, 'calibrate_weights'):
             continue
-        w_in_proj = state_dict[in_proj_key]
-        embed_dim = w_in_proj.shape[0] // 3
-        slices = {
-            'q_proj': (0, embed_dim),
-            'k_proj': (embed_dim, 2 * embed_dim),
-            'v_proj': (2 * embed_dim, 3 * embed_dim),
-        }
-        new_in_proj = w_in_proj.clone()
-        for proj_key, (start, end) in slices.items():
-            vname = proj_map.get(proj_key)
-            if vname and vname in cache_sim_map:
-                w_slice = w_in_proj[start:end].contiguous()
-                
-                bits = per_layer_weight_bits.get(vname, 8)
-                formats = SIGNED_FORMATS_BY_BITS.get(bits, [])
-                best_fmt = get_best_weight_format(w_slice, formats, chunk_size=chunk_size)
-                
-                if best_fmt:
-                    w_deq, _ = get_quantized_tensor_sim(w_slice, best_fmt, chunk_size=chunk_size)
-                    new_in_proj[start:end] = w_deq
-                    quant_map[vname] = best_fmt
-                    
-        state_dict[in_proj_key] = new_in_proj
-        handled_names.update(proj_map.values())
-        
-    # 2. For all other layers in cache_sim_map
-    for name, module in model.named_modules():
-        if name in cache_sim_map and name not in handled_names:
-            weight_key = f"{name}.weight"
-            if weight_key in state_dict:
-                w = state_dict[weight_key]
-                
-                bits = per_layer_weight_bits.get(name, 8)
-                formats = SIGNED_FORMATS_BY_BITS.get(bits, [])
-                best_fmt = get_best_weight_format(w, formats, chunk_size=chunk_size)
-                
-                if best_fmt:
-                    w_deq, _ = get_quantized_tensor_sim(w, best_fmt, chunk_size=chunk_size)
-                    state_dict[weight_key] = w_deq
-                    quant_map[name] = best_fmt
-                    
-    return state_dict, quant_map
+        if not hasattr(module, 'weight') or module.weight is None:
+            continue
+
+        bits = per_layer_weight_bits.get(layer_name, 8)
+        formats = SIGNED_FORMATS_BY_BITS.get(bits, [])
+        best_fmt = get_best_weight_format(module.weight.detach(), formats, chunk_size=chunk_size)
+        if not best_fmt:
+            continue
+
+        module.weight_quantization = True
+        module.weight_chunk_size = chunk_size
+        module.weight_mode = 'channel'
+        module.chunk_formats = None
+        module.q_type = best_fmt
+        module.calibrate_weights()
+        quant_map[layer_name] = best_fmt
+
+    return model.state_dict(), quant_map
 
 
 # ============================================================
@@ -392,19 +459,7 @@ def main():
         print(f"Results will be stored in: {model_output_dir}")
 
         # 1. Load the reference FP32 model and obtain weight state dict
-        ref_config = {
-            'model': {'name': model_name, 'weights': model_weights},
-            'adapter': {
-                'type': 'generic',
-                'quantized_ops': ['-1'],
-                'weight_quantization': False,
-                'input_quantization': False,
-            },
-            'dataset': {
-                'name': args.dataset_name, 'path': args.dataset_path,
-                'batch_size': args.batch_size, 'num_workers': args.num_workers,
-            },
-        }
+        ref_config = build_bandwidth_fp32_config(args, model_name, model_weights)
         model_order_dir = os.path.join(model_output_dir, "ref_fp32_loader")
         os.makedirs(model_order_dir, exist_ok=True)
         model, _, _ = runner.prepare_model_with_materialized_weights(config=ref_config, output_dir=model_order_dir)
@@ -432,7 +487,7 @@ def main():
         print(f"\n--- Evaluating reference FP32 model ---")
         ref_cycles_per_cs = {}
         for cs in cache_sizes:
-            sim_layers, cache_sim_map = cache_sims[cs]
+            sim_layers, _ = cache_sims[cs]
             total_cyc = 0.0
             prev_stay = False
             for idx, layer in enumerate(sim_layers):
@@ -448,38 +503,25 @@ def main():
                 total_cyc += cyc
                 prev_stay = stay
             ref_cycles_per_cs[cs] = total_cyc
-            print(f"  Cache {cs}MB reference cycles (32b): {total_cyc:,}")
+            print(f"  Cache {cs}MB FP32 cycles (32b): {total_cyc:,}")
 
-        ref_eval_config = {
-            'model': {'name': model_name, 'weights': model_weights},
-            'adapter': {
-                'type': 'generic',
-                'quantized_ops': ['-1'],
-                'weight_quantization': False,
-                'input_quantization': False,
-            },
-            'evaluation': {
-                'mode': 'evaluate',
-                'max_batches': args.limit_batches,
-            },
-            'dataset': {
-                'name': args.dataset_name,
-                'path': args.dataset_path,
-                'batch_size': args.batch_size,
-                'num_workers': args.num_workers,
-            }
-        }
+        ref_baseline_cycles = ref_cycles_per_cs.get(0.0)
+        if ref_baseline_cycles is None:
+            ref_baseline_cycles = next(iter(ref_cycles_per_cs.values()), 1.0)
+        print(f"  FP32 0MB reference baseline cycles: {ref_baseline_cycles:,}")
 
-        try:
-            print("Running reference FP32 evaluation...")
-            ref_eval_results = runner.run_single(ref_eval_config, output_root=model_output_dir)
-            ref_acc1 = ref_eval_results.get('acc1', 0.0)
-            print(f"Reference FP32: Top-1 Acc = {ref_acc1:.3f}%")
-        except Exception as e:
-            print(f"Error during reference evaluation: {e}")
-            ref_acc1 = 0.0
-            import traceback
-            traceback.print_exc()
+        ref_acc1 = get_cached_fp32_acc1(model_name)
+        if ref_acc1 is None:
+            try:
+                print("Running reference FP32 evaluation...")
+                ref_eval_results = runner.run_single(ref_config, output_root=model_output_dir)
+                ref_acc1 = ref_eval_results.get('acc1', 0.0)
+                print(f"Reference FP32: Top-1 Acc = {ref_acc1:.3f}%")
+            except Exception as e:
+                print(f"Error during reference evaluation: {e}")
+                ref_acc1 = 0.0
+                import traceback
+                traceback.print_exc()
 
         # 4. Sweep loops
         unique_runs = []
@@ -503,7 +545,13 @@ def main():
             sim_layers, cache_sim_map = cache_sims[cs]
             
             # 3.1. Compute execution runtime (cycles) and obtain layer-specific transfer bits
-            cycles, layer_input_bits, layer_weight_bits, layer_output_bits = compute_model_runtime(sim_layers, b, bandwidth=args.bandwidth)
+            (
+                cycles,
+                layer_input_bits,
+                layer_weight_bits,
+                layer_output_bits,
+                layer_residual_input_bits,
+            ) = compute_model_runtime(sim_layers, b, bandwidth=args.bandwidth)
             print(f"Calculated compute time: {cycles:,} cycles")
 
             # 3.2. Quantize model weights based on per-layer weight bit-width
@@ -518,17 +566,29 @@ def main():
             if DIQ1 is not None:
                 DIQ1._global_cache_sim_map = cache_sim_map
                 DIQ1._global_layer_input_bits_map = layer_input_bits
+                DIQ1._global_layer_residual_input_bits_map = layer_residual_input_bits
             if DIQ2 is not None:
                 DIQ2._global_cache_sim_map = cache_sim_map
                 DIQ2._global_layer_input_bits_map = layer_input_bits
+                DIQ2._global_layer_residual_input_bits_map = layer_residual_input_bits
 
-            # 3.4. Build evaluation config
+            # 3.4. Build evaluation config — mirror the standard hybrid_quant
+            # pipeline (Quant wrappers + decomposed MHA + folded input norm) so the
+            # loaded state_dict (with weight_fp8/weight_scale populated by
+            # create_bandwidth_aware_state_dict) is consumed by the same module
+            # graph. weight_quantization=True lets calibrate_weights run during
+            # build, but the materialized state_dict's weight_fp8/weight_scale
+            # buffers take precedence over re-calibration on load.
             eval_config = {
                 'model': {'name': model_name, 'weights': os.path.abspath(temp_weights_path)},
                 'adapter': {
                     'type': 'generic',
-                    'quantized_ops': ['-1'],
-                    'input_quantization': False,
+                    'quantized_ops': ['all'],
+                    'build_quantized': True,
+                    'input_quantization': True,
+                    'weight_quantization': True,
+                    'fold_input_norm': True,
+                    'quantize_first_layer': True,
                 },
                 'evaluation': {
                     'mode': 'evaluate',
@@ -586,6 +646,7 @@ def main():
             'model_name': model_name,
             'ref_fp32': {
                 'accuracy': ref_acc1,
+                'baseline_cycles': ref_baseline_cycles,
                 'cycles_per_cache_size': ref_cycles_per_cs,
             },
             'min_bits_sweeps': {
