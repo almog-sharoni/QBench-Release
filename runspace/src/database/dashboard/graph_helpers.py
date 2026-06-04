@@ -1,21 +1,108 @@
+def _collect_distinct_model_names_from_db(db_path, table_names):
+    if not db_path or not os.path.exists(db_path):
+        return set()
+
+    names = set()
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            for table_name in table_names:
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (table_name,),
+                )
+                if cursor.fetchone() is None:
+                    continue
+
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                columns = {row[1] for row in cursor.fetchall()}
+                if 'model_name' not in columns:
+                    continue
+
+                cursor.execute(
+                    f"""
+                    SELECT DISTINCT model_name
+                    FROM {table_name}
+                    WHERE model_name IS NOT NULL AND TRIM(model_name) != ''
+                    """
+                )
+                names.update(str(row[0]).strip() for row in cursor.fetchall() if row[0])
+    except sqlite3.Error:
+        return names
+
+    return names
+
+
+def _collect_model_names_from_config(config_path):
+    if not config_path or not os.path.exists(config_path):
+        return set()
+
+    try:
+        import yaml
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            config = yaml.safe_load(config_file)
+    except Exception:
+        return set()
+
+    if isinstance(config, dict):
+        entries = config.get('models', [])
+    else:
+        entries = config
+
+    names = set()
+    for entry in entries or []:
+        if isinstance(entry, str):
+            name = entry
+        elif isinstance(entry, dict):
+            name = entry.get('name')
+        else:
+            continue
+        if name and str(name).strip():
+            names.add(str(name).strip())
+    return names
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_architecture_graph_model_options(db_path, fm_db_path, models_config_path):
+    model_names = set()
+    model_names.update(
+        _collect_distinct_model_names_from_db(
+            db_path,
+            ("runs", "model_graphs", "cache_simulations", "fm_runs"),
+        )
+    )
+    model_names.update(
+        _collect_distinct_model_names_from_db(
+            fm_db_path,
+            ("fm_runs", "model_graphs", "cache_simulations", "runs"),
+        )
+    )
+    model_names.update(_collect_model_names_from_config(models_config_path))
+    return sorted(model_names)
+
+
 def generate_live_model_graph_bundle(model_name, graph_depth=12):
     if not TORCH_AVAILABLE:
         raise RuntimeError("torch is not available in this environment.")
     if not GRAPH_VIZ_AVAILABLE:
         raise RuntimeError("Graph visualization dependencies are not available.")
 
+    from runspace.src.utils.model_input_utils import resolve_model_input_size
+
     adapter = GenericAdapter(
         model_name=model_name,
         quantized_ops=["all"],
         input_quantization=False,
         enable_fx_quantization=False,
+        skip_calibration=True,
     )
     model = adapter.model
     model.eval()
+    input_size = resolve_model_input_size(model)
 
     graph_json = generate_hierarchical_json(
         model,
-        input_size=(1, 3, 224, 224),
+        input_size=input_size,
         model_name=model_name,
         depth=graph_depth,
     )
@@ -35,7 +122,6 @@ def generate_live_model_graph_bundle(model_name, graph_depth=12):
     }
 
 
-@st.cache_data(show_spinner=False)
 def get_cached_model_graph_bundle(db_path, model_name):
     db = RunDatabase(db_path=db_path)
     graph_json, graph_meta = db.get_model_graph_json(model_name)
@@ -55,8 +141,6 @@ def load_or_generate_model_graph_bundle(model_name, use_cache=True, force_regene
     graph_meta = dict(graph_meta or {})
     graph_meta['source'] = 'live'
     if use_cache:
-        # Avoid keeping an earlier cache miss around after this model is stored.
-        get_cached_model_graph_bundle.clear()
         db = RunDatabase(db_path=DB_PATH)
         db.store_model_graph(model_name, graph_json, graph_meta)
     return graph_json, graph_meta, "live"
@@ -190,5 +274,3 @@ def render_dashboard_intro():
         """,
         unsafe_allow_html=True,
     )
-
-
