@@ -1,3 +1,4 @@
+from numpy import mean
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,10 +35,10 @@ def qtype_to_unsigned_qtype(
     # Fallback for other types
     return "u" + q_type
 
-def rsqrt_lut_approx_with_inv_n(x, n, lut_size=256, eps=1e-12):
+def inv_rsqrt_lut_approx(x, lut_size=256, eps=1e-12):
     """
     Approximates:
-        1 / sqrt((1/n) * x)
+        1 / sqrt(x)
     """
     x = torch.clamp(x, min=eps)
 
@@ -52,24 +53,23 @@ def rsqrt_lut_approx_with_inv_n(x, n, lut_size=256, eps=1e-12):
         max=lut_size - 1
     )
 
-    # LUT contains 1 / sqrt((1/n) * M)
+    # LUT contains 1 / sqrt(M)
     lut_m = 1.0 + torch.arange(
         lut_size,
         device=x.device,
         dtype=x.dtype
     ) / lut_size
 
-    inv_n = 1.0 / float(n)
-    lut = torch.rsqrt(inv_n * lut_m)
+    lut = torch.rsqrt(lut_m)
     # Enforce 17-bit precision (1s, 8e, 8m)
     lut = round_fractional_part(lut)
 
-    mant_rsqrt_with_inv_n = lut[idx]
+    mant_rsqrt = lut[idx]
 
     # exponent correction
     exp_corr = torch.exp2(-0.5 * E)
 
-    return exp_corr * mant_rsqrt_with_inv_n
+    return exp_corr * mant_rsqrt
 
 @OpRegistry.register("QuantLayerNorm", original_cls=nn.LayerNorm)
 class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
@@ -137,46 +137,53 @@ class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
         q_type = getattr(self, 'q_type', 'fp8_e4m3')
         capture = getattr(self, 'capture_activations', False)
 
+        n = float(input.shape[-1])
+        inv_n = 1.0 / n
 
-
-        # 1. Quantization of the Input
+        # Quantization of the Input
         input_dequant = self.quantize_input(input)
 
-        # 2. CORE LAYER NORM LOGIC
-        # calc mean 
-        mean = input_dequant.sum(dim=-1, keepdim=True)
-        n = float(input_dequant.shape[-1])
-        mean_neg = mean / -n 
-        # quantize mean (w2m simulation)
+        # 1.1 calc -mean
+        mean_neg = - inv_n * torch.sum(input_dequant, dim=-1, keepdim=True)
+        # 1.2 quantize -mean
         mean_neg = self.quantize_input(mean_neg, internal=True)
 
-        # x - mean 
+        # 2.1 calc diff = input + mean_neg
         diff = input_dequant + mean_neg
-        diff_sq = diff * diff
+
+        # 2.2 quantize diff
+        diff = self.quantize_input(diff, internal=True)
+
+        # 2.3 calc n * sum(diff^2)
+        n_diff_sq = torch.sum(diff * diff, dim=-1, keepdim=True)
+
+        # 2.4 quantize n_diff_sq
+        n_diff_sq = self.quantize_input(n_diff_sq, internal=True)
+
+        # 3.1 calc 1/n * n_diff_sq
+        var_pow2 = inv_n * n_diff_sq
+        # 3.2 quantize 1/n * n_diff_sq
+        var_pow2 = self.quantize_input(var_pow2, internal=True)
+
+        # 4.1 calc inv_var
+        inv_var = inv_rsqrt_lut_approx(var_pow2, lut_size=256, eps=1e-12)
+
+        # 4.2 quantize inv_var
+        inv_var = self.quantize_input(inv_var, internal=True)
+
+        # 5.1 calc standardized = diff * inv_var
+        standardized = diff * inv_var
+        # 5.2 quantize standardized
+        standardized = self.quantize_input(standardized, internal=True)
         
-        # calc variance via lut
-        sum_diff_sq = diff_sq.sum(dim=-1, keepdim=True)
-        variance_inv_rsqrt_n = rsqrt_lut_approx_with_inv_n(sum_diff_sq, n)
+        # quantize gamma and beta
+        quantized_gamma = self.quantize_input(self.weight, internal=True)
+        quantized_betta = self.quantize_input(self.bias, internal=True)
 
-        variance_inv_rsqrt_n = self.quantize_input(variance_inv_rsqrt_n, internal=True)
 
-        x_minux_man_div_var = diff * variance_inv_rsqrt_n
-
-        x_minux_man_div_var = self.quantize_input(x_minux_man_div_var, internal=True)
-
-        #quantize gamma and beta
-        if self.weight is not None:
-            quantized_gamma = self.quantize_input(self.weight, internal=True)
-        else:
-            quantized_gamma = 1.0
-
-        if self.bias is not None:
-            quantized_betta = self.quantize_input(self.bias, internal=True)
-        else:
-            quantized_betta = 0.0
 
         # (x - mean) / sqrt(var) * gamma + beta
-        out = x_minux_man_div_var * quantized_gamma + quantized_betta
+        out = standardized * quantized_gamma + quantized_betta
         
 
         # 3. Activation Capture and Output Quantization

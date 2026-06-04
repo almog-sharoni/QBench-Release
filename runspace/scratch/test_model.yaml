@@ -1,0 +1,7 @@
+model:
+  name: resnet18
+  source: torchvision
+  weights: null
+adapter:
+  type: generic
+  build_quantized: true

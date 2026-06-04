@@ -65,10 +65,11 @@ with tab_cache:
                   delta=f"-{off_chip}" if off_chip else None, delta_color="inverse")
         m4.metric("Flagged",        flagged,
                   delta=f"-{flagged}" if flagged else None, delta_color="inverse")
-        m5.metric("Cache Size",     f"{latest.get('cache_size_M', '?')}M  ×{num_banks} banks")
+        m5.metric("Cache Size",     f"{latest.get('cache_size_M', '?')}M  /{num_banks} banks")
 
         st.markdown(
             f"<p class='dashboard-filter-note'>metadata_bits={int(latest.get('metadata_bits') or 0)} &nbsp;·&nbsp; "
+            f"bandwidth={latest.get('bandwidth', 1.0):.1f} B/cyc &nbsp;·&nbsp; "
             f"bank_size={bank_size:,} elem &nbsp;·&nbsp; "
             f"timestamp={latest.get('timestamp', '—')}</p>",
             unsafe_allow_html=True,
@@ -100,12 +101,28 @@ with tab_cache:
 
             # ── Layer table ───────────────────────────────────────────────────
             st.markdown("#### Layer Details")
-            layers_df = pd.DataFrame(layers)
+            
+            # Format collapsed layers into name and type columns for display
+            formatted_layers = []
+            for layer in layers:
+                layer_copy = dict(layer)
+                collapsed = layer.get('collapsed_layers', [])
+                if collapsed:
+                    collapsed_names = ", ".join(c['name'] for c in collapsed)
+                    collapsed_types = ", ".join(c['type'] for c in collapsed)
+                    layer_copy['name'] = f"{layer['name']} (+ {collapsed_names})"
+                    layer_copy['type'] = f"{layer['type']} (+ {collapsed_types})"
+                formatted_layers.append(layer_copy)
+            
+            layers_df = pd.DataFrame(formatted_layers)
 
             display_cols = [c for c in [
                 'name', 'type', 'stay_on_chip', 'rule', 'reason',
                 'input_elems', 'weight_elems', 'output_elems',
                 'output_banked', 'next_xin_banked', 'next_layer_name',
+                'input_bits', 'weight_bits', 'output_bits',
+                'input_bw_limited', 'weight_bw_limited', 'output_bw_limited',
+                'compute_cycles', 'total_cycles',
             ] if c in layers_df.columns]
 
             # Scale element counts to Thousands (K) to keep the table clean 
@@ -115,6 +132,11 @@ with tab_cache:
             for col in num_cols:
                 if col in layers_viz.columns:
                     layers_viz[col] = layers_viz[col].astype(float) / 1000.0
+
+            # Format compute/total cycles as integers for display
+            for col in ['compute_cycles', 'total_cycles']:
+                if col in layers_viz.columns:
+                    layers_viz[col] = layers_viz[col].fillna(0).astype(int)
 
             st.dataframe(
                 layers_viz,
@@ -132,6 +154,14 @@ with tab_cache:
                     'output_banked':   st.column_config.NumberColumn("Banked (K)",   format="%.1f K", width="small"),
                     'next_xin_banked': st.column_config.NumberColumn("Next Xin (K)", format="%.1f K", width="small"),
                     'next_layer_name': st.column_config.TextColumn("Next Layer",   width="large"),
+                    'input_bits':      st.column_config.NumberColumn("in Bits",      format="%d", width="small"),
+                    'weight_bits':     st.column_config.NumberColumn("W Bits",       format="%d", width="small"),
+                    'output_bits':     st.column_config.NumberColumn("out Bits",     format="%d", width="small"),
+                    'input_bw_limited':   st.column_config.CheckboxColumn("xin BW",  width="small"),
+                    'weight_bw_limited':  st.column_config.CheckboxColumn("W BW",    width="small"),
+                    'output_bw_limited':  st.column_config.CheckboxColumn("xout BW", width="small"),
+                    'compute_cycles':  st.column_config.NumberColumn("Comp Cyc",     format="%d", width="small"),
+                    'total_cycles':    st.column_config.NumberColumn("Total Cyc",    format="%d", width="small"),
                 },
             )
 

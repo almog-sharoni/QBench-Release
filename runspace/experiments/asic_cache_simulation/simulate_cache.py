@@ -18,21 +18,27 @@ def get_footprint_elements(num_elements: int, metadata_bits: int) -> int:
     """
     Calculate total element-equivalent footprint including metadata overhead.
 
-    Each FP8 element is 8 bits, so 16 elements form one 128-bit chunk.
-    Metadata bytes (ceil(metadata_bits/8)) are counted as element-equivalents
-    (1 byte = 1 FP8 element).
+    Tensors are allocated in 128-element chunks. If a tensor uses any part
+    of a chunk, it occupies the full chunk.
+
+    Metadata bytes are counted as element-equivalents (1 byte = 1 FP8 element)
+    and are also computed per chunk.
     """
     if num_elements <= 0:
         return 0
-    num_chunks = math.ceil(num_elements / 16)          # 16 FP8 elements per 128-bit chunk
+    chunk_size = 128
+    num_chunks = math.ceil(num_elements / chunk_size)
+    chunk_elems = num_chunks * chunk_size
     metadata_elems = math.ceil(num_chunks * metadata_bits / 8)
-    return num_elements + metadata_elems
+    return chunk_elems + metadata_elems
 
 
 def round_to_banks(size_elems: int, bank_size: int) -> int:
     """Round up to the nearest bank boundary (in elements)."""
     if size_elems <= 0:
         return 0
+    if bank_size <= 0:
+        return size_elems
     return math.ceil(size_elems / bank_size) * bank_size
 
 
@@ -46,188 +52,12 @@ def fmt_elems(n: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Rule system
-#
-# RULES: dict of rule_name -> rule definition.  Each rule has:
-#   'on_chip'       : bool  — True  → output stays in cache after this rule
-#                             False → output streamed to external memory (QUANTIZE)
-#   'xin_from_cache': bool  — True  → rule requires xin fully resident in cache
-#                             False → rule streams xin from external (2-bank buffer)
-#   'ctx_guard'     : (ctx) -> bool  — optional runtime condition (e.g. xout >= xin);
-#                                      evaluated before stay(); rule skipped if False
-#   'perm'          : (ctx) -> int   — elements resident after execution
-#   'stay'          : (ctx) -> bool  — capacity check for this rule
-#
-# ctx fields (all in bank-aligned elements unless noted):
-#   input_banked, output_banked, weight_banked, cache_elements, bank_size
-#
-# LAYER_RULES: dict of layer_type -> ordered list of rule keys to try.
-#   '__default__' is the fallback for any type not explicitly listed.
-#
-# Evaluation:
-#   1. Look up layer type in LAYER_RULES (fallback to '__default__')
-#   2. Iterate rule keys in order; for each:
-#      a. If ctx_guard present and returns False → skip
-#      b. If stay(ctx) is False → skip
-#      c. Run 1-level lookahead: next layer must have a compatible rule given
-#         the xin source implied by on_chip:
-#           on_chip=True  → next xin from cache  (xin_from_cache=True rules only)
-#           on_chip=False → next xin from external (xin_from_cache=False rules only)
-#   3. First confirmed rule wins.  No confirmation → FLAGGED.
+# Rule system (imported from rules.py)
 # ---------------------------------------------------------------------------
-
-RULES = {
-
-    'global_fit': {
-        'on_chip':        True,
-        'xin_from_cache': True,
-        'stay_condition': 'xin + xout + 2 banks ≤ cache',
-        'permanents':     'xout (→ next xin)',
-        'notes':          'Everything fits; both tensors stay on chip simultaneously.',
-        'perm':  lambda ctx: ctx['input_banked'],
-        'stay':  lambda ctx: (
-            ctx['input_banked'] + ctx['output_banked'] + 2 * ctx['bank_size']
-            <= ctx['cache_elements']
-        ),
-    },
-
-    'residual': {
-        'on_chip':        True,
-        'xin_from_cache': True,
-        'stay_condition': 'xin + 4 banks (2 xout, 2 x_residual) ≤ cache',
-        'permanents':     'xin (skip tensor)',
-        'notes':          'Skip tensor held in cache; x_residual + xout use 4 banks (2 xout, 2 x_residual), xout is written on xin.',
-        'perm':  lambda ctx: ctx['input_banked'],
-        'stay':  lambda ctx: (
-            ctx['input_banked'] + 4 * ctx['bank_size']
-            <= ctx['cache_elements']
-        ),
-    },
-
-    'conv_output_dominated': {
-        'on_chip':        True,
-        'xin_from_cache': True,
-        'ctx_guard':      lambda ctx: ctx['output_banked'] >= ctx['input_banked'],
-        'stay_condition': 'xout + weights + 1 bank ≤ cache',
-        'permanents':     'weights + xout',
-        'pipeline_banks': 1,
-        'notes':          'xout is the larger tensor; xin is written onto xout\'s space. 1 bank overhead for read/write pipeline boundary.',
-        'perm':  lambda ctx: ctx['weight_banked'] + ctx['output_banked'],
-        'stay':  lambda ctx: (
-            ctx['output_banked'] + 1 * ctx['bank_size'] + ctx['weight_banked']
-            <= ctx['cache_elements']
-        ),
-    },
-
-    'conv_input_dominated': {
-        'on_chip':        True,
-        'xin_from_cache': True,
-        'ctx_guard':      lambda ctx: ctx['input_banked'] > ctx['output_banked'],
-        'stay_condition': 'xin + weights + 1 bank ≤ cache',
-        'permanents':     'weights + xin',
-        'pipeline_banks': 1,
-        'notes':          'xin is the larger tensor; xout is written onto xin\'s space. 1 bank overhead for read/write pipeline boundary.',
-        'perm':  lambda ctx: ctx['weight_banked'] + ctx['input_banked'],
-        'stay':  lambda ctx: (
-            ctx['input_banked'] + 1 * ctx['bank_size'] + ctx['weight_banked']
-            <= ctx['cache_elements']
-        ),
-    },
-
-    'pool': {
-        'on_chip':        True,
-        'xin_from_cache': True,
-        'stay_condition': 'xin + xout + 2 banks ≤ cache',
-        'permanents':     'xout',
-        'notes':          'No weights; output stays on chip. Shows size reduction from spatial downsampling.',
-        'perm':  lambda ctx: ctx['output_banked'],
-        'stay':  lambda ctx: (
-            ctx['input_banked'] + ctx['output_banked'] + 2 * ctx['bank_size']
-            <= ctx['cache_elements']
-        ),
-    },
-
-    'stream_xin_keep_xout': {
-        'on_chip':        True,
-        'xin_from_cache': False,
-        'stay_condition': 'xout + weights + 2 banks ≤ cache',
-        'permanents':     'weights + xout',
-        'notes':          'xin streams from external (prev layer evicted); xout still kept on chip.',
-        'perm':  lambda ctx: ctx['weight_banked'] + ctx['output_banked'],
-        'stay':  lambda ctx: (
-            ctx['output_banked'] + ctx['weight_banked'] + 2 * ctx['bank_size']
-            <= ctx['cache_elements']
-        ),
-    },
-
-    'fallback': {
-        'on_chip':        False,
-        'xin_from_cache': False,
-        'stay_condition': 'weights + 4 banks ≤ cache',
-        'permanents':     'weights only',
-        'notes':          'Full streaming: xin and xout both via external memory → output marked QUANTIZE.',
-        'perm':  lambda ctx: ctx['weight_banked'],
-        'stay':  lambda ctx: (
-            ctx['weight_banked'] + 4 * ctx['bank_size']
-            <= ctx['cache_elements']
-        ),
-    },
-
-    'linear_stream_xout': {
-        'on_chip':        False,
-        'xin_from_cache': True,
-        'stay_condition': 'xin + 4 banks ≤ cache',
-        'permanents':     'xin',
-        'notes':          'xin in cache, weights streamed in, xout is computed and streamed out.',
-        'perm':  lambda ctx: ctx['input_banked'],
-        'stay':  lambda ctx: (
-            ctx['input_banked'] + 4 * ctx['bank_size']
-            <= ctx['cache_elements']
-        ),
-    },
-
-    'conv_stream_xin_out': {
-        'on_chip':        False,
-        'xin_from_cache': True,
-        'stay_condition': 'xin + weights + 2 banks ≤ cache',
-        'permanents':     'xin + weights (held while streaming xout)',
-        'notes':          'xin from cache, weights resident, xout streamed to external.',
-        'perm':  lambda ctx: ctx['input_banked'],
-        'stay':  lambda ctx: (
-            ctx['input_banked'] + ctx['weight_banked'] + 2 * ctx['bank_size']
-            <= ctx['cache_elements']
-        ),
-    },
-}
-
-
-# Layer type → ordered list of rule keys to try (priority order).
-# Linear intentionally skips conv/pool-specific rules and falls through to fallback.
-LAYER_RULES = {
-    'QuantConv2d':       ['conv_output_dominated', 'conv_input_dominated', 'global_fit',
-                          'stream_xin_keep_xout', 'conv_stream_xin_out', 'fallback'],
-    'Conv2d':            ['conv_output_dominated', 'conv_input_dominated', 'global_fit',
-                          'stream_xin_keep_xout', 'conv_stream_xin_out', 'fallback'],
-    'QuantLinear':       ['global_fit', 'linear_stream_xout', 'fallback'],
-    'Linear':            ['global_fit', 'linear_stream_xout', 'fallback'],
-    'Residual':          ['residual', 'fallback'],
-    'QuantAdd':          ['residual', 'global_fit', 'fallback'],
-    'QuantMaxPool2d':    ['global_fit', 'pool', 'fallback'],
-    'QuantAvgPool2d':    ['global_fit', 'pool', 'fallback'],
-    'QuantMaxPool1d':    ['global_fit', 'pool', 'fallback'],
-    'QuantAvgPool1d':    ['global_fit', 'pool', 'fallback'],
-    'QuantMatMul':       ['global_fit', 'fallback'],
-    'QuantSoftmax':      ['global_fit', 'fallback'],
-    'LayerNorm':         ['global_fit', 'fallback'],
-    'BatchNorm1d':       ['global_fit', 'fallback'],
-    'BatchNorm2d':       ['global_fit', 'fallback'],
-    'BatchNorm3d':       ['global_fit', 'fallback'],
-    'GroupNorm':         ['global_fit', 'fallback'],
-    'QuantGELU':         ['global_fit', 'fallback'],
-    'QuantDropout':      ['global_fit', 'fallback'],
-    'DecomposedMultiheadAttention': ['global_fit', 'fallback'],
-    '__default__':       ['global_fit', 'fallback'],
-}
+try:
+    from runspace.experiments.asic_cache_simulation.rules import RULES, LAYER_RULES
+except ImportError:
+    from rules import RULES, LAYER_RULES
 
 
 def _next_layer_viable(next_layer: dict, metadata_bits: int, bank_size: int,
@@ -247,6 +77,7 @@ def _next_layer_viable(next_layer: dict, metadata_bits: int, bank_size: int,
     ctx = {
         'input_banked':   ni, 'output_banked': no, 'weight_banked': nw,
         'cache_elements': cache_elements, 'bank_size': bank_size,
+        'jump_back_size_in_banks': next_layer.get('jump_back_size_in_banks', 0),
     }
     layer_type = next_layer.get('type', '__default__')
     rule_keys  = LAYER_RULES.get(layer_type, LAYER_RULES['__default__'])
@@ -289,16 +120,251 @@ def evaluate_stay(layer: dict, ctx: dict,
     return False, 0, False, 'FLAGGED'
 
 
+def is_collapsible(layer_type: str) -> bool:
+    """Check if the layer is an activation, layer norm, or softmax that should be collapsed."""
+    _COLLAPSIBLE_TYPES = {
+        # Norm types
+        'QuantLayerNorm','LayerNorm', 'BatchNorm1d', 'BatchNorm2d', 'BatchNorm3d', 'GroupNorm',
+        # Softmax types
+        'Softmax', 'QuantSoftmax',
+    }
+    if layer_type in _COLLAPSIBLE_TYPES:
+        return True
+    
+    # Check if registered as an activation in OpRegistry
+    try:
+        if OpRegistry.is_activation(layer_type):
+            return True
+    except Exception:
+        pass
+
+    # Fallback to standard activation name patterns
+    act_names = {'relu', 'relu6', 'gelu', 'silu', 'hardswish', 'hardsigmoid', 'tanh', 'sigmoid', 'softmax'}
+    cleaned_type = layer_type.lower()
+    if cleaned_type.startswith("quant"):
+        cleaned_type = cleaned_type[5:]
+    if cleaned_type in act_names:
+        return True
+    
+    return False
+
+
+def is_registry_activation(layer_type: str) -> bool:
+    """Check whether a layer type is marked as activation in OpRegistry."""
+    try:
+        if OpRegistry.is_activation(layer_type):
+            return True
+        for original_cls, quantized_cls in OpRegistry.get_supported_ops().items():
+            if (
+                quantized_cls.__name__ == layer_type
+                and OpRegistry.is_activation(quantized_cls.__name__)
+            ):
+                return True
+            if (
+                original_cls.__name__ == layer_type
+                and OpRegistry.is_activation(quantized_cls.__name__)
+            ):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 # ---------------------------------------------------------------------------
 
-def analyze_model(model_name: str, batch_size: int, device: str = "cpu"):
+COMPUTE_PU_WIDTH = 128
+
+
+def _cycles_for_ops(num_ops: float) -> int:
+    if num_ops <= 0:
+        return 0
+    return math.ceil(num_ops / COMPUTE_PU_WIDTH)
+
+
+def _cycles_for_reduction_outputs(num_outputs: int, reduction_dim: float) -> int:
+    if num_outputs <= 0 or reduction_dim <= 0:
+        return 0
+    chunks_per_output = math.ceil(reduction_dim / COMPUTE_PU_WIDTH)
+    return int(num_outputs) * chunks_per_output + 1
+
+
+def _numel_from_shape(shape) -> int:
+    if not shape:
+        return 0
+    return math.prod(shape)
+
+
+def _collect_tensor_shapes(value) -> list[tuple]:
+    shapes = []
+    if isinstance(value, torch.Tensor):
+        shapes.append(tuple(value.shape))
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            shapes.extend(_collect_tensor_shapes(item))
+    return shapes
+
+
+def _compute_layer_cycles(layer: dict) -> float:
+    """Compute cycles with 128-wide chunks, including collapsed children."""
+    l_type = layer['type']
+    if is_registry_activation(l_type):
+        return 0.0
+
+    compute_cycles = 0
+
+    if 'Conv' in l_type:
+        in_c = layer.get('in_channels', 0)
+        groups = layer.get('groups', 1)
+        fh = layer.get('filter_height', 0)
+        fw = layer.get('filter_width', 0)
+        output_elems = layer.get('output_elems', 0)
+        reduction_dim = (in_c / groups) * fh * fw if groups else 0
+        compute_cycles = _cycles_for_reduction_outputs(output_elems, reduction_dim)
+    elif 'Linear' in l_type:
+        in_features = layer.get('in_features', 0)
+        out_features = layer.get('out_features', 0)
+        weight_elems = layer.get('weight_elems', 0)
+        if not in_features and out_features:
+            in_features = weight_elems / out_features
+        output_elems = layer.get('output_elems', 0)
+        compute_cycles = _cycles_for_reduction_outputs(output_elems, in_features)
+        if compute_cycles == 0 and weight_elems:
+            compute_cycles = _cycles_for_reduction_outputs(out_features or 1, in_features or weight_elems)
+    elif l_type in ('QuantMatMul', 'QuantBMM'):
+        input_shapes = layer.get('input_shapes', [])
+        output_shape = layer.get('output_shape')
+        output_elems = layer.get('output_elems', _numel_from_shape(output_shape))
+        reduction_dim = input_shapes[0][-1] if input_shapes and input_shapes[0] else 0
+        compute_cycles = _cycles_for_reduction_outputs(output_elems, reduction_dim)
+    elif l_type in ('QuantAdd', 'QuantSub', 'QuantMul', 'QuantDiv', 'Residual'):
+        compute_cycles = _cycles_for_ops(layer.get('output_elems', 0))
+    elif l_type == 'QuantCat':
+        compute_cycles = 0
+    else:
+        in_elems = layer.get('input_elems', 0)
+        out_elems = layer.get('output_elems', 0)
+        compute_cycles = _cycles_for_ops(max(in_elems, out_elems))
+
+    for collapsed in layer.get('collapsed_layers', []):
+        if is_registry_activation(collapsed.get('type', '')):
+            continue
+        collapsed_out_elems = collapsed.get('output_elems', 0)
+        compute_cycles += _cycles_for_ops(collapsed_out_elems)
+
+    return float(compute_cycles)
+
+
+def optimize_layer_bits(layer: dict, bandwidth: float,
+                        need_input_transfer: bool,
+                        need_weight_transfer: bool,
+                        need_output_transfer: bool,
+                        min_bits: int = 3, max_bits: int = 8):
+    """
+    Layer-wide bit-width optimization for BW-limited transfers.
+
+    Starting from *max_bits* for every transferred component, if the layer is
+    overall BW-limited (total_transfer > compute), all transferred components are
+    reduced by 1 bit simultaneously. Repeats until the layer becomes compute-
+    limited or all transferred components reach *min_bits*.
+
+    Returns
+    -------
+    input_bits : int
+    weight_bits : int
+    output_bits : int
+    total_cycles : float   – max(compute_cycles, total_transfer_cycles)
+    """
+    compute = _compute_layer_cycles(layer)
+
+    def _transfer_cycles(name, bits):
+        elems = 0
+        if name == 'weight':
+            if not need_weight_transfer:
+                return 0.0
+            elems = layer.get('weight_elems', 0)
+        elif name == 'input':
+            if not need_input_transfer:
+                return 0.0
+            elems = layer.get('input_elems', 0)
+        elif name == 'output':
+            if not need_output_transfer:
+                return 0.0
+            elems = layer.get('output_elems', 0)
+        if elems <= 0:
+            return 0.0
+        num_chunks = math.ceil(elems / 128)
+        bytes_per_chunk = 16 * bits
+        return (num_chunks * bytes_per_chunk) / bandwidth
+
+    input_bits = max_bits
+    weight_bits = max_bits
+    output_bits = max_bits
+
+    while True:
+        w_t = _transfer_cycles('weight', weight_bits)
+        i_t = _transfer_cycles('input', input_bits)
+        o_t = _transfer_cycles('output', output_bits)
+        total_transfer = w_t + i_t + o_t
+
+        if total_transfer <= compute:
+            break
+
+        reduced = False
+        if need_weight_transfer and weight_bits > min_bits:
+            weight_bits -= 1
+            reduced = True
+        if need_input_transfer and input_bits > min_bits:
+            input_bits -= 1
+            reduced = True
+        if need_output_transfer and output_bits > min_bits:
+            output_bits -= 1
+            reduced = True
+
+        if not reduced:
+            break
+
+    total_transfer = (
+        _transfer_cycles('weight', weight_bits) +
+        _transfer_cycles('input', input_bits) +
+        _transfer_cycles('output', output_bits)
+    )
+    total_cycles = max(compute, total_transfer)
+
+    return input_bits, weight_bits, output_bits, total_cycles
+
+
+def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapter_cfg: dict = None,
+                  cache_elements: int = 0, bank_size: int = 0, metadata_bits: int = 0):
     """Trace model to get layer element counts in execution order."""
     import torch.nn.functional as F
+    import yaml
     from runspace.src.adapters.adapter_factory import create_adapter
-    config = {
-        'model': {'name': model_name, 'weights': None},
-        'adapter': {'type': 'generic', 'build_quantized': True}
-    }
+
+    if isinstance(model_cfg_or_name, dict):
+        config = {
+            'model': model_cfg_or_name,
+            'adapter': dict({'type': 'generic', 'build_quantized': True}, **(adapter_cfg or {}))
+        }
+    elif isinstance(model_cfg_or_name, str) and (model_cfg_or_name.endswith('.yaml') or model_cfg_or_name.endswith('.yml') or os.path.isfile(model_cfg_or_name)):
+        with open(model_cfg_or_name, 'r') as f:
+            config = yaml.safe_load(f)
+        if not isinstance(config, dict):
+            if isinstance(config, list):
+                item = config[0]
+                config = {'model': item if isinstance(item, dict) else {'name': item, 'weights': None}}
+            else:
+                raise ValueError(f"Loaded YAML from {model_cfg_or_name} is not a valid dictionary or list.")
+        if 'model' not in config:
+            config = {'model': config}
+        if 'adapter' not in config:
+            config['adapter'] = {}
+        config['adapter']['build_quantized'] = True
+    else:
+        config = {
+            'model': {'name': model_cfg_or_name, 'weights': None},
+            'adapter': {'type': 'generic', 'build_quantized': True}
+        }
+
     adapter = create_adapter(config)
     model = adapter.model
     model.eval()
@@ -357,13 +423,29 @@ def analyze_model(model_name: str, batch_size: int, device: str = "cpu"):
                 'weight_elems': module.weight.numel() if getattr(module, 'weight', None) is not None else 0,
                 'input_elems':  input[0].numel() if isinstance(input[0], torch.Tensor) else 0,
                 'output_elems': output.numel()   if isinstance(output,   torch.Tensor) else 0,
+                'input_shapes': _collect_tensor_shapes(input),
+                'output_shape': tuple(output.shape) if isinstance(output, torch.Tensor) else None,
             }
             if isinstance(module, nn.Conv2d):
                 ks = module.kernel_size
-                info['in_channels']  = module.in_channels
-                info['out_channels'] = module.out_channels
-                info['kernel_size']  = ks[0] if isinstance(ks, tuple) else ks
-                info['groups']       = module.groups
+                if isinstance(ks, tuple):
+                    filter_height, filter_width = ks
+                else:
+                    filter_height = filter_width = ks
+                in_t = input[0] if isinstance(input[0], torch.Tensor) else None
+                out_t = output   if isinstance(output,   torch.Tensor) else None
+
+                info['in_channels']            = module.in_channels
+                info['out_channels']           = module.out_channels
+                info['filter_height']          = filter_height
+                info['filter_width']           = filter_width
+                info['kernel_size']            = ks[0] if isinstance(ks, tuple) else ks
+                info['groups']                 = module.groups
+                info['input_channel_height']   = in_t.shape[-2] if in_t is not None and in_t.ndim >= 4 else 0
+                info['input_channel_width']    = in_t.shape[-1] if in_t is not None and in_t.ndim >= 4 else 0
+                info['output_channel_height']  = out_t.shape[-2] if out_t is not None and out_t.ndim >= 4 else 0
+                info['output_channel_width']   = out_t.shape[-1] if out_t is not None and out_t.ndim >= 4 else 0
+                info['jump_back_size_in_banks'] = round_to_banks(info['filter_width'] * info['in_channels'] * (info['input_channel_width'])//128 * 128, bank_size)
             elif isinstance(module, nn.Linear):
                 info['in_features']  = module.in_features
                 info['out_features'] = module.out_features
@@ -375,6 +457,8 @@ def analyze_model(model_name: str, batch_size: int, device: str = "cpu"):
                 'weight_elems': 0,
                 'input_elems':  input[0].numel() if isinstance(input[0], torch.Tensor) else 0,
                 'output_elems': output.numel()   if isinstance(output,   torch.Tensor) else 0,
+                'input_shapes': _collect_tensor_shapes(input),
+                'output_shape': tuple(output.shape) if isinstance(output, torch.Tensor) else None,
             })
         elif isinstance(module, _NORM_TYPES):
             in_t  = input[0] if isinstance(input[0], torch.Tensor) else None
@@ -386,6 +470,8 @@ def analyze_model(model_name: str, batch_size: int, device: str = "cpu"):
                 'weight_elems': wt,
                 'input_elems':  in_t.numel()  if in_t  is not None else 0,
                 'output_elems': out_t.numel() if out_t is not None else 0,
+                'input_shapes': _collect_tensor_shapes(input),
+                'output_shape': tuple(output.shape) if isinstance(output, torch.Tensor) else None,
             })
 
     def residual_hook_fn(module, input, output):
@@ -396,6 +482,8 @@ def analyze_model(model_name: str, batch_size: int, device: str = "cpu"):
             'weight_elems':   0,
             'input_elems':    skip.numel() if skip is not None else 0,
             'output_elems':   output.numel() if isinstance(output, torch.Tensor) else 0,
+            'input_shapes':    _collect_tensor_shapes(input),
+            'output_shape':    tuple(output.shape) if isinstance(output, torch.Tensor) else None,
             'has_downsample': module.downsample is not None,
         })
 
@@ -448,6 +536,26 @@ def analyze_model(model_name: str, batch_size: int, device: str = "cpu"):
         for h in hooks:
             h.remove()
 
+    collapsed_order = []
+    for layer in execution_order:
+        if is_collapsible(layer['type']) and collapsed_order:
+            prev_layer = collapsed_order[-1]
+            prev_layer['output_elems'] = layer['output_elems']
+            prev_layer['weight_elems'] += layer.get('weight_elems', 0)
+            if 'collapsed_layers' not in prev_layer:
+                prev_layer['collapsed_layers'] = []
+            prev_layer['collapsed_layers'].append({
+                'name': layer['name'],
+                'type': layer['type'],
+                'weight_elems': layer.get('weight_elems', 0),
+                'output_elems': layer['output_elems'],
+                'input_shapes': layer.get('input_shapes', []),
+                'output_shape': layer.get('output_shape'),
+            })
+        else:
+            collapsed_order.append(layer)
+    execution_order = collapsed_order
+
     return execution_order
 
 
@@ -490,159 +598,319 @@ def serialize_rules() -> list:
 
 
 def run_simulation(args):
+    if getattr(args, 'model_config', None):
+        args.model_name = args.model_config
+
     cache_elements = int(args.cache_size * 1_000_000)
     bank_size      = cache_elements // args.num_banks   # elements per bank
 
+    adapter_override = {}
+    if args.fold_layers is not None:
+        adapter_override['fold_layers'] = args.fold_layers
+    if args.fold_input_norm is not None:
+        adapter_override['fold_input_norm'] = args.fold_input_norm
+    if args.quantize_first_layer is not None:
+        adapter_override['quantize_first_layer'] = args.quantize_first_layer
+
+    # Resolve and load models to run
+    models_to_run = []
+    is_yaml = args.model_name.endswith('.yaml') or args.model_name.endswith('.yml') or os.path.isfile(args.model_name)
+    if is_yaml:
+        import yaml
+        try:
+            with open(args.model_name, 'r') as f:
+                cfg = yaml.safe_load(f)
+            
+            if isinstance(cfg, list):
+                for item in cfg:
+                    if isinstance(item, dict):
+                        models_to_run.append({
+                            'config_path': args.model_name,
+                            'name': item.get('name'),
+                            'model_cfg': item,
+                            'adapter_cfg': {}
+                        })
+                    elif isinstance(item, str):
+                        models_to_run.append({
+                            'config_path': args.model_name,
+                            'name': item,
+                            'model_cfg': {'name': item, 'weights': None},
+                            'adapter_cfg': {}
+                        })
+            elif isinstance(cfg, dict):
+                if 'model' in cfg and isinstance(cfg['model'], dict):
+                    model_cfg = cfg['model']
+                    name = model_cfg.get('name', args.model_name)
+                    adapter_cfg = dict(cfg.get('adapter', {}), **adapter_override)
+                else:
+                    model_cfg = cfg
+                    name = cfg.get('name', args.model_name)
+                    adapter_cfg = dict({}, **adapter_override)
+                
+                models_to_run.append({
+                    'config_path': args.model_name,
+                    'name': name,
+                    'model_cfg': model_cfg,
+                    'adapter_cfg': adapter_cfg
+                })
+        except Exception as e:
+            print(f"Warning: Failed to parse YAML file {args.model_name}: {e}")
+            models_to_run.append({
+                'config_path': None,
+                'name': args.model_name,
+                'model_cfg': {'name': args.model_name, 'weights': None},
+                'adapter_cfg': dict({}, **adapter_override)
+            })
+    else:
+        models_to_run.append({
+            'config_path': None,
+            'name': args.model_name,
+            'model_cfg': {'name': args.model_name, 'weights': None},
+            'adapter_cfg': dict({'type': 'generic', 'build_quantized': True}, **adapter_override)
+        })
+
+    total_models = len(models_to_run)
     print(f"--- ASIC Cache Simulation ---")
-    print(f"Model:         {args.model_name}")
+    print(f"Loaded {total_models} model(s) to simulate.")
     print(f"Cache Size:    {fmt_elems(cache_elements)} elements  ({args.num_banks} banks × {fmt_elems(bank_size)} elements)")
     print(f"Metadata Bits: {args.metadata_bits} per 128-bit chunk")
     print(f"Batch Size:    {args.batch_size}")
+    print(f"-----------------------------")
 
-    layers = analyze_model(args.model_name, args.batch_size, args.device)
-    if not layers:
-        print("No layers found to analyze.")
-        return
+    for idx, model_info in enumerate(models_to_run, 1):
+        model_display_name = model_info['name']
+        config_path = model_info['config_path']
+        model_cfg = model_info['model_cfg']
+        adapter_cfg = model_info['adapter_cfg']
 
-    results = []
+        print(f"\n[{idx}/{total_models}] Simulating model: {model_display_name}" + (f" (from config: {config_path})" if config_path else ""))
 
-    for i, layer in enumerate(layers):
-        next_layer = layers[i + 1] if i + 1 < len(layers) else None
+        try:
+            layers = analyze_model(model_cfg, args.batch_size, args.device, adapter_cfg,
+                                   cache_elements, bank_size, args.metadata_bits)
+        except Exception as e:
+            print(f"Error: Failed to analyze model {model_display_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
 
-        weight_elems = get_footprint_elements(layer['weight_elems'], args.metadata_bits)
-        input_elems  = get_footprint_elements(layer['input_elems'],  args.metadata_bits)
-        output_elems = get_footprint_elements(layer['output_elems'], args.metadata_bits)
+        if not layers:
+            print(f"No layers found to analyze for model {model_display_name}.")
+            continue
 
-        next_xin_elems = (
-            get_footprint_elements(next_layer['input_elems'], args.metadata_bits)
-            if next_layer else 0
+        results = []
+        prev_stay_on_chip = False
+
+        for i, layer in enumerate(layers):
+            next_layer = layers[i + 1] if i + 1 < len(layers) else None
+
+            weight_elems = get_footprint_elements(layer['weight_elems'], args.metadata_bits)
+            input_elems  = get_footprint_elements(layer['input_elems'],  args.metadata_bits)
+            output_elems = get_footprint_elements(layer['output_elems'], args.metadata_bits)
+
+            next_xin_elems = (
+                get_footprint_elements(next_layer['input_elems'], args.metadata_bits)
+                if next_layer else 0
+            )
+
+            output_banked   = round_to_banks(output_elems,   bank_size)
+            input_banked    = round_to_banks(input_elems,    bank_size)
+            weight_banked   = round_to_banks(weight_elems,   bank_size)
+            next_xin_banked = round_to_banks(next_xin_elems, bank_size)
+
+            ctx = {
+                'input_banked':    input_banked,
+                'output_banked':   output_banked,
+                'weight_banked':   weight_banked,
+                'next_xin_banked': next_xin_banked,
+                'cache_elements':  cache_elements,
+                'bank_size':       bank_size,
+                'filter_height':   layer.get('filter_height', 0),
+                'filter_width':    layer.get('filter_width', 0),
+                'in_channels':     layer.get('in_channels', 0),
+                'out_channels':    layer.get('out_channels', 0),
+                'input_channel_height':  layer.get('input_channel_height', 0),
+                'input_channel_width':   layer.get('input_channel_width', 0),
+                'output_channel_height': layer.get('output_channel_height', 0),
+                'output_channel_width':  layer.get('output_channel_width', 0),
+                'jump_back_size_in_banks': layer.get('jump_back_size_in_banks', 0),
+            }
+
+            stay_on_chip, perm_elems, possible, rule_name = evaluate_stay(
+                layer, ctx, next_layer, args.metadata_bits, bank_size, cache_elements
+            )
+
+            rule_xin_from_cache = RULES.get(rule_name, {}).get('xin_from_cache', True)
+            need_input = (i == 0 or not prev_stay_on_chip or not rule_xin_from_cache)
+            need_output = not stay_on_chip
+            in_b, w_b, out_b, cycle_count = optimize_layer_bits(
+                layer, args.bandwidth, need_input, True, need_output, min_bits=3
+            )
+            compute_cycles = _compute_layer_cycles(layer)
+
+            input_bw_limited  = need_input  and in_b < 8
+            weight_bw_limited = True         and w_b < 8
+            output_bw_limited = need_output and out_b < 8
+
+            results.append({
+                'name':             layer['name'],
+                'type':             layer['type'],
+                'input_elems':      input_elems,
+                'weight_elems':     weight_elems,
+                'output_elems':     output_elems,
+                'output_banked':    output_banked,
+                'perm_elems':       perm_elems,
+                'next_xin_banked':  next_xin_banked,
+                'footprint_banks':  output_banked // bank_size,
+                'next_xin_banks':   next_xin_banked // bank_size,
+                'next_layer_name':  next_layer['name'] if next_layer else None,
+                'total_required':   output_banked + next_xin_banked,
+                'filter_height':    layer.get('filter_height', 0),
+                'filter_width':     layer.get('filter_width', 0),
+                'in_channels':      layer.get('in_channels', 0),
+                'out_channels':     layer.get('out_channels', 0),
+                'input_channel_height':  layer.get('input_channel_height', 0),
+                'input_channel_width':   layer.get('input_channel_width', 0),
+                'output_channel_height': layer.get('output_channel_height', 0),
+                'output_channel_width':  layer.get('output_channel_width', 0),
+                'stay_on_chip':     stay_on_chip,
+                'xin_from_cache':   rule_xin_from_cache,
+                'rule':             rule_name,
+                'reason': (
+                    rule_name if stay_on_chip
+                    else f"no rule fits (flagged)" if rule_name == 'FLAGGED'
+                    else f"{rule_name} — output to external"
+                ),
+                'collapsed_layers': layer.get('collapsed_layers', []),
+                'input_bits':       in_b,
+                'weight_bits':      w_b,
+                'output_bits':      out_b,
+                'input_bw_limited':   input_bw_limited,
+                'weight_bw_limited':  weight_bw_limited,
+                'output_bw_limited':  output_bw_limited,
+                'compute_cycles':   compute_cycles,
+                'total_cycles':     cycle_count,
+            })
+            prev_stay_on_chip = stay_on_chip
+
+        # --- Console output ---
+        COL = 11
+        BWCOL = 6
+        header = (
+            f"{'Layer Name':<45} | {'Type':<14}"
+            f" | {'Input':>{COL}} | {'Weights':>{COL}}"
+            f" | {'Output':>{COL}} | {'Banked':>{COL}}"
+            f" | {'NextXin':>{COL}} | {'OnChip':<7}"
+            f" | {'inB':>{BWCOL}} | {'wB':>{BWCOL}} | {'outB':>{BWCOL}}"
+            f" | Reason"
         )
+        sep = "-" * len(header)
+        print(f"\n{header}\n{sep}")
 
-        output_banked   = round_to_banks(output_elems,   bank_size)
-        input_banked    = round_to_banks(input_elems,    bank_size)
-        weight_banked   = round_to_banks(weight_elems,   bank_size)
-        next_xin_banked = round_to_banks(next_xin_elems, bank_size)
+        quantize_count = flagged_count = 0
+        for res in results:
+            on_chip_str = "yes" if res['stay_on_chip'] else "no"
+            print(
+                f"{res['name']:<45} | {res['type']:<14}"
+                f" | {fmt_elems(res['input_elems']):>{COL}}"
+                f" | {fmt_elems(res['weight_elems']):>{COL}}"
+                f" | {fmt_elems(res['output_elems']):>{COL}}"
+                f" | {fmt_elems(res['output_banked']):>{COL}}"
+                f" | {fmt_elems(res['next_xin_banked']):>{COL}}"
+                f" | {on_chip_str:<7}"
+                f" | {res['input_bits']:>{BWCOL}} | {res['weight_bits']:>{BWCOL}} | {res['output_bits']:>{BWCOL}}"
+                f" | {res['reason']}"
+            )
+            if not res['stay_on_chip'] and res['rule'] != 'FLAGGED':
+                quantize_count += 1
+            elif res['rule'] == 'FLAGGED':
+                flagged_count += 1
 
-        ctx = {
-            'input_banked':    input_banked,
-            'output_banked':   output_banked,
-            'weight_banked':   weight_banked,
-            'next_xin_banked': next_xin_banked,
-            'cache_elements':  cache_elements,
-            'bank_size':       bank_size,
+        print(sep)
+        print(f"Total layers:              {len(results)}")
+        print(f"Layers marked QUANTIZE:    {quantize_count}")
+        print(f"Layers FLAGGED (no rule):  {flagged_count}")
+
+        # --- off_chip_layers: names only ---
+        off_chip_layers = [res['name'] for res in results if not res['stay_on_chip']]
+
+        # --- Structured JSON output ---
+        output = {
+            'metadata': {
+                'model':          model_display_name,
+                'model_config':   config_path,
+                'cache_elements': cache_elements,
+                'cache_size_M':   args.cache_size,
+                'num_banks':      args.num_banks,
+                'bank_size':      bank_size,
+                'metadata_bits':  args.metadata_bits,
+                'batch_size':     args.batch_size,
+                'bandwidth':      args.bandwidth,
+                'timestamp':      datetime.utcnow().isoformat() + 'Z',
+            },
+            'summary': {
+                'total_layers':   len(results),
+                'quantize_count': quantize_count,
+                'flagged_count':  flagged_count,
+            },
+            'layers': results,
+            'off_chip_layers': off_chip_layers,
+            'rules': serialize_rules(),
         }
 
-        stay_on_chip, perm_elems, possible, rule_name = evaluate_stay(
-            layer, ctx, next_layer, args.metadata_bits, bank_size, cache_elements
-        )
+        out_dir  = os.path.dirname(os.path.abspath(__file__))
+        
+        # Save standard output file
+        out_path_std = os.path.join(out_dir, "simulation_results.json")
+        with open(out_path_std, 'w') as f:
+            json.dump(output, f, indent=2)
 
-        results.append({
-            'name':             layer['name'],
-            'type':             layer['type'],
-            'input_elems':      input_elems,
-            'weight_elems':     weight_elems,
-            'output_elems':     output_elems,
-            'output_banked':    output_banked,
-            'perm_elems':       perm_elems,
-            'next_xin_banked':  next_xin_banked,
-            'footprint_banks':  output_banked // bank_size,
-            'next_xin_banks':   next_xin_banked // bank_size,
-            'next_layer_name':  next_layer['name'] if next_layer else None,
-            'total_required':   output_banked + next_xin_banked,
-            'stay_on_chip':     stay_on_chip,
-            'rule':             rule_name,
-            'reason': (
-                rule_name if stay_on_chip
-                else f"no rule fits (flagged)" if rule_name == 'FLAGGED'
-                else f"{rule_name} — output to external"
-            ),
-        })
+        # Save model-specific output file
+        sanitized_model_name = "".join([c if c.isalnum() else "_" for c in model_display_name])
+        out_path_model = os.path.join(out_dir, f"simulation_results_{sanitized_model_name}.json")
+        with open(out_path_model, 'w') as f:
+            json.dump(output, f, indent=2)
+        
+        print(f"\nResults saved to {out_path_model} and {out_path_std}")
 
-    # --- Console output ---
-    COL = 11
-    header = (
-        f"{'Layer Name':<45} | {'Type':<14}"
-        f" | {'Input':>{COL}} | {'Weights':>{COL}}"
-        f" | {'Output':>{COL}} | {'Banked':>{COL}}"
-        f" | {'NextXin':>{COL}} | {'OnChip':<7} | Reason"
-    )
-    sep = "-" * len(header)
-    print(f"\n{header}\n{sep}")
-
-    quantize_count = flagged_count = 0
-    for res in results:
-        on_chip_str = "yes" if res['stay_on_chip'] else "no"
-        print(
-            f"{res['name']:<45} | {res['type']:<14}"
-            f" | {fmt_elems(res['input_elems']):>{COL}}"
-            f" | {fmt_elems(res['weight_elems']):>{COL}}"
-            f" | {fmt_elems(res['output_elems']):>{COL}}"
-            f" | {fmt_elems(res['output_banked']):>{COL}}"
-            f" | {fmt_elems(res['next_xin_banked']):>{COL}}"
-            f" | {on_chip_str:<7} | {res['reason']}"
-        )
-        if not res['stay_on_chip'] and res['rule'] != 'FLAGGED':
-            quantize_count += 1
-        elif res['rule'] == 'FLAGGED':
-            flagged_count += 1
-
-    print(sep)
-    print(f"Total layers:              {len(results)}")
-    print(f"Layers marked QUANTIZE:    {quantize_count}")
-    print(f"Layers FLAGGED (no rule):  {flagged_count}")
-
-    # --- off_chip_layers: names only — format is resolved at run time by the runner ---
-    off_chip_layers = [res['name'] for res in results if not res['stay_on_chip']]
-
-    # --- Structured JSON output ---
-    output = {
-        'metadata': {
-            'model':          args.model_name,
-            'cache_elements': cache_elements,
-            'cache_size_M':   args.cache_size,
-            'num_banks':      args.num_banks,
-            'bank_size':      bank_size,
-            'metadata_bits':  args.metadata_bits,
-            'batch_size':     args.batch_size,
-            'timestamp':      datetime.utcnow().isoformat() + 'Z',
-        },
-        'summary': {
-            'total_layers':   len(results),
-            'quantize_count': quantize_count,
-            'flagged_count':  flagged_count,
-        },
-        'layers': results,
-        # Layer names whose outputs must be quantized for external memory transfer.
-        # The runner stamps these with whatever format+mode is active for the run.
-        'off_chip_layers': off_chip_layers,
-        # Serialized rule metadata — captured at run time so the dashboard always
-        # reflects the rules that were actually used for this simulation.
-        'rules': serialize_rules(),
-    }
-
-    out_dir  = os.path.dirname(os.path.abspath(__file__))
-    out_path = os.path.join(out_dir, "simulation_results.json")
-    with open(out_path, 'w') as f:
-        json.dump(output, f, indent=2)
-    print(f"\nResults saved to {out_path}")
-
-    # Upload to DB
-    try:
-        from runspace.src.database.handler import RunDatabase
-        RunDatabase().store_cache_simulation(output)
-    except Exception as e:
-        print(f"[CacheSim] Warning: could not upload to DB: {e}")
+        # Upload to DB
+        try:
+            from runspace.src.database.handler import RunDatabase
+            RunDatabase().store_cache_simulation(output)
+            print(f"[CacheSim] Successfully stored simulation for {model_display_name} to DB.")
+        except Exception as e:
+            print(f"[CacheSim] Warning: could not upload to DB for {model_display_name}: {e}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name",    type=str,   default="resnet18")
+    parser.add_argument("--model_name",    type=str,   default="resnet18",
+                        help="Model name (e.g., resnet18) or path to a model config .yaml file")
+    parser.add_argument("--model_config",  type=str,   default=None,
+                        help="Path to a model config .yaml file (overrides --model_name)")
     parser.add_argument("--cache_size",    type=float, default=2.0,
                         help="Cache size in millions of elements (e.g. 2.0 = 2,000,000 elements)")
     parser.add_argument("--num_banks",     type=int,   default=16)
     parser.add_argument("--metadata_bits", type=int,   default=0)
     parser.add_argument("--batch_size",    type=int,   default=1)
     parser.add_argument("--device",        type=str,   default="cuda")
+    parser.add_argument("--bandwidth",     type=float, default=1.0,
+                        help="Memory bandwidth in bytes/cycle for BW-limitation analysis")
+    parser.add_argument("--fold_layers", action="store_true", dest="fold_layers",
+                        default=True,
+                        help="Fold batchnorm/conv layers during model build")
+    parser.add_argument("--no_fold_layers", action="store_false", dest="fold_layers",
+                        help="Disable layer folding during model build")
+    parser.add_argument("--fold_input_norm", action="store_true", dest="fold_input_norm",
+                        default=True,
+                        help="Fold input normalization into the first layer")
+    parser.add_argument("--no_fold_input_norm", action="store_false", dest="fold_input_norm",
+                        help="Disable folding of input normalization")
+    parser.add_argument("--quantize_first_layer", action="store_true", dest="quantize_first_layer",
+                        default=True,
+                        help="Quantize the first layer's input/weights")
+    parser.add_argument("--no_quantize_first_layer", action="store_false", dest="quantize_first_layer",
+                        help="Disable quantization of the first layer")
     args = parser.parse_args()
 
     run_simulation(args)

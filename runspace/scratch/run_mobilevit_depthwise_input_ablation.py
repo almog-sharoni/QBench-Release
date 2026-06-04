@@ -138,7 +138,7 @@ def main():
     norm_mse = input_stats.get("norm_mse") if input_stats else None
     print(
         f"ABLATION {label}: Top1={acc1:.4f} Top5={acc5:.4f} "
-        f"Certainty={certainty:.6f} NormL1={norm_l1:.6e} NormMSE={norm_mse:.6e}"
+        f"Certainty={certainty:.6f} NormL1={norm_l1} NormMSE={norm_mse}"
     )
 
 
