@@ -162,14 +162,31 @@ def _dashboard_right_panel_css():
     """
 
 
+_DASHBOARD_RIGHT_CSS = None
+
+
 @st.fragment(run_every=5)
 def _render_dashboard_right_active_runs():
+    global _DASHBOARD_RIGHT_CSS
     refresh_registry = globals().get("_dashboard_runner_refresh_registry")
     if refresh_registry is None:
         return
 
     registry = refresh_registry()
     running = [run for run in registry if run.get("status") == "running"]
+
+    if _DASHBOARD_RIGHT_CSS is None:
+        _DASHBOARD_RIGHT_CSS = _dashboard_right_panel_css()
+
+    # When nothing is running, skip rebuilding HTML if the panel state hasn't changed.
+    # We must still render a component to keep the iframe alive in Streamlit's tree.
+    _prev_key = "_dashboard_right_panel_prev_state"
+    _cur_state = [(r.get("pid"), r.get("status"), r.get("log_path")) for r in registry[-8:]]
+    if not running and st.session_state.get(_prev_key) == _cur_state:
+        _dashboard_components.html("<script></script>", height=0)
+        return
+    st.session_state[_prev_key] = _cur_state
+
     recent = list(reversed(registry[-8:]))
     cards = []
 
@@ -219,7 +236,7 @@ def _render_dashboard_right_active_runs():
         <script>
         (() => {{
           const doc = window.parent.document;
-          const css = {_dashboard_json.dumps(_dashboard_right_panel_css())};
+          const css = {_dashboard_json.dumps(_DASHBOARD_RIGHT_CSS)};
           const html = {_dashboard_json.dumps(panel_html)};
           let style = doc.getElementById('qbench-right-runs-style');
           if (!style) {{

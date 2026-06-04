@@ -204,6 +204,26 @@ def _collect_tensor_shapes(value) -> list[tuple]:
     return shapes
 
 
+def _collect_tensor_ids(value) -> list[int]:
+    ids = []
+    if isinstance(value, torch.Tensor):
+        ids.append(id(value))
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            ids.extend(_collect_tensor_ids(item))
+    return ids
+
+
+def _collect_tensors(value) -> list[torch.Tensor]:
+    tensors = []
+    if isinstance(value, torch.Tensor):
+        tensors.append(value)
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            tensors.extend(_collect_tensors(item))
+    return tensors
+
+
 def _compute_layer_cycles(layer: dict) -> float:
     """Compute cycles with 128-wide chunks, including collapsed children."""
     l_type = layer['type']
@@ -236,7 +256,10 @@ def _compute_layer_cycles(layer: dict) -> float:
         output_elems = layer.get('output_elems', _numel_from_shape(output_shape))
         reduction_dim = input_shapes[0][-1] if input_shapes and input_shapes[0] else 0
         compute_cycles = _cycles_for_reduction_outputs(output_elems, reduction_dim)
-    elif l_type in ('QuantAdd', 'QuantSub', 'QuantMul', 'QuantDiv', 'Residual'):
+    elif l_type == 'QuantAdd':
+        add_passes = _quant_add_connection_count(layer)
+        compute_cycles = add_passes * _cycles_for_ops(layer.get('output_elems', 0))
+    elif l_type in ('QuantSub', 'QuantMul', 'QuantDiv', 'Residual'):
         compute_cycles = _cycles_for_ops(layer.get('output_elems', 0))
     elif l_type == 'QuantCat':
         compute_cycles = 0
@@ -254,18 +277,30 @@ def _compute_layer_cycles(layer: dict) -> float:
     return float(compute_cycles)
 
 
+def _quant_add_connection_count(layer: dict) -> int:
+    if layer.get('type') != 'QuantAdd':
+        return 0
+    num_inputs = len(layer.get('input_shapes', []))
+    return max(1, num_inputs)
+
+
 def optimize_layer_bits(layer: dict, bandwidth: float,
                         need_input_transfer: bool,
                         need_weight_transfer: bool,
                         need_output_transfer: bool,
-                        min_bits: int = 3, max_bits: int = 8):
+                        min_bits: int = 3, max_bits: int = 8,
+                        fixed_transfers: list[dict] = None,
+                        forced_bits: dict = None):
     """
     Layer-wide bit-width optimization for BW-limited transfers.
 
     Starting from *max_bits* for every transferred component, if the layer is
-    overall BW-limited (total_transfer > compute), all transferred components are
-    reduced by 1 bit simultaneously. Repeats until the layer becomes compute-
-    limited or all transferred components reach *min_bits*.
+    overall BW-limited (total_transfer > compute), all non-forced transferred
+    components are reduced by 1 bit simultaneously. Repeats until the layer
+    becomes compute-limited or all reducible components reach *min_bits*.
+
+    fixed_transfers model side-band transfers that consume bandwidth but do not
+    have an optimizable bit-width here, e.g. residual spill/reload at min_bits.
 
     Returns
     -------
@@ -275,6 +310,24 @@ def optimize_layer_bits(layer: dict, bandwidth: float,
     total_cycles : float   – max(compute_cycles, total_transfer_cycles)
     """
     compute = _compute_layer_cycles(layer)
+    fixed_transfers = fixed_transfers or []
+    forced_bits = forced_bits or {}
+
+    def _transfer_cycles_for_elems(elems, bits):
+        if elems <= 0:
+            return 0.0
+        num_chunks = math.ceil(elems / 128)
+        bytes_per_chunk = 16 * bits
+        return (num_chunks * bytes_per_chunk) / bandwidth
+
+    def _fixed_transfer_cycles():
+        total = 0.0
+        for transfer in fixed_transfers:
+            total += _transfer_cycles_for_elems(
+                transfer.get('elems', 0),
+                transfer.get('bits', min_bits),
+            )
+        return total
 
     def _transfer_cycles(name, bits):
         elems = 0
@@ -292,38 +345,38 @@ def optimize_layer_bits(layer: dict, bandwidth: float,
             elems = layer.get('output_elems', 0)
         if elems <= 0:
             return 0.0
-        num_chunks = math.ceil(elems / 128)
-        bytes_per_chunk = 16 * bits
-        return (num_chunks * bytes_per_chunk) / bandwidth
+        bits = forced_bits.get(name, bits)
+        return _transfer_cycles_for_elems(elems, bits)
 
-    input_bits = max_bits
-    weight_bits = max_bits
-    output_bits = max_bits
+    input_bits = forced_bits.get('input', max_bits)
+    weight_bits = forced_bits.get('weight', max_bits)
+    output_bits = forced_bits.get('output', max_bits)
+    fixed_transfer_cycles = _fixed_transfer_cycles()
 
     while True:
         w_t = _transfer_cycles('weight', weight_bits)
         i_t = _transfer_cycles('input', input_bits)
         o_t = _transfer_cycles('output', output_bits)
-        total_transfer = w_t + i_t + o_t
+        total_transfer = fixed_transfer_cycles + w_t + i_t + o_t
 
         if total_transfer <= compute:
             break
 
         reduced = False
-        if need_weight_transfer and weight_bits > min_bits:
+        if need_weight_transfer and 'weight' not in forced_bits and weight_bits > min_bits:
             weight_bits -= 1
             reduced = True
-        if need_input_transfer and input_bits > min_bits:
+        if need_input_transfer and 'input' not in forced_bits and input_bits > min_bits:
             input_bits -= 1
             reduced = True
-        if need_output_transfer and output_bits > min_bits:
+        if need_output_transfer and 'output' not in forced_bits and output_bits > min_bits:
             output_bits -= 1
             reduced = True
 
         if not reduced:
             break
 
-    total_transfer = (
+    total_transfer = fixed_transfer_cycles + (
         _transfer_cycles('weight', weight_bits) +
         _transfer_cycles('input', input_bits) +
         _transfer_cycles('output', output_bits)
@@ -414,9 +467,37 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
     )
 
     # --- module recording hooks ---
+    tensor_producers = {}
+
+    def _remember_output_producer(info: dict):
+        output_tensor_id = info.get('output_tensor_id')
+        if output_tensor_id is not None:
+            tensor_producers[output_tensor_id] = info
+
+    def _mark_residual_stream(info: dict, residual_input: torch.Tensor):
+        residual_elems = residual_input.numel()
+        residual_connections = _quant_add_connection_count(info)
+        residual_stream_elems = residual_elems * residual_connections
+        info['residual_input_elems'] = residual_elems
+        info['residual_input_shape'] = tuple(residual_input.shape)
+        info['residual_input_tensor_id'] = id(residual_input)
+        info['residual_input_stream_elems'] = residual_stream_elems
+
+        producer = tensor_producers.get(id(residual_input))
+        if producer is None:
+            info['residual_producer_name'] = None
+            return
+
+        producer['residual_output_elems'] = max(
+            producer.get('residual_output_elems', 0),
+            residual_elems,
+        )
+        producer.setdefault('residual_output_consumers', []).append(info['name'])
+        info['residual_producer_name'] = producer['name']
 
     def hook_fn(module, input, output):
         if isinstance(module, (nn.Conv2d, nn.Linear) + quantized_types):
+            input_tensors = _collect_tensors(input)
             info = {
                 'name':         getattr(module, 'layer_name', 'unknown'),
                 'type':         module.__class__.__name__,
@@ -425,7 +506,11 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'output_elems': output.numel()   if isinstance(output,   torch.Tensor) else 0,
                 'input_shapes': _collect_tensor_shapes(input),
                 'output_shape': tuple(output.shape) if isinstance(output, torch.Tensor) else None,
+                'input_tensor_ids': _collect_tensor_ids(input),
+                'output_tensor_id': id(output) if isinstance(output, torch.Tensor) else None,
             }
+            if module.__class__.__name__ == 'QuantAdd' and len(input_tensors) >= 2:
+                _mark_residual_stream(info, input_tensors[1])
             if isinstance(module, nn.Conv2d):
                 ks = module.kernel_size
                 if isinstance(ks, tuple):
@@ -450,8 +535,9 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 info['in_features']  = module.in_features
                 info['out_features'] = module.out_features
             execution_order.append(info)
+            _remember_output_producer(info)
         elif isinstance(module, _POOL_TYPES):
-            execution_order.append({
+            info = {
                 'name':         getattr(module, 'layer_name', 'unknown'),
                 'type':         module.__class__.__name__,
                 'weight_elems': 0,
@@ -459,12 +545,16 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'output_elems': output.numel()   if isinstance(output,   torch.Tensor) else 0,
                 'input_shapes': _collect_tensor_shapes(input),
                 'output_shape': tuple(output.shape) if isinstance(output, torch.Tensor) else None,
-            })
+                'input_tensor_ids': _collect_tensor_ids(input),
+                'output_tensor_id': id(output) if isinstance(output, torch.Tensor) else None,
+            }
+            execution_order.append(info)
+            _remember_output_producer(info)
         elif isinstance(module, _NORM_TYPES):
             in_t  = input[0] if isinstance(input[0], torch.Tensor) else None
             out_t = output   if isinstance(output,   torch.Tensor) else None
             wt    = module.weight.numel() if getattr(module, 'weight', None) is not None else 0
-            execution_order.append({
+            info = {
                 'name':         getattr(module, 'layer_name', 'unknown'),
                 'type':         module.__class__.__name__,
                 'weight_elems': wt,
@@ -472,11 +562,15 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'output_elems': out_t.numel() if out_t is not None else 0,
                 'input_shapes': _collect_tensor_shapes(input),
                 'output_shape': tuple(output.shape) if isinstance(output, torch.Tensor) else None,
-            })
+                'input_tensor_ids': _collect_tensor_ids(input),
+                'output_tensor_id': id(output) if isinstance(output, torch.Tensor) else None,
+            }
+            execution_order.append(info)
+            _remember_output_producer(info)
 
     def residual_hook_fn(module, input, output):
         skip = input[0] if isinstance(input[0], torch.Tensor) else None
-        execution_order.append({
+        info = {
             'name':           getattr(module, 'layer_name', 'unknown'),
             'type':           'Residual',
             'weight_elems':   0,
@@ -484,8 +578,12 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
             'output_elems':   output.numel() if isinstance(output, torch.Tensor) else 0,
             'input_shapes':    _collect_tensor_shapes(input),
             'output_shape':    tuple(output.shape) if isinstance(output, torch.Tensor) else None,
+            'input_tensor_ids': _collect_tensor_ids(input),
+            'output_tensor_id': id(output) if isinstance(output, torch.Tensor) else None,
             'has_downsample': module.downsample is not None,
-        })
+        }
+        execution_order.append(info)
+        _remember_output_producer(info)
 
     # --- scope tracking: push/pop for every module so functional ops get sensible names ---
     for name, module in model.named_modules():
@@ -537,11 +635,23 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
             h.remove()
 
     collapsed_order = []
+    residual_producer_aliases = {}
     for layer in execution_order:
         if is_collapsible(layer['type']) and collapsed_order:
             prev_layer = collapsed_order[-1]
             prev_layer['output_elems'] = layer['output_elems']
+            prev_layer['output_tensor_id'] = layer.get('output_tensor_id')
             prev_layer['weight_elems'] += layer.get('weight_elems', 0)
+            if layer.get('residual_output_elems', 0):
+                prev_layer['residual_output_elems'] = max(
+                    prev_layer.get('residual_output_elems', 0),
+                    layer['residual_output_elems'],
+                )
+                prev_layer.setdefault('residual_output_consumers', []).extend(
+                    layer.get('residual_output_consumers', [])
+                )
+                for consumer_name in layer.get('residual_output_consumers', []):
+                    residual_producer_aliases[consumer_name] = prev_layer['name']
             if 'collapsed_layers' not in prev_layer:
                 prev_layer['collapsed_layers'] = []
             prev_layer['collapsed_layers'].append({
@@ -554,6 +664,9 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
             })
         else:
             collapsed_order.append(layer)
+    for layer in collapsed_order:
+        if layer['name'] in residual_producer_aliases:
+            layer['residual_producer_name'] = residual_producer_aliases[layer['name']]
     execution_order = collapsed_order
 
     return execution_order
@@ -743,8 +856,36 @@ def run_simulation(args):
             rule_xin_from_cache = RULES.get(rule_name, {}).get('xin_from_cache', True)
             need_input = (i == 0 or not prev_stay_on_chip or not rule_xin_from_cache)
             need_output = not stay_on_chip
+            residual_bits = 3
+            residual_input_stream_elems = layer.get('residual_input_stream_elems', 0)
+            residual_output_elems = layer.get('residual_output_elems', 0)
+            fixed_transfers = []
+            forced_bits = {}
+            residual_output_uses_main_stream = (
+                residual_output_elems > 0
+                and need_output
+                and residual_output_elems == layer.get('output_elems', 0)
+            )
+
+            if residual_output_elems > 0:
+                if residual_output_uses_main_stream:
+                    forced_bits['output'] = residual_bits
+                else:
+                    fixed_transfers.append({
+                        'name': 'residual_output',
+                        'elems': residual_output_elems,
+                        'bits': residual_bits,
+                    })
+            if residual_input_stream_elems > 0:
+                fixed_transfers.append({
+                    'name': 'residual_input',
+                    'elems': residual_input_stream_elems,
+                    'bits': residual_bits,
+                })
+
             in_b, w_b, out_b, cycle_count = optimize_layer_bits(
-                layer, args.bandwidth, need_input, True, need_output, min_bits=3
+                layer, args.bandwidth, need_input, True, need_output, min_bits=residual_bits,
+                fixed_transfers=fixed_transfers, forced_bits=forced_bits
             )
             compute_cycles = _compute_layer_cycles(layer)
 
@@ -755,9 +896,18 @@ def run_simulation(args):
             results.append({
                 'name':             layer['name'],
                 'type':             layer['type'],
+                'residual_connections': _quant_add_connection_count(layer),
                 'input_elems':      input_elems,
                 'weight_elems':     weight_elems,
                 'output_elems':     output_elems,
+                'residual_input_elems': (
+                    get_footprint_elements(residual_input_stream_elems, args.metadata_bits)
+                    if residual_input_stream_elems else 0
+                ),
+                'residual_output_elems': (
+                    get_footprint_elements(residual_output_elems, args.metadata_bits)
+                    if residual_output_elems else 0
+                ),
                 'output_banked':    output_banked,
                 'perm_elems':       perm_elems,
                 'next_xin_banked':  next_xin_banked,
@@ -781,13 +931,19 @@ def run_simulation(args):
                     else f"no rule fits (flagged)" if rule_name == 'FLAGGED'
                     else f"{rule_name} — output to external"
                 ),
+                'residual_producer_name': layer.get('residual_producer_name'),
+                'residual_output_consumers': layer.get('residual_output_consumers', []),
                 'collapsed_layers': layer.get('collapsed_layers', []),
                 'input_bits':       in_b,
                 'weight_bits':      w_b,
                 'output_bits':      out_b,
+                'residual_input_bits': residual_bits if residual_input_stream_elems else None,
+                'residual_output_bits': residual_bits if residual_output_elems else None,
                 'input_bw_limited':   input_bw_limited,
                 'weight_bw_limited':  weight_bw_limited,
                 'output_bw_limited':  output_bw_limited,
+                'residual_input_bw_limited': residual_input_stream_elems > 0,
+                'residual_output_bw_limited': residual_output_elems > 0,
                 'compute_cycles':   compute_cycles,
                 'total_cycles':     cycle_count,
             })

@@ -56,6 +56,19 @@ This experiment evaluates model accuracy under a bandwidth-aware mixed-precision
     --limit_batches 2
 ```
 
+### Plot per-layer bit allocations without inference:
+```bash
+./apptainer.sh runspace/experiments/bandwidth_aware_quant/plot_layer_bit_allocations.py \
+    --model_name resnet18 \
+    --cache_sizes 0 2 4 \
+    --thresholds 2 3 4 5 6 7 8
+```
+
+This generates one `layer_weight_bits_cache_*.png` plot per cache size. The
+x-axis is layer number, the y-axis is the per-layer bit-width, and each line is
+a minimum bit threshold. The lowest threshold is plotted last as a solid black
+line so it stays visually in front; the other thresholds are dashed.
+
 ### Options:
 - `--model_name`: Model name (e.g. `resnet18`) or path to a YAML file containing a list of models.
 - `--bandwidth`: Memory bandwidth in bytes/cycle (default: `1.0`).
