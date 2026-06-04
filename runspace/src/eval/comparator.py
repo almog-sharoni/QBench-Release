@@ -29,6 +29,8 @@ class LayerComparator:
         ref_input_normalization=False,
         ref_input_mean=None,
         ref_input_std=None,
+        compare_mode="propagated",
+        offload_captures=True,
     ):
         self.ref_model = ref_model
         self.quant_model = quant_model
@@ -44,8 +46,32 @@ class LayerComparator:
         self.ref_input_normalization = bool(ref_input_normalization)
         self.ref_input_mean = ref_input_mean if ref_input_mean is not None else [0.485, 0.456, 0.406]
         self.ref_input_std = ref_input_std if ref_input_std is not None else [0.229, 0.224, 0.225]
+        # Comparison mode:
+        #   'propagated' (default) — both models run independently end-to-end;
+        #       per-layer numbers are the CUMULATIVE divergence at that tensor.
+        #   'isolated'  — teacher-forced; every quant layer is fed the FP32
+        #       reference INPUT for that layer, and we measure its OUTPUT error.
+        #       This attributes error to a single layer with no inherited drift.
+        if compare_mode not in ("propagated", "isolated"):
+            raise ValueError(
+                f"compare_mode must be 'propagated' or 'isolated', got {compare_mode!r}"
+            )
+        self.compare_mode = compare_mode
+        # Captured activations are stored here (CPU by default) instead of on the
+        # GPU. The comparator otherwise pins every layer's activation for BOTH
+        # models on the GPU at once; offloading to host RAM removes that from
+        # VRAM. Metrics are computed by moving one layer's pair back to
+        # self.device transiently, so GPU compute stays fast.
+        self._cap_dev = torch.device("cpu") if offload_captures else (device or torch.device("cpu"))
         self.ref_activations = {}
         self.ref_weights = {}
+        # Teacher-forcing buffers (only populated in 'isolated' mode), reset per batch:
+        #   ref_layer_inputs   : name -> full input tuple captured from the ref model
+        #   ref_layer_outputs  : name -> ref model's output for that layer
+        #   quant_layer_outputs: name -> quant model's output when fed the ref input
+        self.ref_layer_inputs = {}
+        self.ref_layer_outputs = {}
+        self.quant_layer_outputs = {}
         self.hooks = []
         
         # Metrics Engines — use adapter's task-appropriate metrics if available
@@ -113,6 +139,8 @@ class LayerComparator:
 
 
     def _register_hooks(self):
+        isolated = self.compare_mode == "isolated"
+
         def get_activation_hook(name):
             def hook(model, input):
                 # Capture input to the layer
@@ -121,19 +149,38 @@ class LayerComparator:
                     inp = input[0]
                 else:
                     inp = input
-                
+
                 if isinstance(inp, torch.Tensor):
-                    self.ref_activations[name] = inp.detach().clone()
+                    # .to(cpu) already makes a fresh copy, so no extra .clone() is
+                    # needed to guard against later in-place ops.
+                    self.ref_activations[name] = inp.detach().to(self._cap_dev)
                 else:
                     self.ref_activations[name] = inp
+
+                # Isolated mode also needs the FULL input tuple so multi-operand
+                # ops (QuantAdd/QuantMatMul) can be teacher-forced on every arg.
+                if isolated and isinstance(input, tuple):
+                    self.ref_layer_inputs[name] = tuple(
+                        a.detach().to(self._cap_dev) if isinstance(a, torch.Tensor) else a
+                        for a in input
+                    )
+            return hook
+
+        def get_output_hook(name):
+            def hook(model, input, output):
+                out = output[0] if isinstance(output, tuple) and len(output) > 0 else output
+                if isinstance(out, torch.Tensor):
+                    self.ref_layer_outputs[name] = out.detach().to(self._cap_dev)
             return hook
 
         supported_ops = tuple(OpRegistry.get_supported_ops().keys())
         for name, module in self.ref_model.named_modules():
             if isinstance(module, supported_ops):
                 self.hooks.append(module.register_forward_pre_hook(get_activation_hook(name)))
+                if isolated:
+                    self.hooks.append(module.register_forward_hook(get_output_hook(name)))
                 if hasattr(module, 'weight') and module.weight is not None:
-                    self.ref_weights[name] = module.weight.detach()
+                    self.ref_weights[name] = module.weight.detach().to(self._cap_dev)
 
     def _enable_quant_capture(self):
         """
@@ -151,9 +198,10 @@ class LayerComparator:
                 else:
                     inp = input
 
-                # Store detached clone to avoid memory issues or in-place modifications
+                # Store detached copy (on the capture device, CPU by default) to
+                # avoid pinning every layer's activation in VRAM.
                 if isinstance(inp, torch.Tensor):
-                    self.quant_activations[name] = inp.detach()
+                    self.quant_activations[name] = inp.detach().to(self._cap_dev)
                 else:
                     self.quant_activations[name] = inp
                 if not getattr(_observer_state_mod._state, "call_log_frozen", False):
@@ -188,6 +236,38 @@ class LayerComparator:
             pair_proc.register_forward_hook(_freeze_hook)
             break
 
+        isolated = self.compare_mode == "isolated"
+
+        def make_inject_pre(name):
+            # Teacher-forcing: replace this layer's incoming args with the FP32
+            # reference inputs captured for the same-named ref layer, so the quant
+            # layer computes on a clean input and its output error is its own.
+            def pre(module, args):
+                ref_in = self.ref_layer_inputs.get(name)
+                if ref_in is None or not isinstance(args, tuple):
+                    return None
+                new_args = []
+                for i, cur in enumerate(args):
+                    if i < len(ref_in):
+                        r = ref_in[i]
+                        if (
+                            isinstance(cur, torch.Tensor)
+                            and isinstance(r, torch.Tensor)
+                            and r.shape == cur.shape
+                        ):
+                            new_args.append(r.to(cur.device))
+                            continue
+                    new_args.append(cur)
+                return tuple(new_args)
+            return pre
+
+        def make_out_capture(name):
+            def hook(module, inp, out):
+                o = out[0] if isinstance(out, tuple) and len(out) > 0 else out
+                if isinstance(o, torch.Tensor):
+                    self.quant_layer_outputs[name] = o.detach().to(self._cap_dev)
+            return hook
+
         for name, module in self.quant_model.named_modules():
             # Maintain a parent-path stack so @observer-cached singletons can label
             # their events as "<parent_path>.<fn_name>" instead of class names.
@@ -196,7 +276,13 @@ class LayerComparator:
             # Hook leaf modules (modules with no children)
             # For DecomposedMHA, it has children, but we want to capture its output too
             if len(list(module.children())) == 0 or isinstance(module, DecomposedMultiheadAttention):
+                # In isolated mode the injection pre-hook must run before the
+                # layer forward; register it ahead of the input-capture hook.
+                if isolated:
+                    module.register_forward_pre_hook(make_inject_pre(name))
                 module.register_forward_hook(get_hook(name))
+                if isolated:
+                    module.register_forward_hook(make_out_capture(name))
                 # Enable internal capture for Quant layers (including QuantizedLayerMixin-only
                 # ops like Observed* modules that aren't registered with original_cls).
                 if (
@@ -275,14 +361,20 @@ class LayerComparator:
 
                 # Run Ref Model
                 self.ref_activations.clear()
+                self.ref_layer_inputs.clear()
+                self.ref_layer_outputs.clear()
                 if self.adapter is not None:
                     ref_outputs = self.adapter.forward(self.ref_model, (ref_inputs, targets))
                 else:
                     ref_outputs = self.ref_model(ref_inputs)
 
                 # Run Quant Model
+                # In 'isolated' mode the ref model has just populated
+                # ref_layer_inputs; the quant model's injection pre-hooks now feed
+                # each layer its clean FP32 reference input.
                 self.call_log = []
                 self.quant_activations = {}
+                self.quant_layer_outputs.clear()
                 quant_cfg = getattr(self.adapter, "quant_config", None) if self.adapter is not None else None
                 with quantized_dispatch(config=quant_cfg, call_log=self.call_log):
                     if self.adapter is not None:
@@ -502,6 +594,23 @@ class LayerComparator:
             
         return report_lines, unquantized_supported_count
 
+    def _pair_metric(self, ref_t, quant_t):
+        """MSE + cosine for a (ref, quant) pair, handling device mismatch.
+
+        Captured tensors live on CPU (offload); module-resident quant buffers may
+        be on GPU. Compute on self.device when it's CUDA (fast reductions), moving
+        only this one layer's pair across — a transient cost, not a persistent one.
+        """
+        from src.eval.metrics import compute_mse, compute_cosine_similarity
+        try:
+            is_cuda = torch.device(self.device).type == "cuda"
+        except Exception:
+            is_cuda = False
+        dev = self.device if is_cuda else ref_t.device
+        a = ref_t.to(dev, non_blocking=True)
+        b = quant_t.to(dev, non_blocking=True)
+        return compute_mse(a, b), compute_cosine_similarity(a, b)
+
     def _compute_layer_metrics(self):
         from src.eval.metrics import compute_mse, compute_cosine_similarity
         from runspace.src.ops.quant_base import QuantizedLayerMixin
@@ -548,6 +657,9 @@ class LayerComparator:
                 self.layer_metrics[name] = {
                     'input_mse_sum': 0.0,
                     'input_cossim_sum': 0.0,
+                    'output_mse_sum': 0.0,
+                    'output_cossim_sum': 0.0,
+                    'output_count': 0,
                     'weight_mse_sum': 0.0,
                     'weight_cossim_sum': 0.0,
                     'xmax_orig_sum': 0.0,
@@ -586,8 +698,9 @@ class LayerComparator:
             if quant_input is not None and isinstance(quant_input, torch.Tensor):
                 if ref_input is not None and isinstance(ref_input, torch.Tensor):
                     if ref_input.is_floating_point() and ref_input.shape == quant_input.shape:
-                        metrics['input_mse_sum'] += compute_mse(ref_input, quant_input)
-                        metrics['input_cossim_sum'] += compute_cosine_similarity(ref_input, quant_input)
+                        mse, cossim = self._pair_metric(ref_input, quant_input)
+                        metrics['input_mse_sum'] += mse
+                        metrics['input_cossim_sum'] += cossim
                 
                 # Calculate zeros percentage
                 zeros_pct = (quant_input == 0).float().mean().item() * 100.0
@@ -595,15 +708,34 @@ class LayerComparator:
                 
                 # Compression Stats (Input & Weight)
                 self.compression_tracker.update(module, prev_module_type, quant_input, bit_width=bit_width)
-                
+
                 metrics['count'] += 1
-            
+
+            # 1b. Isolated Output Metrics (teacher-forced mode only)
+            # Both models received the SAME FP32 reference input for this layer,
+            # so the output difference is this layer's own quantization error with
+            # no inherited upstream drift.
+            if self.compare_mode == "isolated":
+                ref_out = self.ref_layer_outputs.get(name, None)
+                quant_out = self.quant_layer_outputs.get(name, None)
+                if (
+                    isinstance(ref_out, torch.Tensor)
+                    and isinstance(quant_out, torch.Tensor)
+                    and ref_out.is_floating_point()
+                    and ref_out.shape == quant_out.shape
+                ):
+                    mse, cossim = self._pair_metric(ref_out, quant_out)
+                    metrics['output_mse_sum'] += mse
+                    metrics['output_cossim_sum'] += cossim
+                    metrics['output_count'] += 1
+
             # 2. Weight Metrics
             ref_weight = self.ref_weights.get(name, None)
             if ref_weight is not None and hasattr(module, 'last_quant_weight'):
                  quant_weight = module.last_quant_weight
-                 metrics['weight_mse_sum'] += compute_mse(ref_weight, quant_weight)
-                 metrics['weight_cossim_sum'] += compute_cosine_similarity(ref_weight, quant_weight)
+                 w_mse, w_cossim = self._pair_metric(ref_weight, quant_weight)
+                 metrics['weight_mse_sum'] += w_mse
+                 metrics['weight_cossim_sum'] += w_cossim
                  
                  weight_zeros_pct = (quant_weight == 0).float().mean().item() * 100.0
                  metrics['zeros_pct_weight_sum'] += weight_zeros_pct
@@ -627,9 +759,9 @@ class LayerComparator:
                  metrics['xmax_count'] += 1
 
             # 4. Captured Scales (for chunk-wise reporting)
-            if hasattr(module, 'last_quant_input_scale_packed'):
+            if hasattr(module, 'last_quant_input_scale_packed') and module.last_quant_input_scale_packed is not None:
                 metrics['input_scales'].append(module.last_quant_input_scale_packed.detach().cpu())
-            elif hasattr(module, 'last_quant_input_scale'):
+            elif hasattr(module, 'last_quant_input_scale') and module.last_quant_input_scale is not None:
                 metrics['input_scales'].append(module.last_quant_input_scale.detach().cpu())
             
             if hasattr(module, 'last_quant_weight_scale_packed'):
@@ -670,6 +802,13 @@ class LayerComparator:
             acc_source = "Local (Comparison Batches)"
         
         report_lines.append("\n=== Model Comparison Report ===")
+        report_lines.append(f"Compare Mode: {self.compare_mode}")
+        if self.compare_mode == "isolated":
+            report_lines.append(
+                "NOTE: in isolated/teacher-forced mode every layer is fed the FP32 "
+                "reference input, so the Quantized end-to-end accuracy below is NOT "
+                "the model's real accuracy — use the per-layer Out MSE/CosSim table instead."
+            )
         report_lines.append(f"Accuracy Source: {acc_source}")
         report_lines.append(f"{'Metric':<20} | {'Reference (FP32)':<20} | {f'Quantized ({self.quant_type})':<20}")
         report_lines.append("-" * 66)
@@ -1241,8 +1380,19 @@ class LayerComparator:
         report_lines.append("\n")
 
         # 4. Layer-Level Comparison (Average)
-        report_lines.append(f"--- Layer Comparison (Average over {self.total_batches} Batches) ---")
-        report_lines.append(f"{'Layer':<{_NAME_W}} | {'Type':<{_TYPE_W}} | {'Input MSE':<10} | {'Input CosSim':<12} | {'Weight MSE':<10} | {'Weight CosSim':<12} | {'XMax Orig':<10} | {'XMax Deq':<10} | {'XMax Err %':<10} | {'Zeros % (I)':<12} | {'Zeros % (W)':<12}")
+        _isolated = self.compare_mode == "isolated"
+        _mode_desc = (
+            "ISOLATED / teacher-forced — each layer fed the FP32 reference input; "
+            "columns below report this layer's OWN output error (no inherited drift)"
+            if _isolated else
+            "PROPAGATED — both models run independently end-to-end; columns below are "
+            "the CUMULATIVE input divergence at each layer"
+        )
+        _m1_label = "Out MSE" if _isolated else "Input MSE"
+        _m2_label = "Out CosSim" if _isolated else "Input CosSim"
+        report_lines.append(f"--- Layer Comparison [{self.compare_mode}] (Average over {self.total_batches} Batches) ---")
+        report_lines.append(f"Mode: {_mode_desc}")
+        report_lines.append(f"{'Layer':<{_NAME_W}} | {'Type':<{_TYPE_W}} | {_m1_label:<10} | {_m2_label:<12} | {'Weight MSE':<10} | {'Weight CosSim':<12} | {'XMax Orig':<10} | {'XMax Deq':<10} | {'XMax Err %':<10} | {'Zeros % (I)':<12} | {'Zeros % (W)':<12}")
         _LAYER_CMP_W = _NAME_W + 3 + _TYPE_W + 3 + 10 + 3 + 12 + 3 + 10 + 3 + 12 + 3 + 10 + 3 + 10 + 3 + 10 + 3 + 12 + 3 + 12
         report_lines.append("-" * _LAYER_CMP_W)
         
@@ -1253,25 +1403,16 @@ class LayerComparator:
             
             input_mse_str = "N/A"
             input_cossim_str = "N/A"
-            
-            # Check if we have valid input metrics (requires ref input)
-            # We can check if mse_sum is > 0 or if we have a flag. 
-            # But mse could be 0. Let's check if we had ref inputs.
-            # We don't store that explicitly. 
-            # But if we processed 'count' batches, and input_mse_sum is 0, it might be perfect match OR no ref.
-            # However, we only add to sum if ref_input is not None.
-            # Let's assume if we have count > 0, we have valid quant inputs.
-            # But we need to know if we had ref inputs.
-            # Let's add a 'ref_count' to metrics.
-            
-            # For now, let's just print the values. If they are 0.0 and shouldn't be, that's ambiguous.
-            # But since we initialized to 0.0, if we never added anything, they remain 0.0.
-            # This is risky. Let's modify _compute_layer_metrics to track ref_count.
-            
-            # Actually, let's just modify the print logic to be safe for now, 
-            # assuming that if we are here, we might have N/A.
-            
-            if metrics['input_mse_sum'] == 0.0 and metrics['input_cossim_sum'] == 0.0:
+
+            # In isolated mode the headline columns report this layer's OWN output
+            # error (teacher-forced). In propagated mode they report the cumulative
+            # input divergence. Either way they fill the same two table columns.
+            if _isolated:
+                out_count = metrics['output_count']
+                if out_count > 0:
+                    input_mse_str = f"{metrics['output_mse_sum'] / out_count:.2e}"
+                    input_cossim_str = f"{metrics['output_cossim_sum'] / out_count:.4f}"
+            elif metrics['input_mse_sum'] == 0.0 and metrics['input_cossim_sum'] == 0.0:
                  # Heuristic: if both are exactly 0.0, likely no ref input (unless perfect match which is rare for float)
                  pass
             else:
@@ -1425,8 +1566,11 @@ class LayerComparator:
                 if hasattr(module, 'last_quant_input_max'):
                     input_max = module.last_quant_input_max
                     input_scale = calculate_scale(input_max, input_q_type)
-                    
-                    # Scale Reference to Format Range (e.g., 0-448)
+
+                    # Scale Reference to Format Range (e.g., 0-448). ref_input is
+                    # offloaded to CPU; align it to the scale's device first.
+                    if torch.is_tensor(input_scale):
+                        ref_input = ref_input.to(input_scale.device)
                     ref_input_scaled = ref_input / input_scale
                     # Quantize (Unscaled)
                     quant_input_unscaled = quantize_tensor(
@@ -1445,7 +1589,9 @@ class LayerComparator:
             if ref_weight is not None:
                 if hasattr(module, 'weight_scale') and module.weight_scale is not None:
                     weight_scale = module.weight_scale
-                    # Scale Reference to Format Range
+                    # Scale Reference to Format Range (ref_weight is offloaded to CPU).
+                    if torch.is_tensor(weight_scale):
+                        ref_weight = ref_weight.to(weight_scale.device)
                     ref_weight_scaled = ref_weight / weight_scale
                     # Quantize (Unscaled)
                     quant_weight_unscaled = quantize_tensor(

@@ -10,37 +10,46 @@ def _load_cache_sims(db_path):
 
 @st.cache_data(ttl=30, show_spinner=False)
 def _load_bandwidth_aware_quant_results(project_root):
-    results_root = os.path.join(
-        project_root,
-        "runspace/experiments/bandwidth_aware_quant/results",
-    )
+    results_roots = [
+        (
+            "bandwidth_aware_quant",
+            os.path.join(project_root, "runspace/experiments/bandwidth_aware_quant/results"),
+        ),
+        (
+            "baselines_vs_dynamic_runs",
+            os.path.join(project_root, "runspace/experiments/baselines_vs_dynamic_runs/results/bandwidth_aware"),
+        ),
+    ]
     runs = []
-    if not os.path.isdir(results_root):
-        return runs
 
-    for dirpath, _, filenames in os.walk(results_root):
-        if "bandwidth_aware_quant_results.json" not in filenames:
+    for source_label, results_root in results_roots:
+        if not os.path.isdir(results_root):
             continue
-        json_path = os.path.join(dirpath, "bandwidth_aware_quant_results.json")
-        rel_dir = os.path.relpath(dirpath, results_root)
-        try:
-            with open(json_path, "r") as f:
-                data = json.load(f)
-        except Exception as exc:
+
+        for dirpath, _, filenames in os.walk(results_root):
+            if "bandwidth_aware_quant_results.json" not in filenames:
+                continue
+            json_path = os.path.join(dirpath, "bandwidth_aware_quant_results.json")
+            rel_dir = os.path.relpath(dirpath, results_root)
+            label = os.path.join(source_label, rel_dir)
+            try:
+                with open(json_path, "r") as f:
+                    data = json.load(f)
+            except Exception as exc:
+                runs.append({
+                    "label": label,
+                    "path": json_path,
+                    "error": str(exc),
+                })
+                continue
+
             runs.append({
-                "label": rel_dir,
+                "label": label,
                 "path": json_path,
-                "error": str(exc),
+                "dir": dirpath,
+                "data": data,
+                "model_name": data.get("model_name", rel_dir),
             })
-            continue
-
-        runs.append({
-            "label": rel_dir,
-            "path": json_path,
-            "dir": dirpath,
-            "data": data,
-            "model_name": data.get("model_name", rel_dir),
-        })
 
     return sorted(runs, key=lambda r: r["label"])
 

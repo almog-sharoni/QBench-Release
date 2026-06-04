@@ -1262,12 +1262,21 @@ class Runner:
         if not fmt or str(fmt).strip().lower() == 'fp32':
             return {}
 
+        unsigned_input_sources = quant_cfg.get('unsigned_input_sources', []) or []
+        if isinstance(unsigned_input_sources, str):
+            unsigned_input_sources = [
+                s.strip() for s in unsigned_input_sources.split(',') if s.strip()
+            ]
+
         return {
             'enabled': True,
             'mode': 'uniform',
             'format': fmt,
             'chunk_size': int(quant_cfg.get('chunk_size', 128) or 128),
             'quant_mode': str(quant_cfg.get('mode', 'chunk') or 'chunk'),
+            'unsigned_input_sources': list(unsigned_input_sources),
+            'uniform_unsigned_input_candidates': True,
+            'collect_error_stats': bool(quant_cfg.get('collect_error_stats', True)),
         }
 
     def _build_layer_input_quantizer(self, model, input_quant_cfg: Dict[str, Any]):
@@ -1294,6 +1303,9 @@ class Runner:
                 use_cache_sim_db=input_quant_cfg.get('use_cache_sim_db', False),
                 model_name=input_quant_cfg.get('model_name'),
                 skip_depthwise_input_quant=input_quant_cfg.get('skip_depthwise_input_quant', False),
+                input_transfer_map=input_quant_cfg.get('input_transfer_map'),
+                collect_error_stats=input_quant_cfg.get('collect_error_stats', True),
+                collect_format_stats=input_quant_cfg.get('collect_format_stats', True),
             )
             quantizer.register_hooks()
             print(f"Input quantization enabled: mode=dynamic metric=MSE chunk_size={chunk_size}")
@@ -1310,9 +1322,16 @@ class Runner:
                 fmt=fmt,
                 chunk_size=chunk_size,
                 quant_mode=quant_mode,
+                unsigned_input_sources=input_quant_cfg.get('unsigned_input_sources', []),
+                use_unsigned_input_candidates=input_quant_cfg.get('uniform_unsigned_input_candidates', True),
+                collect_error_stats=input_quant_cfg.get('collect_error_stats', True),
             )
             quantizer.register_hooks()
-            print(f"Input quantization enabled: mode=uniform format={fmt} quant_mode={quant_mode} chunk_size={chunk_size}")
+            stats_msg = "on" if input_quant_cfg.get('collect_error_stats', True) else "off"
+            print(
+                f"Input quantization enabled: mode=uniform format={fmt} "
+                f"quant_mode={quant_mode} chunk_size={chunk_size} error_stats={stats_msg}"
+            )
             return quantizer
 
         # input_only is handled in the evaluation loop
@@ -2002,6 +2021,8 @@ class Runner:
                     ref_input_normalization=ref_input_normalization,
                     ref_input_mean=ref_input_mean,
                     ref_input_std=ref_input_std,
+                    compare_mode=eval_cfg.get('compare_mode', 'propagated'),
+                    offload_captures=eval_cfg.get('offload_captures', True),
                 )
                 
                 # Determine number of batches

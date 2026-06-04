@@ -11,6 +11,8 @@ from runspace.src.quantization.constants import get_format_params
 from runspace.src.quantization.chunking import (
     chunk_tensor_by_context,
     unchunk_tensor_by_context,
+    chunk_weight_by_context,
+    unchunk_weight_by_context,
 )
 
 def _get_reduce_dims(input: torch.Tensor):
@@ -73,6 +75,19 @@ def _can_use_cuda(input: torch.Tensor, q_type: str, mode: str, chunk_size):
             raise RuntimeError(
                 f"quantize_tensor: chunk mode requires chunk_size=128 "
                 f"(CUDA codec hardcodes 128); got chunk_size={chunk_size}."
+            )
+        # The flat "chunk a whole tensor" method is GONE. mode='chunk' is now only
+        # the PE-level primitive: it must be fed an already-formed [N, 128] row
+        # stack produced by chunk_tensor_by_context (inputs) or
+        # chunk_weight_by_context (weights). Any other shape is the old method and
+        # must crash, so nothing silently bypasses the per-context chunkers.
+        if input.dim() != 2 or input.shape[-1] != chunk_size:
+            raise RuntimeError(
+                "quantize_tensor(mode='chunk') only accepts an already-chunked "
+                f"[N, {chunk_size}] block stack (got shape {tuple(input.shape)}). "
+                "The flat whole-tensor chunker was removed — chunk via "
+                "chunk_tensor_by_context (activations) or chunk_weight_by_context "
+                "(weights) first, then quantize the reshaped [-1, 128] rows."
             )
     if mode == "channel" and input.dim() < 2:
         raise RuntimeError(
@@ -224,6 +239,28 @@ def quantize_tensor(
     )
 
 
+def _context_chunk_quant(tensor, q_type, chunk_size, capture):
+    """Per-context (chunk_tensor_by_context) activation quantization.
+
+    The single canonical activation chunker for the runtime layer wrappers —
+    mirrors the dynamic/uniform input quantizers so inputs and outputs are
+    quantized per-context (never the removed flat whole-tensor method).
+    Returns the dequantized tensor (capture=False) or
+    (deq, unscaled, max_val, scale_b, scale_p) (capture=True).
+    """
+    chunked, oshape, pad = chunk_tensor_by_context(tensor, chunk_size)
+    b, nc, cs = chunked.shape
+    flat = chunked.reshape(-1, cs)
+    if not capture:
+        fp8, _ = quantize_tensor(flat, q_type=q_type, mode='chunk', chunk_size=cs)
+        return unchunk_tensor_by_context(fp8.view(b, nc, cs), oshape, pad)
+    fp8, unscaled, max_val, scale_b, scale_p = quantize_tensor(
+        flat, q_type=q_type, return_unscaled=True, return_scale=True,
+        mode='chunk', chunk_size=cs)
+    deq = unchunk_tensor_by_context(fp8.view(b, nc, cs), oshape, pad)
+    unsc = unchunk_tensor_by_context(unscaled.view(b, nc, cs), oshape, pad)
+    scb = unchunk_tensor_by_context(scale_b.view(b, nc, cs), oshape, pad)
+    return deq, unsc, max_val, scb, scale_p
 
 
 class QuantizedLayerMixin:
@@ -270,9 +307,15 @@ class QuantizedLayerMixin:
         chunk_size = getattr(self, 'weight_chunk_size', None)
         rounding = getattr(self, 'rounding', 'nearest') # Default to nearest for weights
         chunk_formats = getattr(self, 'chunk_formats', None) # Per-chunk format list
-        
+
+        # Single-format chunk mode is just the per-context weight chunker with one
+        # format everywhere — route it through the chunk_formats path (the only
+        # weight chunker), never the removed flat method.
+        if mode == 'chunk' and chunk_formats is None and chunk_size is not None:
+            chunk_formats = [q_type]
+
         if chunk_formats is not None and chunk_size is not None:
-            chunked, original_shape, pad_len = chunk_tensor_by_context(
+            chunked, original_shape, _wmeta = chunk_weight_by_context(
                 self.weight, chunk_size
             )
             num_contexts, num_chunks, chunk_size = chunked.shape
@@ -282,7 +325,10 @@ class QuantizedLayerMixin:
             
             # Align chunk_formats
             final_formats = []
-            if len(chunk_formats) == total_chunks:
+            if len(chunk_formats) == 1:
+                # Single-format chunk mode: broadcast one format to every chunk.
+                final_formats = [chunk_formats[0]] * total_chunks
+            elif len(chunk_formats) == total_chunks:
                 final_formats = chunk_formats
             elif len(chunk_formats) == num_chunks:
                 # Broadcast across logical contexts.
@@ -339,11 +385,11 @@ class QuantizedLayerMixin:
             # View as original shape (clone to ensure contiguous, non-overlapping memory)
             weight_fp8_chunked = quantized_flat.reshape(num_contexts, num_chunks, chunk_size)
             weight_scale_chunked = scale_flat.reshape(num_contexts, num_chunks, chunk_size)
-            self.weight_fp8 = unchunk_tensor_by_context(
-                weight_fp8_chunked, original_shape, pad_len
+            self.weight_fp8 = unchunk_weight_by_context(
+                weight_fp8_chunked, original_shape, _wmeta
             ).clone()
-            self.weight_scale = unchunk_tensor_by_context(
-                weight_scale_chunked, original_shape, pad_len
+            self.weight_scale = unchunk_weight_by_context(
+                weight_scale_chunked, original_shape, _wmeta
             ).clone()
             
             # Store chunk formats for reference
@@ -363,27 +409,9 @@ class QuantizedLayerMixin:
         # Or just implement custom logic here as before but updated for modes.
         
         # Let's stick to custom logic here to be safe and precise about weight structure.
-        
-        if mode == 'chunk':
-             # Use quantize_tensor for chunking
-             # It handles arbitrary shapes
-             # Modified to return scales (broadcast and packed)
-             _, w_unscaled, _, scale_b, scale_p = quantize_tensor(self.weight, q_type=q_type, return_unscaled=True, return_scale=True, mode='chunk', chunk_size=chunk_size)
-             self.weight_scale = scale_b
-             self.weight_scale_packed = scale_p
-             if q_type == 'int8':
-                 self.weight_fp8 = w_unscaled.to(torch.int8)
-             elif q_type == 'int4':
-                 # Store as int8 (no native int4 type), but values are in [-8, 7]
-                 self.weight_fp8 = w_unscaled.to(torch.int8)
-             elif q_type in ['fp8_e4m3', 'fp8_e5m2', "fp8_e2m5", "fp8_e3m4", "fp8_e1m6", "fp8_e6m1", "fp8_e7m0"]:
-                 # Use custom quantize to ensure no inf/nan and consistent behavior
-                 # w_unscaled is already quantized by quantize_tensor, just store as float32
-                 self.weight_fp8 = w_unscaled
-             else:
-                 self.weight_fp8 = w_unscaled # FP4 simulated
-                 
-             return
+        # NOTE: the old flat `quantize_tensor(self.weight, mode='chunk')` path was
+        # removed — chunk mode now always routes through chunk_weight_by_context
+        # above (single format is broadcast as chunk_formats=[q_type]).
 
         # Default/Channel/Tensor logic
         if mode == 'tensor':
@@ -509,7 +537,14 @@ class QuantizedLayerMixin:
         # outputs would be thrown away.  In chunk mode this matters: scale_b
         # is an input-sized expand+contiguous+slice allocation per layer per
         # batch.  Gate the flags on `capture` so we skip that work in eval.
-        if capture:
+        if mode == 'chunk' and chunk_formats is None:
+            # Per-context activation chunking (the canonical method).
+            if capture:
+                input_fp8, input_fp8_unscaled, max_val, scale_b, scale_p = _context_chunk_quant(
+                    input, q_type, chunk_size, True)
+            else:
+                input_fp8 = _context_chunk_quant(input, q_type, chunk_size, False)
+        elif capture:
             input_fp8, input_fp8_unscaled, max_val, scale_b, scale_p = quantize_tensor(
                 input, q_type=q_type, return_unscaled=True, return_scale=True,
                 mode=mode, chunk_size=chunk_size,
@@ -558,7 +593,18 @@ class QuantizedLayerMixin:
         chunk_size = getattr(self, 'output_chunk_size', None)
         capture = getattr(self, 'capture_activations', False)
 
-        if capture:
+        if mode == 'chunk':
+            if capture:
+                out_q, out_q_unscaled, max_val, scale_b, scale_p = _context_chunk_quant(
+                    output, q_type, chunk_size, True)
+                self.last_quant_output = out_q.detach()
+                self.last_quant_output_unscaled = out_q_unscaled.detach()
+                self.last_quant_output_max = max_val.detach()
+                self.last_quant_output_scale = scale_b.detach()
+                self.last_quant_output_scale_packed = scale_p.detach()
+            else:
+                out_q = _context_chunk_quant(output, q_type, chunk_size, False)
+        elif capture:
             out_q, out_q_unscaled, max_val, scale_b, scale_p = quantize_tensor(
                 output, q_type=q_type, return_unscaled=True, return_scale=True,
                 mode=mode, chunk_size=chunk_size,
