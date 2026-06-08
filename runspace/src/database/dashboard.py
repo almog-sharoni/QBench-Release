@@ -19,6 +19,7 @@ _DASHBOARD_PARTS = [
     "run_models_tab.py",
     "graph_tab.py",
     "chunk_layout_tab.py",
+    "bwaware_best_weights_tab.py",
     "auto_refresh.py",
 ]
 

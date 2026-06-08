@@ -259,9 +259,14 @@ def count_context_chunks(tensor: torch.Tensor, chunk_size: int) -> int:
 #   * fan_in <= chunk_size : pack floor(chunk_size/fan_in) WHOLE output channels
 #                            into one chunk (one shared scale), never splitting a
 #                            channel.  e.g. fan_in=27 -> 4 channels (108) per chunk.
-#   * fan_in  > chunk_size : within each output channel, pack floor(chunk_size/kernel)
+#   * fan_in  > chunk_size and kernel <= chunk_size :
+#                            within each output channel, pack floor(chunk_size/kernel)
 #                            WHOLE kernel (f*f) blocks per chunk, never splitting an
 #                            f*f block and never crossing output channels.
+#   * kernel  > chunk_size : split each input-channel kernel into the minimum number
+#                            of evenly sized kernel slices, padded to chunk_size.
+#                            This handles patch/projection convolutions such as ViT
+#                            [out, 3, 16, 16] with 128-wide chunks.
 # Returns (chunked[n_ctx, n_chunk, chunk_size], original_shape, meta) with a matching
 # unchunk_weight_by_context. Implemented with regular reshapes + zero padding.
 # ---------------------------------------------------------------------------
@@ -299,6 +304,33 @@ def chunk_weight_by_context(weight: torch.Tensor, chunk_size: int):
                 "real_w": k * fan_in, "cs": cs}
         return chunked, original_shape, meta
 
+    if kernel > cs:
+        c_in = fan_in // kernel
+        n_kernel_chunks = -(-kernel // cs)
+        split_w = -(-kernel // n_kernel_chunks)
+        padded_kernel = n_kernel_chunks * split_w
+
+        W = weight.contiguous().reshape(c_out, c_in, kernel)
+        pad_kernel = padded_kernel - kernel
+        if pad_kernel:
+            W = F.pad(W, (0, pad_kernel))
+        W = W.reshape(c_out, c_in, n_kernel_chunks, split_w)
+        pad_w = cs - split_w
+        if pad_w:
+            W = F.pad(W, (0, pad_w))
+        chunked = W.reshape(c_out, c_in * n_kernel_chunks, cs)
+        meta = {
+            "case": "C",
+            "c_out": c_out,
+            "c_in": c_in,
+            "kernel": kernel,
+            "n_kernel_chunks": n_kernel_chunks,
+            "split_w": split_w,
+            "padded_kernel": padded_kernel,
+            "cs": cs,
+        }
+        return chunked, original_shape, meta
+
     b = max(1, cs // kernel)                           # whole f*f blocks per chunk
     c_in = fan_in // kernel
     W = weight.contiguous().reshape(c_out, c_in, kernel)
@@ -324,6 +356,17 @@ def unchunk_weight_by_context(chunked: torch.Tensor, original_shape, meta) -> to
         W = chunked.reshape(n_groups, cs)[:, :real_w].reshape(n_groups * k, fan_in)
         return W[:c_out].reshape(original_shape)
 
+    if meta["case"] == "C":
+        c_out = meta["c_out"]
+        c_in = meta["c_in"]
+        kernel = meta["kernel"]
+        n_kernel_chunks = meta["n_kernel_chunks"]
+        split_w = meta["split_w"]
+        padded_kernel = meta["padded_kernel"]
+        W = chunked.reshape(c_out, c_in, n_kernel_chunks, cs)[:, :, :, :split_w]
+        W = W.reshape(c_out, c_in, padded_kernel)[:, :, :kernel]
+        return W.reshape(original_shape)
+
     c_out, c_in, kernel = meta["c_out"], meta["c_in"], meta["kernel"]
     n_chunk, real_w = meta["n_chunk"], meta["real_w"]
     b = meta["b"]
@@ -336,6 +379,10 @@ def count_weight_chunks(weight: torch.Tensor, chunk_size: int) -> int:
     if fan_in <= chunk_size:
         k = max(1, chunk_size // fan_in)
         return -(-c_out // k)
+    if kernel > chunk_size:
+        c_in = fan_in // kernel
+        n_kernel_chunks = -(-kernel // chunk_size)
+        return c_out * c_in * n_kernel_chunks
     b = max(1, chunk_size // kernel)
     c_in = fan_in // kernel
     return c_out * (-(-c_in // b))

@@ -16,7 +16,7 @@ ADAPTER_SCHEMA = {
     'model': ['name', 'pipeline', 'source', 'weights', 'repo_path', 'sg_weights', 'sp_config', 'sg_config'],
     'adapter': ['type', 'quantize_first_layer', 'quantized_ops', 'excluded_ops', 'input_quantization', 'weight_quantization', 'output_quantization', 'quantization_type', 'layers', 'fold_layers', 'fold_input_norm', 'input_mean', 'input_std', 'input_quantization_type', 'input_chunk_size', 'skip_calibration', 'build_quantized', 'quantize_components', 'input_size', 'unsigned_input_sources', 'enable_fx_quantization'],
     'quantization': ['format', 'bias', 'calib_method', 'layers', 'type', 'enabled', 'input_format', 'mode', 'chunk_size', 'weight_mode', 'weight_chunk_size', 'weight_source', 'act_mode', 'act_chunk_size', 'output_format', 'output_mode', 'output_chunk_size', 'simulate_tf32_accum', 'rounding', 'per_chunk_format', 'strict_format_check', 'cache_simulation_path', 'unsigned_input_sources'],
-    'dataset': ['name', 'path', 'batch_size', 'num_workers', 'image_size', 'grayscale', 'pairs_file', 'max_pairs', 'resize_size', 'multiprocessing_context', 'persistent_workers', 'prefetch_factor'],
+    'dataset': ['name', 'path', 'batch_size', 'num_workers', 'image_size', 'grayscale', 'pairs_file', 'max_pairs', 'resize_size', 'multiprocessing_context', 'persistent_workers', 'prefetch_factor', 'seq_len', 'max_blocks'],
     'evaluation': ['mode', 'compare_batches', 'dataset', 'batch_size', 'max_samples', 'generate_graph_svg', 'save_histograms', 'max_batches', 'graph_only', 'dynamic_input_quant', 'input_quant', 'save_visualizations', 'num_viz_samples'],
 }
 
@@ -219,12 +219,22 @@ def create_adapter(config: dict) -> BaseAdapter:
             _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)
         return GenericAdapter(**resolved_kwargs)
     
-    # elif adapter_type == 'slm':
-    #     from .slm_adapter import SLMAdapter
-    #     resolved_kwargs = _common_adapter_kwargs(params)
-    #     if _should_print_adapter_config(config):
-    #         _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)
-    #     return SLMAdapter(**resolved_kwargs)
+    elif adapter_type == 'slm':
+        from .slm_adapter import SLMAdapter
+        resolved_kwargs = _common_adapter_kwargs(params)
+        resolved_kwargs.update(
+            per_chunk_format=params['per_chunk_format'],
+            run_id=params['run_id'],
+            skip_calibration=params['skip_calibration'],
+            build_quantized=params['build_quantized'],
+            strict_format_check=params['strict_format_check'],
+            unsigned_input_sources=params['unsigned_input_sources'],
+            input_size=params['input_size'],
+            enable_fx_quantization=params['enable_fx_quantization'],
+        )
+        if _should_print_adapter_config(config):
+            _print_adapter_config_snapshot(config, adapter_type, resolved_kwargs)
+        return SLMAdapter(**resolved_kwargs)
 
     elif adapter_type == 'feature_matching':
         from .feature_matching_adapter import FeatureMatchingAdapter

@@ -1581,9 +1581,12 @@ def _analyze_weight_tensor(w, layer_name, args, metrics_to_calc, qt_options, lay
                         sim = torch.nn.functional.cosine_similarity(w_chunked, w_deq_chunked, dim=-1)
                         chunk_errs = (1.0 - sim).view(-1)
                     metric_chunk_errors[m][q_type] = chunk_errs.cpu().numpy()
-        except:
-            for m in metrics_to_calc:
-                record['metrics'][m][q_type] = float('inf')
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to analyze weight tensor for layer {layer_name}, "
+                f"format {q_type}, shape {tuple(w.shape)}, "
+                f"chunk_size={args.weight_chunk_size}"
+            ) from exc
 
     # Process Chunk Wins
     if args.weight_chunk_size:
