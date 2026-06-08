@@ -43,3 +43,8 @@ opencode.jsonc
 .claude/settings.json
 **/backup
 **.pt
+# PhD paper draft (local only)
+paper_draft/
+**/.pylibs
+# Bandwidth-aware descent experiment outputs (regenerable)
+runspace/experiments/bandwidth_aware_quant/results_descent/

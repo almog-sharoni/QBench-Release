@@ -25,6 +25,8 @@ def _dashboard_right_panel_run_title(run):
         return "Weight Quant"
     if "find_optimal_hybrid_quant.py" in command:
         return "Hybrid Quant"
+    if "bandwidth_aware_quant.py" in command:
+        return "BW-Aware Quant"
     if "run_interactive.py" in command:
         return "Interactive Run"
     return "Dashboard Run"

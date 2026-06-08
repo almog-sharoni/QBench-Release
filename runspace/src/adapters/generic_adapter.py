@@ -931,8 +931,13 @@ class GenericAdapter(BaseAdapter):
                     quant_class = QuantBatchNormAct2d
                     should_quantize = True
 
-            # timm-specific Attention / MLP decomposition
-            if not should_quantize and self._is_timm_attention_like(module):
+            # timm-specific Attention / MLP decomposition.
+            # These heuristics key off attribute names (qkv / fc1+fc2) that also
+            # appear on non-timm composites — e.g. HF OPTDecoderLayer exposes
+            # fc1/fc2 and would be wrongly swapped wholesale to DecomposedMlpBlock,
+            # discarding its attention. SLM/LLM adapters disable them.
+            enable_timm_decomp = getattr(self, '_enable_timm_decomposition', True)
+            if enable_timm_decomp and not should_quantize and self._is_timm_attention_like(module):
                 wants_attention = quantize_all or self._contains_requested_name(
                     quantized_ops_lc,
                     {"Attention", "MultiheadAttention", "MHA", "QkvAttention"}
@@ -943,7 +948,7 @@ class GenericAdapter(BaseAdapter):
                     quant_class = DecomposedQkvAttention
                     should_quantize = True
 
-            if not should_quantize and self._is_timm_mlp_like(module):
+            if enable_timm_decomp and not should_quantize and self._is_timm_mlp_like(module):
                 wants_mlp = quantize_all or self._contains_requested_name(
                     quantized_ops_lc,
                     {"Mlp", "MLP", "FeedForward", "FFN", "MlpBlock"}
