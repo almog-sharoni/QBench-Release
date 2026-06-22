@@ -595,7 +595,9 @@ search_best_chunk_format(torch::Tensor x,
                          std::vector<int> cands_e,
                          std::vector<int> cands_m,
                          std::vector<int> cands_sgn,
-                         bool return_capture)
+                         bool return_capture,
+                         int metric,
+                         double metric_param)
 {
     TORCH_CHECK(x.is_cuda() && x.scalar_type() == torch::kFloat32 && x.is_contiguous(),
                 "search_best_chunk_format: x must be contiguous CUDA float32");
@@ -640,6 +642,8 @@ search_best_chunk_format(torch::Tensor x,
         out.data_ptr<float>(),
         return_capture ? out_unscaled.data_ptr<float>() : nullptr,
         N,
+        metric,
+        (float)metric_param,
         current_stream_ptr());
 
     return {best_indices, best_scales, out, out_unscaled};
@@ -720,7 +724,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, mod) {
     mod.def("search_best_chunk_format", &search_best_chunk_format,
             py::arg("x"), py::arg("cands_e"), py::arg("cands_m"), py::arg("cands_sgn"),
             py::arg("return_capture") = false,
-            "Fused search and quantize for chunk-mode dynamic quantization.");
+            py::arg("metric") = 0,
+            py::arg("metric_param") = 0.0625,
+            "Fused search and quantize for chunk-mode dynamic quantization. "
+            "metric selects the per-chunk error norm (0=L2, 1=L1, 2=Linf, 3=bias, "
+            "4=L0, 5=Huber, 6=logsum); metric_param is the Huber delta.");
 
     mod.def("n_per_word",     &n_per_word_py,
             py::arg("e"), py::arg("m"),
