@@ -1,0 +1,55 @@
+- name: superpoint_superglue_4_020_0040
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.004
+    nms_radius: 4
+  sg_config:
+    match_threshold: 0.2
+
+- name: superpoint_superglue_4_020_0045
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.0045
+    nms_radius: 4
+  sg_config:
+    match_threshold: 0.2
+
+
+- name: superpoint_superglue_4_020_0050
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.005
+    nms_radius: 4
+  sg_config:
+    match_threshold: 0.2
+
+- name: superpoint_superglue_4_020_0055
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.0055
+    nms_radius: 4
+  sg_config:
+    match_threshold: 0.2
+
+- name: superpoint_superglue_4_020_0060
+  pipeline: superpoint_superglue
+  source: custom
+  sg_weights: indoor
+  repo_path: ../custom/SuperGluePretrainedNetwork
+  sp_config:
+    keypoint_threshold: 0.006
+    nms_radius: 4
+  sg_config:
+    match_threshold: 0.2
