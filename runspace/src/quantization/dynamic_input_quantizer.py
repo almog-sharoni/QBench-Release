@@ -38,7 +38,7 @@ class DynamicInputQuantizer:
     Runtime dynamic input quantizer.
 
     Registers forward pre-hooks on quantized modules and selects per-chunk
-    input formats by minimizing MSE.
+    input formats by minimizing a configurable error metric.
     """
     _RELU_TYPES = (nn.ReLU, nn.ReLU6)
     _COMPUTE_TYPES = (nn.Conv2d, nn.Linear)
@@ -57,6 +57,7 @@ class DynamicInputQuantizer:
         self,
         model,
         metric='mse',
+        metric_param=None,
         chunk_size=128,
         candidate_formats=None,
         restrict_post_relu_ufp=False,
@@ -70,7 +71,10 @@ class DynamicInputQuantizer:
         collect_format_stats=True,
     ):
         self.model = model
-        self.metric = 'mse'
+        self.metric = self._normalize_metric(metric)
+        # Huber transition point (in the per-chunk scaled domain, where chunk
+        # amax maps to ~[1, 2)). Only used by the 'huber' metric.
+        self.metric_param = float(metric_param) if metric_param is not None else 0.0625
         self.chunk_size = chunk_size
         self.restrict_post_relu_ufp = bool(restrict_post_relu_ufp)
         self.use_unsigned_input_candidates = bool(use_unsigned_input_candidates)
@@ -92,7 +96,9 @@ class DynamicInputQuantizer:
         self.layer_unsigned_input_indices = {}
 
         self.stats = {
+            'sum_l1_err': None,
             'sum_mse_err': None,
+            'sum_l1_norm': None,
             'sum_l2_norm': None
         }
 
@@ -151,6 +157,45 @@ class DynamicInputQuantizer:
         self.all_fp8_formats = ['fp8_e4m3', 'fp8_e5m2', 'fp8_e2m5', 'fp8_e3m4', 'fp8_e1m6', 'fp8_e6m1', 'fp8_e7m0']
         self.unsigned_all_fp8_formats = self._make_unsigned_candidates(self.all_fp8_formats)
         self._reported_missing_layers = set()
+
+    # Per-chunk selection metrics. Codes MUST match the SearchMetric enum in
+    # runspace/src/quantization/cuda/ops_search.cu.
+    _METRIC_CODES = {
+        'l2': 0,
+        'l1': 1,
+        'linf': 2,
+        'bias': 3,
+        'l0': 4,
+        'huber': 5,
+        'logsum': 6,
+    }
+    _METRIC_ALIASES = {
+        'mse': 'l2',
+        'mae': 'l1',
+        'max': 'linf',
+        'chebyshev': 'linf',
+        'sad': 'l1',
+        'mean_bias': 'bias',
+        'count': 'l0',
+        'logl1': 'logsum',
+        'logsum_exp': 'logsum',
+    }
+
+    @classmethod
+    def _normalize_metric(cls, metric):
+        normalized = str(metric or 'l2').strip().lower()
+        normalized = cls._METRIC_ALIASES.get(normalized, normalized)
+        if normalized not in cls._METRIC_CODES:
+            raise ValueError(
+                f"Unsupported dynamic input quantization metric: {metric!r}. "
+                f"Expected one of {sorted(cls._METRIC_CODES)} "
+                f"(or aliases {sorted(cls._METRIC_ALIASES)})."
+            )
+        return normalized
+
+    @property
+    def metric_code(self):
+        return self._METRIC_CODES[self.metric]
 
     @staticmethod
     def _dedupe_formats(formats):
@@ -506,17 +551,17 @@ class DynamicInputQuantizer:
             print(
                 f"Registered hooks on {count_dynamic + count_ufp} layers: "
                 f"{count_ufp} post-ReLU (UFP candidates), "
-                f"{count_dynamic} other (non-UFP candidates, metric=MSE)."
+                f"{count_dynamic} other (non-UFP candidates, metric={self.metric.upper()})."
             )
             if not self.ufp_candidates:
-                print("  WARNING: no UFP formats in candidates; post-ReLU layers use non-UFP.")
+                print("  No UFP formats in candidates; deriving post-ReLU UFP candidates from non-UFP formats.")
             if not self.non_ufp_candidates:
                 print("  WARNING: no non-UFP formats in candidates; other layers use UFP.")
         else:
             print(
                 f"Registered hooks on {count_dynamic + count_ufp} layers: "
                 f"all layers use all {len(self.candidate_formats)} candidates "
-                f"(metric=MSE)."
+                f"(metric={self.metric.upper()})."
             )
         if self.use_unsigned_input_candidates:
             print(f"{count_unsigned_candidate_layers} layers are using UFP candidates.")
@@ -679,7 +724,9 @@ class DynamicInputQuantizer:
             with torch.no_grad():
                 diff = tensor - quantized
                 updates = {
+                    'sum_l1_err': diff.abs().sum(),
                     'sum_mse_err': diff.pow(2).sum(),
+                    'sum_l1_norm': tensor.abs().sum(),
                     'sum_l2_norm': tensor.pow(2).sum(),
                 }
                 for key, value in updates.items():
@@ -717,6 +764,96 @@ class DynamicInputQuantizer:
         self._candidate_param_cache[key] = cached
         return cached
 
+    @staticmethod
+    def _chunk_scale(chunks):
+        amax = chunks.abs().max(dim=1, keepdim=True).values
+        scales = torch.ones_like(amax)
+        nonzero = amax != 0
+        if nonzero.any():
+            values = amax[nonzero].contiguous()
+            try:
+                bits = values.view(torch.int32)
+                mask = torch.tensor(-8388608, dtype=torch.int32, device=chunks.device)
+                scales[nonzero] = torch.bitwise_and(bits, mask).view(torch.float32)
+            except Exception:
+                scales[nonzero] = torch.pow(
+                    torch.tensor(2.0, dtype=chunks.dtype, device=chunks.device),
+                    torch.floor(torch.log2(values))
+                )
+        return scales
+
+    def _reduce_metric_python(self, diff):
+        """Per-chunk metric value for a (num_chunks, chunk_size) error tensor.
+
+        Mirrors metric_elem/block_reduce_metric in ops_search.cu so the CPU path
+        and CUDA kernel agree on which format wins each chunk.
+        """
+        metric = self.metric
+        if metric == 'linf':
+            return diff.abs().max(dim=1).values
+        if metric == 'l1':
+            return diff.abs().sum(dim=1)
+        if metric == 'bias':
+            return diff.sum(dim=1).abs()
+        if metric == 'l0':
+            return (diff != 0).to(diff.dtype).sum(dim=1)
+        if metric == 'huber':
+            delta = self.metric_param
+            a = diff.abs()
+            quad = 0.5 * diff.pow(2)
+            lin = delta * (a - 0.5 * delta)
+            return torch.where(a <= delta, quad, lin).sum(dim=1)
+        if metric == 'logsum':
+            a = diff.abs()
+            exps = torch.where(
+                a > 0,
+                torch.floor(torch.log2(a.clamp(min=1e-30))),
+                torch.full_like(a, -126.0),
+            )
+            return exps.sum(dim=1)
+        # default: l2
+        return diff.pow(2).sum(dim=1)
+
+    def _select_best_format_python(self, ref_chunks, candidates, chunk_size, capture):
+        total_chunks = ref_chunks.shape[0]
+        scales = self._chunk_scale(ref_chunks)
+        x_scaled = ref_chunks / scales
+
+        best_errors = torch.full(
+            (total_chunks,),
+            float('inf'),
+            dtype=ref_chunks.dtype,
+            device=ref_chunks.device,
+        )
+        best_indices = torch.zeros(total_chunks, dtype=torch.long, device=ref_chunks.device)
+        best_qs_scaled = torch.zeros_like(ref_chunks)
+
+        for c_idx, fmt in enumerate(candidates):
+            q_scaled, _max_val = quantize_tensor(
+                x_scaled.contiguous(),
+                q_type=fmt,
+                mode='chunk',
+                chunk_size=chunk_size,
+            )
+            diff = x_scaled - q_scaled
+            reduced = self._reduce_metric_python(diff)
+
+            mask = reduced < best_errors
+            if mask.any():
+                best_errors[mask] = reduced[mask]
+                best_indices[mask] = c_idx
+                best_qs_scaled[mask] = q_scaled[mask]
+
+        best_qs = best_qs_scaled * scales
+        if capture:
+            return (
+                best_indices,
+                scales.squeeze(1),
+                best_qs,
+                best_qs_scaled,
+            )
+        return best_indices, scales.squeeze(1), best_qs, None
+
     def _select_best_format(self, tensor, layer_name, candidates, module=None):
         """
         Optimized format selection:
@@ -753,21 +890,36 @@ class DynamicInputQuantizer:
                     chunk_size=chunk_size,
                 )
                 scale_chunks = None
-        else:
+        elif ref_chunks.is_cuda:
             cands_e, cands_m, cands_sgn = self._candidate_params(candidates)
 
-            # Call the fused CUDA kernel
+            # Fused CUDA kernel: per-chunk format search under the active metric.
             best_indices, best_scales, best_qs_flat, best_unscaled_qs_flat = search_best_chunk_format(
                 ref_chunks.view(-1).contiguous(),
                 cands_e,
                 cands_m,
                 cands_sgn,
-                capture
+                capture,
+                self.metric_code,
+                self.metric_param,
             )
 
             best_qs = best_qs_flat.view(-1, chunk_size)
             if capture:
                 best_unscaled_qs = best_unscaled_qs_flat.view(-1, chunk_size)
+                scale_chunks = best_scales.unsqueeze(-1).expand(-1, chunk_size).contiguous()
+            else:
+                scale_chunks = None
+
+        else:
+            # CPU fallback / reference path (also the correctness oracle).
+            best_indices, best_scales, best_qs, best_unscaled_qs = self._select_best_format_python(
+                ref_chunks.contiguous(),
+                candidates,
+                chunk_size,
+                capture,
+            )
+            if capture:
                 scale_chunks = best_scales.unsqueeze(-1).expand(-1, chunk_size).contiguous()
             else:
                 scale_chunks = None
@@ -809,6 +961,10 @@ class DynamicInputQuantizer:
             key: (value.item() if isinstance(value, torch.Tensor) else 0.0)
             for key, value in self.stats.items()
         }
+        norm_l1 = (
+            scalar_stats['sum_l1_err'] / scalar_stats['sum_l1_norm']
+            if scalar_stats['sum_l1_norm'] > 0 else 0.0
+        )
         norm_mse = (
             scalar_stats['sum_mse_err'] / scalar_stats['sum_l2_norm']
             if scalar_stats['sum_l2_norm'] > 0 else 0.0
@@ -835,9 +991,12 @@ class DynamicInputQuantizer:
                 processed_layer_stats[layer_name] = stats_copy
 
         return {
+            'norm_l1': norm_l1,
             'norm_mse': norm_mse,
+            'total_l1': scalar_stats['sum_l1_err'],
             'total_mse': scalar_stats['sum_mse_err'],
-            'layer_stats': processed_layer_stats
+            'layer_stats': processed_layer_stats,
+            'collect_error_stats': self.collect_error_stats,
         }
 
     def cleanup(self):

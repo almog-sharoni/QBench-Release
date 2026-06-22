@@ -101,6 +101,8 @@ void launch_search_and_quantize_chunk(
     float*       out,
     float*       out_unscaled,
     int          N,
+    int          metric,
+    float        metric_param,
     void*        stream);
 
 

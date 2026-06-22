@@ -114,6 +114,7 @@ with tab_runner:
         "input": os.path.join(PROJECT_ROOT, "runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py"),
         "weight": os.path.join(PROJECT_ROOT, "runspace/experiments/find_optimal_weight_quant/find_optimal_weight_quant.py"),
         "hybrid": os.path.join(PROJECT_ROOT, "runspace/experiments/find_optimal_hybrid_quant/find_optimal_hybrid_quant.py"),
+        "bwaware": os.path.join(PROJECT_ROOT, "runspace/experiments/bandwidth_aware_quant/bandwidth_aware_quant.py"),
     }
 
     def _dashboard_runner_list_files(folder, pattern="*.yaml"):
@@ -856,6 +857,13 @@ with tab_runner:
                 command.append("--fold_input_norm")
             else:
                 command.append("--no_fold_input_norm")
+        elif kind == "bwaware":
+            for name in (
+                "bandwidth", "mode", "compare_batches", "compare_mode", "cache_size", "b_bits", "input_format_policy"
+            ):
+                _dashboard_runner_add_experiment_arg(kind, command, name, values.get(name))
+            if values.get("use_best_weights", False):
+                _dashboard_runner_add_experiment_bool(kind, command, "use_best_weights", values.get("use_best_weights"))
         return command
 
     def _dashboard_runner_common_experiment_fields(kind, prefix):
@@ -989,6 +997,7 @@ with tab_runner:
             "input": "Input Quant",
             "weight": "Weight Quant",
             "hybrid": "Hybrid Quant",
+            "bwaware": "BW-Aware Quant",
         }
         experiment_kind_options = list(experiment_kind_labels)
         saved_experiment_kind = str(_dashboard_runner_ui_default("selected_experiment_kind", "input"))
@@ -1157,7 +1166,61 @@ with tab_runner:
             _dashboard_runner_save_experiment_run_state("hybrid", hybrid_values)
             _dashboard_runner_render_experiment_launch("hybrid", hybrid_values, "Hybrid Quant Experiment")
 
-    
+        if selected_experiment_kind == "bwaware":
+            bwaware_values = _dashboard_runner_common_experiment_fields(
+                "bwaware",
+                "runner_exp_bwaware",
+            )
+            b1, b2, b3, b4 = st.columns(4)
+            bwaware_values["bandwidth"] = b1.number_input(
+                "Bandwidth",
+                min_value=0.1,
+                value=float(_dashboard_runner_experiment_default("bwaware", "bandwidth", 1.0) or 1.0),
+                step=0.1,
+                key="runner_exp_bwaware_bandwidth",
+                help="Memory bandwidth in bytes/cycle.",
+            )
+            bwaware_values["mode"] = b2.selectbox(
+                "Mode",
+                options=["evaluate", "compare"],
+                index=0 if str(_dashboard_runner_experiment_default("bwaware", "mode", "evaluate")) == "evaluate" else 1,
+                key="runner_exp_bwaware_mode",
+            )
+            bwaware_values["cache_size"] = b3.number_input(
+                "Cache size (MB)",
+                min_value=0.0,
+                value=float(_dashboard_runner_experiment_default("bwaware", "cache_size", 0.0) or 0.0),
+                step=0.5,
+                key="runner_exp_bwaware_cache_size",
+                help="Pin a single cache size (e.g. 0, 2, 4). Default 0 runs cache size 0 only.",
+            )
+            bwaware_values["b_bits"] = b4.number_input(
+                "Min bits",
+                min_value=0,
+                max_value=32,
+                value=int(_dashboard_runner_experiment_default("bwaware", "b_bits", 0) or 0),
+                step=1,
+                key="runner_exp_bwaware_b_bits",
+                help="Pin a single min bit-width (0 = sweep 2–8, 2–8 = single value).",
+            )
+            policy_options = ["all", "typed", "canonical"]
+            policy_default = str(_dashboard_runner_experiment_default("bwaware", "input_format_policy", "all"))
+            bwaware_values["input_format_policy"] = st.selectbox(
+                "Input format policy",
+                options=policy_options,
+                index=policy_options.index(policy_default) if policy_default in policy_options else 0,
+                key="runner_exp_bwaware_input_policy",
+                help="'all' searches all formats; 'typed' searches signed/unsigned separately; 'canonical' uses one balanced format per bit-width.",
+            )
+            bwaware_values["use_best_weights"] = st.checkbox(
+                "Use best weights from DB",
+                value=bool(_dashboard_runner_experiment_default("bwaware", "use_best_weights", True)),
+                key="runner_exp_bwaware_use_best_weights",
+                help="Use the per-layer best weight formats from the latest weight_quant_optimized DB run instead of SIGNED_FORMATS_BY_BITS.",
+            )
+            _dashboard_runner_save_experiment_run_state("bwaware", bwaware_values)
+            _dashboard_runner_render_experiment_launch("bwaware", bwaware_values, "Bandwidth-Aware Quant Experiment")
+
         st.markdown("---")
         st.markdown("#### Model Runs")
         if not base_config_options:
