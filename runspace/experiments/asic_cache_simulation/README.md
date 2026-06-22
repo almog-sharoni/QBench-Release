@@ -1,6 +1,6 @@
 # ASIC Cache Simulation Experiment
 
-Simulates a model layer-by-layer to determine which outputs exceed the on-chip cache and must be quantized for external memory transfer.
+Simulates a model layer-by-layer to determine which outputs can remain on chip, which transfers must stream through external memory, and how compute/transfer cycles behave under the hardware model.
 
 ## Methodology
 
@@ -9,12 +9,13 @@ All sizes are in **number of FP8 elements** (1 element = 8 bits).
 The cache is specified in **millions of elements** (`--cache_size 2.0` = 2,000,000 elements).
 
 ### Element Footprint Calculation
-Each tensor's footprint includes metadata overhead per 128-bit chunk (16 FP8 elements).
+Each tensor's footprint is rounded to the simulator's 128-element transfer chunks, with optional metadata overhead per chunk.
 
 **Formula:**
-- `num_chunks = ceil(num_elements / 16)`
+- `num_chunks = ceil(num_elements / 128)`
+- `chunk_elems = num_chunks * 128`
 - `metadata_elems = ceil(num_chunks × metadata_bits / 8)`  *(metadata bytes as element-equivalents)*
-- `total_footprint = num_elements + metadata_elems`
+- `total_footprint = chunk_elems + metadata_elems`
 
 ### Cache Banking
 The cache is divided into `num_banks` equal banks.  
@@ -24,9 +25,31 @@ Any allocation is rounded up to the nearest bank boundary.
 
 ### Layer Capture
 Layers are captured via forward hooks in execution order.  
-Captured types: **Conv2d**, **Linear**, **Residual** (BasicBlock / Bottleneck skip connections).
+Captured types include **Conv**, **Linear**, pooling, normalization, residual skip entries, registered quantized ops, and supported functional arithmetic ops such as `QuantMatMul`, `QuantBMM`, `QuantAdd`, and `QuantCat`.
 
 Residual entries record the identity tensor (`xin`) that must be held in cache across the entire residual block, plus the merged output size.
+
+Activations registered in `OpRegistry` are treated as pipeline operations for compute-cycle accounting. They still participate in tensor shape/output propagation, but they contribute `0` compute cycles. If an activation is collapsed into a previous layer, its collapsed compute contribution is also `0`.
+
+### Compute-Cycle Model
+The hardware model assumes 128 processing units (PUs) with a two-stage multiply/accumulate pipeline.
+
+Reduction-style ops use 128-wide chunks per output:
+
+- Conv: `output_elems * ceil((in_channels / groups * filter_height * filter_width) / 128) + 1`
+- Linear: `output_elems * ceil(in_features / 128) + 1`
+- MatMul/BMM: `output_elems * ceil(reduction_dim / 128) + 1`
+
+Elementwise ops such as add/sub/mul/div and residual merges use `ceil(output_elems / 128)`.
+Concatenation and registry-marked activations use `0` compute cycles because they are modeled as pipeline/data-movement operations.
+
+Transfer cycles use the same 128-element chunk granularity:
+
+- `transfer_cycles = ceil(elems / 128) * (16 * bits) / bandwidth`
+
+The per-layer cycle estimate is:
+
+- `total_cycles = max(compute_cycles, total_transfer_cycles)`
 
 ---
 
@@ -79,12 +102,12 @@ Results are saved to `simulation_results.json` with four sections:
 
 | Section | Contents |
 |---|---|
-| `metadata` | Cache params, model, timestamp |
+| `metadata` | Cache params, model, bandwidth, timestamp |
 | `summary` | Layer counts, quantize/flagged totals |
-| `layers` | Per-layer element counts, bank usage, `stay_on_chip`, `rule`, `reason` |
+| `layers` | Per-layer element counts, bank usage, `stay_on_chip`, `xin_from_cache`, transfer bits, BW-limited flags, compute cycles, total cycles, `rule`, `reason` |
 | `off_chip_layers` | Layer names whose outputs must be quantized for external memory |
 
-Console output columns: `Layer Name | Type | Input | Weights | Output | Banked | NextXin | OnChip | Reason`
+Console output columns: `Layer Name | Type | Input | Weights | Output | Banked | NextXin | OnChip | inB | wB | outB | Reason`
 
 ---
 
@@ -111,13 +134,14 @@ Explicit entries under `quantization.layers` always take priority over simulatio
 | `--model_name` | `resnet18` | Model to analyze |
 | `--cache_size` | `2.0` | Cache size in **millions of elements** |
 | `--num_banks` | `16` | Number of cache banks |
-| `--metadata_bits` | `0` | Extra bits per 128-bit chunk |
+| `--metadata_bits` | `0` | Extra metadata bits per 128-element chunk |
 | `--batch_size` | `1` | Batch size for activation shape calculation |
 | `--device` | `cuda` | Device for the dummy forward pass |
+| `--bandwidth` | `1.0` | Memory bandwidth in bytes/cycle for transfer-cycle and BW-limitation analysis |
 
 ## Running
 
 ```bash
 python runspace/experiments/asic_cache_simulation/simulate_cache.py \
-    --model_name resnet18 --cache_size 2.0 --metadata_bits 16
+    --model_name resnet18 --cache_size 2.0 --metadata_bits 16 --bandwidth 1.0
 ```

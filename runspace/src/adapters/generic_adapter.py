@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.models as models
 import os
 from .base_adapter import BaseAdapter
@@ -141,6 +142,7 @@ class GenericAdapter(BaseAdapter):
             "mode": self.quant_mode,
             "chunk_size": self.input_chunk_size if self.input_chunk_size is not None else self.chunk_size,
             "quantization_bias": self.quantization_bias,
+            "layers": self.layer_config,
         }
 
     def _auto_detect_model_source(self) -> str:
@@ -446,8 +448,16 @@ class GenericAdapter(BaseAdapter):
 
             if (
                 isinstance(mod_curr, (nn.Conv2d, nn.Linear)) and 
-                isinstance(mod_next, (nn.BatchNorm2d, nn.BatchNorm1d)) and
-                type(mod_next).__name__ != 'BatchNormAct2d'
+                isinstance(mod_next, nn.BatchNorm2d) and
+                type(mod_next) is not nn.BatchNorm2d
+            ):
+                self._fold_conv_bn_subclass(name_curr, mod_curr, name_next, mod_next, model)
+                i += 2
+                continue
+
+            if (
+                isinstance(mod_curr, (nn.Conv2d, nn.Linear)) and 
+                isinstance(mod_next, (nn.BatchNorm2d, nn.BatchNorm1d))
             ):
                 modules_to_fuse.append([name_curr, name_next])
                 i += 2
@@ -457,6 +467,51 @@ class GenericAdapter(BaseAdapter):
 
         if modules_to_fuse:
             torch.quantization.fuse_modules(model, modules_to_fuse, inplace=True)
+
+    def _fold_conv_bn_subclass(self, conv_name, conv, bn_name, bn_mod, model):
+        if not isinstance(conv, nn.Conv2d):
+            return
+
+        eps = bn_mod.eps
+        bn_weight = bn_mod.weight
+        bn_bias = bn_mod.bias
+        running_mean = bn_mod.running_mean
+        running_var = bn_mod.running_var
+
+        if bn_weight is None:
+            return
+
+        with torch.no_grad():
+            inv_std = 1.0 / torch.sqrt(running_var + eps)
+            scale = bn_weight * inv_std
+            shift = bn_bias - bn_weight * running_mean * inv_std
+
+            scale_reshaped = scale.view(-1, 1, 1, 1)
+            conv.weight.copy_(conv.weight * scale_reshaped)
+
+            if conv.bias is None:
+                conv.bias = nn.Parameter(torch.zeros(conv.out_channels, device=conv.weight.device))
+            conv.bias.copy_(conv.bias * scale + shift)
+
+        parent_name = '.'.join(bn_name.split('.')[:-1])
+        child_attr = bn_name.split('.')[-1]
+        parent = model.get_submodule(parent_name)
+
+        drop_mod = getattr(bn_mod, 'drop', nn.Identity())
+        act_mod = getattr(bn_mod, 'act', nn.Identity())
+
+        if not isinstance(drop_mod, nn.Identity) and not isinstance(act_mod, nn.Identity):
+            replacement = nn.Sequential()
+            replacement.add_module('drop', drop_mod)
+            replacement.add_module('act', act_mod)
+        elif not isinstance(drop_mod, nn.Identity):
+            replacement = drop_mod
+        elif not isinstance(act_mod, nn.Identity):
+            replacement = act_mod
+        else:
+            replacement = nn.Identity()
+
+        setattr(parent, child_attr, replacement)
 
     def _fold_input_normalization(self, model: nn.Module):
         """
@@ -901,10 +956,11 @@ class GenericAdapter(BaseAdapter):
                     quant_class = DecomposedMlpBlock
                     should_quantize = True
             
-            # Check layer config for fp32 override
+            # Check layer config for explicit skip / fp32 override
             if should_quantize and full_name in self.layer_config:
                 l_conf = self.layer_config[full_name]
-                if l_conf.get('format') == 'fp32' or l_conf.get('type') == 'fp32':
+                if l_conf.get('skip_quantization') is True \
+                        or l_conf.get('format') == 'fp32' or l_conf.get('type') == 'fp32':
                     should_quantize = False
 
             if should_quantize:
@@ -1157,6 +1213,7 @@ class GenericAdapter(BaseAdapter):
             torch.div: "QuantDiv",
             operator.truediv: "QuantDiv",
             torch.cat: "QuantCat",
+            F.softmax: "QuantSoftmax",
         }
         
         # Filter by requested quantized ops
@@ -1222,34 +1279,46 @@ class GenericAdapter(BaseAdapter):
             print("Note: submodule FX fallback did not find any safe traceable children.")
         return model
 
-    def _fx_quantize_module_graph(self, module: nn.Module, target_funcs: dict):
+    def _fx_quantize_module_graph(self, module: nn.Module, target_funcs: dict, traced_path: str = ""):
         try:
             _, graph, gm = trace_quant_aware(module)
         except Exception as e:
             return None, False
         non_tensor_nodes = find_non_tensor_nodes(graph)
         modified = False
-        
+
         for node in list(graph.nodes):
             if node.name in non_tensor_nodes:
                 continue
             if node.op == 'call_function' and node.target in target_funcs:
                 op_name = target_funcs[node.target]
                 QuantClass = OpRegistry.get(op_name)
-                
+
                 # Create new module instance
                 # We use the same config as the adapter
                 kwargs = {'q_type': self.quantization_type}
                 if self.quantization_bias is not None:
                     kwargs['quantization_bias'] = self.quantization_bias
-                
+
                 # Add specific args if needed (e.g. inplace)
                 # We pass them to the module init if supported, or rely on forward kwargs
                 # QuantReLU supports inplace in init
                 if 'inplace' in node.kwargs:
                     kwargs['inplace'] = node.kwargs['inplace']
-                
-                new_mod = QuantClass(**kwargs)
+
+                # F.softmax(x, dim=...) — `dim` is a constructor arg on
+                # QuantSoftmax, not a forward arg. Peel it out of the call
+                # site so the resulting call_module passes only the input.
+                fwd_args = node.args
+                fwd_kwargs = dict(node.kwargs)
+                if node.target is F.softmax:
+                    if 'dim' in fwd_kwargs:
+                        kwargs['dim'] = fwd_kwargs.pop('dim')
+                    elif len(fwd_args) >= 2:
+                        kwargs['dim'] = fwd_args[1]
+                        fwd_args = (fwd_args[0],)
+                    fwd_kwargs.pop('_stacklevel', None)
+                    fwd_kwargs.pop('dtype', None)
 
                 # Add module to GraphModule. Use FX's auto-numbered node.name
                 # (e.g. "cat", "add", "add_1", "truediv") so the report path
@@ -1261,6 +1330,14 @@ class GenericAdapter(BaseAdapter):
                 while hasattr(gm, new_mod_name):
                     _i += 1
                     new_mod_name = f"{base}_{_i}"
+
+                qualified_name = f"{traced_path}.{new_mod_name}" if traced_path else new_mod_name
+                if isinstance(self.layer_config, dict):
+                    layer_conf = self.layer_config.get(qualified_name, {})
+                    if layer_conf.get('skip_quantization') is True:
+                        continue
+
+                new_mod = QuantClass(**kwargs)
                 gm.add_module(new_mod_name, new_mod)
 
                 # Propagate runtime config (mirrors _create_quantized_module for
@@ -1282,7 +1359,7 @@ class GenericAdapter(BaseAdapter):
                 
                 # Replace node
                 with graph.inserting_after(node):
-                    new_node = graph.call_module(new_mod_name, args=node.args, kwargs=node.kwargs)
+                    new_node = graph.call_module(new_mod_name, args=fwd_args, kwargs=fwd_kwargs)
                     node.replace_all_uses_with(new_node)
                 
                 # Erase old node
@@ -1347,18 +1424,19 @@ class GenericAdapter(BaseAdapter):
         # symbolic_trace raises.
         return True
 
-    def _fx_quantize_submodules(self, module: nn.Module, target_funcs: dict) -> bool:
+    def _fx_quantize_submodules(self, module: nn.Module, target_funcs: dict, module_path: str = "") -> bool:
         modified_any = False
 
         for child_name, child in list(module.named_children()):
+            child_path = f"{module_path}.{child_name}" if module_path else child_name
             if self._is_safe_fx_submodule(child):
-                quantized_child, modified = self._fx_quantize_module_graph(child, target_funcs)
+                quantized_child, modified = self._fx_quantize_module_graph(child, target_funcs, traced_path=child_path)
                 if modified and quantized_child is not None:
                     setattr(module, child_name, quantized_child)
                     modified_any = True
                     continue
 
-            if self._fx_quantize_submodules(child, target_funcs):
+            if self._fx_quantize_submodules(child, target_funcs, module_path=child_path):
                 modified_any = True
 
         return modified_any

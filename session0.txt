@@ -1,0 +1,1824 @@
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [10:22<00:00,  1.59s/batch, acc1=0.20%, acc5=0.92%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 0.202%, Top-5 Acc = 0.924%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 6-bits
+============================================================
+Calculated compute time: 13,057,602.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_0.0_b_6.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3782, 0.3219]
+[Debug] Folding into features.0.0: weight range after: [-1.6514, 1.4305]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.1860, 2.4087]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 11 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [10:24<00:00,  1.60s/batch, acc1=2.84%, acc5=9.43%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 2.840%, Top-5 Acc = 9.430%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 7-bits
+============================================================
+Calculated compute time: 15,157,184.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_0.0_b_7.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3442, 0.3637]
+[Debug] Folding into features.0.0: weight range after: [-1.5030, 1.5881]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.0311, 2.0545]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 13 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [10:32<00:00,  1.62s/batch, acc1=65.25%, acc5=86.60%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 65.254%, Top-5 Acc = 86.600%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 8-bits
+============================================================
+Calculated compute time: 17,322,496.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_0.0_b_8.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2960, 0.3904]
+[Debug] Folding into features.0.0: weight range after: [-1.3212, 1.7429]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.5292, 2.8578]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 15 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [10:39<00:00,  1.64s/batch, acc1=73.68%, acc5=91.76%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 73.676%, Top-5 Acc = 91.764%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 2-bits
+============================================================
+Calculated compute time: 6,171,416.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_2.0_b_2.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3532, 0.3433]
+[Debug] Folding into features.0.0: weight range after: [-1.5767, 1.5326]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.9576, 1.8342]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 3 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [10:38<00:00,  1.63s/batch, acc1=0.27%, acc5=1.29%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 0.266%, Top-5 Acc = 1.288%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 3-bits
+============================================================
+Calculated compute time: 6,788,136.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_2.0_b_3.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.4747, 0.4400]
+[Debug] Folding into features.0.0: weight range after: [-2.1098, 1.9557]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.9563, 2.2682]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 5 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [10:42<00:00,  1.64s/batch, acc1=57.05%, acc5=81.41%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 57.046%, Top-5 Acc = 81.406%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 4-bits
+============================================================
+Calculated compute time: 7,443,701.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_2.0_b_4.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.4487, 0.3407]
+[Debug] Folding into features.0.0: weight range after: [-2.0030, 1.5143]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.4488, 1.9253]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 7 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [10:44<00:00,  1.65s/batch, acc1=67.91%, acc5=88.76%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 67.908%, Top-5 Acc = 88.760%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 5-bits
+============================================================
+Calculated compute time: 8,138,145.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_2.0_b_5.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3679, 0.3413]
+[Debug] Folding into features.0.0: weight range after: [-1.6067, 1.4905]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.4907, 2.9210]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 9 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [10:43<00:00,  1.65s/batch, acc1=71.02%, acc5=90.37%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 71.018%, Top-5 Acc = 90.372%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 6-bits
+============================================================
+Calculated compute time: 8,909,265.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_2.0_b_6.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3618, 0.3950]
+[Debug] Folding into features.0.0: weight range after: [-1.6080, 1.7557]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.9063, 1.6958]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 11 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [10:42<00:00,  1.64s/batch, acc1=73.12%, acc5=91.34%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 73.116%, Top-5 Acc = 91.336%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 7-bits
+============================================================
+Calculated compute time: 9,680,385.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_2.0_b_7.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3179, 0.3696]
+[Debug] Folding into features.0.0: weight range after: [-1.4192, 1.6138]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.5413, 2.0327]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 13 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [10:45<00:00,  1.65s/batch, acc1=73.70%, acc5=91.77%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 73.700%, Top-5 Acc = 91.774%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 8-bits
+============================================================
+Calculated compute time: 10,459,566.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_2.0_b_8.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3163, 0.3290]
+[Debug] Folding into features.0.0: weight range after: [-1.4119, 1.4686]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.6523, 2.1161]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 15 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [10:51<00:00,  1.67s/batch, acc1=73.68%, acc5=91.76%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 73.676%, Top-5 Acc = 91.764%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 2-bits
+============================================================
+Calculated compute time: 6,171,416.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_4.0_b_2.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.4051, 0.3561]
+[Debug] Folding into features.0.0: weight range after: [-1.8085, 1.5552]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.6647, 2.7692]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 3 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [11:03<00:00,  1.70s/batch, acc1=0.27%, acc5=1.29%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 0.266%, Top-5 Acc = 1.288%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 3-bits
+============================================================
+Calculated compute time: 6,788,136.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_4.0_b_3.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3060, 0.3422]
+[Debug] Folding into features.0.0: weight range after: [-1.3601, 1.5207]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.1719, 1.2298]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 5 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [11:03<00:00,  1.70s/batch, acc1=57.05%, acc5=81.41%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 57.046%, Top-5 Acc = 81.406%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 4-bits
+============================================================
+Calculated compute time: 7,443,701.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_4.0_b_4.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3219, 0.3683]
+[Debug] Folding into features.0.0: weight range after: [-1.4369, 1.6083]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.9582, 1.7365]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 7 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [11:00<00:00,  1.69s/batch, acc1=67.91%, acc5=88.76%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 67.908%, Top-5 Acc = 88.760%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 5-bits
+============================================================
+Calculated compute time: 8,138,145.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_4.0_b_5.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.4117, 0.4881]
+[Debug] Folding into features.0.0: weight range after: [-1.8298, 2.1692]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.2776, 1.6586]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 9 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [10:58<00:00,  1.68s/batch, acc1=71.02%, acc5=90.37%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 71.018%, Top-5 Acc = 90.372%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 6-bits
+============================================================
+Calculated compute time: 8,909,265.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_4.0_b_6.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3855, 0.3811]
+[Debug] Folding into features.0.0: weight range after: [-1.7131, 1.6642]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.7080, 2.6959]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 11 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [11:01<00:00,  1.69s/batch, acc1=73.12%, acc5=91.34%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 73.116%, Top-5 Acc = 91.336%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 7-bits
+============================================================
+Calculated compute time: 9,680,385.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_4.0_b_7.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3561, 0.3329]
+[Debug] Folding into features.0.0: weight range after: [-1.5829, 1.4796]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-3.3037, 2.8195]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 13 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [10:55<00:00,  1.68s/batch, acc1=73.70%, acc5=91.77%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 73.700%, Top-5 Acc = 91.774%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 8-bits
+============================================================
+Calculated compute time: 10,459,566.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilenet_v3_large with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/temp_weights
+/weights_cs_4.0_b_8.pt (62.5 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilenet_v3_large
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3352, 0.3300]
+[Debug] Folding into features.0.0: weight range after: [-1.4636, 1.4734]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.5094, 2.7530]
+Deleted 47 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/weights/materia
+lized_weights.pt): state_dict validated (coverage=1.000, comparable=128/128, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/mobilenet_v3_large/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 139 layers: all layers use all 15 candidates (metric=MSE).
+22 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [10:58<00:00,  1.68s/batch, acc1=73.68%, acc5=91.76%, remaining_batches=0]
+Cleaning up memory for mobilenet_v3_large...
+Accuracy results: Top-1 Acc = 73.676%, Top-5 Acc = 91.764%
+
+All results saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/bandwidth_aware_quant_results.json
+
+--- Generating plots for each starting min_bits threshold ---
+  Cache 0.0MB: 6 pts, acc 0.09–73.68%, cyc 7.993M–17.322M
+  Cache 2.0MB: 6 pts, acc 57.05–73.70%, cyc 6.788M–10.460M
+  Cache 4.0MB: 6 pts, acc 57.05–73.70%, cyc 6.788M–10.460M
+Saved plot: /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilenet_v3_large/accuracy_vs_speedup_min_bits_3.png
+
+============================================================
+RUNNING BANDWIDTH-AWARE EXPERIMENT FOR MODEL: efficientnet_b0
+============================================================
+Results will be stored in: /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2851, 0.2946]
+[Debug] Folding into features.0.0: weight range after: [-1.2672, 1.3152]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.8079, 1.0915]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/ref_fp32_loader/weights/materialized_weig
+hts.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+
+--- Running cache simulation for Cache Size: 0.0MB ---
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3226, 0.2473]
+[Debug] Folding into features.0.0: weight range after: [-1.4337, 1.0800]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.5601, 1.6275]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+Cache 0.0MB: 0 layers stay on-chip, 124 layers stream off-chip.
+
+--- Running cache simulation for Cache Size: 2.0MB ---
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3046, 0.2180]
+[Debug] Folding into features.0.0: weight range after: [-1.3537, 0.9521]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.3301, 2.5669]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+Cache 2.0MB: 124 layers stay on-chip, 0 layers stream off-chip.
+
+--- Running cache simulation for Cache Size: 4.0MB ---
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2525, 0.3106]
+[Debug] Folding into features.0.0: weight range after: [-1.1029, 1.3565]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.0389, 1.2175]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+Cache 4.0MB: 124 layers stay on-chip, 0 layers stream off-chip.
+
+--- Evaluating reference FP32 model ---
+  Cache 0.0MB FP32 cycles (32b): 95,783,936.0
+  Cache 2.0MB FP32 cycles (32b): 26,215,780.0
+  Cache 4.0MB FP32 cycles (32b): 26,215,780.0
+  FP32 0MB reference baseline cycles: 95,783,936.0
+[FP32 ref] Using cached DB reference: Top-1 Acc = 77.650%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 2-bits
+============================================================
+Calculated compute time: 10,037,068.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_0.0_b_2.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2616, 0.2460]
+[Debug] Folding into features.0.0: weight range after: [-1.1626, 1.0742]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.6811, 2.4787]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 3 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [13:26<00:00,  2.06s/batch, acc1=0.11%, acc5=0.48%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 0.112%, Top-5 Acc = 0.476%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 3-bits
+============================================================
+Calculated compute time: 11,527,860.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_0.0_b_3.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2575, 0.2656]
+[Debug] Folding into features.0.0: weight range after: [-1.1244, 1.1597]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.9797, 1.6459]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 5 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [13:14<00:00,  2.03s/batch, acc1=0.10%, acc5=0.47%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 0.098%, Top-5 Acc = 0.466%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 4-bits
+============================================================
+Calculated compute time: 13,478,031.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_0.0_b_4.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2570, 0.2737]
+[Debug] Folding into features.0.0: weight range after: [-1.1221, 1.2217]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.0044, 2.0392]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 7 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [13:33<00:00,  2.08s/batch, acc1=0.10%, acc5=0.49%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 0.096%, Top-5 Acc = 0.490%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 5-bits
+============================================================
+Calculated compute time: 15,944,489.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_0.0_b_5.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2857, 0.2546]
+[Debug] Folding into features.0.0: weight range after: [-1.2697, 1.1116]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.1808, 1.9721]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 9 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [12:04<00:00,  1.85s/batch, acc1=0.14%, acc5=0.56%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 0.136%, Top-5 Acc = 0.558%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 6-bits
+============================================================
+Calculated compute time: 18,564,389.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_0.0_b_6.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2636, 0.2735]
+[Debug] Folding into features.0.0: weight range after: [-1.1513, 1.2155]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.8341, 1.3277]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 11 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [13:08<00:00,  2.02s/batch, acc1=0.32%, acc5=1.33%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 0.320%, Top-5 Acc = 1.328%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 7-bits
+============================================================
+Calculated compute time: 21,320,432.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_0.0_b_7.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2910, 0.2673]
+[Debug] Folding into features.0.0: weight range after: [-1.2709, 1.1935]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.6712, 1.7669]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 13 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [13:15<00:00,  2.03s/batch, acc1=0.92%, acc5=2.85%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 0.922%, Top-5 Acc = 2.852%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 8-bits
+============================================================
+Calculated compute time: 24,366,208.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_0.0_b_8.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3031, 0.2896]
+[Debug] Folding into features.0.0: weight range after: [-1.3470, 1.2930]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.6345, 1.2889]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 15 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [13:31<00:00,  2.07s/batch, acc1=66.17%, acc5=86.53%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 66.168%, Top-5 Acc = 86.534%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 2-bits
+============================================================
+Calculated compute time: 8,652,998.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_2.0_b_2.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2430, 0.2773]
+[Debug] Folding into features.0.0: weight range after: [-1.0802, 1.2378]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-0.9528, 1.9775]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 3 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [13:29<00:00,  2.07s/batch, acc1=0.45%, acc5=1.56%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 0.454%, Top-5 Acc = 1.564%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 3-bits
+============================================================
+Calculated compute time: 8,951,045.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_2.0_b_3.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2646, 0.2596]
+[Debug] Folding into features.0.0: weight range after: [-1.1762, 1.1539]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.2997, 1.9644]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 5 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [13:33<00:00,  2.08s/batch, acc1=23.98%, acc5=44.18%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 23.976%, Top-5 Acc = 44.180%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 4-bits
+============================================================
+Calculated compute time: 9,399,487.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_2.0_b_4.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2779, 0.2602]
+[Debug] Folding into features.0.0: weight range after: [-1.2350, 1.1365]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.8333, 2.0159]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 7 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [13:30<00:00,  2.07s/batch, acc1=56.75%, acc5=79.43%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 56.752%, Top-5 Acc = 79.432%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 5-bits
+============================================================
+Calculated compute time: 9,996,443.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_2.0_b_5.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2442, 0.3323]
+[Debug] Folding into features.0.0: weight range after: [-1.0784, 1.4770]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.2329, 1.6329]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 9 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [13:37<00:00,  2.09s/batch, acc1=65.41%, acc5=86.14%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 65.410%, Top-5 Acc = 86.136%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 6-bits
+============================================================
+Calculated compute time: 10,602,619.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_2.0_b_6.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2451, 0.2786]
+[Debug] Folding into features.0.0: weight range after: [-1.0702, 1.2165]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.3441, 1.6567]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 11 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [13:43<00:00,  2.11s/batch, acc1=65.31%, acc5=86.04%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 65.306%, Top-5 Acc = 86.042%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 7-bits
+============================================================
+Calculated compute time: 11,208,795.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_2.0_b_7.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3136, 0.2820]
+[Debug] Folding into features.0.0: weight range after: [-1.3939, 1.2590]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.2671, 1.5168]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 13 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [14:07<00:00,  2.17s/batch, acc1=65.75%, acc5=86.31%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 65.752%, Top-5 Acc = 86.310%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 8-bits
+============================================================
+Calculated compute time: 11,820,857.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_2.0_b_8.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2694, 0.2587]
+[Debug] Folding into features.0.0: weight range after: [-1.2027, 1.1296]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.8256, 2.4773]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 15 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [15:46<00:00,  2.42s/batch, acc1=66.17%, acc5=86.53%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 66.168%, Top-5 Acc = 86.534%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 2-bits
+============================================================
+Calculated compute time: 8,652,998.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_4.0_b_2.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2265, 0.2694]
+[Debug] Folding into features.0.0: weight range after: [-1.0066, 1.1973]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.8535, 1.5218]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 3 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [15:20<00:00,  2.35s/batch, acc1=0.45%, acc5=1.56%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 0.454%, Top-5 Acc = 1.564%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 3-bits
+============================================================
+Calculated compute time: 8,951,045.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_4.0_b_3.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2914, 0.2830]
+[Debug] Folding into features.0.0: weight range after: [-1.2950, 1.2358]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.7334, 1.7980]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 5 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [16:40<00:00,  2.56s/batch, acc1=23.98%, acc5=44.18%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 23.976%, Top-5 Acc = 44.180%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 4-bits
+============================================================
+Calculated compute time: 9,399,487.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_4.0_b_4.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2391, 0.2512]
+[Debug] Folding into features.0.0: weight range after: [-1.0674, 1.0968]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.2203, 1.9588]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 7 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [17:02<00:00,  2.62s/batch, acc1=56.75%, acc5=79.43%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 56.752%, Top-5 Acc = 79.432%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 5-bits
+============================================================
+Calculated compute time: 9,996,443.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_4.0_b_5.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2801, 0.2737]
+[Debug] Folding into features.0.0: weight range after: [-1.2449, 1.2217]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-3.3087, 2.2522]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 9 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [17:14<00:00,  2.64s/batch, acc1=65.41%, acc5=86.14%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 65.410%, Top-5 Acc = 86.136%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 6-bits
+============================================================
+Calculated compute time: 10,602,619.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_4.0_b_6.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2428, 0.3523]
+[Debug] Folding into features.0.0: weight range after: [-1.0630, 1.5727]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.8844, 1.7812]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 11 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [17:04<00:00,  2.62s/batch, acc1=65.31%, acc5=86.04%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 65.306%, Top-5 Acc = 86.042%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 7-bits
+============================================================
+Calculated compute time: 11,208,795.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_4.0_b_7.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.3059, 0.2650]
+[Debug] Folding into features.0.0: weight range after: [-1.3594, 1.1779]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-2.1173, 1.4274]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 13 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [17:08<00:00,  2.63s/batch, acc1=65.75%, acc5=86.31%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 65.752%, Top-5 Acc = 86.310%
+
+============================================================
+Evaluating Cache: 4.0MB | Bit-Width of Off-Chip Layers: 8-bits
+============================================================
+Calculated compute time: 11,820,857.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running efficientnet_b0 with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/config.yaml
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/temp_weights/we
+ights_cs_4.0_b_8.pt (60.2 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: torchvision
+[Debug] build_model: quantized=True, fold_layers=True, model_name=efficientnet_b0
+Folding input normalization into first layer: features.0.0
+[Debug] Folding into features.0.0: weight range before: [-0.2992, 0.2864]
+[Debug] Folding into features.0.0: weight range after: [-1.3064, 1.2786]
+[Debug] Folding into features.0.0: bias range before: [0.0000, 0.0000]
+[Debug] Folding into features.0.0: bias range after: [-1.9892, 1.8909]
+Deleted 50 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/weights/materialized_
+weights.pt): state_dict validated (coverage=1.000, comparable=164/164, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/efficientnet_b0/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 173 layers: all layers use all 15 candidates (metric=MSE).
+0 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [17:12<00:00,  2.64s/batch, acc1=66.17%, acc5=86.53%, remaining_batches=0]
+Cleaning up memory for efficientnet_b0...
+Accuracy results: Top-1 Acc = 66.168%, Top-5 Acc = 86.534%
+
+All results saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/bandwidth_aware_quant_results.json
+
+--- Generating plots for each starting min_bits threshold ---
+  Cache 0.0MB: 6 pts, acc 0.10–66.17%, cyc 11.528M–24.366M
+  Cache 2.0MB: 6 pts, acc 23.98–66.17%, cyc 8.951M–11.821M
+  Cache 4.0MB: 6 pts, acc 23.98–66.17%, cyc 8.951M–11.821M
+Saved plot: /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/efficientnet_b0/accuracy_vs_speedup_min_bits_3.png
+
+============================================================
+RUNNING BANDWIDTH-AWARE EXPERIMENT FOR MODEL: mobilevit_s
+============================================================
+Results will be stored in: /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+/usr/local/lib/python3.12/dist-packages/apex/transformer/tensor_parallel/cross_entropy.py:86: SyntaxWarning: invalid escape sequence '\s'
+  """
+/usr/local/lib/python3.12/dist-packages/apex/transformer/pipeline_parallel/schedules/fwd_bwd_pipelining_with_interleaving.py:49: SyntaxWarning: invalid escape sequence '\_'
+  """Run interleaved 1F1B schedule with communication between pipeline stages as needed.
+/usr/local/lib/python3.12/dist-packages/apex/transformer/pipeline_parallel/schedules/fwd_bwd_pipelining_without_interleaving.py:261: SyntaxWarning: invalid escape sequence '\_'
+  """Run non-interleaved 1F1B schedule, with communication between pipeline stages.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.3327, 0.3185]
+[Debug] Folding into stem.conv: weight range after: [-0.3327, 0.3185]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/ref_fp32_loader/weights/materialized_weights.
+pt): state_dict validated (coverage=1.000, comparable=183/183, mismatched=0, max_abs_diff=0.000e+00)
+
+--- Running cache simulation for Cache Size: 0.0MB ---
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.3466, 0.3949]
+[Debug] Folding into stem.conv: weight range after: [-0.3466, 0.3949]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+Cache 0.0MB: 0 layers stay on-chip, 123 layers stream off-chip.
+
+--- Running cache simulation for Cache Size: 2.0MB ---
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.3242, 0.2974]
+[Debug] Folding into stem.conv: weight range after: [-0.3242, 0.2974]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+Cache 2.0MB: 122 layers stay on-chip, 1 layers stream off-chip.
+
+--- Running cache simulation for Cache Size: 4.0MB ---
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.2970, 0.3557]
+[Debug] Folding into stem.conv: weight range after: [-0.2970, 0.3557]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+Cache 4.0MB: 123 layers stay on-chip, 0 layers stream off-chip.
+
+--- Evaluating reference FP32 model ---
+  Cache 0.0MB FP32 cycles (32b): 197,027,328.0
+  Cache 2.0MB FP32 cycles (32b): 56,868,438.0
+  Cache 4.0MB FP32 cycles (32b): 42,691,672.0
+  FP32 0MB reference baseline cycles: 197,027,328.0
+[FP32 ref] Using cached DB reference: Top-1 Acc = 78.320%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 2-bits
+============================================================
+Calculated compute time: 30,880,968.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilevit_s with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/config.yaml
+Skipping timm normalization for mobilevit_s (using mean=0, std=1)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/temp_weights/weight
+s_cs_0.0_b_2.pt (63.7 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.3403, 0.3820]
+[Debug] Folding into stem.conv: weight range after: [-0.3403, 0.3820]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/weights/materialized_weights.
+pt): state_dict validated (coverage=1.000, comparable=183/183, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 187 layers: all layers use all 3 candidates (metric=MSE).
+9 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [20:37<00:00,  3.16s/batch, acc1=0.10%, acc5=0.46%, remaining_batches=0]
+Cleaning up memory for mobilevit_s...
+Accuracy results: Top-1 Acc = 0.102%, Top-5 Acc = 0.456%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 3-bits
+============================================================
+Calculated compute time: 32,936,353.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilevit_s with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/config.yaml
+Skipping timm normalization for mobilevit_s (using mean=0, std=1)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/temp_weights/weight
+s_cs_0.0_b_3.pt (63.7 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.3730, 0.3943]
+[Debug] Folding into stem.conv: weight range after: [-0.3730, 0.3943]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/weights/materialized_weights.
+pt): state_dict validated (coverage=1.000, comparable=183/183, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 187 layers: all layers use all 5 candidates (metric=MSE).
+9 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [20:55<00:00,  3.21s/batch, acc1=0.08%, acc5=0.51%, remaining_batches=0]
+Cleaning up memory for mobilevit_s...
+Accuracy results: Top-1 Acc = 0.080%, Top-5 Acc = 0.508%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 4-bits
+============================================================
+Calculated compute time: 35,747,827.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilevit_s with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/config.yaml
+Skipping timm normalization for mobilevit_s (using mean=0, std=1)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/temp_weights/weight
+s_cs_0.0_b_4.pt (63.7 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.2836, 0.3472]
+[Debug] Folding into stem.conv: weight range after: [-0.2836, 0.3472]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/weights/materialized_weights.
+pt): state_dict validated (coverage=1.000, comparable=183/183, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 187 layers: all layers use all 7 candidates (metric=MSE).
+9 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [21:16<00:00,  3.26s/batch, acc1=0.08%, acc5=0.55%, remaining_batches=0]
+Cleaning up memory for mobilevit_s...
+Accuracy results: Top-1 Acc = 0.084%, Top-5 Acc = 0.548%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 5-bits
+============================================================
+Calculated compute time: 39,685,592.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilevit_s with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/config.yaml
+Skipping timm normalization for mobilevit_s (using mean=0, std=1)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/temp_weights/weight
+s_cs_0.0_b_5.pt (63.7 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.3593, 0.3338]
+[Debug] Folding into stem.conv: weight range after: [-0.3593, 0.3338]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/weights/materialized_weights.
+pt): state_dict validated (coverage=1.000, comparable=183/183, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 187 layers: all layers use all 9 candidates (metric=MSE).
+9 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [21:45<00:00,  3.34s/batch, acc1=0.55%, acc5=2.10%, remaining_batches=0]
+Cleaning up memory for mobilevit_s...
+Accuracy results: Top-1 Acc = 0.548%, Top-5 Acc = 2.098%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 6-bits
+============================================================
+Calculated compute time: 43,842,495.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilevit_s with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/config.yaml
+Skipping timm normalization for mobilevit_s (using mean=0, std=1)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/temp_weights/weight
+s_cs_0.0_b_6.pt (63.7 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.3847, 0.3289]
+[Debug] Folding into stem.conv: weight range after: [-0.3847, 0.3289]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/weights/materialized_weights.
+pt): state_dict validated (coverage=1.000, comparable=183/183, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 187 layers: all layers use all 11 candidates (metric=MSE).
+9 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [22:08<00:00,  3.40s/batch, acc1=29.82%, acc5=51.33%, remaining_batches=0]
+Cleaning up memory for mobilevit_s...
+Accuracy results: Top-1 Acc = 29.816%, Top-5 Acc = 51.332%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 7-bits
+============================================================
+Calculated compute time: 48,827,366.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilevit_s with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/config.yaml
+Skipping timm normalization for mobilevit_s (using mean=0, std=1)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/temp_weights/weight
+s_cs_0.0_b_7.pt (63.7 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.4201, 0.3058]
+[Debug] Folding into stem.conv: weight range after: [-0.4201, 0.3058]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/weights/materialized_weights.
+pt): state_dict validated (coverage=1.000, comparable=183/183, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 187 layers: all layers use all 13 candidates (metric=MSE).
+9 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [22:53<00:00,  3.51s/batch, acc1=68.09%, acc5=88.34%, remaining_batches=0]
+Cleaning up memory for mobilevit_s...
+Accuracy results: Top-1 Acc = 68.090%, Top-5 Acc = 88.340%
+
+============================================================
+Evaluating Cache: 0.0MB | Bit-Width of Off-Chip Layers: 8-bits
+============================================================
+Calculated compute time: 54,735,752.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilevit_s with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/config.yaml
+Skipping timm normalization for mobilevit_s (using mean=0, std=1)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/temp_weights/weight
+s_cs_0.0_b_8.pt (63.7 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.3652, 0.3332]
+[Debug] Folding into stem.conv: weight range after: [-0.3652, 0.3332]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/weights/materialized_weights.
+pt): state_dict validated (coverage=1.000, comparable=183/183, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 187 layers: all layers use all 15 candidates (metric=MSE).
+9 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████| 391/391 [23:41<00:00,  3.64s/batch, acc1=74.82%, acc5=92.24%, remaining_batches=0]
+Cleaning up memory for mobilevit_s...
+Accuracy results: Top-1 Acc = 74.824%, Top-5 Acc = 92.236%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 2-bits
+============================================================
+Calculated compute time: 29,558,552.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilevit_s with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/config.yaml
+Skipping timm normalization for mobilevit_s (using mean=0, std=1)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/temp_weights/weight
+s_cs_2.0_b_2.pt (63.7 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.3220, 0.3478]
+[Debug] Folding into stem.conv: weight range after: [-0.3220, 0.3478]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/weights/materialized_weights.
+pt): state_dict validated (coverage=1.000, comparable=183/183, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 187 layers: all layers use all 3 candidates (metric=MSE).
+9 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████| 391/391 [22:46<00:00,  3.49s/batch, acc1=0.11%, acc5=0.63%, remaining_batches=0]
+Cleaning up memory for mobilevit_s...
+Accuracy results: Top-1 Acc = 0.112%, Top-5 Acc = 0.626%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 3-bits
+============================================================
+Calculated compute time: 30,334,056.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilevit_s with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/config.yaml
+Skipping timm normalization for mobilevit_s (using mean=0, std=1)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/temp_weights/weight
+s_cs_2.0_b_3.pt (63.7 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.3756, 0.3233]
+[Debug] Folding into stem.conv: weight range after: [-0.3756, 0.3233]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/weights/materialized_weights.
+pt): state_dict validated (coverage=1.000, comparable=183/183, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 187 layers: all layers use all 5 candidates (metric=MSE).
+9 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating: 100%|██████████████████████████████████████████████████████████████████████████████| 391/391 [23:03<00:00,  3.54s/batch, acc1=1.69%, acc5=4.94%, remaining_batches=0]
+Cleaning up memory for mobilevit_s...
+Accuracy results: Top-1 Acc = 1.694%, Top-5 Acc = 4.936%
+
+============================================================
+Evaluating Cache: 2.0MB | Bit-Width of Off-Chip Layers: 4-bits
+============================================================
+Calculated compute time: 31,138,354.0 cycles
+Quantizing model weights...
+Running evaluation forward pass...
+--- Running mobilevit_s with fp8 ---
+Config saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/config.yaml
+Skipping timm normalization for mobilevit_s (using mean=0, std=1)
+Label mapping: 1000/1000 classes matched to ImageNet canonical indices.
+Info: model.weights points to a file; forcing materialized weights rebuild to avoid stale cache reuse.
+prepare_model_with_materialized_weights: source checkpoint=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/temp_weights/weight
+s_cs_2.0_b_4.pt (63.7 MB)
+materialize_weight_file: source is a checkpoint file; canonicalizing state_dict directly (no model rebuild in this step).
+load_model_from_weight_file: building skeleton model with weights=None and loading from materialized checkpoint.
+Auto-detected model source: timm
+[Debug] GenericAdapter: resolved mean from timm: (0.0, 0.0, 0.0)
+[Debug] GenericAdapter: resolved std from timm: (1.0, 1.0, 1.0)
+[Debug] build_model: quantized=True, fold_layers=True, model_name=mobilevit_s
+Folding input normalization into first layer: stem.conv
+[Debug] Folding into stem.conv: weight range before: [-0.3178, 0.3575]
+[Debug] Folding into stem.conv: weight range after: [-0.3178, 0.3575]
+[Debug] Folding into stem.conv: bias range before: [0.0000, 0.0000]
+[Debug] Folding into stem.conv: bias range after: [0.0000, 0.0000]
+Deleted 154 no-op Dropout/Identity layers from model (post-recursive quantization).
+load_model_from_weight_file(file=/data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/weights/materialized_weights.
+pt): state_dict validated (coverage=1.000, comparable=183/183, mismatched=0, max_abs_diff=0.000e+00)
+Generating quantization graph at /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg...
+Quantization graph saved to /data/almog/Projects/QBench-Release/runspace/experiments/bandwidth_aware_quant/results/mobilevit_s/mobilevit_s/fp8/quant_graph.svg
+Running in EVALUATE mode (Quantized Model Only)...
+Registered hooks on 187 layers: all layers use all 7 candidates (metric=MSE).
+9 layers are using UFP candidates.
+Input quantization enabled: mode=dynamic metric=MSE chunk_size=128
+Evaluating:   9%|██████▉                                                                      | 35/391 [02:07<21:30,  3.62s/batch, acc1=4.26%, acc5=9.96%, remaining_batches=356]

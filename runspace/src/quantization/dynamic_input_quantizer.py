@@ -65,6 +65,9 @@ class DynamicInputQuantizer:
         use_cache_sim_db=False,
         model_name=None,
         skip_depthwise_input_quant=False,
+        input_transfer_map=None,
+        collect_error_stats=True,
+        collect_format_stats=True,
     ):
         self.model = model
         self.metric = 'mse'
@@ -72,6 +75,9 @@ class DynamicInputQuantizer:
         self.restrict_post_relu_ufp = bool(restrict_post_relu_ufp)
         self.use_unsigned_input_candidates = bool(use_unsigned_input_candidates)
         self.skip_depthwise_input_quant = bool(skip_depthwise_input_quant)
+        self.collect_error_stats = bool(collect_error_stats)
+        self.collect_format_stats = bool(collect_format_stats)
+        self._candidate_param_cache = {}
         self.unsigned_input_sources = {
             str(source).lower()
             for source in (unsigned_input_sources or [])
@@ -83,6 +89,7 @@ class DynamicInputQuantizer:
         self.layer_stats = {}
         self.running_error = 0.0
         self.total_chunks = 0
+        self.layer_unsigned_input_indices = {}
 
         self.stats = {
             'sum_mse_err': None,
@@ -112,6 +119,8 @@ class DynamicInputQuantizer:
         self.unsigned_candidate_formats = self._make_unsigned_candidates(self.candidate_formats)
 
         self.cache_sim_map = {}
+        self.layer_residual_input_bits_map = {}
+        self.layer_need_input_transfer_map = dict(input_transfer_map or {})
         if use_cache_sim_db and model_name:
             print(f"Loading cache simulation results from DB for {model_name}")
             try:
@@ -124,6 +133,12 @@ class DynamicInputQuantizer:
                 if sim:
                     for layer in sim.get('layers', []):
                         self.cache_sim_map[layer['name']] = layer.get('stay_on_chip', True)
+                        residual_bits = layer.get('residual_input_bits')
+                        if residual_bits is not None:
+                            self.layer_residual_input_bits_map[layer['name']] = int(residual_bits)
+                        need_input_transfer = layer.get('need_input_transfer')
+                        if need_input_transfer is not None:
+                            self.layer_need_input_transfer_map[layer['name']] = bool(need_input_transfer)
                     print(f"Loaded {len(self.cache_sim_map)} layer statuses from cache sim DB.")
                     if self.cache_sim_map:
                         sample_keys = list(self.cache_sim_map.keys())[:10]
@@ -168,21 +183,42 @@ class DynamicInputQuantizer:
     def _is_unsigned_format(fmt):
         return isinstance(fmt, str) and fmt.startswith(('ufp', 'uefp'))
 
-    def _module_uses_unsigned_input(self, module):
-        if not self.use_unsigned_input_candidates:
-            return False
+    def _mark_unsigned_input(self, layer_name, input_index=0):
+        self.layer_unsigned_input_indices.setdefault(layer_name, set()).add(int(input_index))
 
-        input_q_type = getattr(module, 'input_q_type', None)
-        if self._is_unsigned_format(input_q_type):
-            return True
+    def _module_unsigned_input_indices(self, module, input_count=None):
+        if not self.use_unsigned_input_candidates:
+            return set()
+
+        indices = set()
+        is_multi_input = self._is_multi_input_module(module)
+
+        if not is_multi_input and self._is_unsigned_format(getattr(module, 'input_q_type', None)):
+            indices.add(0)
 
         for attr_name in dir(module):
             if not attr_name.startswith('input') or not attr_name.endswith('_q_type'):
                 continue
-            if self._is_unsigned_format(getattr(module, attr_name, None)):
-                return True
 
-        return False
+            middle = attr_name[len('input'):-len('_q_type')]
+            if not middle:
+                if not is_multi_input and self._is_unsigned_format(getattr(module, attr_name, None)):
+                    indices.add(0)
+                continue
+
+            if not middle.isdigit():
+                continue
+
+            if self._is_unsigned_format(getattr(module, attr_name, None)):
+                indices.add(int(middle) - 1)
+
+        if input_count is not None:
+            indices = {idx for idx in indices if 0 <= idx < input_count}
+
+        return indices
+
+    def _module_uses_unsigned_input(self, module):
+        return bool(self._module_unsigned_input_indices(module))
 
     def _is_unsigned_source_module(self, module):
         if not self.use_unsigned_input_candidates or not self.unsigned_input_sources:
@@ -319,19 +355,27 @@ class DynamicInputQuantizer:
                     continue
 
                 node_inputs = self._node_inputs(node)
-                
-                # Dynamic pre-hooks quantize the first tensor argument for
-                # multi-input functional ops. Treat only that operand as the
-                # immediate unsigned consumer; do not let the op output become
-                # an unsigned source for downstream layers.
+                static_unsigned_indices = self._module_unsigned_input_indices(
+                    module,
+                    len(node_inputs),
+                )
                 if len(node_inputs) > 1:
-                    is_post_unsigned = node_inputs[0].name in unsigned_nodes
+                    unsigned_input_indices = {
+                        idx for idx, inp in enumerate(node_inputs)
+                        if inp.name in unsigned_nodes
+                    }
                 else:
-                    is_post_unsigned = any(inp.name in unsigned_nodes for inp in node_inputs)
+                    unsigned_input_indices = (
+                        {0} if any(inp.name in unsigned_nodes for inp in node_inputs) else set()
+                    )
+                unsigned_input_indices.update(static_unsigned_indices)
+                is_post_unsigned = bool(unsigned_input_indices)
                 
-                if self._module_uses_unsigned_input(module) or is_post_unsigned:
+                if is_post_unsigned:
                     layer_name = f"{prefix}.{node.target}" if prefix else str(node.target)
                     post_unsigned.add(layer_name)
+                    for input_index in unsigned_input_indices:
+                        self._mark_unsigned_input(layer_name, input_index)
                     modified = True
 
             return modified
@@ -359,6 +403,9 @@ class DynamicInputQuantizer:
         return post_unsigned, traced_any
 
     def _find_post_unsigned_layers(self):
+        if not self.use_unsigned_input_candidates or not self.unsigned_input_sources:
+            return set()
+
         post_unsigned, traced = self._find_post_unsigned_layers_fx()
         if traced:
             return post_unsigned
@@ -387,8 +434,11 @@ class DynamicInputQuantizer:
                 # However, for hybrid quant, it's safer to be conservative.
                 if prev_was_unsigned and not self._is_multi_input_module(module):
                     post_unsigned.add(name)
+                    self._mark_unsigned_input(name, 0)
                 elif uses_unsigned_input:
                     post_unsigned.add(name)
+                    for input_index in self._module_unsigned_input_indices(module):
+                        self._mark_unsigned_input(name, input_index)
                 prev_was_unsigned = False
             elif not isinstance(
                 module,
@@ -406,6 +456,22 @@ class DynamicInputQuantizer:
                 prev_was_unsigned = False
 
         return post_unsigned
+
+    def _layer_uses_unsigned_input(self, layer_name, input_index=0):
+        if not self.use_unsigned_input_candidates:
+            return False
+
+        unsigned_indices = self.layer_unsigned_input_indices.get(layer_name)
+        if unsigned_indices:
+            return int(input_index) in unsigned_indices
+
+        return (
+            int(input_index) == 0
+            and (
+                layer_name in self.post_unsigned_layers
+                or layer_name in self.unsigned_passthrough_layers
+            )
+        )
 
     def register_hooks(self):
         count_dynamic = 0
@@ -426,13 +492,8 @@ class DynamicInputQuantizer:
                 self.hooks.append(module.register_forward_pre_hook(hook))
                 self.hooked_modules.append(module)
                 uses_unsigned_candidates = (
-                    self.use_unsigned_input_candidates
-                    and (
-                        name in self.post_unsigned_layers
-                        or name in self.unsigned_passthrough_layers
-                    )
-                ) or (
-                    self._module_uses_unsigned_input(module)
+                    self._layer_uses_unsigned_input(name, input_index=0)
+                    or bool(self.layer_unsigned_input_indices.get(name))
                 )
                 if uses_unsigned_candidates:
                     count_unsigned_candidate_layers += 1
@@ -465,17 +526,28 @@ class DynamicInputQuantizer:
                 f"for {count_skipped_depthwise} depthwise Conv2d layers."
             )
 
-    def _candidates_for_layer(self, layer_name, module=None):
-        is_unsigned = (
-            self.use_unsigned_input_candidates
-            and (
-                layer_name in self.post_unsigned_layers
-                or layer_name in self.unsigned_passthrough_layers
-            )
-        ) or (
-            module is not None
-            and self._module_uses_unsigned_input(module)
-        )
+    def _formats_for_bits(self, bits, unsigned=False):
+        def matches_width(fmt):
+            if not isinstance(fmt, str) or not fmt.startswith(('fp', 'ufp')):
+                return False
+            width = fmt.split('_', 1)[0].lstrip('u')[2:]
+            return width.isdigit() and int(width) == bits
+
+        formats = [fmt for fmt in self.candidate_formats if matches_width(fmt)]
+        if not formats:
+            formats = [fmt for fmt in DEFAULT_DYNAMIC_INPUT_CANDIDATES if matches_width(fmt)]
+        if unsigned:
+            formats = self._make_unsigned_candidates(formats)
+        return formats
+
+    def _candidates_for_layer(self, layer_name, module=None, input_index=0):
+        is_unsigned = self._layer_uses_unsigned_input(layer_name, input_index=input_index)
+
+        if input_index == 1 and layer_name in self.layer_residual_input_bits_map:
+            residual_bits = self.layer_residual_input_bits_map[layer_name]
+            candidates = self._formats_for_bits(residual_bits, unsigned=is_unsigned)
+            if candidates:
+                return candidates
 
         stays_on_chip = self.cache_sim_map.get(layer_name)
         if stays_on_chip is None:
@@ -496,16 +568,48 @@ class DynamicInputQuantizer:
 
         return self.candidate_formats
 
+    def _should_quantize_input(self, layer_name, input_index=0):
+        # On-chip-resident inputs are NOT exempt from quantization: the simulated
+        # architecture stores activations at the on-chip width (8-bit) inside the
+        # chip, so they must still be quantized. The need_input_transfer map only
+        # affects the cycle/runtime accounting in compute_model_runtime, not
+        # whether the value is quantized here. Always quantize the primary input;
+        # _candidates_for_layer already supplies 8-bit formats for on-chip layers.
+        return True
+
     def _get_hook(self, layer_name):
         def hook_fn(module, args):
             x = args[0]
             if not isinstance(x, torch.Tensor):
                 return None
 
-            candidates = self._candidates_for_layer(layer_name, module)
+            quantize_primary = self._should_quantize_input(layer_name, input_index=0)
+            if quantize_primary:
+                candidates = self._candidates_for_layer(layer_name, module, input_index=0)
+                x_quantized, best_indices = self._quantize_input_tensor(x, layer_name, candidates, module)
+                self._set_module_input_quant_state(module, candidates, best_indices)
+            else:
+                # The input is already resident on-chip for this layer, so do not
+                # model an external-memory transfer quantization for it.
+                module.input_quantization = False
+                module.input_mode = 'fp32'
+                x_quantized = x
 
-            x_quantized, best_indices = self._quantize_input_tensor(x, layer_name, candidates, module)
-            self._set_module_input_quant_state(module, candidates, best_indices)
+            if (
+                module.__class__.__name__ == "QuantAdd"
+                and len(args) >= 2
+                and isinstance(args[1], torch.Tensor)
+                and layer_name in self.layer_residual_input_bits_map
+                and self._should_quantize_input(layer_name, input_index=1)
+            ):
+                residual_candidates = self._candidates_for_layer(layer_name, module, input_index=1)
+                residual_quantized, residual_indices = self._quantize_input_tensor(
+                    args[1], f"{layer_name}.input2", residual_candidates, module
+                )
+                self._set_module_input_quant_state(
+                    module, residual_candidates, residual_indices, input_index=1
+                )
+                return (x_quantized, residual_quantized, *args[2:])
 
             # Return the quantized tensor and all other original arguments to replace the input.
             # This ensures multi-argument ops like QuantAdd(x, other) don't lose 'other'.
@@ -541,7 +645,7 @@ class DynamicInputQuantizer:
 
         return hook_fn
 
-    def _set_module_input_quant_state(self, module, candidates, best_indices):
+    def _set_module_input_quant_state(self, module, candidates, best_indices, input_index=0):
         # Disable a quantized module's built-in input quantization path after the
         # pre-hook has already supplied dynamically quantized inputs.
         module.input_quantization = False
@@ -550,30 +654,68 @@ class DynamicInputQuantizer:
 
         # Store candidates and indices without turning the full tensor into a
         # Python list; that would force a large GPU-CPU sync.
-        module.input_chunk_candidates = candidates
-        module.input_chunk_format_indices = best_indices
+        if input_index == 0:
+            module.input_chunk_candidates = candidates
+            module.input_chunk_format_indices = best_indices
+        else:
+            prefix = f'input{input_index + 1}'
+            setattr(module, f'{prefix}_chunk_candidates', candidates)
+            setattr(module, f'{prefix}_chunk_format_indices', best_indices)
 
         if len(candidates) > 0:
-            module.input_q_type = candidates[0]
+            if input_index > 0:
+                setattr(module, f'input{input_index + 1}_q_type', candidates[0])
+            else:
+                module.input_q_type = candidates[0]
+                if self._is_multi_input_module(module):
+                    setattr(module, 'input1_q_type', candidates[0])
 
         module.rounding = 'nearest'
 
     def _quantize_input_tensor(self, tensor, layer_name, candidates, module=None):
         quantized, best_indices = self._select_best_format(tensor, layer_name, candidates, module)
 
-        with torch.no_grad():
-            diff = tensor - quantized
-            updates = {
-                'sum_mse_err': diff.pow(2).sum(),
-                'sum_l2_norm': tensor.pow(2).sum(),
-            }
-            for key, value in updates.items():
-                if self.stats[key] is None:
-                    self.stats[key] = value.detach()
-                else:
-                    self.stats[key] += value.detach()
+        if self.collect_error_stats:
+            with torch.no_grad():
+                diff = tensor - quantized
+                updates = {
+                    'sum_mse_err': diff.pow(2).sum(),
+                    'sum_l2_norm': tensor.pow(2).sum(),
+                }
+                for key, value in updates.items():
+                    if self.stats[key] is None:
+                        self.stats[key] = value.detach()
+                    else:
+                        self.stats[key] += value.detach()
 
         return quantized, best_indices
+
+    def _candidate_params(self, candidates):
+        key = tuple(candidates)
+        cached = self._candidate_param_cache.get(key)
+        if cached is not None:
+            return cached
+
+        cands_e = []
+        cands_m = []
+        cands_sgn = []
+        for fmt in candidates:
+            # The CUDA kernel does not natively bypass fp32. Map it to a
+            # high-precision FP format for compatibility with older configs.
+            if fmt == 'fp32':
+                cands_e.append(8)
+                cands_m.append(7)
+                cands_sgn.append(1)
+            else:
+                e, m = get_format_params(fmt)
+                is_signed = not fmt.startswith('ufp')
+                cands_e.append(e)
+                cands_m.append(m)
+                cands_sgn.append(1 if is_signed else 0)
+
+        cached = (cands_e, cands_m, cands_sgn)
+        self._candidate_param_cache[key] = cached
+        return cached
 
     def _select_best_format(self, tensor, layer_name, candidates, module=None):
         """
@@ -592,41 +734,43 @@ class DynamicInputQuantizer:
         ref_chunks = ref_chunked.reshape(-1, chunk_size)
         total_chunks = ref_chunks.shape[0]
 
-        # Convert candidates to vectors
-        cands_e = []
-        cands_m = []
-        cands_sgn = []
-        for fmt in candidates:
-            # handle fp32 specially or assume it's filtered? 
-            # Actually, standard candidates are just strings.
-            # fp32 should just be bypassed if we can, but if it's in candidates,
-            # we need a fallback. We'll just map fp32 to a fake high precision 
-            # or handle it carefully. The CUDA kernel doesn't natively do fp32 bypass.
-            # Usually fp32 is not in the candidate list for dynamic quant.
-            if fmt == 'fp32':
-                # Use a safe fallback e=8, m=7, sgn=1
-                cands_e.append(8)
-                cands_m.append(7)
-                cands_sgn.append(1)
+        if len(candidates) == 1:
+            best_indices = torch.zeros(total_chunks, dtype=torch.long, device=device)
+            if capture:
+                best_qs, best_unscaled_qs, _max_val, scale_chunks, _scale_p = quantize_tensor(
+                    ref_chunks.contiguous(),
+                    q_type=candidates[0],
+                    return_unscaled=True,
+                    return_scale=True,
+                    mode='chunk',
+                    chunk_size=chunk_size,
+                )
             else:
-                e, m = get_format_params(fmt)
-                is_signed = not fmt.startswith('ufp')
-                cands_e.append(e)
-                cands_m.append(m)
-                cands_sgn.append(1 if is_signed else 0)
+                best_qs, _max_val = quantize_tensor(
+                    ref_chunks.contiguous(),
+                    q_type=candidates[0],
+                    mode='chunk',
+                    chunk_size=chunk_size,
+                )
+                scale_chunks = None
+        else:
+            cands_e, cands_m, cands_sgn = self._candidate_params(candidates)
 
-        # Call the fused CUDA kernel
-        best_indices, best_scales, best_qs_flat, best_unscaled_qs_flat = search_best_chunk_format(
-            ref_chunks.view(-1).contiguous(),
-            cands_e,
-            cands_m,
-            cands_sgn,
-            capture
-        )
+            # Call the fused CUDA kernel
+            best_indices, best_scales, best_qs_flat, best_unscaled_qs_flat = search_best_chunk_format(
+                ref_chunks.view(-1).contiguous(),
+                cands_e,
+                cands_m,
+                cands_sgn,
+                capture
+            )
 
-        best_qs = best_qs_flat.view(-1, chunk_size)
-        if capture:
-            best_unscaled_qs = best_unscaled_qs_flat.view(-1, chunk_size)
+            best_qs = best_qs_flat.view(-1, chunk_size)
+            if capture:
+                best_unscaled_qs = best_unscaled_qs_flat.view(-1, chunk_size)
+                scale_chunks = best_scales.unsqueeze(-1).expand(-1, chunk_size).contiguous()
+            else:
+                scale_chunks = None
 
         # Reconstruct the quantized tensor from best chunks
         q_reshaped = best_qs.view(num_contexts, num_chunks, chunk_size)
@@ -634,23 +778,23 @@ class DynamicInputQuantizer:
 
         # Populate activation capture fields if enabled
         if capture:
-            best_scales_expanded = best_scales.unsqueeze(-1).expand(-1, chunk_size).contiguous()
             u_reshaped = best_unscaled_qs.view(num_contexts, num_chunks, chunk_size)
             module.last_quant_input_unscaled = unchunk_tensor_by_context(u_reshaped, original_shape, pad_len).detach()
             module.last_quant_input = quantized_tensor.detach()
-            s_reshaped = best_scales_expanded.view(num_contexts, num_chunks, chunk_size)
+            s_reshaped = scale_chunks.view(num_contexts, num_chunks, chunk_size)
             module.last_quant_input_scale = unchunk_tensor_by_context(s_reshaped, original_shape, pad_len).detach()
 
-        # Update layer-wise format selection statistics (stay on GPU)
-        if layer_name not in self.layer_stats:
-            self.layer_stats[layer_name] = {
-                'format_counts_tensor': torch.zeros(len(candidates), dtype=torch.long, device=device),
-                'candidates': candidates
-            }
-        
-        stats = self.layer_stats[layer_name]
-        counts = torch.bincount(best_indices, minlength=len(candidates))
-        stats['format_counts_tensor'] += counts
+        if self.collect_format_stats:
+            # Update layer-wise format selection statistics (stay on GPU).
+            if layer_name not in self.layer_stats:
+                self.layer_stats[layer_name] = {
+                    'format_counts_tensor': torch.zeros(len(candidates), dtype=torch.long, device=device),
+                    'candidates': candidates
+                }
+            
+            stats = self.layer_stats[layer_name]
+            counts = torch.bincount(best_indices, minlength=len(candidates))
+            stats['format_counts_tensor'] += counts
 
         # Track running error for progress/debug
         if self.running_error is None:

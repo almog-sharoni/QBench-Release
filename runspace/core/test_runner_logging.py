@@ -11,9 +11,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from runspace.core.runner import Runner
+from runspace.experiments.utils.common import build_uniform_input_quant_cfg
+from src.ops.quant_arithmetic import QuantAdd
 from src.ops.quant_dropout import QuantDropout
 from src.ops.quant_matmul import QuantMatMul
 from src.quantization.dynamic_input_quantizer import DynamicInputQuantizer
+from src.quantization.uniform_input_quantizer import UniformInputQuantizer
 
 
 def test_runner_logs_fp32_weight_dt_when_weight_quantization_disabled():
@@ -91,7 +94,49 @@ def test_runner_synthesizes_uniform_input_quant_config():
         "format": "fp8_e4m3",
         "chunk_size": 128,
         "quant_mode": "chunk",
+        "unsigned_input_sources": [],
+        "uniform_unsigned_input_candidates": True,
+        "collect_error_stats": True,
     }
+
+
+def test_uniform_input_quant_cfg_carries_unsigned_sources():
+    input_quant_cfg = build_uniform_input_quant_cfg(
+        "fp8_e1m6",
+        128,
+        unsigned_input_sources="relu,softmax",
+        use_unsigned_input_candidates=False,
+    )
+
+    assert input_quant_cfg == {
+        "enabled": True,
+        "mode": "uniform",
+        "format": "fp8_e1m6",
+        "chunk_size": 128,
+        "unsigned_input_sources": ["relu", "softmax"],
+        "uniform_unsigned_input_candidates": False,
+        "collect_error_stats": True,
+    }
+
+
+def test_uniform_input_quantizer_can_skip_error_stats():
+    model = nn.Sequential(nn.Linear(4, 4))
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt="fp4_e1m2",
+        chunk_size=4,
+        collect_error_stats=False,
+    )
+    quantizer._quantize_with_format = lambda x, fmt: x + 1.0
+
+    hook = quantizer._make_hook("0")
+    hook(model[0], (torch.randn(1, 4),))
+    stats = quantizer.get_final_stats()
+
+    assert stats["collect_error_stats"] is False
+    assert stats["total_mse"] == 0.0
+    assert stats["norm_mse"] == 0.0
+    assert stats["layer_stats"]["0"]["total_chunks"] > 0
 
 
 def test_runner_logs_dynamic_input_map_from_processed_layer_stats():
@@ -207,11 +252,169 @@ def test_dynamic_input_quantizer_logs_multihead_attention_inputs():
     assert layer_stats["query_input"]["total_chunks"] > 0
 
 
+def test_uniform_input_quantizer_uses_fixed_unsigned_format_after_source_dropout():
+    model = nn.Sequential(
+        nn.ReLU(),
+        QuantDropout(p=0.0),
+        nn.Linear(4, 4),
+    )
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt="fp4_e1m2",
+        chunk_size=4,
+        unsigned_input_sources=["relu"],
+    )
+
+    assert "2" in quantizer.post_unsigned_layers
+    assert "1" not in quantizer.post_unsigned_layers
+    assert "1" in quantizer.unsigned_passthrough_layers
+    assert quantizer._effective_format_for_module("1", model[1]) == "ufp4_e1m3"
+    assert quantizer._effective_format_for_module("2", model[2]) == "ufp4_e1m3"
+
+    forward_model = nn.Sequential(
+        nn.ReLU(),
+        nn.Dropout(p=0.0),
+        nn.Linear(4, 4),
+    )
+    forward_quantizer = UniformInputQuantizer(
+        forward_model,
+        fmt="fp4_e1m2",
+        chunk_size=4,
+        unsigned_input_sources=["relu"],
+    )
+    forward_quantizer._quantize_with_format = lambda x, fmt: x
+    forward_quantizer.register_hooks()
+    forward_model(torch.randn(1, 4))
+    layer_stats = forward_quantizer.get_final_stats()["layer_stats"]
+    forward_quantizer.cleanup()
+
+    assert set(layer_stats["2"]["format_counts"]) == {"ufp4_e1m3"}
+    assert layer_stats["2"]["total_chunks"] > 0
+
+
+def test_uniform_input_quantizer_targets_actual_consumer_after_softmax_dropout():
+    class AttentionLike(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.softmax = nn.Softmax(dim=-1)
+            self.dropout_layer = QuantDropout(p=0.0)
+            self.out_proj = nn.Linear(4, 4)
+            self.quantmatmul = QuantMatMul()
+
+        def forward(self, scores, values):
+            attn = self.softmax(scores)
+            attn = self.dropout_layer(attn)
+            out = self.quantmatmul(attn, values)
+            return self.out_proj(out)
+
+    model = AttentionLike()
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt="fp4_e1m2",
+        chunk_size=4,
+        unsigned_input_sources=["softmax"],
+    )
+
+    assert "quantmatmul" in quantizer.post_unsigned_layers
+    assert "dropout_layer" not in quantizer.post_unsigned_layers
+    assert "dropout_layer" in quantizer.unsigned_passthrough_layers
+    assert "out_proj" not in quantizer.post_unsigned_layers
+    assert quantizer._effective_format_for_module("dropout_layer", model.dropout_layer) == "ufp4_e1m3"
+    assert quantizer._effective_format_for_module("quantmatmul", model.quantmatmul) == "ufp4_e1m3"
+    assert quantizer._effective_format_for_module("out_proj", model.out_proj) == "fp4_e1m2"
+
+
+def test_uniform_input_quantizer_keeps_signed_residual_add_operand():
+    class ResidualAdd(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.relu = nn.ReLU()
+            self.add = QuantAdd()
+
+        def forward(self, signed, unsigned):
+            unsigned = self.relu(unsigned)
+            return self.add(signed, unsigned)
+
+    model = ResidualAdd()
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt="fp4_e1m2",
+        chunk_size=4,
+        unsigned_input_sources=["relu"],
+    )
+
+    assert quantizer.layer_unsigned_input_indices["add"] == {1}
+
+    quantizer._quantize_with_format = lambda x, fmt: x
+    hook = quantizer._make_hook("add")
+    hook(model.add, (torch.randn(1, 4) - 1.0, torch.randn(1, 4)))
+
+    assert model.add.input_q_type == "fp4_e1m2"
+    assert model.add.input1_q_type == "fp4_e1m2"
+    assert model.add.input2_q_type == "ufp4_e1m3"
+
+
+def test_dynamic_input_quantizer_keeps_signed_residual_add_operand():
+    class ResidualAdd(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.relu = nn.ReLU()
+            self.add = QuantAdd()
+
+        def forward(self, signed, unsigned):
+            unsigned = self.relu(unsigned)
+            return self.add(signed, unsigned)
+
+    model = ResidualAdd()
+    quantizer = DynamicInputQuantizer(
+        model,
+        candidate_formats=["fp4_e1m2", "fp4_e2m1"],
+        unsigned_input_sources=["relu"],
+    )
+
+    assert quantizer.layer_unsigned_input_indices["add"] == {1}
+    assert quantizer._candidates_for_layer("add", model.add, input_index=0) == ["fp4_e1m2", "fp4_e2m1"]
+    assert quantizer._candidates_for_layer("add", model.add, input_index=1) == ["ufp4_e1m3", "ufp4_e2m2"]
+
+    quantizer._select_best_format = (
+        lambda tensor, layer_name, candidates, module=None: (
+            tensor,
+            torch.zeros(1, dtype=torch.long, device=tensor.device),
+        )
+    )
+    hook = quantizer._get_hook("add")
+    hook(model.add, (torch.randn(1, 4) - 1.0, torch.randn(1, 4)))
+
+    assert model.add.input_q_type == "fp4_e1m2"
+    assert model.add.input1_q_type == "fp4_e1m2"
+
+
+def test_dynamic_input_quantizer_ignores_runtime_qtype_mutation_for_candidates():
+    model = nn.Sequential(nn.Linear(4, 4))
+    quantizer = DynamicInputQuantizer(
+        model,
+        candidate_formats=["fp4_e1m2", "fp4_e2m1"],
+        unsigned_input_sources=["relu"],
+    )
+
+    model[0].input_q_type = "ufp4_e1m3"
+
+    assert "0" not in quantizer.post_unsigned_layers
+    assert quantizer._candidates_for_layer("0", model[0], input_index=0) == ["fp4_e1m2", "fp4_e2m1"]
+
+
 if __name__ == "__main__":
     test_runner_logs_fp32_weight_dt_when_weight_quantization_disabled()
     test_materialized_cache_detects_weight_quant_buffers()
     test_runner_synthesizes_uniform_input_quant_config()
+    test_uniform_input_quant_cfg_carries_unsigned_sources()
+    test_uniform_input_quantizer_can_skip_error_stats()
     test_runner_logs_dynamic_input_map_from_processed_layer_stats()
     test_dynamic_input_quantizer_uses_unsigned_candidates_after_source_dropout()
     test_dynamic_input_quantizer_targets_actual_consumer_after_softmax_dropout()
     test_dynamic_input_quantizer_logs_multihead_attention_inputs()
+    test_uniform_input_quantizer_uses_fixed_unsigned_format_after_source_dropout()
+    test_uniform_input_quantizer_targets_actual_consumer_after_softmax_dropout()
+    test_uniform_input_quantizer_keeps_signed_residual_add_operand()
+    test_dynamic_input_quantizer_keeps_signed_residual_add_operand()
+    test_dynamic_input_quantizer_ignores_runtime_qtype_mutation_for_candidates()

@@ -28,4 +28,18 @@ systemd/
 pyrightconfig.json
 qbench_sandbox
 /runspace/database/**
-dashboard2/node_modules/*
+
+# Dashboard 2
+dashboard2/node_modules/
+dashboard2/dist/
+dashboard2/*
+.agent/
+AGENTS.md
+CLAUDE.md
+.codegraph
+.mcp.json
+opencode.jsonc
+.claude/settings.local.json
+.claude/settings.json
+**/backup
+**.pt

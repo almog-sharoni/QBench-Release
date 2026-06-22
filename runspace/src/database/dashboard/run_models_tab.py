@@ -901,7 +901,8 @@ with tab_runner:
         values["output_dir"] = r4.text_input("Output dir", value=output_dir, key=f"{prefix}_output_dir")
         return values
 
-    @st.fragment(run_every=3 if st.session_state.get("runner_auto_refresh", True) else None)
+    _runner_refresh_interval = 3 if st.session_state.get("runner_auto_refresh", True) else None
+    @st.fragment(run_every=_runner_refresh_interval)
     def render_run_models_tab_content():
         # Refresh current process and registry
         process = _dashboard_runner_current_process()
@@ -1032,7 +1033,7 @@ with tab_runner:
             input_values["excluded_ops"] = i7.text_input("Excluded ops", value=str(_dashboard_runner_experiment_default("input", "excluded_ops", "LayerNorm")), key="runner_exp_input_excluded")
             input_values["unsigned_input_sources"] = i8.text_input("Unsigned input sources", value=str(_dashboard_runner_experiment_default("input", "unsigned_input_sources", "") or ""), key="runner_exp_input_unsigned")
             input_values["dynamic_unsigned_input_candidates"] = st.checkbox(
-                "Dynamic UFP after unsigned sources",
+                "Use UFP after unsigned sources",
                 value=bool(_dashboard_runner_experiment_default("input", "dynamic_unsigned_input_candidates", True)),
                 key="runner_exp_input_dynamic_unsigned_candidates",
             )
@@ -1134,18 +1135,16 @@ with tab_runner:
                     )
                 hybrid_values["input_chunk_size"] = st.number_input("Input chunk size", min_value=1, max_value=100000, value=int(_dashboard_runner_experiment_default("hybrid", "input_chunk_size", 128) or 128), step=1, key="runner_exp_hybrid_input_chunk")
                 
-                # Unsigned sources for hybrid dynamic input
-                if hybrid_values["input_mode"] == "dynamic":
-                    hybrid_values["unsigned_input_sources"] = st.text_input(
-                        "Unsigned input sources", 
-                        value=str(_dashboard_runner_experiment_default("hybrid", "unsigned_input_sources", "") or ""), 
-                        key="runner_exp_hybrid_unsigned"
-                    )
-                    hybrid_values["dynamic_unsigned_input_candidates"] = st.checkbox(
-                        "Dynamic UFP after unsigned sources",
-                        value=bool(_dashboard_runner_experiment_default("hybrid", "dynamic_unsigned_input_candidates", True)),
-                        key="runner_exp_hybrid_dynamic_unsigned_candidates",
-                    )
+                hybrid_values["unsigned_input_sources"] = st.text_input(
+                    "Unsigned input sources",
+                    value=str(_dashboard_runner_experiment_default("hybrid", "unsigned_input_sources", "") or ""),
+                    key="runner_exp_hybrid_unsigned"
+                )
+                hybrid_values["dynamic_unsigned_input_candidates"] = st.checkbox(
+                    "Use UFP after unsigned sources",
+                    value=bool(_dashboard_runner_experiment_default("hybrid", "dynamic_unsigned_input_candidates", True)),
+                    key="runner_exp_hybrid_dynamic_unsigned_candidates",
+                )
 
             hybrid_values["use_cache_sim_db"] = st.checkbox("Use cache simulation from DB", value=bool(_dashboard_runner_experiment_default("hybrid", "use_cache_sim_db", False)), key="runner_exp_hybrid_use_cache_sim")
             hybrid_values["fold_input_norm"] = st.checkbox(
@@ -1611,6 +1610,7 @@ with tab_runner:
                 value=True,
                 key="runner_auto_refresh",
                 disabled=not is_running,
+                on_change=st.rerun,
             )
             page_size = st.select_slider(
                 "Lines per page",
