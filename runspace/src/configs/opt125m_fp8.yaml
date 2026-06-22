@@ -1,0 +1,38 @@
+# OPT-125M FP8 (E4M3) quantization — small language model perplexity eval.
+# Quantizes nn.Linear -> QuantLinear, nn.LayerNorm -> QuantLayerNorm,
+# nn.ReLU -> QuantReLU via the SLM adapter, and scores wikitext-2 perplexity.
+
+model:
+  name: facebook/opt-125m
+  source: huggingface
+
+adapter:
+  type: slm
+  quantize_first_layer: false      # leave the token embedding in FP
+  quantized_ops: ["all"]
+  input_quantization: true         # quantize activations too (per-context chunks)
+  weight_quantization: true
+  quantization_type: fp8_e4m3
+
+quantization:
+  format: fp8_e4m3
+  bias: 7
+  calib_method: max
+  # Per-context chunking (the 128-PE HW model), applied separately to inputs
+  # and weights. chunk_size is fixed at 128 by the CUDA codec.
+  mode: chunk                # activation/input quantization
+  chunk_size: 128
+  weight_mode: chunk         # weight quantization (separate chunker)
+  weight_chunk_size: 128
+  act_mode: chunk            # activation ops (ReLU, etc.)
+  act_chunk_size: 128
+
+dataset:
+  name: wikitext2_lm
+  batch_size: 4
+  seq_len: 512
+  num_workers: 0
+
+evaluation:
+  mode: compare          # reference (FP) vs quantized
+  compare_batches: -1

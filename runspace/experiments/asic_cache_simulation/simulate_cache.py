@@ -387,8 +387,14 @@ def optimize_layer_bits(layer: dict, bandwidth: float,
 
 
 def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapter_cfg: dict = None,
-                  cache_elements: int = 0, bank_size: int = 0, metadata_bits: int = 0):
-    """Trace model to get layer element counts in execution order."""
+                  cache_elements: int = 0, bank_size: int = 0, metadata_bits: int = 0,
+                  dummy_input=None):
+    """Trace model to get layer element counts in execution order.
+
+    dummy_input: optional caller-supplied trace input (e.g. token ids for an
+    LLM). When None, an image tensor is synthesized from resolve_model_input_size
+    (the original vision behavior).
+    """
     import torch.nn.functional as F
     import yaml
     from runspace.src.adapters.adapter_factory import create_adapter
@@ -613,9 +619,12 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
     # Catches custom attention implementations (e.g. MobileViT) that use these directly.
     # nn.MultiheadAttention's C++ fast path is handled above by mha_hook_fn instead.
     # nn.Linear uses F.linear → torch.addmm (not matmul), so no double-counting.
-    from runspace.src.utils.model_input_utils import resolve_model_input_size
-    input_shape = resolve_model_input_size(model, batch_size=batch_size)
-    dummy_input = torch.randn(*input_shape).to(device)
+    if dummy_input is None:
+        from runspace.src.utils.model_input_utils import resolve_model_input_size
+        input_shape = resolve_model_input_size(model, batch_size=batch_size)
+        dummy_input = torch.randn(*input_shape).to(device)
+    else:
+        dummy_input = dummy_input.to(device)
 
     try:
         with torch.no_grad():

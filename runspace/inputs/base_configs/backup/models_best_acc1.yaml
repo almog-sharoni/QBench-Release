@@ -1,12 +1,12 @@
 - name: alexnet
   source: torchvision
   weights: DEFAULT
-- name: densenet161
-  source: torchvision
-  weights: DEFAULT
-- name: efficientnet_v2_l
-  source: torchvision
-  weights: DEFAULT
+# - name: densenet161
+#   source: torchvision
+#   weights: DEFAULT
+# - name: efficientnet_v2_l
+#   source: torchvision
+#   weights: DEFAULT
 - name: googlenet
   source: torchvision
   weights: DEFAULT
