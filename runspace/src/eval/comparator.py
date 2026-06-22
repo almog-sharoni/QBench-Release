@@ -970,12 +970,10 @@ class LayerComparator:
                 iq = 'No'
                 i = pq   # tensor flows through unchanged; format = arrival format
 
-            # Output Q? from module flag (the "did we explicitly quantize?" question)
-            output_quant_enabled = bool(getattr(
-                module,
-                'output_quantization',
-                getattr(self.adapter, 'output_quantization', False),
-            ))
+            # Output Q? from the module's own flag — no adapter-level fallback,
+            # so the column reflects what actually runs at quantize_output() time
+            # rather than what the adapter intended.
+            output_quant_enabled = bool(getattr(module, 'output_quantization', False))
             oq = 'Yes' if output_quant_enabled else 'No'
 
             # Output Pre-Quant: the format the layer's compute would naturally
@@ -1121,8 +1119,27 @@ class LayerComparator:
                     entry = OpRegistry.get_replacement_by_name(fn_name)
                     if entry is None:
                         continue
-                    obs_cls, _ = entry
-                    inst = cache_by_cls.get(obs_cls)
+                    # Resolve the variant the active config asked for first,
+                    # then fall back to any other cached variant — covers
+                    # both the configured case and the (unconfigured)
+                    # default case without letting a stale singleton from
+                    # another variant override the user's choice.
+                    cfg_for_render = getattr(self.adapter, "quant_config", None) if self.adapter is not None else None
+                    expected_cls = OpRegistry.resolve_observed_class_from_config(
+                        fn_name, cfg_for_render, parent_path=prefix
+                    )
+                    obs_cls = None
+                    inst = None
+                    if expected_cls is not None:
+                        cand_inst = cache_by_cls.get(expected_cls)
+                        if cand_inst is not None:
+                            obs_cls, inst = expected_cls, cand_inst
+                    if inst is None:
+                        for cand_cls in OpRegistry.iter_observed_classes(fn_name):
+                            cand_inst = cache_by_cls.get(cand_cls)
+                            if cand_inst is not None:
+                                obs_cls, inst = cand_cls, cand_inst
+                                break
                     if inst is None:
                         continue
                     sub_name = node.name
@@ -1143,16 +1160,19 @@ class LayerComparator:
                     traced.graph.erase_node(node)
                     mutated = True
 
-                    # Sub-trace the Observed* instance and queue its graph
-                    # so the walker can recurse inline into its body.
-                    inst_prefix = f'{prefix}.{sub_name}' if prefix else sub_name
-                    already_traced = any(p == inst_prefix for p, _ in fx_subtrees)
-                    if not already_traced:
-                        try:
-                            _, _, sub_traced = trace_quant_aware(inst)
-                            fx_subtrees.append((inst_prefix, sub_traced))
-                        except Exception:
-                            pass
+                    # Sub-trace and queue ONLY for quantized=False wrappers —
+                    # for quantized=True wrappers (e.g. ObservedSimpleNMS) the
+                    # row should render once, using the wrapper's own
+                    # input/output q_type, not be decomposed into its body.
+                    if not OpRegistry.is_quantized(obs_cls.__name__):
+                        inst_prefix = f'{prefix}.{sub_name}' if prefix else sub_name
+                        already_traced = any(p == inst_prefix for p, _ in fx_subtrees)
+                        if not already_traced:
+                            try:
+                                _, _, sub_traced = trace_quant_aware(inst)
+                                fx_subtrees.append((inst_prefix, sub_traced))
+                            except Exception:
+                                pass
                 if mutated:
                     traced.graph.lint()
                     traced.recompile()
