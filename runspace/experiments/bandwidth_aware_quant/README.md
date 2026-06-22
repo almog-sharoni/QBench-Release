@@ -56,6 +56,20 @@ This experiment evaluates model accuracy under a bandwidth-aware mixed-precision
     --limit_batches 2
 ```
 
+### Run greedy descent with e1/e2-only activation candidates:
+```bash
+./apptainer.sh runspace/experiments/bandwidth_aware_quant/bandwidth_aware_quant.py \
+    --model_name runspace/inputs/models.yaml \
+    --descent \
+    --activation_exponents e1e2
+```
+
+This keeps the greedy descent weight search unchanged while limiting dynamic
+input activation candidates to exponent counts e1 and e2 at every bit-width.
+Unsigned input sources remain `relu`, `relu6`, `softmax`, `quantrelu`,
+`quantsoftmax`, and `quantrelu6`. Results are written under
+`results_descent_activation_e1e2/` unless `--output_dir` is supplied.
+
 ### Plot per-layer bit allocations without inference:
 ```bash
 ./apptainer.sh runspace/experiments/bandwidth_aware_quant/plot_layer_bit_allocations.py \
@@ -75,3 +89,4 @@ line so it stays visually in front; the other thresholds are dashed.
 - `--limit_batches`: Number of evaluation batches (default: `-1` for all).
 - `--device`: Target execution device (`cuda` or `cpu`).
 - `--batch_size`: Batch size for evaluation (default: `128`).
+- `--activation_exponents`: Activation input candidate exponent policy. Use `e1e2` to keep only e1/e2 formats; default `all` preserves existing behavior.

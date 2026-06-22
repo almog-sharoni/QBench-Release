@@ -1143,6 +1143,10 @@ class Runner:
         if mse is None:
             mse = input_quant.get('norm_mse', result.get('dyn_norm_mse'))
 
+        l1 = metrics_cfg.get('l1')
+        if l1 is None:
+            l1 = input_quant.get('norm_l1', result.get('dyn_norm_l1'))
+
         quant_map_json = None
         if not weights_are_fp32:
             quant_map_json = self._to_json_string(exp_cfg.get('quant_map_json'))
@@ -1176,7 +1180,7 @@ class Runner:
             'experiment_type': experiment_type,
             'status': result.get('status', 'SUCCESS'),
             'mse': float(mse) if mse is not None else None,
-            'l1': None,
+            'l1': float(l1) if l1 is not None else None,
             'certainty': float(metrics_cfg.get('certainty', result.get('certainty', 0.0)) or 0.0),
             'quant_map_json': quant_map_json,
             'input_map_json': input_map_json,
@@ -1291,10 +1295,11 @@ class Runner:
             candidate_formats = input_quant_cfg.get('candidate_formats')
             if isinstance(candidate_formats, str):
                 candidate_formats = [f.strip() for f in candidate_formats.split(',') if f.strip()]
-            metric = 'mse'
+            metric = input_quant_cfg.get('metric', 'l2')
             quantizer = DynamicInputQuantizer(
                 model=model,
                 metric=metric,
+                metric_param=input_quant_cfg.get('metric_param'),
                 chunk_size=chunk_size,
                 candidate_formats=candidate_formats,
                 restrict_post_relu_ufp=input_quant_cfg.get('restrict_post_relu_ufp', False),
@@ -1308,7 +1313,10 @@ class Runner:
                 collect_format_stats=input_quant_cfg.get('collect_format_stats', True),
             )
             quantizer.register_hooks()
-            print(f"Input quantization enabled: mode=dynamic metric=MSE chunk_size={chunk_size}")
+            print(
+                "Input quantization enabled: "
+                f"mode=dynamic metric={quantizer.metric.upper()} chunk_size={chunk_size}"
+            )
             return quantizer
 
         if mode == 'uniform':
@@ -1372,12 +1380,14 @@ class Runner:
         stats = {
             'mode': mode,
             'chunk_size': int(input_quant_cfg.get('chunk_size', 128)),
+            'norm_l1': final_stats.get('norm_l1', 0.0),
             'norm_mse': final_stats.get('norm_mse', 0.0),
+            'total_l1': final_stats.get('total_l1', 0.0),
             'total_mse': final_stats.get('total_mse', 0.0),
             'layer_stats': layer_stats,
         }
         if mode == 'dynamic':
-            stats['metric'] = input_quant_cfg.get('metric', 'mse')
+            stats['metric'] = getattr(quantizer, 'metric', input_quant_cfg.get('metric', 'l2'))
         if mode == 'uniform':
             stats['format'] = input_quant_cfg.get('format')
         return stats

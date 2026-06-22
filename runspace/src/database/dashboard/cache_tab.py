@@ -54,7 +54,34 @@ def _load_bandwidth_aware_quant_results(project_root):
     return sorted(runs, key=lambda r: r["label"])
 
 
-def _bandwidth_aware_quant_rows(data):
+@st.cache_data(ttl=30, show_spinner=False)
+def _load_bandwidth_aware_descent_results(project_root, results_dir="results_descent"):
+    """Load greedy-descent (--descent) runs, keyed by model name.
+
+    Mirrors the regular results loader but scans a descent results directory.
+    Each descent JSON carries its own `min_bits_sweeps` (the descent's winning
+    acc-vs-speedup curve) plus a `descent` block, so it can be overlaid on the
+    baseline chart.
+    """
+    root = os.path.join(project_root, "runspace/experiments/bandwidth_aware_quant", results_dir)
+    runs = {}
+    if not os.path.isdir(root):
+        return runs
+    for dirpath, _, filenames in os.walk(root):
+        if "bandwidth_aware_quant_results.json" not in filenames:
+            continue
+        json_path = os.path.join(dirpath, "bandwidth_aware_quant_results.json")
+        try:
+            with open(json_path, "r") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        model = data.get("model_name") or os.path.basename(dirpath)
+        runs[model] = {"path": json_path, "data": data}
+    return runs
+
+
+def _bandwidth_aware_quant_rows(data, series="Baseline"):
     ref = data.get("ref_fp32", {}) or {}
     ref_acc = ref.get("accuracy")
     ref_cycles = {str(k): v for k, v in (ref.get("cycles_per_cache_size", {}) or {}).items()}
@@ -79,12 +106,13 @@ def _bandwidth_aware_quant_rows(data):
                     "speedup": (ref_cycle_baseline / cycles) if cycles else None,
                     "norm_speedup": (ref_cycle_baseline / cycles) if cycles else None,
                     "cache_label": f"Cache {float(cache_size):g}M",
+                    "series": series,
                 })
 
     return rows
 
 
-def _render_bandwidth_aware_quant_chart(data, points_df):
+def _render_bandwidth_aware_quant_chart(data, points_df, overlay=None):
     if points_df.empty:
         return
 
@@ -310,8 +338,95 @@ def _render_bandwidth_aware_quant_chart(data, points_df):
         )
         layers.extend([ref_points, ref_labels])
 
+    # Optional greedy-descent overlays: same axes, distinct markers + dashed
+    # lines, and their own colors so they read as separate curves "on top".
+    if overlay is not None:
+        overlays = overlay if isinstance(overlay, list) else [overlay]
+        for overlay_spec in overlays:
+            if isinstance(overlay_spec, dict):
+                overlay_rows_df = overlay_spec.get("rows")
+                point_type = overlay_spec.get("point_type", "Descent (8→3)")
+                legend_prefix = overlay_spec.get("legend_prefix", "Descent")
+                marker_shape = overlay_spec.get("shape", "square")
+                stroke_dash = overlay_spec.get("stroke_dash", [6, 3])
+            else:
+                _overlay_data, overlay_rows_df = overlay_spec
+                point_type = "Descent (8→3)"
+                legend_prefix = "Descent"
+                marker_shape = "square"
+                stroke_dash = [6, 3]
+
+            if overlay_rows_df is None or overlay_rows_df.empty:
+                continue
+
+            o = overlay_rows_df[overlay_rows_df["min_bits"] == selected_min_bits].copy()
+            if not o.empty:
+                o_ranges = {}
+                for cache_size, group in o.groupby("cache_size_M"):
+                    o_cycles = group["cycles"].dropna()
+                    o_ranges[cache_size] = (
+                        f"{_fmt_cycles(o_cycles.min())}-{_fmt_cycles(o_cycles.max())} cyc"
+                        if not o_cycles.empty else "N/A"
+                    )
+                o["point_type"] = point_type
+                o = _mark_overlapping_series(o)
+                o["bit_label"] = o["b"].astype(int).astype(str)
+                o["legend_label"] = o.apply(
+                    lambda row: f"{legend_prefix} {float(row['cache_size_M']):g}M ({o_ranges.get(row['cache_size_M'], 'N/A')})",
+                    axis=1,
+                )
+                o["cache_color"] = o["legend_label"]
+                o_line = o.copy()
+                o_line["line_order"] = o_line["b"].astype(float)
+
+                o_base = alt.Chart(o).encode(**common_encoding)
+                o_line_base = alt.Chart(o_line).encode(
+                    **common_encoding,
+                    order=alt.Order("line_order:Q", sort="descending"),
+                )
+                o_lines = o_line_base.mark_line(
+                    point=False, strokeWidth=2.5, strokeDash=stroke_dash
+                ).add_params(hover)
+                o_points = o_base.mark_point(shape=marker_shape, filled=True, size=150)
+                o_halo = o_base.mark_text(
+                    align="center", baseline="middle", color="white",
+                    fontWeight="bold", fontSize=11, stroke="black", strokeWidth=4,
+                ).encode(text="bit_label:N")
+                o_labels = o_base.mark_text(
+                    align="center", baseline="middle", color="white",
+                    fontWeight="bold", fontSize=11,
+                ).encode(text="bit_label:N")
+                layers.extend([o_lines, o_points, o_halo, o_labels])
+
     chart = alt.layer(*layers).properties(height=420).interactive()
     st.altair_chart(chart, use_container_width=True)
+
+
+def _render_descent_policy_table(descent_block, label="Descent"):
+    """Render the descent's chosen weight policy per bit-width, one column per cache.
+
+    `descent_block` is data["descent"]: {cache_str: {"policy_by_bits": {bits: policy}, ...}}.
+    Rows are bit-widths 8→3; cells are the winning fixed format or "mse" (per-chunk MSE).
+    """
+    if not descent_block:
+        return
+
+    cache_keys = sorted(descent_block.keys(), key=lambda c: float(c))
+    all_bits = set()
+    for cache in cache_keys:
+        all_bits.update(int(b) for b in (descent_block[cache].get("policy_by_bits", {}) or {}))
+    if not all_bits:
+        return
+
+    table = {}
+    for cache in cache_keys:
+        pol = descent_block[cache].get("policy_by_bits", {}) or {}
+        col = f"Cache {float(cache):g}M"
+        table[col] = {f"{b}-bit": pol.get(str(b), pol.get(b, "—")) for b in sorted(all_bits, reverse=True)}
+
+    policy_df = pd.DataFrame(table)
+    st.caption(f"{label} chosen weight policy per bit-width (fixed format or `mse` = per-chunk MSE)")
+    st.dataframe(policy_df, width='stretch')
 
 
 def _render_bandwidth_aware_quant_results(selected_model=None):
@@ -358,9 +473,55 @@ def _render_bandwidth_aware_quant_results(selected_model=None):
         sort_cols = [c for c in ["min_bits", "cache_size_M", "b"] if c in points_df.columns]
         points_df = points_df.sort_values(sort_cols)
         st.markdown("##### Accuracy vs Speedup")
-        _render_bandwidth_aware_quant_chart(data, points_df)
 
-        hidden_cols = {"min_bits", "norm_speedup", "cache_label"}
+        overlays = []
+        descent_runs = _load_bandwidth_aware_descent_results(PROJECT_ROOT)
+        descent_run = descent_runs.get(data.get("model_name"))
+        if descent_run is not None and not bool(data.get("used_descent")):
+            if st.checkbox(
+                "Overlay greedy-descent (8→3) results",
+                value=False,
+                key="cache_bwaq_overlay_descent",
+                help=f"Overlay the matching descent run on top: {descent_run['path']}",
+            ):
+                overlays.append({
+                    "data": descent_run["data"],
+                    "rows": pd.DataFrame(_bandwidth_aware_quant_rows(descent_run["data"], series="Descent")),
+                    "point_type": "Descent (8→3)",
+                    "legend_prefix": "Descent",
+                    "shape": "square",
+                    "stroke_dash": [6, 3],
+                })
+                _render_descent_policy_table(descent_run["data"].get("descent", {}), label="Descent")
+
+        e1e2_descent_runs = _load_bandwidth_aware_descent_results(
+            PROJECT_ROOT,
+            results_dir="results_descent_activation_e1e2",
+        )
+        e1e2_descent_run = e1e2_descent_runs.get(data.get("model_name"))
+        if e1e2_descent_run is not None and not bool(data.get("used_descent")):
+            if st.checkbox(
+                "Overlay e1/e2 activation descent results",
+                value=False,
+                key="cache_bwaq_overlay_descent_activation_e1e2",
+                help=f"Overlay the matching e1/e2 activation descent run on top: {e1e2_descent_run['path']}",
+            ):
+                overlays.append({
+                    "data": e1e2_descent_run["data"],
+                    "rows": pd.DataFrame(_bandwidth_aware_quant_rows(e1e2_descent_run["data"], series="Descent e1/e2 activations")),
+                    "point_type": "Descent (e1/e2 activations)",
+                    "legend_prefix": "Descent e1/e2",
+                    "shape": "triangle-up",
+                    "stroke_dash": [2, 3],
+                })
+                _render_descent_policy_table(
+                    e1e2_descent_run["data"].get("descent", {}),
+                    label="Descent e1/e2 activations",
+                )
+
+        _render_bandwidth_aware_quant_chart(data, points_df, overlay=overlays or None)
+
+        hidden_cols = {"min_bits", "norm_speedup", "cache_label", "series"}
         visible_cols = [c for c in points_df.columns if c not in hidden_cols]
         st.dataframe(
             points_df[visible_cols],

@@ -72,10 +72,17 @@ CANONICAL_INPUT_FORMATS_BY_BITS = {
     8: 'fp8_e4m3',
 }
 
+UNSIGNED_INPUT_SOURCES = ['relu', 'relu6', 'softmax', 'quantrelu', 'quantsoftmax', 'quantrelu6']
+ACTIVATION_EXPONENT_POLICIES = ('all', 'e1e2')
+ACTIVATION_EXPONENTS_BY_POLICY = {
+    'e1e2': {1, 2},
+}
+
 def patched_candidates_for_layer(self, layer_name, module=None, input_index=0):
     """Silent custom candidates picker that uses per-layer input bit-width for off-chip layers."""
     is_unsigned = self._layer_uses_unsigned_input(layer_name, input_index=input_index)
     input_format_policy = getattr(self, 'layer_input_format_policy', 'all')
+    activation_exponents = getattr(self, 'activation_exponents', 'all')
 
     if input_index == 1:
         residual_bits = self.layer_residual_input_bits_map.get(layer_name)
@@ -84,6 +91,7 @@ def patched_candidates_for_layer(self, layer_name, module=None, input_index=0):
                 residual_bits,
                 policy=input_format_policy,
                 unsigned=is_unsigned,
+                activation_exponents=activation_exponents,
             )
             return (
                 self._make_unsigned_candidates(candidates)
@@ -99,18 +107,21 @@ def patched_candidates_for_layer(self, layer_name, module=None, input_index=0):
             8,
             policy=input_format_policy,
             unsigned=is_unsigned,
+            activation_exponents=activation_exponents,
         )
     elif stays_on_chip:
         candidates = get_input_formats_for_bits(
             8,
             policy=input_format_policy,
             unsigned=is_unsigned,
+            activation_exponents=activation_exponents,
         )
     else:
         candidates = get_input_formats_for_bits(
             input_bits,
             policy=input_format_policy,
             unsigned=is_unsigned,
+            activation_exponents=activation_exponents,
         )
 
     if is_unsigned and input_format_policy != 'typed':
@@ -152,6 +163,11 @@ for DIQ in (DIQ1, DIQ2):
                     '_global_layer_input_format_policy',
                     getattr(self, 'layer_input_format_policy', 'all'),
                 )
+                self.activation_exponents = getattr(
+                    self.__class__,
+                    '_global_activation_exponents',
+                    getattr(self, 'activation_exponents', 'all'),
+                )
             return new_init
         DIQ.__init__ = make_new_init(_orig_init)
 
@@ -173,11 +189,33 @@ SIGNED_FORMATS_BY_BITS = {
 # Helpers
 # ============================================================
 
-def get_input_formats_for_bits(b, policy='all', unsigned=False):
+def get_format_exponent(fmt):
+    """Return the exponent count encoded in qtype strings like fp8_e4m3."""
+    if not isinstance(fmt, str) or '_e' not in fmt:
+        return None
+    exp_part = fmt.split('_e', 1)[1].split('m', 1)[0]
+    return int(exp_part) if exp_part.isdigit() else None
+
+
+def filter_formats_by_activation_exponents(formats, activation_exponents='all'):
+    """Apply the activation-only exponent filter used by the e1/e2 descent run."""
+    if activation_exponents == 'all':
+        return list(formats)
+    allowed = ACTIVATION_EXPONENTS_BY_POLICY.get(activation_exponents)
+    if allowed is None:
+        raise ValueError(
+            f"Unsupported activation exponent policy: {activation_exponents!r}. "
+            f"Expected one of {ACTIVATION_EXPONENT_POLICIES}."
+        )
+    return [fmt for fmt in formats if get_format_exponent(fmt) in allowed]
+
+
+def get_input_formats_for_bits(b, policy='all', unsigned=False, activation_exponents='all'):
     """Filter input formats to retrieve candidates with exactly b bits."""
     if policy == 'canonical':
         fmt = CANONICAL_INPUT_FORMATS_BY_BITS.get(b)
-        return [fmt] if fmt else []
+        candidates = [fmt] if fmt else []
+        return filter_formats_by_activation_exponents(candidates, activation_exponents)
 
     candidates = []
     for fmt in DEFAULT_DYNAMIC_INPUT_CANDIDATES:
@@ -193,8 +231,8 @@ def get_input_formats_for_bits(b, policy='all', unsigned=False):
             typed_candidates = [fmt for fmt in candidates if fmt.startswith('ufp')]
         else:
             typed_candidates = [fmt for fmt in candidates if not fmt.startswith('ufp')]
-        return typed_candidates or candidates
-    return candidates
+        candidates = typed_candidates or candidates
+    return filter_formats_by_activation_exponents(candidates, activation_exponents)
 
 
 def get_best_weight_format(weight_tensor, formats, chunk_size=128, layer_name=None):
@@ -844,7 +882,8 @@ def load_best_weight_map_by_bits(model_name, db_path=None):
 
 
 def set_diq_globals(cache_sim_map, layer_input_bits, layer_residual_input_bits,
-                    layer_need_input_transfer, input_format_policy):
+                    layer_need_input_transfer, input_format_policy,
+                    activation_exponents='all'):
     """Inject the per-(cache_size, b) maps the patched DynamicInputQuantizer reads."""
     for DIQ in (DIQ1, DIQ2):
         if DIQ is None:
@@ -854,6 +893,15 @@ def set_diq_globals(cache_sim_map, layer_input_bits, layer_residual_input_bits,
         DIQ._global_layer_residual_input_bits_map = layer_residual_input_bits
         DIQ._global_layer_need_input_transfer_map = layer_need_input_transfer
         DIQ._global_layer_input_format_policy = input_format_policy
+        DIQ._global_activation_exponents = activation_exponents
+
+
+def get_activation_candidate_formats(b, args):
+    return get_input_formats_for_bits(
+        b,
+        policy=args.input_format_policy,
+        activation_exponents=args.activation_exponents,
+    )
 
 
 def build_eval_config(model_name, args, weights_path, b, layer_need_input_transfer):
@@ -882,12 +930,12 @@ def build_eval_config(model_name, args, weights_path, b, layer_need_input_transf
             'dynamic_input_quant': {
                 'enabled': True,
                 'chunk_size': 128,
-                'candidate_formats': get_input_formats_for_bits(b, policy=args.input_format_policy),
+                'candidate_formats': get_activation_candidate_formats(b, args),
                 'input_transfer_map': layer_need_input_transfer,
                 'use_cache_sim_db': False,
                 'collect_error_stats': False,
                 'collect_format_stats': False,
-                'unsigned_input_sources': ['relu', 'relu6', 'softmax', 'quantrelu', 'quantsoftmax', 'quantrelu6'],
+                'unsigned_input_sources': UNSIGNED_INPUT_SOURCES,
             }
         },
         'dataset': {
@@ -935,7 +983,8 @@ def run_descent_for_cache(model, model_name, args, runner, sim_layers, cache_sim
 
         # DIQ input maps depend only on (cache, b); set once for all candidates.
         set_diq_globals(cache_sim_map, layer_input_bits, layer_residual_input_bits,
-                        layer_need_input_transfer, args.input_format_policy)
+                        layer_need_input_transfer, args.input_format_policy,
+                        args.activation_exponents)
 
         candidates = list(SIGNED_FORMATS_BY_BITS.get(b, [])) + [MSE_POLICY]
         best_policy = None
@@ -1016,6 +1065,8 @@ def main():
                         help="Pin a single min bit-width (e.g. 8) instead of sweeping 2-8")
     parser.add_argument("--input_format_policy", choices=["all", "typed", "canonical"], default="all",
                         help="'all' searches all formats for each bit-width; 'typed' searches signed/unsigned formats separately; 'canonical' uses one balanced format per bit-width.")
+    parser.add_argument("--activation_exponents", choices=ACTIVATION_EXPONENT_POLICIES, default="all",
+                        help="'all' keeps the existing activation candidate set; 'e1e2' limits activation input candidates to e1/e2 exponent formats at every bit-width.")
     parser.add_argument("--use_best_weights", action="store_true",
                         help="Use the per-layer best weight formats from the latest weight_quant_optimized DB run instead of SIGNED_FORMATS_BY_BITS.")
     parser.add_argument("--descent", action="store_true",
@@ -1026,6 +1077,8 @@ def main():
 
     if args.descent and args.use_best_weights:
         parser.error("--descent and --use_best_weights are mutually exclusive.")
+    if args.activation_exponents == 'e1e2' and args.input_format_policy == 'canonical':
+        parser.error("--activation_exponents e1e2 is incompatible with --input_format_policy canonical because canonical uses higher exponents at larger bit-widths.")
 
     # Verify CUDA availability
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -1054,6 +1107,8 @@ def main():
         print(f"\n============================================================")
         print(f"RUNNING BANDWIDTH-AWARE EXPERIMENT FOR MODEL: {model_name}")
         print(f"============================================================")
+        if args.activation_exponents != 'all':
+            print(f"Activation input candidates restricted by exponent policy: {args.activation_exponents}")
 
         # Resolve output directory for this model
         if args.output_dir:
@@ -1063,11 +1118,20 @@ def main():
                 model_output_dir = args.output_dir
         else:
             if args.descent:
-                default_results_dir = "runspace/experiments/bandwidth_aware_quant/results_descent"
+                if args.activation_exponents == 'e1e2':
+                    default_results_dir = "runspace/experiments/bandwidth_aware_quant/results_descent_activation_e1e2"
+                else:
+                    default_results_dir = "runspace/experiments/bandwidth_aware_quant/results_descent"
             elif args.use_best_weights:
-                default_results_dir = "runspace/experiments/bandwidth_aware_quant/results_best_weights"
+                if args.activation_exponents == 'e1e2':
+                    default_results_dir = "runspace/experiments/bandwidth_aware_quant/results_best_weights_activation_e1e2"
+                else:
+                    default_results_dir = "runspace/experiments/bandwidth_aware_quant/results_best_weights"
             else:
-                default_results_dir = "runspace/experiments/bandwidth_aware_quant/results"
+                if args.activation_exponents == 'e1e2':
+                    default_results_dir = "runspace/experiments/bandwidth_aware_quant/results_activation_e1e2"
+                else:
+                    default_results_dir = "runspace/experiments/bandwidth_aware_quant/results"
             model_output_dir = os.path.join(PROJECT_ROOT, default_results_dir, model_name)
 
         os.makedirs(model_output_dir, exist_ok=True)
@@ -1218,18 +1282,9 @@ def main():
             torch.save(q_state_dict, temp_weights_path)
             
             # 3.3. Inject cache sim map and per-layer input bits to global attributes of both classes
-            if DIQ1 is not None:
-                DIQ1._global_cache_sim_map = cache_sim_map
-                DIQ1._global_layer_input_bits_map = layer_input_bits
-                DIQ1._global_layer_residual_input_bits_map = layer_residual_input_bits
-                DIQ1._global_layer_need_input_transfer_map = layer_need_input_transfer
-                DIQ1._global_layer_input_format_policy = args.input_format_policy
-            if DIQ2 is not None:
-                DIQ2._global_cache_sim_map = cache_sim_map
-                DIQ2._global_layer_input_bits_map = layer_input_bits
-                DIQ2._global_layer_residual_input_bits_map = layer_residual_input_bits
-                DIQ2._global_layer_need_input_transfer_map = layer_need_input_transfer
-                DIQ2._global_layer_input_format_policy = args.input_format_policy
+            set_diq_globals(cache_sim_map, layer_input_bits, layer_residual_input_bits,
+                            layer_need_input_transfer, args.input_format_policy,
+                            args.activation_exponents)
 
             # 3.4. Build evaluation config — mirror the standard hybrid_quant
             # pipeline (Quant wrappers + decomposed MHA + folded input norm) so the
@@ -1257,12 +1312,12 @@ def main():
                     'dynamic_input_quant': {
                         'enabled': True,
                         'chunk_size': 128,
-                        'candidate_formats': get_input_formats_for_bits(b, policy=args.input_format_policy),
+                        'candidate_formats': get_activation_candidate_formats(b, args),
                         'input_transfer_map': layer_need_input_transfer,
                         'use_cache_sim_db': False,
                         'collect_error_stats': False,
                         'collect_format_stats': False,
-                        'unsigned_input_sources': ['relu', 'relu6', 'softmax', 'quantrelu', 'quantsoftmax','quantrelu6'],
+                        'unsigned_input_sources': UNSIGNED_INPUT_SOURCES,
                     }
                 },
                 'dataset': {
@@ -1325,6 +1380,13 @@ def main():
                 'accuracy': ref_acc1,
                 'baseline_cycles': ref_baseline_cycles,
                 'cycles_per_cache_size': ref_cycles_per_cs,
+            },
+            'experiment_config': {
+                'input_format_policy': args.input_format_policy,
+                'activation_exponents': args.activation_exponents,
+                'unsigned_input_sources': UNSIGNED_INPUT_SOURCES,
+                'descent': bool(args.descent),
+                'use_best_weights': bool(args.use_best_weights),
             },
             'min_bits_sweeps': {
                 str(mb): {
