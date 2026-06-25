@@ -12,7 +12,7 @@ if PROJECT_ROOT not in sys.path:
 
 from runspace.core.runner import Runner
 from runspace.experiments.utils.common import build_uniform_input_quant_cfg
-from src.ops.quant_arithmetic import QuantAdd
+from src.ops.quant_arithmetic import QuantAdd, QuantCat
 from src.ops.quant_dropout import QuantDropout
 from src.ops.quant_matmul import QuantMatMul
 from src.quantization.dynamic_input_quantizer import DynamicInputQuantizer
@@ -387,6 +387,86 @@ def test_dynamic_input_quantizer_keeps_signed_residual_add_operand():
 
     assert model.add.input_q_type == "fp4_e1m2"
     assert model.add.input1_q_type == "fp4_e1m2"
+    assert model.add.input2_q_type == "ufp4_e1m3"
+
+
+def test_dynamic_input_quantizer_quantizes_all_binary_graph_operands():
+    class ResidualAdd(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.add = QuantAdd()
+
+        def forward(self, lhs, rhs):
+            return self.add(lhs, rhs)
+
+    model = ResidualAdd()
+    candidates = ["fp4_e1m2", "fp4_e2m1"]
+    quantizer = DynamicInputQuantizer(
+        model,
+        candidate_formats=candidates,
+        collect_error_stats=False,
+    )
+    calls = []
+
+    def fake_quantize(tensor, layer_name, candidate_formats, module=None):
+        calls.append((layer_name, list(candidate_formats)))
+        return tensor + float(len(calls)), torch.zeros(1, dtype=torch.long, device=tensor.device)
+
+    quantizer._quantize_input_tensor = fake_quantize
+    hook = quantizer._get_hook("add")
+    lhs = torch.zeros(1, 4)
+    rhs = torch.ones(1, 4)
+
+    out_args = hook(model.add, (lhs, rhs))
+
+    assert [layer_name for layer_name, _ in calls] == ["add", "add.input2"]
+    assert all(call_candidates == candidates for _, call_candidates in calls)
+    assert torch.equal(out_args[0], lhs + 1.0)
+    assert torch.equal(out_args[1], rhs + 2.0)
+    assert model.add.input_quantization is False
+    assert model.add.input1_q_type == "fp4_e1m2"
+    assert model.add.input2_q_type == "fp4_e1m2"
+    assert model.add.input_chunk_candidates == candidates
+    assert model.add.input2_chunk_candidates == candidates
+
+
+def test_dynamic_input_quantizer_quantizes_graph_cat_list_operands():
+    class CatModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.cat = QuantCat()
+
+        def forward(self, lhs, rhs):
+            return self.cat([lhs, rhs], dim=1)
+
+    model = CatModel()
+    candidates = ["fp4_e1m2", "fp4_e2m1"]
+    quantizer = DynamicInputQuantizer(
+        model,
+        candidate_formats=candidates,
+        collect_error_stats=False,
+    )
+    calls = []
+
+    def fake_quantize(tensor, layer_name, candidate_formats, module=None):
+        calls.append((layer_name, list(candidate_formats)))
+        return tensor + float(len(calls)), torch.zeros(1, dtype=torch.long, device=tensor.device)
+
+    quantizer._quantize_input_tensor = fake_quantize
+    hook = quantizer._get_hook("cat")
+    lhs = torch.zeros(1, 4)
+    rhs = torch.ones(1, 4)
+
+    out_args = hook(model.cat, ([lhs, rhs], 1))
+
+    assert [layer_name for layer_name, _ in calls] == ["cat", "cat.input2"]
+    assert isinstance(out_args[0], list)
+    assert out_args[1] == 1
+    assert torch.equal(out_args[0][0], lhs + 1.0)
+    assert torch.equal(out_args[0][1], rhs + 2.0)
+    assert model.cat.input_quantization is False
+    assert model.cat.input1_q_type == "fp4_e1m2"
+    assert model.cat.input2_q_type == "fp4_e1m2"
 
 
 def test_dynamic_input_quantizer_ignores_runtime_qtype_mutation_for_candidates():
@@ -401,6 +481,27 @@ def test_dynamic_input_quantizer_ignores_runtime_qtype_mutation_for_candidates()
 
     assert "0" not in quantizer.post_unsigned_layers
     assert quantizer._candidates_for_layer("0", model[0], input_index=0) == ["fp4_e1m2", "fp4_e2m1"]
+
+
+def test_dynamic_input_quantizer_checks_cache_map_only_when_enabled(capsys):
+    model = nn.Sequential(nn.Linear(4, 4))
+    candidates = ["fp4_e1m2", "fp4_e2m1"]
+
+    disabled_quantizer = DynamicInputQuantizer(
+        model,
+        candidate_formats=candidates,
+        use_cache_sim_db=False,
+    )
+    assert disabled_quantizer._candidates_for_layer("0", model[0]) == candidates
+    assert "NOT found in cache sim map" not in capsys.readouterr().out
+
+    enabled_quantizer = DynamicInputQuantizer(
+        model,
+        candidate_formats=candidates,
+        use_cache_sim_db=True,
+    )
+    assert enabled_quantizer._candidates_for_layer("0", model[0]) == candidates
+    assert "NOT found in cache sim map" in capsys.readouterr().out
 
 
 if __name__ == "__main__":

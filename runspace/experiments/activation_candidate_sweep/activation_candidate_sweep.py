@@ -37,6 +37,9 @@ WEIGHT_DT = "fp32"
 METRIC = "l2"
 DEFAULT_BIT_WIDTHS = [8, 7, 6, 5, 4]
 DEFAULT_EXP_CAPS = [None, 4, 3, 2, 1]
+DEFAULT_SINGLETON_EXP_BITS = [2]
+DEFAULT_SINGLETON_IMPORT_EXPERIMENT_TYPES = ["input_quant_baseline_4_8"]
+DEFAULT_SINGLETON_IMPORT_VERIFY_ACC1_TOLERANCE = 0.05
 UNSIGNED_INPUT_SOURCES = ["relu", "relu6", "softmax"]
 
 
@@ -81,8 +84,36 @@ def exp_cap_label(exp_cap):
     return "all" if exp_cap is None else f"exp{int(exp_cap)}"
 
 
+def singleton_exp_label(exp_bits):
+    return f"only_e{int(exp_bits)}"
+
+
+def _activation_dt_for_label(bit_width, label):
+    return f"dyn_a{int(bit_width)}_{label}_{METRIC}"
+
+
 def activation_dt_for_spec(bit_width, exp_cap):
-    return f"dyn_a{int(bit_width)}_{exp_cap_label(exp_cap)}_{METRIC}"
+    return _activation_dt_for_label(bit_width, exp_cap_label(exp_cap))
+
+
+def _candidate_pool_label(exp_cap):
+    text = str(exp_cap or "").strip().lower()
+    if text == "all":
+        return "full pool"
+    if text.startswith("only_e"):
+        try:
+            return f"e{int(text[6:])} only"
+        except Exception:
+            return text.replace("_", " ")
+    if text.startswith("exp"):
+        try:
+            exp_bits = int(text[3:])
+            if exp_bits == 1:
+                return "e1 only"
+            return f"e <= {exp_bits}"
+        except Exception:
+            return text
+    return str(exp_cap)
 
 
 def candidate_formats_for_bit_width(bit_width, exp_cap=None):
@@ -109,7 +140,26 @@ def candidate_formats_for_bit_width(bit_width, exp_cap=None):
     return candidates
 
 
-def build_sweep_specs(bit_widths, exp_caps, skip_duplicate_pools=True):
+def candidate_format_for_exp_bits(bit_width, exp_bits):
+    bit_width = int(bit_width)
+    exp_bits = int(exp_bits)
+    mant_bits = bit_width - 1 - exp_bits
+    if exp_bits <= 0 or mant_bits <= 0:
+        return None
+    return f"fp{bit_width}_e{exp_bits}m{mant_bits}"
+
+
+def candidate_formats_for_single_exp_bits(bit_width, exp_bits):
+    candidate = candidate_format_for_exp_bits(bit_width, exp_bits)
+    return [candidate] if candidate else []
+
+
+def build_sweep_specs(
+    bit_widths,
+    exp_caps,
+    singleton_exp_bits=DEFAULT_SINGLETON_EXP_BITS,
+    skip_duplicate_pools=True,
+):
     specs = []
     for bit_width in bit_widths:
         seen_for_width = set()
@@ -130,6 +180,27 @@ def build_sweep_specs(bit_widths, exp_caps, skip_duplicate_pools=True):
                     exp_cap_label=exp_cap_label(exp_cap),
                     candidate_formats=candidates,
                     activation_dt=activation_dt_for_spec(bit_width, exp_cap),
+                )
+            )
+
+        for exp_bits in singleton_exp_bits or []:
+            candidates = candidate_formats_for_single_exp_bits(bit_width, exp_bits)
+            if not candidates:
+                continue
+
+            key = tuple(candidates)
+            if skip_duplicate_pools and key in seen_for_width:
+                continue
+            seen_for_width.add(key)
+
+            label = singleton_exp_label(exp_bits)
+            specs.append(
+                CandidateSweepSpec(
+                    bit_width=int(bit_width),
+                    exp_cap=int(exp_bits),
+                    exp_cap_label=label,
+                    candidate_formats=candidates,
+                    activation_dt=_activation_dt_for_label(bit_width, label),
                 )
             )
     return specs
@@ -155,6 +226,45 @@ def get_args():
     parser.add_argument("--bit_widths", type=str, default="8,7,6,5,4")
     parser.add_argument("--exp_caps", type=str, default="all,4,3,2,1")
     parser.add_argument(
+        "--singleton_exp_bits",
+        type=str,
+        default="2",
+        help=(
+            "Comma-separated exponent-bit counts to run as single-candidate "
+            "activation pools in addition to cumulative exp caps. The default "
+            "adds the e2-only pool; e1-only is already covered by exp_cap=1."
+        ),
+    )
+    parser.add_argument(
+        "--no_import_singleton_baselines",
+        action="store_false",
+        dest="import_singleton_baselines",
+        help=(
+            "Disable importing existing single-format baseline DB rows for "
+            "singleton candidate pools such as e2-only."
+        ),
+    )
+    parser.set_defaults(import_singleton_baselines=True)
+    parser.add_argument(
+        "--singleton_import_experiment_types",
+        type=str,
+        default=",".join(DEFAULT_SINGLETON_IMPORT_EXPERIMENT_TYPES),
+        help=(
+            "Comma-separated source experiment_type values to search when "
+            "importing singleton candidate pools from existing DB rows."
+        ),
+    )
+    parser.add_argument(
+        "--singleton_import_verify_acc1_tolerance",
+        type=float,
+        default=DEFAULT_SINGLETON_IMPORT_VERIFY_ACC1_TOLERANCE,
+        help=(
+            "Maximum absolute Top-1 percentage-point difference allowed when "
+            "verifying the existing e1-only sweep row against the source DB "
+            "family before importing another singleton pool."
+        ),
+    )
+    parser.add_argument(
         "--unsigned_input_sources",
         type=str,
         default=",".join(UNSIGNED_INPUT_SOURCES),
@@ -170,6 +280,14 @@ def get_args():
     args = parser.parse_args()
     args.bit_widths = _parse_int_csv(args.bit_widths, DEFAULT_BIT_WIDTHS)
     args.exp_caps = _parse_exp_caps(args.exp_caps)
+    args.singleton_exp_bits = _parse_int_csv(
+        args.singleton_exp_bits,
+        DEFAULT_SINGLETON_EXP_BITS,
+    )
+    args.singleton_import_experiment_types = _parse_csv(
+        args.singleton_import_experiment_types,
+        DEFAULT_SINGLETON_IMPORT_EXPERIMENT_TYPES,
+    )
     args.unsigned_input_sources = _parse_csv(
         args.unsigned_input_sources, UNSIGNED_INPUT_SOURCES
     )
@@ -212,7 +330,11 @@ def _build_w32_dynamic_runtime_config(
             "quantized_ops": ["all"],
             "build_quantized": True,
             "weight_quantization": False,
-            "input_quantization": False,
+            # Keep the adapter's graph-quantized activation surface identical
+            # to the input-only baseline. DynamicInputQuantizer pre-hooks supply
+            # already-quantized inputs at runtime and disable module input
+            # quantization per call, so this does not double-quantize activations.
+            "input_quantization": True,
             "output_quantization": False,
             "unsigned_input_sources": list(args.unsigned_input_sources),
         }
@@ -288,6 +410,108 @@ def _safe_json_load(config_json):
         return None
 
 
+def _row_get(row, key, default=None):
+    if row is None:
+        return default
+    if hasattr(row, "get"):
+        value = row.get(key, default)
+    else:
+        try:
+            value = row[key]
+        except Exception:
+            return default
+    try:
+        if value != value:
+            return default
+    except Exception:
+        pass
+    return value
+
+
+def _row_float(row, key, default=None):
+    value = _row_get(row, key, default)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _config_value(config_json, paths):
+    cfg = _safe_json_load(config_json)
+    if not isinstance(cfg, dict):
+        return None
+
+    for path in paths:
+        node = cfg
+        for key in path:
+            if not isinstance(node, dict):
+                node = None
+                break
+            node = node.get(key)
+        if node is not None:
+            return node
+    return None
+
+
+def _chunk_size_from_config_json(config_json):
+    return _config_value(
+        config_json,
+        (
+            ("evaluation", "input_quant", "chunk_size"),
+            ("evaluation", "dynamic_input_quant", "chunk_size"),
+            ("quantization", "chunk_size"),
+            ("quantization", "activation_chunk_size"),
+        ),
+    )
+
+
+def _candidate_formats_from_config_json(config_json):
+    formats = _config_value(
+        config_json,
+        (
+            ("evaluation", "input_quant", "candidate_formats"),
+            ("evaluation", "dynamic_input_quant", "candidate_formats"),
+            ("experiment", "candidate_formats"),
+        ),
+    )
+    if isinstance(formats, list):
+        return [str(fmt) for fmt in formats]
+
+    input_format = _config_value(
+        config_json,
+        (
+            ("quantization", "input_format"),
+            ("quantization", "activation_format"),
+        ),
+    )
+    return [str(input_format)] if input_format else []
+
+
+def _single_format_source_config_matches(
+    config_json,
+    activation_format,
+    limit_batches,
+    chunk_size,
+):
+    if not _limit_matches(config_json, limit_batches):
+        return False
+
+    logged_chunk_size = _chunk_size_from_config_json(config_json)
+    if logged_chunk_size is not None:
+        try:
+            if int(logged_chunk_size) != int(chunk_size):
+                return False
+        except Exception:
+            return False
+
+    return _list_matches(
+        _candidate_formats_from_config_json(config_json),
+        [activation_format],
+    )
+
+
 def _normalize_metric(metric):
     aliases = {
         "mse": "l2",
@@ -357,11 +581,31 @@ def _experiment_from_config_json(config_json):
     return experiment if isinstance(experiment, dict) else {}
 
 
+def _adapter_from_config_json(config_json):
+    cfg = _safe_json_load(config_json)
+    if not isinstance(cfg, dict):
+        return {}
+    adapter = cfg.get("adapter", {})
+    return adapter if isinstance(adapter, dict) else {}
+
+
+def _adapter_graph_input_quant_matches(config_json):
+    adapter = _adapter_from_config_json(config_json)
+    return (
+        _list_matches(adapter.get("quantized_ops"), ["all"])
+        and adapter.get("build_quantized") is True
+        and adapter.get("input_quantization") is True
+        and adapter.get("weight_quantization") is False
+    )
+
+
 def _list_matches(actual, expected):
     return [str(item) for item in (actual or [])] == [str(item) for item in (expected or [])]
 
 
 def _run_config_matches(config_json, spec, limit_batches, chunk_size):
+    if not _adapter_graph_input_quant_matches(config_json):
+        return False
     if _metric_from_config_json(config_json) != METRIC:
         return False
     if not _limit_matches(config_json, limit_batches):
@@ -508,6 +752,142 @@ def _latest_sweep_result(db, model_name, spec, limit_batches=None, chunk_size=12
     return rows[-1] if rows else None
 
 
+def _is_importable_singleton_spec(spec):
+    return (
+        len(spec.candidate_formats) == 1
+        and str(spec.exp_cap_label).startswith("only_e")
+    )
+
+
+def _single_format_source_rows(
+    db,
+    model_name,
+    activation_format,
+    source_experiment_types,
+    limit_batches=None,
+    chunk_size=128,
+):
+    runs = db.get_runs()
+    if runs.empty:
+        return []
+
+    subset = runs[
+        (runs["model_name"] == model_name)
+        & (runs["weight_dt"] == WEIGHT_DT)
+        & (runs["activation_dt"] == activation_format)
+        & (runs["status"] == "SUCCESS")
+    ]
+    if source_experiment_types:
+        subset = subset[subset["experiment_type"].isin(source_experiment_types)]
+    if subset.empty:
+        return []
+
+    rows = []
+    for _, row in subset.iterrows():
+        if _single_format_source_config_matches(
+            row.get("config_json"),
+            activation_format=activation_format,
+            limit_batches=limit_batches,
+            chunk_size=chunk_size,
+        ):
+            rows.append(row)
+    rows.sort(key=lambda row: int(row.get("id", 0) or 0))
+    return rows
+
+
+def _latest_single_format_source_row(
+    db,
+    model_name,
+    activation_format,
+    source_experiment_types,
+    limit_batches=None,
+    chunk_size=128,
+):
+    rows = _single_format_source_rows(
+        db=db,
+        model_name=model_name,
+        activation_format=activation_format,
+        source_experiment_types=source_experiment_types,
+        limit_batches=limit_batches,
+        chunk_size=chunk_size,
+    )
+    return rows[-1] if rows else None
+
+
+def _e1_spec_for_bit_width(bit_width):
+    return CandidateSweepSpec(
+        bit_width=int(bit_width),
+        exp_cap=1,
+        exp_cap_label=exp_cap_label(1),
+        candidate_formats=candidate_formats_for_single_exp_bits(bit_width, 1),
+        activation_dt=activation_dt_for_spec(bit_width, 1),
+    )
+
+
+def _verify_singleton_import_source(
+    db,
+    model_name,
+    spec,
+    source_experiment_types,
+    limit_batches=None,
+    chunk_size=128,
+    acc1_tolerance=DEFAULT_SINGLETON_IMPORT_VERIFY_ACC1_TOLERANCE,
+):
+    e1_spec = _e1_spec_for_bit_width(spec.bit_width)
+    if not e1_spec.candidate_formats:
+        return False, "e1 verification unavailable: no valid e1 format for bit width"
+
+    sweep_row = _latest_sweep_result(
+        db,
+        model_name,
+        e1_spec,
+        limit_batches=limit_batches,
+        chunk_size=chunk_size,
+    )
+    if sweep_row is None:
+        return (
+            False,
+            f"e1 verification unavailable: missing {e1_spec.activation_dt} sweep row",
+        )
+
+    source_row = _latest_single_format_source_row(
+        db=db,
+        model_name=model_name,
+        activation_format=e1_spec.candidate_formats[0],
+        source_experiment_types=source_experiment_types,
+        limit_batches=limit_batches,
+        chunk_size=chunk_size,
+    )
+    if source_row is None:
+        return (
+            False,
+            f"e1 verification unavailable: missing source row for {e1_spec.candidate_formats[0]}",
+        )
+
+    sweep_acc1 = _row_float(sweep_row, "acc1")
+    source_acc1 = _row_float(source_row, "acc1")
+    if sweep_acc1 is None or source_acc1 is None:
+        return False, "e1 verification unavailable: missing acc1"
+
+    delta = abs(sweep_acc1 - source_acc1)
+    message = (
+        f"e1 verification: sweep run {_row_get(sweep_row, 'id')} "
+        f"acc1={sweep_acc1:.3f}, source run {_row_get(source_row, 'id')} "
+        f"acc1={source_acc1:.3f}, delta={delta:.3f} pp "
+        f"(tolerance={float(acc1_tolerance):.3f})"
+    )
+    return delta <= float(acc1_tolerance), message
+
+
+def _source_run_import_metadata(source_row, verification_message):
+    return {
+        "run_id": _row_get(source_row, "id"),
+        "experiment_type": _row_get(source_row, "experiment_type"),
+        "activation_dt": _row_get(source_row, "activation_dt"),
+        "verification": verification_message,
+    }
+
+
 def _log_sweep_run(
     runner,
     config,
@@ -523,10 +903,19 @@ def _log_sweep_run(
     ref_acc5,
     ref_certainty,
     status="SUCCESS",
+    input_map_json=None,
+    imported_from=None,
 ):
     norm_mse = (input_quant_stats or {}).get("norm_mse")
     norm_l1 = (input_quant_stats or {}).get("norm_l1")
     log_cfg = copy.deepcopy(config)
+    config_json = _config_json_for_run(config, input_quant_cfg, args, spec)
+    if imported_from is not None:
+        config_json_obj = _safe_json_load(config_json)
+        if isinstance(config_json_obj, dict):
+            config_json_obj.setdefault("experiment", {})["imported_from"] = imported_from
+            config_json = json.dumps(config_json_obj, sort_keys=True)
+
     log_cfg["experiment"] = {
         "name": EXPERIMENT_TYPE,
         "type": EXPERIMENT_TYPE,
@@ -545,8 +934,12 @@ def _log_sweep_run(
             "l1": norm_l1,
             "certainty": certainty,
         },
-        "config_json": _config_json_for_run(config, input_quant_cfg, args, spec),
+        "config_json": config_json,
     }
+    if input_map_json is not None:
+        log_cfg["experiment"]["input_map_json"] = input_map_json
+    if imported_from is not None:
+        log_cfg["experiment"]["imported_from"] = imported_from
     runner.log_experiment_result(
         config=log_cfg,
         result={
@@ -558,6 +951,108 @@ def _log_sweep_run(
             "input_quant": input_quant_stats or {},
         },
     )
+
+
+def _try_import_singleton_source_run(
+    runner,
+    db,
+    args,
+    model_name,
+    spec,
+    ref_acc1,
+    ref_acc5,
+    ref_certainty,
+):
+    if args.force_rerun or not getattr(args, "import_singleton_baselines", True):
+        return False
+    if not _is_importable_singleton_spec(spec):
+        return False
+
+    activation_format = spec.candidate_formats[0]
+    source_experiment_types = list(
+        getattr(
+            args,
+            "singleton_import_experiment_types",
+            DEFAULT_SINGLETON_IMPORT_EXPERIMENT_TYPES,
+        )
+    )
+    source_row = _latest_single_format_source_row(
+        db=db,
+        model_name=model_name,
+        activation_format=activation_format,
+        source_experiment_types=source_experiment_types,
+        limit_batches=args.limit_batches,
+        chunk_size=args.chunk_size,
+    )
+    if source_row is None:
+        print(
+            f"[{model_name}/{spec.activation_dt}] no import source found for "
+            f"{activation_format}; running inference."
+        )
+        return False
+
+    ok, verification_message = _verify_singleton_import_source(
+        db=db,
+        model_name=model_name,
+        spec=spec,
+        source_experiment_types=source_experiment_types,
+        limit_batches=args.limit_batches,
+        chunk_size=args.chunk_size,
+        acc1_tolerance=getattr(
+            args,
+            "singleton_import_verify_acc1_tolerance",
+            DEFAULT_SINGLETON_IMPORT_VERIFY_ACC1_TOLERANCE,
+        ),
+    )
+    print(f"[{model_name}/{spec.activation_dt}] {verification_message}")
+    if not ok:
+        print(
+            f"[{model_name}/{spec.activation_dt}] import source run "
+            f"{_row_get(source_row, 'id')} rejected; running inference."
+        )
+        return False
+
+    config = _build_w32_dynamic_runtime_config(
+        args,
+        model_name=model_name,
+        weights=args.weights,
+        candidate_formats=spec.candidate_formats,
+    )
+    input_quant_cfg = _build_sweep_input_quant_cfg(args, spec, model_name)
+    norm_mse = _row_float(source_row, "mse")
+    norm_l1 = _row_float(source_row, "l1")
+    input_quant_stats = {
+        "mode": "dynamic",
+        "metric": METRIC,
+        "chunk_size": int(args.chunk_size),
+        "candidate_formats": list(spec.candidate_formats),
+        "norm_mse": norm_mse,
+        "norm_l1": norm_l1,
+    }
+    imported_from = _source_run_import_metadata(source_row, verification_message)
+    _log_sweep_run(
+        runner=runner,
+        config=config,
+        input_quant_cfg=input_quant_cfg,
+        args=args,
+        model_name=model_name,
+        spec=spec,
+        acc1=_row_float(source_row, "acc1", 0.0),
+        acc5=_row_float(source_row, "acc5", 0.0),
+        certainty=_row_float(source_row, "certainty", 0.0),
+        input_quant_stats=input_quant_stats,
+        ref_acc1=ref_acc1,
+        ref_acc5=ref_acc5,
+        ref_certainty=ref_certainty,
+        input_map_json=_row_get(source_row, "input_map_json"),
+        imported_from=imported_from,
+    )
+    print(
+        f"[{model_name}/{spec.activation_dt}] imported from source run "
+        f"{_row_get(source_row, 'id')} ({_row_get(source_row, 'experiment_type')}/"
+        f"{activation_format}); skipped inference."
+    )
+    return True
 
 
 def _summary_rows_for_model(
@@ -655,6 +1150,11 @@ def _exp_cap_sort_key(exp_cap):
     if text.startswith("exp"):
         try:
             return (1, -int(text[3:]), text)
+        except Exception:
+            pass
+    if text.startswith("only_e"):
+        try:
+            return (2, int(text[6:]), text)
         except Exception:
             pass
     return (2, 0, text)
@@ -846,7 +1346,7 @@ def _plot_model_summary(output_dir, model_name, rows):
             points.sort()
             xs = [point[0] for point in points]
             ys = [point[1] for point in points]
-            plt.plot(xs, ys, marker="o", label=str(exp_cap))
+            plt.plot(xs, ys, marker="o", label=_candidate_pool_label(exp_cap))
             has_values = True
 
         if not has_values:
@@ -856,7 +1356,7 @@ def _plot_model_summary(output_dir, model_name, rows):
         plt.ylabel(ylabel)
         plt.title(f"{model_name}: {ylabel} by Candidate Pool")
         plt.grid(alpha=0.3)
-        plt.legend(title="Exp Cap")
+        plt.legend(title="Candidate Pool")
         plt.tight_layout()
         path = os.path.join(output_dir, filename)
         plt.savefig(path)
@@ -887,7 +1387,7 @@ def _plot_model_format_choices(output_dir, model_name, rows):
         output_dir=output_dir,
         rows=rows,
         filename=f"{model_name}_format_choices_by_exp_cap.png",
-        title=f"{model_name}: Dynamic Input Format Selections by Exp Cap",
+        title=f"{model_name}: Dynamic Input Format Selections by Candidate Pool",
     )
 
 
@@ -896,7 +1396,7 @@ def _plot_combined_format_choices(output_dir, rows):
         output_dir=output_dir,
         rows=rows,
         filename="format_choices_by_exp_cap.png",
-        title="Dynamic Input Format Selections by Exp Cap",
+        title="Dynamic Input Format Selections by Candidate Pool",
     )
 
 
@@ -936,7 +1436,13 @@ def process_single_model(args, device, specs):
             candidate_formats=first_spec.candidate_formats,
         )
 
-    loader = build_loader(args, device, runner, config_builder=config_builder)
+    loader = None
+
+    def get_loader():
+        nonlocal loader
+        if loader is None:
+            loader = build_loader(args, device, runner, config_builder=config_builder)
+        return loader
 
     try:
         for spec in specs:
@@ -948,6 +1454,18 @@ def process_single_model(args, device, specs):
                 chunk_size=args.chunk_size,
             ):
                 print(f"[{model_name}/{spec.activation_dt}] already complete; skipping.")
+                continue
+
+            if _try_import_singleton_source_run(
+                runner=runner,
+                db=db,
+                args=args,
+                model_name=model_name,
+                spec=spec,
+                ref_acc1=ref_acc1,
+                ref_acc5=ref_acc5,
+                ref_certainty=ref_certainty,
+            ):
                 continue
 
             print(
@@ -965,6 +1483,7 @@ def process_single_model(args, device, specs):
             model = None
             adapter = None
             try:
+                current_loader = get_loader()
                 model, adapter, _ = runner.prepare_model_with_materialized_weights(
                     config=config,
                     output_dir=model_out_dir,
@@ -973,7 +1492,7 @@ def process_single_model(args, device, specs):
                     runner,
                     model,
                     adapter,
-                    loader,
+                    current_loader,
                     args,
                     input_quant_cfg=input_quant_cfg,
                     desc=f"{model_name}/{spec.activation_dt}",
@@ -1027,8 +1546,9 @@ def process_single_model(args, device, specs):
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
     finally:
-        runner._shutdown_dataloader_workers(loader)
-        del loader
+        if loader is not None:
+            runner._shutdown_dataloader_workers(loader)
+            del loader
 
     rows = _summary_rows_for_model(
         db,
@@ -1051,7 +1571,11 @@ def process_single_model(args, device, specs):
 
 def main():
     args = get_args()
-    specs = build_sweep_specs(args.bit_widths, args.exp_caps)
+    specs = build_sweep_specs(
+        args.bit_widths,
+        args.exp_caps,
+        singleton_exp_bits=args.singleton_exp_bits,
+    )
     if not specs:
         raise SystemExit("No candidate pools to run.")
 

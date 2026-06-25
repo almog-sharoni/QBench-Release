@@ -95,6 +95,26 @@ def _category_label(category):
     return text
 
 
+def _candidate_pool_label(exp_cap):
+    text = str(exp_cap or "").strip().lower()
+    if text == "all":
+        return "full pool"
+    if text.startswith("only_e"):
+        try:
+            return f"e{int(text[6:])} only"
+        except Exception:
+            return text.replace("_", " ")
+    if text.startswith("exp"):
+        try:
+            exp_bits = int(text[3:])
+            if exp_bits == 1:
+                return "e1 only"
+            return f"e <= {exp_bits}"
+        except Exception:
+            return text
+    return str(exp_cap)
+
+
 def _short_format_label(fmt):
     parts = _format_parts(fmt)
     if parts is None:
@@ -129,6 +149,11 @@ def _exp_cap_sort_key(exp_cap):
     if text.startswith("exp"):
         try:
             return (1, -int(text[3:]), text)
+        except Exception:
+            pass
+    if text.startswith("only_e"):
+        try:
+            return (2, int(text[6:]), text)
         except Exception:
             pass
     return (2, 0, text)
@@ -329,14 +354,14 @@ def plot_format_choice_counts_from_rows(
     try:
         from matplotlib.patches import Patch
         legend_handles = [
-            Patch(facecolor=cap_to_color[exp_cap], label=str(exp_cap))
+            Patch(facecolor=cap_to_color[exp_cap], label=_candidate_pool_label(exp_cap))
             for exp_cap in exp_caps
         ]
     except Exception:
         legend_handles = None
     ax.legend(
         handles=legend_handles,
-        title="Exp Cap",
+        title="Candidate Pool",
         loc="upper center",
         bbox_to_anchor=(0.5, 1.11),
         ncol=min(len(exp_caps), 5),
@@ -377,8 +402,8 @@ def default_output_path(summary_csv):
 def default_title(summary_csv):
     model_name = _model_name_from_summary_path(summary_csv)
     if model_name:
-        return f"{model_name}: Dynamic Input Format Selections by Exp Cap"
-    return "Dynamic Input Format Selections by Exp Cap"
+        return f"{model_name}: Dynamic Input Format Selections by Candidate Pool"
+    return "Dynamic Input Format Selections by Candidate Pool"
 
 
 def regenerate_plot(summary_csv, output_path=None, title=None, dpi=160):

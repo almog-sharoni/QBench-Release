@@ -78,6 +78,7 @@ class DynamicInputQuantizer:
         self.chunk_size = chunk_size
         self.restrict_post_relu_ufp = bool(restrict_post_relu_ufp)
         self.use_unsigned_input_candidates = bool(use_unsigned_input_candidates)
+        self.use_cache_sim_db = bool(use_cache_sim_db)
         self.skip_depthwise_input_quant = bool(skip_depthwise_input_quant)
         self.collect_error_stats = bool(collect_error_stats)
         self.collect_format_stats = bool(collect_format_stats)
@@ -127,7 +128,7 @@ class DynamicInputQuantizer:
         self.cache_sim_map = {}
         self.layer_residual_input_bits_map = {}
         self.layer_need_input_transfer_map = dict(input_transfer_map or {})
-        if use_cache_sim_db and model_name:
+        if self.use_cache_sim_db and model_name:
             print(f"Loading cache simulation results from DB for {model_name}")
             try:
                 try:
@@ -594,14 +595,14 @@ class DynamicInputQuantizer:
             if candidates:
                 return candidates
 
-        stays_on_chip = self.cache_sim_map.get(layer_name)
-        if stays_on_chip is None:
-            if layer_name not in self._reported_missing_layers:
-                print(f"[DynamicInputQuantizer] Layer '{layer_name}' NOT found in cache sim map. Using standard candidates.")
-                self._reported_missing_layers.add(layer_name)
-            
-        if stays_on_chip:
-            return self.unsigned_all_fp8_formats if is_unsigned else self.all_fp8_formats
+        if self.use_cache_sim_db:
+            stays_on_chip = self.cache_sim_map.get(layer_name)
+            if stays_on_chip is None:
+                if layer_name not in self._reported_missing_layers:
+                    print(f"[DynamicInputQuantizer] Layer '{layer_name}' NOT found in cache sim map. Using standard candidates.")
+                    self._reported_missing_layers.add(layer_name)
+            elif stays_on_chip:
+                return self.unsigned_all_fp8_formats if is_unsigned else self.all_fp8_formats
 
         if is_unsigned:
             return self.unsigned_candidate_formats
@@ -622,42 +623,89 @@ class DynamicInputQuantizer:
         # _candidates_for_layer already supplies 8-bit formats for on-chip layers.
         return True
 
+    @staticmethod
+    def _input_layer_name(layer_name, input_index):
+        return layer_name if int(input_index) == 0 else f"{layer_name}.input{int(input_index) + 1}"
+
+    def _quantize_hook_input(self, layer_name, module, tensor, input_index=0):
+        if self._should_quantize_input(layer_name, input_index=input_index):
+            candidates = self._candidates_for_layer(layer_name, module, input_index=input_index)
+            x_quantized, best_indices = self._quantize_input_tensor(
+                tensor,
+                self._input_layer_name(layer_name, input_index),
+                candidates,
+                module,
+            )
+            self._set_module_input_quant_state(
+                module,
+                candidates,
+                best_indices,
+                input_index=input_index,
+            )
+            return x_quantized
+
+        # The input is already resident on-chip for this layer, so do not model
+        # an external-memory transfer quantization for it.
+        module.input_quantization = False
+        module.input_mode = 'fp32'
+        return tensor
+
     def _get_hook(self, layer_name):
         def hook_fn(module, args):
+            if not args:
+                return None
+
+            if self._is_multi_input_module(module):
+                tensor_index = 0
+                saw_tensor = False
+                quantized_args = []
+
+                for arg in args:
+                    if isinstance(arg, torch.Tensor):
+                        quantized_args.append(
+                            self._quantize_hook_input(
+                                layer_name,
+                                module,
+                                arg,
+                                input_index=tensor_index,
+                            )
+                        )
+                        tensor_index += 1
+                        saw_tensor = True
+                        continue
+
+                    if isinstance(arg, (list, tuple)) and any(
+                        isinstance(item, torch.Tensor) for item in arg
+                    ):
+                        quantized_items = []
+                        for item in arg:
+                            if isinstance(item, torch.Tensor):
+                                quantized_items.append(
+                                    self._quantize_hook_input(
+                                        layer_name,
+                                        module,
+                                        item,
+                                        input_index=tensor_index,
+                                    )
+                                )
+                                tensor_index += 1
+                                saw_tensor = True
+                            else:
+                                quantized_items.append(item)
+                        quantized_args.append(
+                            tuple(quantized_items) if isinstance(arg, tuple) else quantized_items
+                        )
+                        continue
+
+                    quantized_args.append(arg)
+
+                return tuple(quantized_args) if saw_tensor else None
+
             x = args[0]
             if not isinstance(x, torch.Tensor):
                 return None
 
-            quantize_primary = self._should_quantize_input(layer_name, input_index=0)
-            if quantize_primary:
-                candidates = self._candidates_for_layer(layer_name, module, input_index=0)
-                x_quantized, best_indices = self._quantize_input_tensor(x, layer_name, candidates, module)
-                self._set_module_input_quant_state(module, candidates, best_indices)
-            else:
-                # The input is already resident on-chip for this layer, so do not
-                # model an external-memory transfer quantization for it.
-                module.input_quantization = False
-                module.input_mode = 'fp32'
-                x_quantized = x
-
-            if (
-                module.__class__.__name__ == "QuantAdd"
-                and len(args) >= 2
-                and isinstance(args[1], torch.Tensor)
-                and layer_name in self.layer_residual_input_bits_map
-                and self._should_quantize_input(layer_name, input_index=1)
-            ):
-                residual_candidates = self._candidates_for_layer(layer_name, module, input_index=1)
-                residual_quantized, residual_indices = self._quantize_input_tensor(
-                    args[1], f"{layer_name}.input2", residual_candidates, module
-                )
-                self._set_module_input_quant_state(
-                    module, residual_candidates, residual_indices, input_index=1
-                )
-                return (x_quantized, residual_quantized, *args[2:])
-
-            # Return the quantized tensor and all other original arguments to replace the input.
-            # This ensures multi-argument ops like QuantAdd(x, other) don't lose 'other'.
+            x_quantized = self._quantize_hook_input(layer_name, module, x, input_index=0)
             return (x_quantized, *args[1:])
 
         return hook_fn
@@ -1008,6 +1056,9 @@ class DynamicInputQuantizer:
             # Clear all optimization-related attributes
             for attr in ('input_chunk_formats', 'input_chunk_candidates', 'input_chunk_format_indices'):
                 if hasattr(module, attr):
+                    setattr(module, attr, None)
+            for attr in tuple(vars(module).keys()):
+                if attr.startswith('input') and attr.endswith(('_chunk_candidates', '_chunk_format_indices')):
                     setattr(module, attr, None)
             
             # Restore default quantization state if needed
