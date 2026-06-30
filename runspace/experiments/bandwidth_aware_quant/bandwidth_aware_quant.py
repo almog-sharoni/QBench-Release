@@ -28,6 +28,10 @@ from runspace.src.quantization.chunking import chunk_weight_by_context
 from runspace.experiments.utils.common import build_fp32_runtime_config
 from runspace.experiments.utils.plotting import get_format_bits
 from runspace.src.database.handler import RunDatabase
+from runspace.src.quantization.dynamic_input_metrics import (
+    assert_dynamic_input_metric_implemented,
+    normalize_dynamic_input_metric,
+)
 
 from runspace.experiments.asic_cache_simulation.simulate_cache import (
     analyze_model,
@@ -77,25 +81,32 @@ ACTIVATION_EXPONENT_POLICIES = ('all', 'e1e2')
 ACTIVATION_EXPONENTS_BY_POLICY = {
     'e1e2': {1, 2},
 }
+DEFAULT_ACTIVATION_METRIC = 'mse'
+PSEUDO_MSE_METRIC = 'pseudo_MSE'
+PSEUDO_MSE_MIN_BIT_WIDTH = 4
 
 def patched_candidates_for_layer(self, layer_name, module=None, input_index=0):
     """Silent custom candidates picker that uses per-layer input bit-width for off-chip layers."""
     is_unsigned = self._layer_uses_unsigned_input(layer_name, input_index=input_index)
     input_format_policy = getattr(self, 'layer_input_format_policy', 'all')
     activation_exponents = getattr(self, 'activation_exponents', 'all')
+    uses_pseudo_mse = is_pseudo_mse_activation_metric(self.metric)
+    if uses_pseudo_mse:
+        activation_exponents = 'e1e2'
+    candidate_policy = 'typed' if uses_pseudo_mse else input_format_policy
 
     if input_index == 1:
         residual_bits = self.layer_residual_input_bits_map.get(layer_name)
         if residual_bits is not None:
             candidates = get_input_formats_for_bits(
                 residual_bits,
-                policy=input_format_policy,
+                policy=candidate_policy,
                 unsigned=is_unsigned,
                 activation_exponents=activation_exponents,
             )
             return (
                 self._make_unsigned_candidates(candidates)
-                if is_unsigned and input_format_policy != 'typed'
+                if is_unsigned and candidate_policy != 'typed'
                 else candidates
             )
 
@@ -105,26 +116,26 @@ def patched_candidates_for_layer(self, layer_name, module=None, input_index=0):
     if input_bits == 8:
         candidates = get_input_formats_for_bits(
             8,
-            policy=input_format_policy,
+            policy=candidate_policy,
             unsigned=is_unsigned,
             activation_exponents=activation_exponents,
         )
     elif stays_on_chip:
         candidates = get_input_formats_for_bits(
             8,
-            policy=input_format_policy,
+            policy=candidate_policy,
             unsigned=is_unsigned,
             activation_exponents=activation_exponents,
         )
     else:
         candidates = get_input_formats_for_bits(
             input_bits,
-            policy=input_format_policy,
+            policy=candidate_policy,
             unsigned=is_unsigned,
             activation_exponents=activation_exponents,
         )
 
-    if is_unsigned and input_format_policy != 'typed':
+    if is_unsigned and candidate_policy != 'typed':
         return self._make_unsigned_candidates(candidates)
 
     if self.restrict_post_relu_ufp:
@@ -195,6 +206,72 @@ def get_format_exponent(fmt):
         return None
     exp_part = fmt.split('_e', 1)[1].split('m', 1)[0]
     return int(exp_part) if exp_part.isdigit() else None
+
+
+def is_pseudo_mse_activation_metric(metric):
+    return normalize_dynamic_input_metric(metric) == 'pseudo_mse'
+
+
+def activation_metric_label(metric):
+    normalized = normalize_dynamic_input_metric(metric)
+    if normalized == 'l2':
+        return 'MSE'
+    if normalized == 'pseudo_mse':
+        return PSEUDO_MSE_METRIC
+    return normalized.upper()
+
+
+def activation_metric_slug(metric):
+    normalized = normalize_dynamic_input_metric(metric)
+    if normalized == 'l2':
+        return 'mse'
+    return normalized
+
+
+def default_results_dir_for_args(args):
+    """Return the default output tree while preserving existing directory names."""
+    dirname = "results"
+    if args.descent:
+        dirname += "_descent"
+    elif args.use_best_weights:
+        dirname += "_best_weights"
+
+    metric_slug = activation_metric_slug(args.activation_metric)
+    if metric_slug != 'mse':
+        dirname += f"_{metric_slug}"
+
+    if args.activation_exponents == 'e1e2':
+        dirname += "_activation_e1e2"
+
+    return os.path.join("runspace/experiments/bandwidth_aware_quant", dirname)
+
+
+def configure_activation_metric_args(parser, args):
+    """Normalize and validate activation metric options."""
+    if args.pseudo_mse:
+        args.activation_metric = PSEUDO_MSE_METRIC
+        if args.activation_exponents != 'e1e2':
+            print("[pseudo_mse] forcing --activation_exponents e1e2")
+            args.activation_exponents = 'e1e2'
+
+    try:
+        assert_dynamic_input_metric_implemented(args.activation_metric)
+    except (ValueError, NotImplementedError) as exc:
+        parser.error(str(exc))
+
+    if is_pseudo_mse_activation_metric(args.activation_metric) and args.activation_exponents != 'e1e2':
+        parser.error("--activation_metric pseudo_MSE requires --activation_exponents e1e2")
+
+    if (
+        is_pseudo_mse_activation_metric(args.activation_metric)
+        and args.b_bits not in (None, 0)
+        and int(args.b_bits) < PSEUDO_MSE_MIN_BIT_WIDTH
+    ):
+        parser.error(f"--activation_metric pseudo_MSE supports --b_bits >= {PSEUDO_MSE_MIN_BIT_WIDTH}")
+
+
+def lowest_activation_bit_width(args):
+    return PSEUDO_MSE_MIN_BIT_WIDTH if is_pseudo_mse_activation_metric(args.activation_metric) else 3
 
 
 def filter_formats_by_activation_exponents(formats, activation_exponents='all'):
@@ -897,9 +974,14 @@ def set_diq_globals(cache_sim_map, layer_input_bits, layer_residual_input_bits,
 
 
 def get_activation_candidate_formats(b, args):
+    # pseudo_MSE is a pairwise signed/unsigned selector. The runtime layer hook
+    # will derive the unsigned e1/e2 pair for unsigned inputs, so keep the config
+    # candidate pool to one signed pair for the requested bit-width.
+    policy = 'typed' if is_pseudo_mse_activation_metric(args.activation_metric) else args.input_format_policy
     return get_input_formats_for_bits(
         b,
-        policy=args.input_format_policy,
+        policy=policy,
+        unsigned=False,
         activation_exponents=args.activation_exponents,
     )
 
@@ -929,8 +1011,11 @@ def build_eval_config(model_name, args, weights_path, b, layer_need_input_transf
             'compare_mode': args.compare_mode,
             'dynamic_input_quant': {
                 'enabled': True,
+                'metric': args.activation_metric,
                 'chunk_size': 128,
                 'candidate_formats': get_activation_candidate_formats(b, args),
+                'input_format_policy': args.input_format_policy,
+                'activation_exponents': args.activation_exponents,
                 'input_transfer_map': layer_need_input_transfer,
                 'use_cache_sim_db': False,
                 'collect_error_stats': False,
@@ -951,7 +1036,8 @@ def run_descent_for_cache(model, model_name, args, runner, sim_layers, cache_sim
                           model_output_dir, temp_weights_dir):
     """Greedy weight-format descent for one cache size.
 
-    Descends b = 8 -> 3. At each level, layers above b keep their already-decided
+    Descends b = 8 down to the lowest activation bit-width supported by the
+    selected metric. At each level, layers above b keep their already-decided
     format (frozen in `policy_by_bits`); layers newly at exactly b bits get their
     policy chosen by sweeping all fixed b-bit formats plus per-chunk MSE, keeping
     whichever maximizes full-model acc1.
@@ -966,7 +1052,8 @@ def run_descent_for_cache(model, model_name, args, runner, sim_layers, cache_sim
     policy_by_bits = {}
     per_level = {}
 
-    for b in range(8, 2, -1):  # 8, 7, 6, 5, 4, 3
+    min_b = lowest_activation_bit_width(args)
+    for b in range(8, min_b - 1, -1):
         print(f"\n------------------------------------------------------------")
         print(f"[descent] Cache stage | Bit-width level b={b}")
         print(f"------------------------------------------------------------")
@@ -1067,6 +1154,10 @@ def main():
                         help="'all' searches all formats for each bit-width; 'typed' searches signed/unsigned formats separately; 'canonical' uses one balanced format per bit-width.")
     parser.add_argument("--activation_exponents", choices=ACTIVATION_EXPONENT_POLICIES, default="all",
                         help="'all' keeps the existing activation candidate set; 'e1e2' limits activation input candidates to e1/e2 exponent formats at every bit-width.")
+    parser.add_argument("--activation_metric", type=str, default=DEFAULT_ACTIVATION_METRIC,
+                        help="Dynamic activation input selection metric. Use 'mse' for the existing path or 'pseudo_MSE' for the new pairwise e1/e2 metric.")
+    parser.add_argument("--pseudo_mse", action="store_true",
+                        help="Run the pseudo_MSE activation-metric sub-experiment. This selects --activation_metric pseudo_MSE and restricts activation candidates to e1/e2.")
     parser.add_argument("--use_best_weights", action="store_true",
                         help="Use the per-layer best weight formats from the latest weight_quant_optimized DB run instead of SIGNED_FORMATS_BY_BITS.")
     parser.add_argument("--descent", action="store_true",
@@ -1074,6 +1165,8 @@ def main():
                              "for layers newly limited to each width — among all fixed formats of that width plus a per-chunk-MSE option — "
                              "freezing the formats already decided for higher-bit layers.")
     args = parser.parse_args()
+
+    configure_activation_metric_args(parser, args)
 
     if args.descent and args.use_best_weights:
         parser.error("--descent and --use_best_weights are mutually exclusive.")
@@ -1109,6 +1202,7 @@ def main():
         print(f"============================================================")
         if args.activation_exponents != 'all':
             print(f"Activation input candidates restricted by exponent policy: {args.activation_exponents}")
+        print(f"Dynamic activation metric: {activation_metric_label(args.activation_metric)}")
 
         # Resolve output directory for this model
         if args.output_dir:
@@ -1117,21 +1211,7 @@ def main():
             else:
                 model_output_dir = args.output_dir
         else:
-            if args.descent:
-                if args.activation_exponents == 'e1e2':
-                    default_results_dir = "runspace/experiments/bandwidth_aware_quant/results_descent_activation_e1e2"
-                else:
-                    default_results_dir = "runspace/experiments/bandwidth_aware_quant/results_descent"
-            elif args.use_best_weights:
-                if args.activation_exponents == 'e1e2':
-                    default_results_dir = "runspace/experiments/bandwidth_aware_quant/results_best_weights_activation_e1e2"
-                else:
-                    default_results_dir = "runspace/experiments/bandwidth_aware_quant/results_best_weights"
-            else:
-                if args.activation_exponents == 'e1e2':
-                    default_results_dir = "runspace/experiments/bandwidth_aware_quant/results_activation_e1e2"
-                else:
-                    default_results_dir = "runspace/experiments/bandwidth_aware_quant/results"
+            default_results_dir = default_results_dir_for_args(args)
             model_output_dir = os.path.join(PROJECT_ROOT, default_results_dir, model_name)
 
         os.makedirs(model_output_dir, exist_ok=True)
@@ -1153,9 +1233,10 @@ def main():
             cache_sizes = [args.cache_size]
         else:
             cache_sizes = [0.0, 2.0, 4.0]
-        # Descent mode always sweeps the full 8->3 range; --b_bits is ignored.
+        # Descent mode sweeps the full valid range for the activation metric; --b_bits is ignored.
         effective_b_bits = None if args.descent else (args.b_bits if args.b_bits not in (None, 0) else None)
-        min_bits_list = [effective_b_bits] if effective_b_bits is not None else [3]
+        default_min_bits = lowest_activation_bit_width(args)
+        min_bits_list = [effective_b_bits] if effective_b_bits is not None else [default_min_bits]
         results_data = {min_bits: {cs: [] for cs in cache_sizes} for min_bits in min_bits_list}
 
         # Load best weight map from DB if requested
@@ -1245,7 +1326,7 @@ def main():
         else:
             unique_runs = []
             for cs in cache_sizes:
-                b_range = [min_bits_list[0]] if effective_b_bits is not None else range(2, 9)
+                b_range = [min_bits_list[0]] if effective_b_bits is not None else range(default_min_bits, 9)
                 for b in b_range:
                     unique_runs.append((cs, b))
 
@@ -1293,40 +1374,13 @@ def main():
             # graph. weight_quantization=True lets calibrate_weights run during
             # build, but the materialized state_dict's weight_fp8/weight_scale
             # buffers take precedence over re-calibration on load.
-            eval_config = {
-                'model': {'name': model_name, 'weights': os.path.abspath(temp_weights_path)},
-                'adapter': {
-                    'type': 'generic',
-                    'quantized_ops': ['all'],
-                    'build_quantized': True,
-                    'input_quantization': True,
-                    'weight_quantization': True,
-                    'fold_input_norm': True,
-                    'quantize_first_layer': True,
-                },
-                'evaluation': {
-                    'mode': args.mode,
-                    'max_batches': args.limit_batches,
-                    'compare_batches': args.compare_batches,
-                    'compare_mode': args.compare_mode,
-                    'dynamic_input_quant': {
-                        'enabled': True,
-                        'chunk_size': 128,
-                        'candidate_formats': get_activation_candidate_formats(b, args),
-                        'input_transfer_map': layer_need_input_transfer,
-                        'use_cache_sim_db': False,
-                        'collect_error_stats': False,
-                        'collect_format_stats': False,
-                        'unsigned_input_sources': UNSIGNED_INPUT_SOURCES,
-                    }
-                },
-                'dataset': {
-                    'name': args.dataset_name,
-                    'path': args.dataset_path,
-                    'batch_size': args.batch_size,
-                    'num_workers': args.num_workers,
-                }
-            }
+            eval_config = build_eval_config(
+                model_name,
+                args,
+                temp_weights_path,
+                b,
+                layer_need_input_transfer,
+            )
 
             # 3.5. Run accuracy evaluation
             try:
@@ -1384,7 +1438,10 @@ def main():
             'experiment_config': {
                 'input_format_policy': args.input_format_policy,
                 'activation_exponents': args.activation_exponents,
+                'activation_metric': args.activation_metric,
+                'activation_metric_label': activation_metric_label(args.activation_metric),
                 'unsigned_input_sources': UNSIGNED_INPUT_SOURCES,
+                'pseudo_mse': is_pseudo_mse_activation_metric(args.activation_metric),
                 'descent': bool(args.descent),
                 'use_best_weights': bool(args.use_best_weights),
             },
@@ -1636,6 +1693,7 @@ def main():
                 0.03, 0.05,
                 f"x-axis: time_ref / time  (1.0x = FP32 0MB baseline, higher = faster)\n"
                 f"Memory Bandwidth = {args.bandwidth} bytes/cycle.\n"
+                f"Dynamic activation metric = {activation_metric_label(args.activation_metric)}.\n"
                 f"Numbers: bit-width inside markers; sweep cycle ranges in legend.",
                 transform=axes[-1].transAxes, ha='left', va='bottom',
                 fontsize=9.5, color='#2c3e50',
@@ -1645,7 +1703,8 @@ def main():
 
             fig.suptitle(
                 f"Accuracy vs. Normalized Speedup vs FP32 0MB (Starting Min Bits = {min_bits})\n"
-                f"Memory Bandwidth = {args.bandwidth} bytes/cycle"
+                f"Memory Bandwidth = {args.bandwidth} bytes/cycle | "
+                f"Activation Metric = {activation_metric_label(args.activation_metric)}"
             )
             xlabel = f"Normalized Speedup vs FP32 0MB  (1.0x = {fmt_elems(int(norm))} cyc baseline, higher = faster)"
             if len(axes) == 1:

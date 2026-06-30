@@ -25,7 +25,7 @@ def _normalize_metric(metric):
     return normalized
 
 
-def _candidate_params(candidate_formats):
+def _candidate_params(candidate_formats, device='cuda'):
     cands_e = []
     cands_m = []
     cands_sgn = []
@@ -34,7 +34,11 @@ def _candidate_params(candidate_formats):
         cands_e.append(e)
         cands_m.append(m)
         cands_sgn.append(0 if fmt.startswith("ufp") else 1)
-    return cands_e, cands_m, cands_sgn
+    return (
+        torch.tensor(cands_e, dtype=torch.int32, device=device),
+        torch.tensor(cands_m, dtype=torch.int32, device=device),
+        torch.tensor(cands_sgn, dtype=torch.int32, device=device),
+    )
 
 
 def _chunk_scale(x):

@@ -1,0 +1,114 @@
+{
+    "model_name": "resnet50",
+    "ref_fp32": {
+        "accuracy": 95.83333333333333,
+        "baseline_cycles": 237708288.0,
+        "cycles_per_cache_size": {
+            "0.0": 237708288.0,
+            "2.0": 113503369.0,
+            "4.0": 113503369.0
+        }
+    },
+    "experiment_config": {
+        "input_format_policy": "all",
+        "activation_exponents": "e1e2",
+        "activation_metric": "pseudo_MSE",
+        "activation_metric_label": "pseudo_MSE",
+        "unsigned_input_sources": [
+            "relu",
+            "relu6",
+            "softmax",
+            "quantrelu",
+            "quantsoftmax",
+            "quantrelu6"
+        ],
+        "pseudo_mse": true,
+        "descent": false,
+        "use_best_weights": false
+    },
+    "min_bits_sweeps": {
+        "4": {
+            "0.0": [
+                {
+                    "b": 4,
+                    "accuracy": 73.008,
+                    "cycles": 49724457.0
+                },
+                {
+                    "b": 5,
+                    "accuracy": 77.93,
+                    "cycles": 55162664.0
+                },
+                {
+                    "b": 6,
+                    "accuracy": 79.362,
+                    "cycles": 61071391.0
+                },
+                {
+                    "b": 7,
+                    "accuracy": 79.884,
+                    "cycles": 68317328.0
+                },
+                {
+                    "b": 8,
+                    "accuracy": 80.19,
+                    "cycles": 75920399.0
+                }
+            ],
+            "2.0": [
+                {
+                    "b": 4,
+                    "accuracy": 78.192,
+                    "cycles": 44918716.0
+                },
+                {
+                    "b": 5,
+                    "accuracy": 79.626,
+                    "cycles": 48871100.0
+                },
+                {
+                    "b": 6,
+                    "accuracy": 79.706,
+                    "cycles": 52823484.0
+                },
+                {
+                    "b": 7,
+                    "accuracy": 80.162,
+                    "cycles": 56775868.0
+                },
+                {
+                    "b": 8,
+                    "accuracy": 80.19,
+                    "cycles": 60744635.0
+                }
+            ],
+            "4.0": [
+                {
+                    "b": 4,
+                    "accuracy": 78.192,
+                    "cycles": 44918716.0
+                },
+                {
+                    "b": 5,
+                    "accuracy": 79.626,
+                    "cycles": 48871100.0
+                },
+                {
+                    "b": 6,
+                    "accuracy": 79.706,
+                    "cycles": 52823484.0
+                },
+                {
+                    "b": 7,
+                    "accuracy": 80.162,
+                    "cycles": 56775868.0
+                },
+                {
+                    "b": 8,
+                    "accuracy": 80.19,
+                    "cycles": 60744635.0
+                }
+            ]
+        }
+    }
+}

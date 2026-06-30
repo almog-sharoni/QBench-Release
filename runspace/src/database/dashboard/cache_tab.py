@@ -55,13 +55,11 @@ def _load_bandwidth_aware_quant_results(project_root):
 
 
 @st.cache_data(ttl=30, show_spinner=False)
-def _load_bandwidth_aware_descent_results(project_root, results_dir="results_descent"):
-    """Load greedy-descent (--descent) runs, keyed by model name.
+def _load_bandwidth_aware_variant_results(project_root, results_dir):
+    """Load bandwidth-aware result variants, keyed by model name.
 
-    Mirrors the regular results loader but scans a descent results directory.
-    Each descent JSON carries its own `min_bits_sweeps` (the descent's winning
-    acc-vs-speedup curve) plus a `descent` block, so it can be overlaid on the
-    baseline chart.
+    Variant directories reuse the normal `bandwidth_aware_quant_results.json`
+    schema, so they can be overlaid on the baseline chart.
     """
     root = os.path.join(project_root, "runspace/experiments/bandwidth_aware_quant", results_dir)
     runs = {}
@@ -79,6 +77,10 @@ def _load_bandwidth_aware_descent_results(project_root, results_dir="results_des
         model = data.get("model_name") or os.path.basename(dirpath)
         runs[model] = {"path": json_path, "data": data}
     return runs
+
+
+def _load_bandwidth_aware_descent_results(project_root, results_dir="results_descent"):
+    return _load_bandwidth_aware_variant_results(project_root, results_dir)
 
 
 def _bandwidth_aware_quant_rows(data, series="Baseline"):
@@ -349,18 +351,33 @@ def _render_bandwidth_aware_quant_chart(data, points_df, overlay=None):
                 legend_prefix = overlay_spec.get("legend_prefix", "Descent")
                 marker_shape = overlay_spec.get("shape", "square")
                 stroke_dash = overlay_spec.get("stroke_dash", [6, 3])
+                allow_min_bits_fallback = bool(overlay_spec.get("allow_min_bits_fallback"))
             else:
                 _overlay_data, overlay_rows_df = overlay_spec
                 point_type = "Descent (8→3)"
                 legend_prefix = "Descent"
                 marker_shape = "square"
                 stroke_dash = [6, 3]
+                allow_min_bits_fallback = False
 
             if overlay_rows_df is None or overlay_rows_df.empty:
                 continue
 
             o = overlay_rows_df[overlay_rows_df["min_bits"] == selected_min_bits].copy()
+            overlay_min_bits = selected_min_bits
+            if o.empty and allow_min_bits_fallback and "min_bits" in overlay_rows_df.columns:
+                overlay_min_bits_values = sorted(
+                    overlay_rows_df["min_bits"].dropna().astype(int).unique().tolist()
+                )
+                if overlay_min_bits_values:
+                    higher_or_equal = [v for v in overlay_min_bits_values if v >= selected_min_bits]
+                    overlay_min_bits = higher_or_equal[0] if higher_or_equal else overlay_min_bits_values[-1]
+                    o = overlay_rows_df[overlay_rows_df["min_bits"] == overlay_min_bits].copy()
             if not o.empty:
+                sweep_note = (
+                    f" start >= {int(overlay_min_bits)}b"
+                    if overlay_min_bits != selected_min_bits else ""
+                )
                 o_ranges = {}
                 for cache_size, group in o.groupby("cache_size_M"):
                     o_cycles = group["cycles"].dropna()
@@ -368,11 +385,11 @@ def _render_bandwidth_aware_quant_chart(data, points_df, overlay=None):
                         f"{_fmt_cycles(o_cycles.min())}-{_fmt_cycles(o_cycles.max())} cyc"
                         if not o_cycles.empty else "N/A"
                     )
-                o["point_type"] = point_type
+                o["point_type"] = f"{point_type}{sweep_note}"
                 o = _mark_overlapping_series(o)
                 o["bit_label"] = o["b"].astype(int).astype(str)
                 o["legend_label"] = o.apply(
-                    lambda row: f"{legend_prefix} {float(row['cache_size_M']):g}M ({o_ranges.get(row['cache_size_M'], 'N/A')})",
+                    lambda row: f"{legend_prefix}{sweep_note} {float(row['cache_size_M']):g}M ({o_ranges.get(row['cache_size_M'], 'N/A')})",
                     axis=1,
                 )
                 o["cache_color"] = o["legend_label"]
@@ -464,10 +481,16 @@ def _render_bandwidth_aware_quant_results(selected_model=None):
     points_df = pd.DataFrame(rows)
 
     st.caption(run["path"])
-    m1, m2, m3 = st.columns(3)
+    experiment_config = data.get("experiment_config", {}) or {}
+    activation_metric = experiment_config.get("activation_metric_label") or experiment_config.get("activation_metric")
+
+    metric_cols = st.columns(4 if activation_metric else 3)
+    m1, m2, m3 = metric_cols[:3]
     m1.metric("Model", data.get("model_name", "N/A"))
     m2.metric("FP32 Acc1", f"{float(ref.get('accuracy', 0.0)):.3f}%")
     m3.metric("Sweep Points", len(points_df))
+    if activation_metric:
+        metric_cols[3].metric("Activation Metric", str(activation_metric))
 
     if not points_df.empty:
         sort_cols = [c for c in ["min_bits", "cache_size_M", "b"] if c in points_df.columns]
@@ -518,6 +541,29 @@ def _render_bandwidth_aware_quant_results(selected_model=None):
                     e1e2_descent_run["data"].get("descent", {}),
                     label="Descent e1/e2 activations",
                 )
+
+        pseudo_mse_runs = _load_bandwidth_aware_variant_results(
+            PROJECT_ROOT,
+            results_dir="results_pseudo_mse_activation_e1e2",
+        )
+        pseudo_mse_run = pseudo_mse_runs.get(data.get("model_name"))
+        selected_is_pseudo_mse = bool((data.get("experiment_config", {}) or {}).get("pseudo_mse"))
+        if pseudo_mse_run is not None and not selected_is_pseudo_mse:
+            if st.checkbox(
+                "Overlay pseudo_MSE activation e1/e2 results",
+                value=False,
+                key="cache_bwaq_overlay_pseudo_mse_activation_e1e2",
+                help=f"Overlay the matching pseudo_MSE run on top: {pseudo_mse_run['path']}",
+            ):
+                overlays.append({
+                    "data": pseudo_mse_run["data"],
+                    "rows": pd.DataFrame(_bandwidth_aware_quant_rows(pseudo_mse_run["data"], series="pseudo_MSE e1/e2 activations")),
+                    "point_type": "pseudo_MSE (e1/e2 activations)",
+                    "legend_prefix": "pseudo_MSE e1/e2",
+                    "shape": "cross",
+                    "stroke_dash": [4, 2],
+                    "allow_min_bits_fallback": True,
+                })
 
         _render_bandwidth_aware_quant_chart(data, points_df, overlay=overlays or None)
 

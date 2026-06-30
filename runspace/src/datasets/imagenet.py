@@ -3,7 +3,7 @@ import json
 import torch
 import torchvision.transforms as transforms
 import torchvision.datasets as tv_datasets
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from src.datasets.dataset_registry import register_dataset
 
@@ -16,6 +16,23 @@ class _ImageNetTargetTransform:
 
     def __call__(self, target):
         return self.idx_map.get(target, target)
+
+
+def _apply_random_subset(dataset, dataset_cfg: dict):
+    subset_size = dataset_cfg.get('random_subset_size')
+    if subset_size is None:
+        return dataset
+
+    subset_size = int(subset_size)
+    if subset_size <= 0:
+        return dataset
+    if subset_size >= len(dataset):
+        return dataset
+
+    generator = torch.Generator()
+    generator.manual_seed(int(dataset_cfg.get('random_seed', 42)))
+    indices = torch.randperm(len(dataset), generator=generator)[:subset_size].tolist()
+    return Subset(dataset, indices)
 
 
 def _build_imagenet_loader(dataset_cfg: dict) -> DataLoader:
@@ -98,6 +115,8 @@ def _build_imagenet_loader(dataset_cfg: dict) -> DataLoader:
     else:
         print(f"Warning: imagenet_class_index.json not found at {index_path}. "
               "Using ImageFolder's default alphabetical label ordering.")
+
+    dataset = _apply_random_subset(dataset, dataset_cfg)
 
     batch_size = int(dataset_cfg['batch_size'])
     num_workers = int(dataset_cfg.get('num_workers', 0))

@@ -1309,6 +1309,8 @@ class Runner:
                 model_name=input_quant_cfg.get('model_name'),
                 skip_depthwise_input_quant=input_quant_cfg.get('skip_depthwise_input_quant', False),
                 input_transfer_map=input_quant_cfg.get('input_transfer_map'),
+                input_format_policy=input_quant_cfg.get('input_format_policy', 'all'),
+                activation_exponents=input_quant_cfg.get('activation_exponents', 'all'),
                 collect_error_stats=input_quant_cfg.get('collect_error_stats', True),
                 collect_format_stats=input_quant_cfg.get('collect_format_stats', True),
             )

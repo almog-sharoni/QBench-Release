@@ -70,6 +70,21 @@ Unsigned input sources remain `relu`, `relu6`, `softmax`, `quantrelu`,
 `quantsoftmax`, and `quantrelu6`. Results are written under
 `results_descent_activation_e1e2/` unless `--output_dir` is supplied.
 
+### Run pseudo_MSE activation metric sub-experiment:
+```bash
+./apptainer.sh runspace/experiments/bandwidth_aware_quant/bandwidth_aware_quant.py \
+    --model_name runspace/inputs/models.yaml \
+    --pseudo_mse
+```
+
+`--pseudo_mse` selects the `pseudo_MSE` dynamic activation metric and restricts
+activation candidates to e1/e2 formats from 4 to 8 bits, which is required by
+the metric. Results are written under `results_pseudo_mse_activation_e1e2/`
+unless `--output_dir` is supplied. It can also be combined with `--descent`;
+that run uses the greedy descent weight search over the same 4-to-8 activation
+range and writes under
+`results_descent_pseudo_mse_activation_e1e2/`.
+
 ### Plot per-layer bit allocations without inference:
 ```bash
 ./apptainer.sh runspace/experiments/bandwidth_aware_quant/plot_layer_bit_allocations.py \
@@ -90,3 +105,5 @@ line so it stays visually in front; the other thresholds are dashed.
 - `--device`: Target execution device (`cuda` or `cpu`).
 - `--batch_size`: Batch size for evaluation (default: `128`).
 - `--activation_exponents`: Activation input candidate exponent policy. Use `e1e2` to keep only e1/e2 formats; default `all` preserves existing behavior.
+- `--activation_metric`: Dynamic activation metric (default: `mse`). Use `pseudo_MSE` together with `--activation_exponents e1e2`, or use `--pseudo_mse`.
+- `--pseudo_mse`: Convenience sub-experiment flag for `--activation_metric pseudo_MSE --activation_exponents e1e2`.

@@ -8,6 +8,17 @@ try:
     from ..cuda import search_best_chunk_format
     from .constants import get_format_params
     from .chunking import chunk_tensor_by_context, unchunk_tensor_by_context
+    from .dynamic_input_metrics import (
+        DYNAMIC_INPUT_METRIC_ALIASES,
+        IMPLEMENTED_DYNAMIC_INPUT_METRIC_CODES,
+        dynamic_input_metric_code,
+        is_pseudo_mse_metric,
+        normalize_dynamic_input_metric,
+        pseudo_mse_reconstruct_scaled_python,
+        pseudo_mse_sqerr_diff_from_scaled,
+        reduce_dynamic_input_metric_python,
+        validate_pseudo_mse_candidate_pairs,
+    )
 except ImportError:
     from src.registry.op_registry import OpRegistry
     from src.ops.quant_base import quantize_tensor
@@ -15,6 +26,17 @@ except ImportError:
     from src.quantization.cuda import search_best_chunk_format
     from src.quantization.constants import get_format_params
     from src.quantization.chunking import chunk_tensor_by_context, unchunk_tensor_by_context
+    from src.quantization.dynamic_input_metrics import (
+        DYNAMIC_INPUT_METRIC_ALIASES,
+        IMPLEMENTED_DYNAMIC_INPUT_METRIC_CODES,
+        dynamic_input_metric_code,
+        is_pseudo_mse_metric,
+        normalize_dynamic_input_metric,
+        pseudo_mse_reconstruct_scaled_python,
+        pseudo_mse_sqerr_diff_from_scaled,
+        reduce_dynamic_input_metric_python,
+        validate_pseudo_mse_candidate_pairs,
+    )
 
 import os
 import json
@@ -43,6 +65,10 @@ class DynamicInputQuantizer:
     _RELU_TYPES = (nn.ReLU, nn.ReLU6)
     _COMPUTE_TYPES = (nn.Conv2d, nn.Linear)
     _ATTENTION_TYPES = (nn.MultiheadAttention,)
+    # search_best_chunk_format uses a CUDA kernel with int-sized element counts.
+    # Keep each launch comfortably below that limit and avoid giant temporaries
+    # for models with very large activation tensors.
+    _CUDA_SEARCH_MAX_ELEMENTS = 1 << 24
     _FUNCTIONAL_OP_NAMES = (
         "QuantMatMul",
         "QuantBMM",
@@ -67,6 +93,8 @@ class DynamicInputQuantizer:
         model_name=None,
         skip_depthwise_input_quant=False,
         input_transfer_map=None,
+        input_format_policy='all',
+        activation_exponents='all',
         collect_error_stats=True,
         collect_format_stats=True,
     ):
@@ -80,6 +108,8 @@ class DynamicInputQuantizer:
         self.use_unsigned_input_candidates = bool(use_unsigned_input_candidates)
         self.use_cache_sim_db = bool(use_cache_sim_db)
         self.skip_depthwise_input_quant = bool(skip_depthwise_input_quant)
+        self.layer_input_format_policy = input_format_policy or 'all'
+        self.activation_exponents = activation_exponents or 'all'
         self.collect_error_stats = bool(collect_error_stats)
         self.collect_format_stats = bool(collect_format_stats)
         self._candidate_param_cache = {}
@@ -159,44 +189,16 @@ class DynamicInputQuantizer:
         self.unsigned_all_fp8_formats = self._make_unsigned_candidates(self.all_fp8_formats)
         self._reported_missing_layers = set()
 
-    # Per-chunk selection metrics. Codes MUST match the SearchMetric enum in
-    # runspace/src/quantization/cuda/ops_search.cu.
-    _METRIC_CODES = {
-        'l2': 0,
-        'l1': 1,
-        'linf': 2,
-        'bias': 3,
-        'l0': 4,
-        'huber': 5,
-        'logsum': 6,
-    }
-    _METRIC_ALIASES = {
-        'mse': 'l2',
-        'mae': 'l1',
-        'max': 'linf',
-        'chebyshev': 'linf',
-        'sad': 'l1',
-        'mean_bias': 'bias',
-        'count': 'l0',
-        'logl1': 'logsum',
-        'logsum_exp': 'logsum',
-    }
+    _METRIC_CODES = IMPLEMENTED_DYNAMIC_INPUT_METRIC_CODES
+    _METRIC_ALIASES = DYNAMIC_INPUT_METRIC_ALIASES
 
     @classmethod
     def _normalize_metric(cls, metric):
-        normalized = str(metric or 'l2').strip().lower()
-        normalized = cls._METRIC_ALIASES.get(normalized, normalized)
-        if normalized not in cls._METRIC_CODES:
-            raise ValueError(
-                f"Unsupported dynamic input quantization metric: {metric!r}. "
-                f"Expected one of {sorted(cls._METRIC_CODES)} "
-                f"(or aliases {sorted(cls._METRIC_ALIASES)})."
-            )
-        return normalized
+        return normalize_dynamic_input_metric(metric)
 
     @property
     def metric_code(self):
-        return self._METRIC_CODES[self.metric]
+        return dynamic_input_metric_code(self.metric)
 
     @staticmethod
     def _dedupe_formats(formats):
@@ -785,8 +787,8 @@ class DynamicInputQuantizer:
 
         return quantized, best_indices
 
-    def _candidate_params(self, candidates):
-        key = tuple(candidates)
+    def _candidate_params(self, candidates, device):
+        key = (tuple(candidates), device)
         cached = self._candidate_param_cache.get(key)
         if cached is not None:
             return cached
@@ -808,9 +810,56 @@ class DynamicInputQuantizer:
                 cands_m.append(m)
                 cands_sgn.append(1 if is_signed else 0)
 
-        cached = (cands_e, cands_m, cands_sgn)
+        cands_e_t = torch.tensor(cands_e, dtype=torch.int32, device=device)
+        cands_m_t = torch.tensor(cands_m, dtype=torch.int32, device=device)
+        cands_sgn_t = torch.tensor(cands_sgn, dtype=torch.int32, device=device)
+
+        cached = (cands_e_t, cands_m_t, cands_sgn_t)
         self._candidate_param_cache[key] = cached
         return cached
+
+    def _search_best_chunk_format_cuda(self, ref_chunks, cands_e, cands_m, cands_sgn, capture):
+        chunk_size = int(ref_chunks.shape[1])
+        total_chunks = int(ref_chunks.shape[0])
+        max_chunks = max(1, int(self._CUDA_SEARCH_MAX_ELEMENTS) // chunk_size)
+
+        def run_search(chunks):
+            return search_best_chunk_format(
+                chunks.reshape(-1).contiguous(),
+                cands_e,
+                cands_m,
+                cands_sgn,
+                capture,
+                self.metric_code,
+                self.metric_param,
+            )
+
+        if total_chunks <= max_chunks:
+            return run_search(ref_chunks)
+
+        total_elements = total_chunks * chunk_size
+        best_indices_full = torch.empty(total_chunks, dtype=torch.long, device=ref_chunks.device)
+        best_scales_full = torch.empty(total_chunks, dtype=torch.float32, device=ref_chunks.device)
+        best_qs_flat_full = torch.empty(total_elements, dtype=ref_chunks.dtype, device=ref_chunks.device)
+        if capture:
+            best_unscaled_qs_flat_full = torch.empty_like(best_qs_flat_full)
+        else:
+            best_unscaled_qs_flat_full = torch.empty(0, dtype=ref_chunks.dtype, device=ref_chunks.device)
+
+        for start in range(0, total_chunks, max_chunks):
+            end = min(start + max_chunks, total_chunks)
+            sub_chunks = ref_chunks[start:end].contiguous()
+            best_indices, best_scales, best_qs_flat, best_unscaled_qs_flat = run_search(sub_chunks)
+            elem_start = start * chunk_size
+            elem_end = end * chunk_size
+
+            best_indices_full[start:end].copy_(best_indices)
+            best_scales_full[start:end].copy_(best_scales)
+            best_qs_flat_full[elem_start:elem_end].copy_(best_qs_flat)
+            if capture:
+                best_unscaled_qs_flat_full[elem_start:elem_end].copy_(best_unscaled_qs_flat)
+
+        return best_indices_full, best_scales_full, best_qs_flat_full, best_unscaled_qs_flat_full
 
     @staticmethod
     def _chunk_scale(chunks):
@@ -836,31 +885,7 @@ class DynamicInputQuantizer:
         Mirrors metric_elem/block_reduce_metric in ops_search.cu so the CPU path
         and CUDA kernel agree on which format wins each chunk.
         """
-        metric = self.metric
-        if metric == 'linf':
-            return diff.abs().max(dim=1).values
-        if metric == 'l1':
-            return diff.abs().sum(dim=1)
-        if metric == 'bias':
-            return diff.sum(dim=1).abs()
-        if metric == 'l0':
-            return (diff != 0).to(diff.dtype).sum(dim=1)
-        if metric == 'huber':
-            delta = self.metric_param
-            a = diff.abs()
-            quad = 0.5 * diff.pow(2)
-            lin = delta * (a - 0.5 * delta)
-            return torch.where(a <= delta, quad, lin).sum(dim=1)
-        if metric == 'logsum':
-            a = diff.abs()
-            exps = torch.where(
-                a > 0,
-                torch.floor(torch.log2(a.clamp(min=1e-30))),
-                torch.full_like(a, -126.0),
-            )
-            return exps.sum(dim=1)
-        # default: l2
-        return diff.pow(2).sum(dim=1)
+        return reduce_dynamic_input_metric_python(self.metric, diff, self.metric_param)
 
     def _select_best_format_python(self, ref_chunks, candidates, chunk_size, capture):
         total_chunks = ref_chunks.shape[0]
@@ -902,6 +927,44 @@ class DynamicInputQuantizer:
             )
         return best_indices, scales.squeeze(1), best_qs, None
 
+    def _select_best_format_pseudo_mse_python(self, ref_chunks, candidates, chunk_size, capture):
+        pair = validate_pseudo_mse_candidate_pairs(candidates)[0]
+        scales = self._chunk_scale(ref_chunks)
+        x_scaled = ref_chunks / scales
+
+        diff = pseudo_mse_sqerr_diff_from_scaled(
+            x_scaled,
+            pair.exp1_mantissa_width,
+            pair.exp1_mantissa_width - 1,
+            pair.is_signed,
+        )
+        choose_exp2 = diff.sum(dim=1) < 0
+
+        q_e1_scaled = pseudo_mse_reconstruct_scaled_python(
+            x_scaled,
+            exp_bits=1,
+            mantissa_bits=pair.exp1_mantissa_width,
+            is_signed=pair.is_signed,
+        )
+        q_e2_scaled = pseudo_mse_reconstruct_scaled_python(
+            x_scaled,
+            exp_bits=2,
+            mantissa_bits=pair.exp1_mantissa_width - 1,
+            is_signed=pair.is_signed,
+        )
+
+        best_indices = torch.where(
+            choose_exp2,
+            torch.full_like(choose_exp2, pair.e2_index, dtype=torch.long),
+            torch.full_like(choose_exp2, pair.e1_index, dtype=torch.long),
+        )
+        best_qs_scaled = torch.where(choose_exp2.unsqueeze(1), q_e2_scaled, q_e1_scaled)
+        best_qs = best_qs_scaled * scales
+
+        if capture:
+            return best_indices, scales.squeeze(1), best_qs, best_qs_scaled
+        return best_indices, scales.squeeze(1), best_qs, None
+
     def _select_best_format(self, tensor, layer_name, candidates, module=None):
         """
         Optimized format selection:
@@ -919,7 +982,35 @@ class DynamicInputQuantizer:
         ref_chunks = ref_chunked.reshape(-1, chunk_size)
         total_chunks = ref_chunks.shape[0]
 
-        if len(candidates) == 1:
+        if is_pseudo_mse_metric(self.metric):
+            validate_pseudo_mse_candidate_pairs(candidates)
+            if ref_chunks.is_cuda:
+                cands_e, cands_m, cands_sgn = self._candidate_params(candidates, device=device)
+                best_indices, best_scales, best_qs_flat, best_unscaled_qs_flat = self._search_best_chunk_format_cuda(
+                    ref_chunks,
+                    cands_e,
+                    cands_m,
+                    cands_sgn,
+                    capture,
+                )
+                best_qs = best_qs_flat.view(-1, chunk_size)
+                if capture:
+                    best_unscaled_qs = best_unscaled_qs_flat.view(-1, chunk_size)
+                    scale_chunks = best_scales.unsqueeze(-1).expand(-1, chunk_size).contiguous()
+                else:
+                    scale_chunks = None
+            else:
+                best_indices, best_scales, best_qs, best_unscaled_qs = self._select_best_format_pseudo_mse_python(
+                    ref_chunks.contiguous(),
+                    candidates,
+                    chunk_size,
+                    capture,
+                )
+                if capture:
+                    scale_chunks = best_scales.unsqueeze(-1).expand(-1, chunk_size).contiguous()
+                else:
+                    scale_chunks = None
+        elif len(candidates) == 1:
             best_indices = torch.zeros(total_chunks, dtype=torch.long, device=device)
             if capture:
                 best_qs, best_unscaled_qs, _max_val, scale_chunks, _scale_p = quantize_tensor(
@@ -939,17 +1030,15 @@ class DynamicInputQuantizer:
                 )
                 scale_chunks = None
         elif ref_chunks.is_cuda:
-            cands_e, cands_m, cands_sgn = self._candidate_params(candidates)
+            cands_e, cands_m, cands_sgn = self._candidate_params(candidates, device=device)
 
             # Fused CUDA kernel: per-chunk format search under the active metric.
-            best_indices, best_scales, best_qs_flat, best_unscaled_qs_flat = search_best_chunk_format(
-                ref_chunks.view(-1).contiguous(),
+            best_indices, best_scales, best_qs_flat, best_unscaled_qs_flat = self._search_best_chunk_format_cuda(
+                ref_chunks,
                 cands_e,
                 cands_m,
                 cands_sgn,
                 capture,
-                self.metric_code,
-                self.metric_param,
             )
 
             best_qs = best_qs_flat.view(-1, chunk_size)

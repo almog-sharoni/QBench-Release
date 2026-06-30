@@ -41,8 +41,10 @@ def main():
         e_list.append(e)
         m_list.append(m)
         sgn_list.append(sgn)
-        
-    cu_idx, cu_s, _, cu_q = search_best_chunk_format(x, e_list, m_list, sgn_list, True)
+    cands_e_tensor = torch.tensor(e_list, dtype=torch.int32, device='cuda')
+    cands_m_tensor = torch.tensor(m_list, dtype=torch.int32, device='cuda')
+    cands_sgn_tensor = torch.tensor(sgn_list, dtype=torch.int32, device='cuda')
+    cu_idx, cu_s, _, cu_q = search_best_chunk_format(x, cands_e_tensor, cands_m_tensor, cands_sgn_tensor, True)
     
     print("Indices match:", torch.equal(py_idx, cu_idx))
     print("Scales match: ", torch.allclose(py_s, cu_s))

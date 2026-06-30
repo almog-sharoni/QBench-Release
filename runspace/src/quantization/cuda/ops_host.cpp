@@ -9,6 +9,7 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAStream.h>
 #include <algorithm>
+#include <limits>
 #include <vector>
 #include <tuple>
 #include <utility>
@@ -592,24 +593,35 @@ roundtrip_channel(torch::Tensor x, int channel_dim,
 
 static std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 search_best_chunk_format(torch::Tensor x,
-                         std::vector<int> cands_e,
-                         std::vector<int> cands_m,
-                         std::vector<int> cands_sgn,
+                         torch::Tensor cands_e,
+                         torch::Tensor cands_m,
+                         torch::Tensor cands_sgn,
                          bool return_capture,
                          int metric,
                          double metric_param)
 {
     TORCH_CHECK(x.is_cuda() && x.scalar_type() == torch::kFloat32 && x.is_contiguous(),
                 "search_best_chunk_format: x must be contiguous CUDA float32");
-    
-    int num_candidates = (int)cands_e.size();
-    TORCH_CHECK(num_candidates > 0 && 
-                cands_m.size() == num_candidates && 
-                cands_sgn.size() == num_candidates,
-                "search_best_chunk_format: candidate vectors must be same size > 0");
+    TORCH_CHECK(cands_e.is_cuda() && cands_e.scalar_type() == torch::kInt32 && cands_e.is_contiguous(),
+                "search_best_chunk_format: cands_e must be contiguous CUDA int32");
+    TORCH_CHECK(cands_m.is_cuda() && cands_m.scalar_type() == torch::kInt32 && cands_m.is_contiguous(),
+                "search_best_chunk_format: cands_m must be contiguous CUDA int32");
+    TORCH_CHECK(cands_sgn.is_cuda() && cands_sgn.scalar_type() == torch::kInt32 && cands_sgn.is_contiguous(),
+                "search_best_chunk_format: cands_sgn must be contiguous CUDA int32");
 
-    const int N = (int)x.numel();
+    int num_candidates = (int)cands_e.numel();
+    TORCH_CHECK(num_candidates > 0 &&
+                cands_m.numel() == num_candidates &&
+                cands_sgn.numel() == num_candidates,
+                "search_best_chunk_format: candidate tensors must be same size > 0");
+
+    const int64_t N64 = x.numel();
     constexpr int CHUNK = 128;
+    TORCH_CHECK(
+        N64 <= std::numeric_limits<int>::max(),
+        "search_best_chunk_format: x.numel()=", N64,
+        " exceeds INT_MAX; split the input into smaller chunk batches before calling this CUDA search");
+    const int N = static_cast<int>(N64);
     const int n_chunks = (N + CHUNK - 1) / CHUNK;
     auto opts = x.options();
 
@@ -626,16 +638,11 @@ search_best_chunk_format(torch::Tensor x,
 
     if (N == 0) return {best_indices, best_scales, out, out_unscaled};
 
-    // Copy candidates to device
-    auto c_e = torch::tensor(cands_e, torch::device(torch::kCUDA).dtype(torch::kInt32));
-    auto c_m = torch::tensor(cands_m, torch::device(torch::kCUDA).dtype(torch::kInt32));
-    auto c_s = torch::tensor(cands_sgn, torch::device(torch::kCUDA).dtype(torch::kInt32));
-
     qbench_lp::launch_search_and_quantize_chunk(
         x.data_ptr<float>(),
-        c_e.data_ptr<int>(),
-        c_m.data_ptr<int>(),
-        c_s.data_ptr<int>(),
+        cands_e.data_ptr<int>(),
+        cands_m.data_ptr<int>(),
+        cands_sgn.data_ptr<int>(),
         num_candidates,
         best_indices.data_ptr<int64_t>(),
         best_scales.data_ptr<float>(),
@@ -728,7 +735,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, mod) {
             py::arg("metric_param") = 0.0625,
             "Fused search and quantize for chunk-mode dynamic quantization. "
             "metric selects the per-chunk error norm (0=L2, 1=L1, 2=Linf, 3=bias, "
-            "4=L0, 5=Huber, 6=logsum); metric_param is the Huber delta.");
+            "4=L0, 5=Huber, 6=logsum, 7=pseudo_MSE); metric_param is the Huber delta.");
 
     mod.def("n_per_word",     &n_per_word_py,
             py::arg("e"), py::arg("m"),

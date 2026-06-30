@@ -26,6 +26,7 @@ enum SearchMetric {
     METRIC_L0     = 4,  // count(diff != 0)       -- reduce SUM
     METRIC_HUBER  = 5,  // sum(huber(diff,delta)) -- reduce SUM
     METRIC_LOGSUM = 6,  // sum(floor(log2|diff|)) -- reduce SUM (log-domain L1)
+    METRIC_PSEUDO_MSE = 7,  // exact pairwise squared-error diff: exp=2 - exp=1
 };
 
 // Per-element contribution for the active metric (operates on the scaled error).
@@ -78,6 +79,24 @@ __device__ __forceinline__ float block_reduce_metric(float val, bool use_max, in
     r = smem[0];
     __syncthreads();
     return r;
+}
+
+__device__ __forceinline__ float pseudo_mse_sqerr_diff(
+    float scaled_v,
+    int m1,
+    int m2,
+    int sgn)
+{
+    const uint32_t p1 = encode_emb(scaled_v, 1, m1, sgn);
+    const uint32_t p2 = encode_emb(scaled_v, 2, m2, sgn);
+
+    const float q1 = decode_emb(p1, 1, m1, sgn);
+    const float q2 = decode_emb(p2, 2, m2, sgn);
+
+    const float d1 = scaled_v - q1;
+    const float d2 = scaled_v - q2;
+
+    return d2 * d2 - d1 * d1;
 }
 
 // This kernel computes the best format per chunk, and directly decodes the values.
@@ -139,6 +158,78 @@ __global__ void search_and_quantize_chunk_kernel(
     const float scaled_v = v * inv_s;
 
     // Step 2: Loop over candidates to find the format minimizing the metric.
+    if (metric == METRIC_PSEUDO_MSE) {
+        int e1_idx = -1;
+        int e2_idx = -1;
+        int exp1_m = -1;
+        int exp2_m = -1;
+        int pair_sgn = 1;
+
+        // Find an exp=1 / exp=2 pair having:
+        //   - the same sign configuration
+        //   - exp2 mantissa width = exp1 mantissa width - 1
+        for (int c1 = 0; c1 < num_candidates && e1_idx < 0; ++c1) {
+            if (cands_e[c1] != 1) {
+                continue;
+            }
+
+            const int m1 = cands_m[c1];
+            const int sgn1 = cands_sgn[c1];
+
+            for (int c2 = 0; c2 < num_candidates; ++c2) {
+                if (cands_e[c2] == 2 &&
+                    cands_sgn[c2] == sgn1 &&
+                    cands_m[c2] == m1 - 1) {
+                    e1_idx = c1;
+                    e2_idx = c2;
+                    exp1_m = m1;
+                    exp2_m = cands_m[c2];
+                    pair_sgn = sgn1;
+                    break;
+                }
+            }
+        }
+
+        int best_c = 0;
+
+        if (e1_idx >= 0 && e2_idx >= 0 && exp1_m >= 1 && exp2_m == exp1_m - 1) {
+            // METRIC_PSEUDO_MSE computes the exact pairwise squared-error
+            // difference between exp=2 and exp=1 formats for the same total
+            // width. It does not use the old bit-level pseudo units.
+            const float diff = pseudo_mse_sqerr_diff(
+                scaled_v,
+                exp1_m,
+                exp2_m,
+                pair_sgn);
+
+            const float chunk_diff =
+                block_reduce_metric(diff, false, lane);
+
+            // chunk_diff = sum_i [(x_i - q_exp2_i)^2 - (x_i - q_exp1_i)^2].
+            // Negative means exp=2 has lower total squared error.
+            // A tie selects exp=1.
+            best_c = (chunk_diff < 0.0f) ? e2_idx : e1_idx;
+        }
+
+        const int e = cands_e[best_c];
+        const int m = cands_m[best_c];
+        const int sgn = cands_sgn[best_c];
+        std::uint32_t packed = encode_emb(scaled_v, e, m, sgn);
+        const float best_qv = decode_emb(packed, e, m, sgn);
+
+        if (global_idx < N) {
+            out[global_idx] = best_qv * s;
+            if (out_unscaled != nullptr) {
+                out_unscaled[global_idx] = best_qv;
+            }
+        }
+        if (lane == 0) {
+            best_indices[chunk] = best_c;
+            best_scales[chunk] = s;
+        }
+        return;
+    }
+
     const bool use_max = (metric == METRIC_LINF);
     float best_err = 3e38f; // infinity
     int best_c = 0;
