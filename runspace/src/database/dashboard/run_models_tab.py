@@ -862,7 +862,18 @@ with tab_runner:
                 "bandwidth", "mode", "compare_batches", "compare_mode", "cache_size", "b_bits", "input_format_policy"
             ):
                 _dashboard_runner_add_experiment_arg(kind, command, name, values.get(name))
-            if values.get("use_best_weights", False):
+            variant = values.get("experiment_variant", "standard")
+            if variant == "descent":
+                command.append("--descent")
+            elif variant == "descent_activation_e1e2":
+                command.extend(["--descent", "--activation_exponents", "e1e2"])
+            elif variant == "pseudo_mse":
+                command.append("--pseudo_mse")
+            elif variant == "pseudo_mse_descent":
+                command.append("--pseudo_mse_descent")
+
+            descent_variant = variant in ("descent", "descent_activation_e1e2", "pseudo_mse_descent")
+            if values.get("use_best_weights", False) and not descent_variant:
                 _dashboard_runner_add_experiment_bool(kind, command, "use_best_weights", values.get("use_best_weights"))
         return command
 
@@ -1201,7 +1212,24 @@ with tab_runner:
                 value=int(_dashboard_runner_experiment_default("bwaware", "b_bits", 0) or 0),
                 step=1,
                 key="runner_exp_bwaware_b_bits",
-                help="Pin a single min bit-width (0 = sweep 2–8, 2–8 = single value).",
+                help="Pin a single min bit-width (0 = sweep; descent variants ignore this).",
+            )
+            variant_options = {
+                "standard": "Standard",
+                "descent": "Greedy descent",
+                "descent_activation_e1e2": "Greedy descent e1/e2 activations",
+                "pseudo_mse": "pseudo_MSE e1/e2 activations",
+                "pseudo_mse_descent": "pseudo_MSE + greedy descent",
+            }
+            variant_default = str(_dashboard_runner_experiment_default("bwaware", "experiment_variant", "standard"))
+            if variant_default not in variant_options:
+                variant_default = "standard"
+            bwaware_values["experiment_variant"] = st.selectbox(
+                "BW-aware variant",
+                options=list(variant_options),
+                format_func=lambda value: variant_options[value],
+                index=list(variant_options).index(variant_default),
+                key="runner_exp_bwaware_variant",
             )
             policy_options = ["all", "typed", "canonical"]
             policy_default = str(_dashboard_runner_experiment_default("bwaware", "input_format_policy", "all"))
@@ -1212,12 +1240,20 @@ with tab_runner:
                 key="runner_exp_bwaware_input_policy",
                 help="'all' searches all formats; 'typed' searches signed/unsigned separately; 'canonical' uses one balanced format per bit-width.",
             )
+            descent_variant = bwaware_values["experiment_variant"] in (
+                "descent",
+                "descent_activation_e1e2",
+                "pseudo_mse_descent",
+            )
             bwaware_values["use_best_weights"] = st.checkbox(
                 "Use best weights from DB",
-                value=bool(_dashboard_runner_experiment_default("bwaware", "use_best_weights", True)),
+                value=False if descent_variant else bool(_dashboard_runner_experiment_default("bwaware", "use_best_weights", True)),
                 key="runner_exp_bwaware_use_best_weights",
+                disabled=descent_variant,
                 help="Use the per-layer best weight formats from the latest weight_quant_optimized DB run instead of SIGNED_FORMATS_BY_BITS.",
             )
+            if descent_variant:
+                bwaware_values["use_best_weights"] = False
             _dashboard_runner_save_experiment_run_state("bwaware", bwaware_values)
             _dashboard_runner_render_experiment_launch("bwaware", bwaware_values, "Bandwidth-Aware Quant Experiment")
 

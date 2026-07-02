@@ -8,7 +8,9 @@
     "bank_size": 125000,
     "metadata_bits": 0,
     "batch_size": 1,
-    "timestamp": "2026-05-24T11:09:37.321780Z"
+    "bandwidth": 1.0,
+    "min_bits": 3,
+    "timestamp": "2026-07-02T10:22:15.655816Z"
   },
   "summary": {
     "total_layers": 31,
@@ -19,9 +21,12 @@
     {
       "name": "conv1",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 150528,
       "weight_elems": 9472,
       "output_elems": 802816,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 875000,
       "perm_elems": 1000000,
       "next_xin_banked": 875000,
@@ -38,23 +43,56 @@
       "output_channel_height": 112,
       "output_channel_width": 112,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": true,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 802816
+          "output_elems": 802816,
+          "input_shapes": [
+            [
+              1,
+              64,
+              112,
+              112
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            112,
+            112
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 1605633.0,
+      "total_cycles": 1605633.0
     },
     {
       "name": "maxpool",
       "type": "QuantMaxPool2d",
+      "residual_connections": 0,
       "input_elems": 802816,
       "weight_elems": 0,
       "output_elems": 200704,
+      "residual_input_elems": 0,
+      "residual_output_elems": 200704,
       "output_banked": 250000,
       "perm_elems": 875000,
       "next_xin_banked": 250000,
@@ -71,16 +109,37 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [
+        "add"
+      ],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": 3,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": true,
+      "compute_cycles": 6272.0,
+      "total_cycles": 75264.0
     },
     {
       "name": "layer1.0.conv1",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 200704,
       "weight_elems": 36864,
       "output_elems": 200704,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 250000,
       "perm_elems": 375000,
       "next_xin_banked": 250000,
@@ -97,23 +156,56 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "layer1.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              64,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 1003521.0,
+      "total_cycles": 1003521.0
     },
     {
       "name": "layer1.0.conv2",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 200704,
       "weight_elems": 36864,
       "output_elems": 200704,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 250000,
       "perm_elems": 375000,
       "next_xin_banked": 250000,
@@ -130,16 +222,35 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 1003521.0,
+      "total_cycles": 1003521.0
     },
     {
       "name": "add",
       "type": "QuantAdd",
+      "residual_connections": 2,
       "input_elems": 200704,
       "weight_elems": 0,
       "output_elems": 200704,
+      "residual_input_elems": 401408,
+      "residual_output_elems": 200704,
       "output_banked": 250000,
       "perm_elems": 250000,
       "next_xin_banked": 250000,
@@ -156,23 +267,58 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "residual",
       "reason": "residual",
+      "residual_producer_name": "maxpool",
+      "residual_output_consumers": [
+        "add_1"
+      ],
       "collapsed_layers": [
         {
           "name": "layer1.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              64,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": 3,
+      "residual_output_bits": 3,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": true,
+      "residual_output_bw_limited": true,
+      "compute_cycles": 3136.0,
+      "total_cycles": 225792.0
     },
     {
       "name": "layer1.1.conv1",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 200704,
       "weight_elems": 36864,
       "output_elems": 200704,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 250000,
       "perm_elems": 375000,
       "next_xin_banked": 250000,
@@ -189,23 +335,56 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "layer1.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              64,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 1003521.0,
+      "total_cycles": 1003521.0
     },
     {
       "name": "layer1.1.conv2",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 200704,
       "weight_elems": 36864,
       "output_elems": 200704,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 250000,
       "perm_elems": 375000,
       "next_xin_banked": 250000,
@@ -222,16 +401,35 @@
       "output_channel_height": 56,
       "output_channel_width": 56,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 1003521.0,
+      "total_cycles": 1003521.0
     },
     {
       "name": "add_1",
       "type": "QuantAdd",
+      "residual_connections": 2,
       "input_elems": 200704,
       "weight_elems": 0,
       "output_elems": 200704,
+      "residual_input_elems": 401408,
+      "residual_output_elems": 0,
       "output_banked": 250000,
       "perm_elems": 250000,
       "next_xin_banked": 250000,
@@ -248,23 +446,56 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "residual",
       "reason": "residual",
+      "residual_producer_name": "add",
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "layer1.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 200704
+          "output_elems": 200704,
+          "input_shapes": [
+            [
+              1,
+              64,
+              56,
+              56
+            ]
+          ],
+          "output_shape": [
+            1,
+            64,
+            56,
+            56
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": 3,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": true,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 3136.0,
+      "total_cycles": 150528.0
     },
     {
       "name": "layer2.0.conv1",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 200704,
       "weight_elems": 73728,
       "output_elems": 100352,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 375000,
       "next_xin_banked": 125000,
@@ -281,23 +512,56 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "layer2.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              128,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 501761.0,
+      "total_cycles": 501761.0
     },
     {
       "name": "layer2.0.conv2",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 100352,
       "weight_elems": 147456,
       "output_elems": 100352,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 375000,
       "next_xin_banked": 250000,
@@ -314,16 +578,35 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer2.0.downsample.0",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 200704,
       "weight_elems": 8192,
       "output_elems": 100352,
+      "residual_input_elems": 0,
+      "residual_output_elems": 100352,
       "output_banked": 125000,
       "perm_elems": 375000,
       "next_xin_banked": 125000,
@@ -340,16 +623,37 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_input_dominated",
       "reason": "conv_input_dominated",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [
+        "add_2"
+      ],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": 3,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": true,
+      "compute_cycles": 100353.0,
+      "total_cycles": 100353.0
     },
     {
       "name": "add_2",
       "type": "QuantAdd",
+      "residual_connections": 2,
       "input_elems": 100352,
       "weight_elems": 0,
       "output_elems": 100352,
+      "residual_input_elems": 200704,
+      "residual_output_elems": 100352,
       "output_banked": 125000,
       "perm_elems": 125000,
       "next_xin_banked": 125000,
@@ -366,23 +670,58 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "residual",
       "reason": "residual",
+      "residual_producer_name": "layer2.0.downsample.0",
+      "residual_output_consumers": [
+        "add_3"
+      ],
       "collapsed_layers": [
         {
           "name": "layer2.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              128,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": 3,
+      "residual_output_bits": 3,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": true,
+      "residual_output_bw_limited": true,
+      "compute_cycles": 1568.0,
+      "total_cycles": 112896.0
     },
     {
       "name": "layer2.1.conv1",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 100352,
       "weight_elems": 147456,
       "output_elems": 100352,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 375000,
       "next_xin_banked": 125000,
@@ -399,23 +738,56 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "layer2.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              128,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer2.1.conv2",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 100352,
       "weight_elems": 147456,
       "output_elems": 100352,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 375000,
       "next_xin_banked": 125000,
@@ -432,16 +804,35 @@
       "output_channel_height": 28,
       "output_channel_width": 28,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "add_3",
       "type": "QuantAdd",
+      "residual_connections": 2,
       "input_elems": 100352,
       "weight_elems": 0,
       "output_elems": 100352,
+      "residual_input_elems": 200704,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 125000,
       "next_xin_banked": 125000,
@@ -458,23 +849,56 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "residual",
       "reason": "residual",
+      "residual_producer_name": "add_2",
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "layer2.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 100352
+          "output_elems": 100352,
+          "input_shapes": [
+            [
+              1,
+              128,
+              28,
+              28
+            ]
+          ],
+          "output_shape": [
+            1,
+            128,
+            28,
+            28
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": 3,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": true,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 1568.0,
+      "total_cycles": 75264.0
     },
     {
       "name": "layer3.0.conv1",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 100352,
       "weight_elems": 294912,
       "output_elems": 50176,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 500000,
       "next_xin_banked": 125000,
@@ -491,23 +915,56 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "layer3.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 451585.0,
+      "total_cycles": 451585.0
     },
     {
       "name": "layer3.0.conv2",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 50176,
       "weight_elems": 589824,
       "output_elems": 50176,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 750000,
       "next_xin_banked": 125000,
@@ -524,16 +981,35 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer3.0.downsample.0",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 100352,
       "weight_elems": 32768,
       "output_elems": 50176,
+      "residual_input_elems": 0,
+      "residual_output_elems": 50176,
       "output_banked": 125000,
       "perm_elems": 250000,
       "next_xin_banked": 125000,
@@ -550,16 +1026,37 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [
+        "add_4"
+      ],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 7,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": 3,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": true,
+      "compute_cycles": 50177.0,
+      "total_cycles": 50177.0
     },
     {
       "name": "add_4",
       "type": "QuantAdd",
+      "residual_connections": 2,
       "input_elems": 50176,
       "weight_elems": 0,
       "output_elems": 50176,
+      "residual_input_elems": 100352,
+      "residual_output_elems": 50176,
       "output_banked": 125000,
       "perm_elems": 125000,
       "next_xin_banked": 125000,
@@ -576,23 +1073,58 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "residual",
       "reason": "residual",
+      "residual_producer_name": "layer3.0.downsample.0",
+      "residual_output_consumers": [
+        "add_5"
+      ],
       "collapsed_layers": [
         {
           "name": "layer3.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": 3,
+      "residual_output_bits": 3,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": true,
+      "residual_output_bw_limited": true,
+      "compute_cycles": 784.0,
+      "total_cycles": 56448.0
     },
     {
       "name": "layer3.1.conv1",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 50176,
       "weight_elems": 589824,
       "output_elems": 50176,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 750000,
       "next_xin_banked": 125000,
@@ -609,23 +1141,56 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "layer3.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer3.1.conv2",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 50176,
       "weight_elems": 589824,
       "output_elems": 50176,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 750000,
       "next_xin_banked": 125000,
@@ -642,16 +1207,35 @@
       "output_channel_height": 14,
       "output_channel_width": 14,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "add_5",
       "type": "QuantAdd",
+      "residual_connections": 2,
       "input_elems": 50176,
       "weight_elems": 0,
       "output_elems": 50176,
+      "residual_input_elems": 100352,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 125000,
       "next_xin_banked": 125000,
@@ -668,23 +1252,56 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "residual",
       "reason": "residual",
+      "residual_producer_name": "add_4",
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "layer3.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 50176
+          "output_elems": 50176,
+          "input_shapes": [
+            [
+              1,
+              256,
+              14,
+              14
+            ]
+          ],
+          "output_shape": [
+            1,
+            256,
+            14,
+            14
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": 3,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": true,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 784.0,
+      "total_cycles": 37632.0
     },
     {
       "name": "layer4.0.conv1",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 50176,
       "weight_elems": 1179648,
       "output_elems": 25088,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 1375000,
       "next_xin_banked": 125000,
@@ -701,23 +1318,56 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "layer4.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 25088
+          "output_elems": 25088,
+          "input_shapes": [
+            [
+              1,
+              512,
+              7,
+              7
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            7,
+            7
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 451585.0,
+      "total_cycles": 451585.0
     },
     {
       "name": "layer4.0.conv2",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 25088,
       "weight_elems": 2359296,
       "output_elems": 25088,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 125000,
       "next_xin_banked": 125000,
@@ -734,16 +1384,35 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer4.0.downsample.0",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 50176,
       "weight_elems": 131072,
       "output_elems": 25088,
+      "residual_input_elems": 0,
+      "residual_output_elems": 25088,
       "output_banked": 125000,
       "perm_elems": 375000,
       "next_xin_banked": 125000,
@@ -760,16 +1429,37 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "conv_output_dominated",
       "reason": "conv_output_dominated",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [
+        "add_6"
+      ],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": 3,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": true,
+      "compute_cycles": 50177.0,
+      "total_cycles": 58560.0
     },
     {
       "name": "add_6",
       "type": "QuantAdd",
+      "residual_connections": 2,
       "input_elems": 25088,
       "weight_elems": 0,
       "output_elems": 25088,
+      "residual_input_elems": 50176,
+      "residual_output_elems": 25088,
       "output_banked": 125000,
       "perm_elems": 125000,
       "next_xin_banked": 125000,
@@ -786,23 +1476,58 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "residual",
       "reason": "residual",
+      "residual_producer_name": "layer4.0.downsample.0",
+      "residual_output_consumers": [
+        "add_7"
+      ],
       "collapsed_layers": [
         {
           "name": "layer4.0.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 25088
+          "output_elems": 25088,
+          "input_shapes": [
+            [
+              1,
+              512,
+              7,
+              7
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            7,
+            7
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": 3,
+      "residual_output_bits": 3,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": true,
+      "residual_output_bw_limited": true,
+      "compute_cycles": 392.0,
+      "total_cycles": 28224.0
     },
     {
       "name": "layer4.1.conv1",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 25088,
       "weight_elems": 2359296,
       "output_elems": 25088,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 125000,
       "next_xin_banked": 125000,
@@ -819,23 +1544,56 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "global_fit",
       "reason": "global_fit",
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "layer4.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 25088
+          "output_elems": 25088,
+          "input_shapes": [
+            [
+              1,
+              512,
+              7,
+              7
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            7,
+            7
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "layer4.1.conv2",
       "type": "QuantConv2d",
+      "residual_connections": 0,
       "input_elems": 25088,
       "weight_elems": 2359296,
       "output_elems": 25088,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 125000,
       "next_xin_banked": 125000,
@@ -852,16 +1610,35 @@
       "output_channel_height": 7,
       "output_channel_width": 7,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 903169.0,
+      "total_cycles": 903169.0
     },
     {
       "name": "add_7",
       "type": "QuantAdd",
+      "residual_connections": 2,
       "input_elems": 25088,
       "weight_elems": 0,
       "output_elems": 25088,
+      "residual_input_elems": 50176,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 125000,
       "next_xin_banked": 125000,
@@ -878,23 +1655,56 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "residual",
       "reason": "residual",
+      "residual_producer_name": "add_6",
+      "residual_output_consumers": [],
       "collapsed_layers": [
         {
           "name": "layer4.1.relu",
           "type": "QuantReLU",
           "weight_elems": 0,
-          "output_elems": 25088
+          "output_elems": 25088,
+          "input_shapes": [
+            [
+              1,
+              512,
+              7,
+              7
+            ]
+          ],
+          "output_shape": [
+            1,
+            512,
+            7,
+            7
+          ]
         }
-      ]
+      ],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": 3,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": true,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 392.0,
+      "total_cycles": 18816.0
     },
     {
       "name": "avgpool",
       "type": "QuantAdaptiveAvgPool2d",
+      "residual_connections": 0,
       "input_elems": 25088,
       "weight_elems": 0,
       "output_elems": 512,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 125000,
       "next_xin_banked": 125000,
@@ -911,16 +1721,35 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 8,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": false,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 196.0,
+      "total_cycles": 196.0
     },
     {
       "name": "fc",
       "type": "QuantLinear",
+      "residual_connections": 0,
       "input_elems": 512,
       "weight_elems": 512000,
       "output_elems": 1024,
+      "residual_input_elems": 0,
+      "residual_output_elems": 0,
       "output_banked": 125000,
       "perm_elems": 125000,
       "next_xin_banked": 0,
@@ -937,9 +1766,25 @@
       "output_channel_height": 0,
       "output_channel_width": 0,
       "stay_on_chip": true,
+      "xin_from_cache": true,
+      "need_input_transfer": false,
       "rule": "global_fit",
       "reason": "global_fit",
-      "collapsed_layers": []
+      "residual_producer_name": null,
+      "residual_output_consumers": [],
+      "collapsed_layers": [],
+      "input_bits": 8,
+      "weight_bits": 3,
+      "output_bits": 8,
+      "residual_input_bits": null,
+      "residual_output_bits": null,
+      "input_bw_limited": false,
+      "weight_bw_limited": true,
+      "output_bw_limited": false,
+      "residual_input_bw_limited": false,
+      "residual_output_bw_limited": false,
+      "compute_cycles": 4001.0,
+      "total_cycles": 192000.0
     }
   ],
   "off_chip_layers": [],
@@ -1033,6 +1878,16 @@
       "permanents": "xin + weights (held while streaming xout)",
       "pipeline_banks": 0,
       "notes": "xin from cache, weights resident, xout streamed to external."
+    },
+    {
+      "name": "mul",
+      "on_chip": true,
+      "xin_from_cache": true,
+      "applies_to": "QuantMul",
+      "stay_condition": "xin + 3 banks <= cache",
+      "permanents": "xin",
+      "pipeline_banks": 0,
+      "notes": "xin in cache, weights streamed in, xout is computed and streamed out."
     }
   ]
 }

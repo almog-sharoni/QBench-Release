@@ -6,6 +6,7 @@ import os
 import sys
 
 import torch
+import yaml
 
 
 os.environ["TORCH_HOME"] = "/tmp/torch"
@@ -81,6 +82,15 @@ def get_args(argv=None):
         description="Evaluate a future pseudo_MSE dynamic activation metric on ImageNet."
     )
     parser.add_argument("--model_name", type=str, default="resnet50")
+    parser.add_argument(
+        "--models_file",
+        type=str,
+        default=None,
+        help=(
+            "Optional path to a models.yaml file. Also supported by passing a "
+            ".yaml/.yml path as --model_name."
+        ),
+    )
     parser.add_argument("--weights", type=str, default="DEFAULT")
     parser.add_argument("--model_source", type=str, default="auto")
     parser.add_argument("--dataset_name", type=str, default="imagenet")
@@ -106,6 +116,71 @@ def get_args(argv=None):
     args.exp_bits = _parse_int_csv(args.exp_bits, DEFAULT_EXP_BITS)
     args.metrics = _parse_csv(args.metrics, DEFAULT_METRICS)
     return args
+
+
+def _is_yaml_path(value):
+    return isinstance(value, str) and value.lower().endswith((".yaml", ".yml"))
+
+
+def _model_entry_from_yaml(entry):
+    if isinstance(entry, dict):
+        name = entry.get("name") or entry.get("model_name")
+        return {
+            "name": name,
+            "weights": entry.get("weights", "DEFAULT"),
+            "source": entry.get("source") or entry.get("model_source"),
+        }
+    return {"name": str(entry), "weights": "DEFAULT", "source": None}
+
+
+def _load_models(models_file):
+    if not models_file:
+        return []
+    with open(models_file, "r") as f:
+        models_cfg = yaml.safe_load(f)
+
+    if models_cfg is None:
+        return []
+    if isinstance(models_cfg, list):
+        entries = models_cfg
+    elif isinstance(models_cfg, dict):
+        entries = models_cfg.get("models")
+        if entries is None:
+            entries = [models_cfg]
+    else:
+        raise ValueError(
+            f"models.yaml must contain a model entry, a list, or a 'models' list; got {type(models_cfg).__name__}"
+        )
+
+    if not isinstance(entries, list):
+        raise ValueError("models.yaml 'models' field must be a list")
+
+    models = []
+    for entry in entries:
+        model = _model_entry_from_yaml(entry)
+        if model.get("name"):
+            models.append(model)
+    return models
+
+
+def _models_from_args(args):
+    models_file = args.models_file
+    if not models_file and _is_yaml_path(args.model_name):
+        models_file = args.model_name
+
+    if models_file:
+        models = _load_models(models_file)
+        if not models:
+            raise ValueError(f"No model entries found in {models_file}")
+        return models, models_file
+
+    return [
+        {
+            "name": args.model_name,
+            "weights": args.weights,
+            "source": args.model_source,
+        }
+    ], None
 
 
 def candidate_formats_for_bit_width(bit_width, exp_bits=None):
@@ -339,6 +414,36 @@ def _write_model_summary(output_dir, model_name, rows, dataset_label):
     return csv_path, txt_path
 
 
+def _write_combined_summary(output_dir, rows):
+    if not rows:
+        return None
+
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, "summary.csv")
+    fields = [
+        "model",
+        "metric",
+        "bit_width",
+        "activation_dt",
+        "candidate_formats",
+        "dataset_size",
+        "random_seed",
+        "limit_batches",
+        "status",
+        "acc1",
+        "acc5",
+        "certainty",
+        "norm_mse",
+        "norm_l1",
+        "error",
+    ]
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
 def _plot_model_summary(output_dir, model_name, rows, dataset_label):
     try:
         import matplotlib.pyplot as plt
@@ -507,7 +612,22 @@ def main(argv=None):
     args = get_args(argv)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    process_single_model(args, device=device)
+    models, models_file = _models_from_args(args)
+    if models_file:
+        print(f"Loaded {len(models)} model(s) from {models_file}")
+
+    combined_rows = []
+    for entry in models:
+        args.model_name = entry["name"]
+        args.weights = entry.get("weights", "DEFAULT")
+        args.model_source = entry.get("source") or "auto"
+        rows = process_single_model(args, device=device)
+        combined_rows.extend(rows)
+
+    if models_file:
+        path = _write_combined_summary(args.output_dir, combined_rows)
+        if path:
+            print(f"\nCombined summary written to {path}")
 
 
 if __name__ == "__main__":

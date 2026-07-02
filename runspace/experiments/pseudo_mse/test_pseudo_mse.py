@@ -23,6 +23,8 @@ from runspace.experiments.pseudo_mse.pseudo_mse import (  # noqa: E402
     build_pseudo_mse_input_quant_cfg,
     build_pseudo_mse_runtime_config,
     get_args,
+    _load_models,
+    _models_from_args,
     _plot_model_summary,
     _write_model_summary,
 )
@@ -114,6 +116,54 @@ def test_pseudo_mse_builds_metric_comparison_specs():
         (4, L1_METRIC_LABEL, "dyn_a4_e1e2_l1"),
         (4, METRIC_NAME, "dyn_a4_e1e2_pseudo_mse"),
     ]
+
+
+def test_pseudo_mse_loads_models_file(tmp_path):
+    models_file = tmp_path / "models.yaml"
+    models_file.write_text(
+        "\n".join(
+            [
+                "- name: resnet50",
+                "  weights: DEFAULT",
+                "  source: torchvision",
+                "- mobilevit_s",
+                "- model_name: vit_b_16",
+                "  model_source: torchvision",
+            ]
+        )
+    )
+
+    assert _load_models(str(models_file)) == [
+        {"name": "resnet50", "weights": "DEFAULT", "source": "torchvision"},
+        {"name": "mobilevit_s", "weights": "DEFAULT", "source": None},
+        {"name": "vit_b_16", "weights": "DEFAULT", "source": "torchvision"},
+    ]
+
+    args = get_args(["--models_file", str(models_file), "--model_name", "ignored"])
+    models, resolved_path = _models_from_args(args)
+
+    assert resolved_path == str(models_file)
+    assert [model["name"] for model in models] == ["resnet50", "mobilevit_s", "vit_b_16"]
+
+
+def test_pseudo_mse_accepts_yaml_path_as_model_name(tmp_path):
+    models_file = tmp_path / "models.yaml"
+    models_file.write_text("models:\n  - name: efficientnet_b0\n    weights: DEFAULT\n")
+
+    args = get_args(["--model_name", str(models_file)])
+    models, resolved_path = _models_from_args(args)
+
+    assert resolved_path == str(models_file)
+    assert models == [{"name": "efficientnet_b0", "weights": "DEFAULT", "source": None}]
+
+
+def test_pseudo_mse_rejects_empty_models_file(tmp_path):
+    models_file = tmp_path / "models.yaml"
+    models_file.write_text("")
+
+    args = get_args(["--models_file", str(models_file)])
+    with pytest.raises(ValueError, match="No model entries"):
+        _models_from_args(args)
 
 
 def test_summary_and_plots_include_dataset_size(tmp_path):

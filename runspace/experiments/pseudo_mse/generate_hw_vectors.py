@@ -273,6 +273,9 @@ def write_value_rows(f, raw_chunks, scaled_chunks, scales, chunk_idx, value_mode
     scale = scales[chunk_idx, 0]
     if value_mode == "raw-and-scaled":
         f.write(f"chunk_scale {fp32_hex(scale)} {fmt_float(scale)}\n")
+        f.write("# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec\n")
+    else:
+        f.write("# value_index scaled_fp32_hex scaled_fp32_dec\n")
 
     f.write("VALUES_BEGIN\n")
     for value_idx in range(CHUNK_SIZE):

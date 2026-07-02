@@ -83,6 +83,77 @@ def _load_bandwidth_aware_descent_results(project_root, results_dir="results_des
     return _load_bandwidth_aware_variant_results(project_root, results_dir)
 
 
+def _render_bandwidth_aware_quant_summary():
+    summary_rows = [
+        {
+            "Sub-experiment": "Standard bandwidth-aware",
+            "Run option": "default",
+            "Result directory": "results/",
+            "What it changes": "Sweeps the bandwidth-aware minimum bit-width and uses the normal dynamic activation MSE selector.",
+            "Activation setup": "Dynamic per-chunk activation formats use the assigned bandwidth-aware input bit-width; on-chip inputs use 8-bit candidates.",
+            "Read as": "Baseline curve for cache-size and bit-width tradeoffs.",
+        },
+        {
+            "Sub-experiment": "Best weights from DB",
+            "Run option": "--use_best_weights",
+            "Result directory": "results/",
+            "What it changes": "Uses per-layer weight formats from the latest optimized weight-quant DB run instead of the fixed default weight candidates.",
+            "Activation setup": "Same dynamic activation setup as the standard bandwidth-aware run.",
+            "Read as": "Checks whether previously optimized weights improve the standard bandwidth-aware sweep.",
+        },
+        {
+            "Sub-experiment": "Greedy descent",
+            "Run option": "--descent",
+            "Result directory": "results_descent/",
+            "What it changes": "Chooses the best weight policy at each bit level while descending from 8 bits to the lowest supported standard activation width.",
+            "Activation setup": "During each weight-policy trial, activations stay dynamic: transferred inputs use that level's assigned bit-width, on-chip inputs use 8-bit candidates, and MSE picks the per-chunk activation format.",
+            "Read as": "Weight-format search curve under the standard activation candidate set.",
+        },
+        {
+            "Sub-experiment": "Greedy descent e1/e2 activations",
+            "Run option": "--descent --activation_exponents e1e2",
+            "Result directory": "results_descent_activation_e1e2/",
+            "What it changes": "Runs greedy weight descent while restricting dynamic activation candidates to e1/e2 formats.",
+            "Activation setup": "Same descent evaluation as greedy descent, but the dynamic activation selector only searches e1/e2 activation formats.",
+            "Read as": "Separates the effect of e1/e2 activation candidates from pseudo_MSE.",
+        },
+        {
+            "Sub-experiment": "pseudo_MSE e1/e2 activations",
+            "Run option": "--pseudo_mse",
+            "Result directory": "results_pseudo_mse_activation_e1e2/",
+            "What it changes": "Uses the pseudo_MSE activation selector and the required e1/e2 activation candidate set from 4 to 8 bits.",
+            "Activation setup": "Dynamic activations use pseudo_MSE with typed e1/e2 signed or unsigned candidates, depending on the input source.",
+            "Read as": "Activation-metric comparison against the standard MSE selector.",
+        },
+        {
+            "Sub-experiment": "pseudo_MSE + greedy descent",
+            "Run option": "--pseudo_mse_descent",
+            "Result directory": "results_descent_pseudo_mse_activation_e1e2/",
+            "What it changes": "Combines the pseudo_MSE activation selector with greedy weight-format descent over the pseudo_MSE-supported 4-to-8 bit range.",
+            "Activation setup": "Weight candidates are evaluated with dynamic pseudo_MSE activations enabled; transferred inputs use the current 4-to-8 bit assignment and typed e1/e2 candidates.",
+            "Read as": "Combined activation-metric and weight-search curve.",
+        },
+    ]
+
+    with st.expander("Sub-experiment summary", expanded=True):
+        st.caption(
+            "Each row names the experiment variant, its launch flag, where the dashboard looks for matching results, and what comparison it is meant to answer. In descent variants, weight policies are chosen by full-model accuracy while activation quantization remains enabled."
+        )
+        st.dataframe(
+            pd.DataFrame(summary_rows),
+            width='stretch',
+            hide_index=True,
+            column_config={
+                "Sub-experiment": st.column_config.TextColumn("Sub-experiment", width="medium"),
+                "Run option": st.column_config.TextColumn("Run option", width="medium"),
+                "Result directory": st.column_config.TextColumn("Result directory", width="medium"),
+                "What it changes": st.column_config.TextColumn("What it changes", width="large"),
+                "Activation setup": st.column_config.TextColumn("Activation setup", width="large"),
+                "Read as": st.column_config.TextColumn("Read as", width="large"),
+            },
+        )
+
+
 def _bandwidth_aware_quant_rows(data, series="Baseline"):
     ref = data.get("ref_fp32", {}) or {}
     ref_acc = ref.get("accuracy")
@@ -447,6 +518,8 @@ def _render_descent_policy_table(descent_block, label="Descent"):
 
 
 def _render_bandwidth_aware_quant_results(selected_model=None):
+    _render_bandwidth_aware_quant_summary()
+
     runs = _load_bandwidth_aware_quant_results(PROJECT_ROOT)
     if not runs:
         st.info(
@@ -564,6 +637,32 @@ def _render_bandwidth_aware_quant_results(selected_model=None):
                     "stroke_dash": [4, 2],
                     "allow_min_bits_fallback": True,
                 })
+
+        pseudo_mse_descent_runs = _load_bandwidth_aware_variant_results(
+            PROJECT_ROOT,
+            results_dir="results_descent_pseudo_mse_activation_e1e2",
+        )
+        pseudo_mse_descent_run = pseudo_mse_descent_runs.get(data.get("model_name"))
+        if pseudo_mse_descent_run is not None and not bool(data.get("used_descent")):
+            if st.checkbox(
+                "Overlay pseudo_MSE + greedy-descent results",
+                value=False,
+                key="cache_bwaq_overlay_pseudo_mse_descent_activation_e1e2",
+                help=f"Overlay the matching pseudo_MSE descent run on top: {pseudo_mse_descent_run['path']}",
+            ):
+                overlays.append({
+                    "data": pseudo_mse_descent_run["data"],
+                    "rows": pd.DataFrame(_bandwidth_aware_quant_rows(pseudo_mse_descent_run["data"], series="pseudo_MSE Descent e1/e2 activations")),
+                    "point_type": "pseudo_MSE Descent (e1/e2 activations)",
+                    "legend_prefix": "pseudo_MSE Descent e1/e2",
+                    "shape": "triangle-down",
+                    "stroke_dash": [5, 2, 1, 2],
+                    "allow_min_bits_fallback": True,
+                })
+                _render_descent_policy_table(
+                    pseudo_mse_descent_run["data"].get("descent", {}),
+                    label="pseudo_MSE Descent e1/e2 activations",
+                )
 
         _render_bandwidth_aware_quant_chart(data, points_df, overlay=overlays or None)
 

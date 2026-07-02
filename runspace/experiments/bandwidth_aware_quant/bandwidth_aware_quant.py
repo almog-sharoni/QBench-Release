@@ -248,6 +248,10 @@ def default_results_dir_for_args(args):
 
 def configure_activation_metric_args(parser, args):
     """Normalize and validate activation metric options."""
+    if args.pseudo_mse_descent:
+        args.pseudo_mse = True
+        args.descent = True
+
     if args.pseudo_mse:
         args.activation_metric = PSEUDO_MSE_METRIC
         if args.activation_exponents != 'e1e2':
@@ -1158,11 +1162,14 @@ def main():
                         help="Dynamic activation input selection metric. Use 'mse' for the existing path or 'pseudo_MSE' for the new pairwise e1/e2 metric.")
     parser.add_argument("--pseudo_mse", action="store_true",
                         help="Run the pseudo_MSE activation-metric sub-experiment. This selects --activation_metric pseudo_MSE and restricts activation candidates to e1/e2.")
+    parser.add_argument("--pseudo_mse_descent", action="store_true",
+                        help="Run the combined pseudo_MSE + greedy-descent sub-experiment. Equivalent to --pseudo_mse --descent.")
     parser.add_argument("--use_best_weights", action="store_true",
                         help="Use the per-layer best weight formats from the latest weight_quant_optimized DB run instead of SIGNED_FORMATS_BY_BITS.")
     parser.add_argument("--descent", action="store_true",
-                        help="Greedy weight-format descent: from 8 down to 3 bits, pick (by full-model acc1) the best weight policy "
-                             "for layers newly limited to each width — among all fixed formats of that width plus a per-chunk-MSE option — "
+                        help="Greedy weight-format descent: from 8 down to the activation metric's minimum supported bit-width, "
+                             "pick (by full-model acc1) the best weight policy for layers newly limited to each width — "
+                             "among all fixed formats of that width plus a per-chunk-MSE option — "
                              "freezing the formats already decided for higher-bit layers.")
     args = parser.parse_args()
 
@@ -1442,6 +1449,7 @@ def main():
                 'activation_metric_label': activation_metric_label(args.activation_metric),
                 'unsigned_input_sources': UNSIGNED_INPUT_SOURCES,
                 'pseudo_mse': is_pseudo_mse_activation_metric(args.activation_metric),
+                'pseudo_mse_descent': bool(args.pseudo_mse_descent or (args.descent and is_pseudo_mse_activation_metric(args.activation_metric))),
                 'descent': bool(args.descent),
                 'use_best_weights': bool(args.use_best_weights),
             },

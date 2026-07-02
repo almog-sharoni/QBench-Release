@@ -25,6 +25,7 @@ err_exp2 0.0107421875
 chunk_diff_exp2_minus_exp1 0.00866699219
 expected_decision exp1
 chunk_scale 0x3f800000 1
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f808000 1.00390625 0x3f808000 1.00390625
 001 0xbf818000 -1.01171875 0xbf818000 -1.01171875
@@ -162,6 +163,7 @@ err_exp2 0.00244140625
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x41000000 8
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x40918000 4.546875 0x3f118000 0.568359375
 001 0xc0928000 -4.578125 0xbf128000 -0.572265625
@@ -299,6 +301,7 @@ err_exp2 0.000610351562
 chunk_diff_exp2_minus_exp1 -0.001953125
 expected_decision exp2
 chunk_scale 0x3e800000 0.25
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3d9f8000 0.0778808594 0x3e9f8000 0.311523438
 001 0xbda08000 -0.0783691406 0xbea08000 -0.313476562
@@ -436,6 +439,7 @@ err_exp2 0.000650405884
 chunk_diff_exp2_minus_exp1 -0.001953125
 expected_decision exp2
 chunk_scale 0x42000000 32
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f878000 1.05859375 0x3d078000 0.0330810547
 001 0xbf888000 -1.06640625 0xbd088000 -0.0333251953
@@ -573,6 +577,7 @@ err_exp2 0.000678767916
 chunk_diff_exp2_minus_exp1 -0.00148925767
 expected_decision exp2
 chunk_scale 0x3d800000 0.0625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xba000000 -0.00048828125 0xbc000000 -0.0078125
 001 0x3a000000 0.00048828125 0x3c000000 0.0078125
@@ -710,6 +715,7 @@ err_exp2 0.00190712325
 chunk_diff_exp2_minus_exp1 -0.000748182414
 expected_decision exp2
 chunk_scale 0x43800000 256
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f5c9bdc 0.861753225 0x3b5c9bdc 0.00336622354
 001 0xc3c5da5a -395.705872 0xbfc5da5a -1.54572606
@@ -847,6 +853,7 @@ err_exp2 0.00427749613
 chunk_diff_exp2_minus_exp1 0.00179649633
 expected_decision exp1
 chunk_scale 0x3c800000 0.015625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3a0bbd18 0.000533060636 0x3d0bbd18 0.0341158807
 001 0xbcf7cfc7 -0.0302504431 0xbff7cfc7 -1.93602836
@@ -984,6 +991,7 @@ err_exp2 0.000262081623
 chunk_diff_exp2_minus_exp1 -0.00080871582
 expected_decision exp2
 chunk_scale 0x40800000 4
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xc0c00000 -6 0xbfc00000 -1.5
 001 0xc0400000 -3 0xbf400000 -0.75
@@ -1121,6 +1129,7 @@ err_exp2 0.00191288115
 chunk_diff_exp2_minus_exp1 0.000527381897
 expected_decision exp1
 chunk_scale 0x3b800000 0.00390625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xbb87f000 -0.00414848328 0xbf87f000 -1.06201172
 001 0xbb881000 -0.00415229797 0xbf881000 -1.06298828
@@ -1258,6 +1267,7 @@ err_exp2 0
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x3f800000 1
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x00000000 0 0x00000000 0
 001 0x00000000 0 0x00000000 0
@@ -1403,6 +1413,7 @@ err_exp2 0.048828125
 chunk_diff_exp2_minus_exp1 0.0380859375
 expected_decision exp1
 chunk_scale 0x3f800000 1
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f808000 1.00390625 0x3f808000 1.00390625
 001 0xbf818000 -1.01171875 0xbf818000 -1.01171875
@@ -1540,6 +1551,7 @@ err_exp2 0.0102539062
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x41000000 8
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x40918000 4.546875 0x3f118000 0.568359375
 001 0xc0928000 -4.578125 0xbf128000 -0.572265625
@@ -1677,6 +1689,7 @@ err_exp2 0.00256347656
 chunk_diff_exp2_minus_exp1 -0.0078125
 expected_decision exp2
 chunk_scale 0x3e800000 0.25
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3d9f8000 0.0778808594 0x3e9f8000 0.311523438
 001 0xbda08000 -0.0783691406 0xbea08000 -0.313476562
@@ -1814,6 +1827,7 @@ err_exp2 0.00260353088
 chunk_diff_exp2_minus_exp1 -0.0078125
 expected_decision exp2
 chunk_scale 0x42000000 32
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f878000 1.05859375 0x3d078000 0.0330810547
 001 0xbf888000 -1.06640625 0xbd088000 -0.0333251953
@@ -1951,6 +1965,7 @@ err_exp2 0.00216802605
 chunk_diff_exp2_minus_exp1 -0.00384521484
 expected_decision exp2
 chunk_scale 0x3d800000 0.0625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xba000000 -0.00048828125 0xbc000000 -0.0078125
 001 0x3a000000 0.00048828125 0x3c000000 0.0078125
@@ -2088,6 +2103,7 @@ err_exp2 0.00995905884
 chunk_diff_exp2_minus_exp1 0.00130709191
 expected_decision exp1
 chunk_scale 0x43800000 256
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f5c9bdc 0.861753225 0x3b5c9bdc 0.00336622354
 001 0xc3c5da5a -395.705872 0xbfc5da5a -1.54572606
@@ -2225,6 +2241,7 @@ err_exp2 0.0167401824
 chunk_diff_exp2_minus_exp1 0.00590062328
 expected_decision exp1
 chunk_scale 0x3c800000 0.015625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3a0bbd18 0.000533060636 0x3d0bbd18 0.0341158807
 001 0xbcf7cfc7 -0.0302504431 0xbff7cfc7 -1.93602836
@@ -2362,6 +2379,7 @@ err_exp2 0.00107079744
 chunk_diff_exp2_minus_exp1 -0.00335693359
 expected_decision exp2
 chunk_scale 0x40800000 4
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xc0c00000 -6 0xbfc00000 -1.5
 001 0xc0400000 -3 0xbf400000 -0.75
@@ -2499,6 +2517,7 @@ err_exp2 0.0119827287
 chunk_diff_exp2_minus_exp1 0.00577926636
 expected_decision exp1
 chunk_scale 0x3b800000 0.00390625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xbb87f000 -0.00414848328 0xbf87f000 -1.06201172
 001 0xbb881000 -0.00415229797 0xbf881000 -1.06298828
@@ -2636,6 +2655,7 @@ err_exp2 0
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x3f800000 1
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x00000000 0 0x00000000 0
 001 0x00000000 0 0x00000000 0
@@ -2781,6 +2801,7 @@ err_exp2 0.228515625
 chunk_diff_exp2_minus_exp1 0.1796875
 expected_decision exp1
 chunk_scale 0x3f800000 1
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f808000 1.00390625 0x3f808000 1.00390625
 001 0xbf818000 -1.01171875 0xbf818000 -1.01171875
@@ -2918,6 +2939,7 @@ err_exp2 0.0415039062
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x41000000 8
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x40918000 4.546875 0x3f118000 0.568359375
 001 0xc0928000 -4.578125 0xbf128000 -0.572265625
@@ -3055,6 +3077,7 @@ err_exp2 0.0103759766
 chunk_diff_exp2_minus_exp1 -0.03125
 expected_decision exp2
 chunk_scale 0x3e800000 0.25
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3d9f8000 0.0778808594 0x3e9f8000 0.311523438
 001 0xbda08000 -0.0783691406 0xbea08000 -0.313476562
@@ -3192,6 +3215,7 @@ err_exp2 0.0104160309
 chunk_diff_exp2_minus_exp1 -0.03125
 expected_decision exp2
 chunk_scale 0x42000000 32
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f878000 1.05859375 0x3d078000 0.0330810547
 001 0xbf888000 -1.06640625 0xbd088000 -0.0333251953
@@ -3329,6 +3353,7 @@ err_exp2 0.00601324067
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x3d800000 0.0625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xba000000 -0.00048828125 0xbc000000 -0.0078125
 001 0x3a000000 0.00048828125 0x3c000000 0.0078125
@@ -3466,6 +3491,7 @@ err_exp2 0.0520853847
 chunk_diff_exp2_minus_exp1 0.017501425
 expected_decision exp1
 chunk_scale 0x43800000 256
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f5c9bdc 0.861753225 0x3b5c9bdc 0.00336622354
 001 0xc3c5da5a -395.705872 0xbfc5da5a -1.54572606
@@ -3603,6 +3629,7 @@ err_exp2 0.0671162084
 chunk_diff_exp2_minus_exp1 0.0265852083
 expected_decision exp1
 chunk_scale 0x3c800000 0.015625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3a0bbd18 0.000533060636 0x3d0bbd18 0.0341158807
 001 0xbcf7cfc7 -0.0302504431 0xbff7cfc7 -1.93602836
@@ -3740,6 +3767,7 @@ err_exp2 0.00442773104
 chunk_diff_exp2_minus_exp1 -0.013671875
 expected_decision exp2
 chunk_scale 0x40800000 4
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xc0c00000 -6 0xbfc00000 -1.5
 001 0xc0400000 -3 0xbf400000 -0.75
@@ -3877,6 +3905,7 @@ err_exp2 0.05251389
 chunk_diff_exp2_minus_exp1 0.0137023926
 expected_decision exp1
 chunk_scale 0x3b800000 0.00390625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xbb87f000 -0.00414848328 0xbf87f000 -1.06201172
 001 0xbb881000 -0.00415229797 0xbf881000 -1.06298828
@@ -4014,6 +4043,7 @@ err_exp2 0
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x3f800000 1
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x00000000 0 0x00000000 0
 001 0x00000000 0 0x00000000 0
@@ -4159,6 +4189,7 @@ err_exp2 1.16601562
 chunk_diff_exp2_minus_exp1 0.9375
 expected_decision exp1
 chunk_scale 0x3f800000 1
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f808000 1.00390625 0x3f808000 1.00390625
 001 0xbf818000 -1.01171875 0xbf818000 -1.01171875
@@ -4296,6 +4327,7 @@ err_exp2 0.166503906
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x41000000 8
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x40918000 4.546875 0x3f118000 0.568359375
 001 0xc0928000 -4.578125 0xbf128000 -0.572265625
@@ -4433,6 +4465,7 @@ err_exp2 0.0416259766
 chunk_diff_exp2_minus_exp1 -0.125
 expected_decision exp2
 chunk_scale 0x3e800000 0.25
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3d9f8000 0.0778808594 0x3e9f8000 0.311523438
 001 0xbda08000 -0.0783691406 0xbea08000 -0.313476562
@@ -4570,6 +4603,7 @@ err_exp2 0.0416660309
 chunk_diff_exp2_minus_exp1 -0.25
 expected_decision exp2
 chunk_scale 0x42000000 32
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f878000 1.05859375 0x3d078000 0.0330810547
 001 0xbf888000 -1.06640625 0xbd088000 -0.0333251953
@@ -4707,6 +4741,7 @@ err_exp2 0.00601324067
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x3d800000 0.0625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xba000000 -0.00048828125 0xbc000000 -0.0078125
 001 0x3a000000 0.00048828125 0x3c000000 0.0078125
@@ -4844,6 +4879,7 @@ err_exp2 0.175360873
 chunk_diff_exp2_minus_exp1 0.0274343677
 expected_decision exp1
 chunk_scale 0x43800000 256
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f5c9bdc 0.861753225 0x3b5c9bdc 0.00336622354
 001 0xc3c5da5a -395.705872 0xbfc5da5a -1.54572606
@@ -4981,6 +5017,7 @@ err_exp2 0.391845137
 chunk_diff_exp2_minus_exp1 0.2317729
 expected_decision exp1
 chunk_scale 0x3c800000 0.015625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3a0bbd18 0.000533060636 0x3d0bbd18 0.0341158807
 001 0xbcf7cfc7 -0.0302504431 0xbff7cfc7 -1.93602836
@@ -5118,6 +5155,7 @@ err_exp2 0.018099606
 chunk_diff_exp2_minus_exp1 -0.0546875
 expected_decision exp2
 chunk_scale 0x40800000 4
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xc0c00000 -6 0xbfc00000 -1.5
 001 0xc0400000 -3 0xbf400000 -0.75
@@ -5255,6 +5293,7 @@ err_exp2 0.109368138
 chunk_diff_exp2_minus_exp1 0.0191650391
 expected_decision exp1
 chunk_scale 0x3b800000 0.00390625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xbb87f000 -0.00414848328 0xbf87f000 -1.06201172
 001 0xbb881000 -0.00415229797 0xbf881000 -1.06298828
@@ -5392,6 +5431,7 @@ err_exp2 0
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x3f800000 1
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x00000000 0 0x00000000 0
 001 0x00000000 0 0x00000000 0
@@ -5537,6 +5577,7 @@ err_exp2 6.66601562
 chunk_diff_exp2_minus_exp1 5.5
 expected_decision exp1
 chunk_scale 0x3f800000 1
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f808000 1.00390625 0x3f808000 1.00390625
 001 0xbf818000 -1.01171875 0xbf818000 -1.01171875
@@ -5674,6 +5715,7 @@ err_exp2 0.666503906
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x41000000 8
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x40918000 4.546875 0x3f118000 0.568359375
 001 0xc0928000 -4.578125 0xbf128000 -0.572265625
@@ -5811,6 +5853,7 @@ err_exp2 0.166625977
 chunk_diff_exp2_minus_exp1 -0.5
 expected_decision exp2
 chunk_scale 0x3e800000 0.25
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3d9f8000 0.0778808594 0x3e9f8000 0.311523438
 001 0xbda08000 -0.0783691406 0xbea08000 -0.313476562
@@ -5948,6 +5991,7 @@ err_exp2 0.291666031
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x42000000 32
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f878000 1.05859375 0x3d078000 0.0330810547
 001 0xbf888000 -1.06640625 0xbd088000 -0.0333251953
@@ -6085,6 +6129,7 @@ err_exp2 0.00601324067
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x3d800000 0.0625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xba000000 -0.00048828125 0xbc000000 -0.0078125
 001 0x3a000000 0.00048828125 0x3c000000 0.0078125
@@ -6222,6 +6267,7 @@ err_exp2 1.03192127
 chunk_diff_exp2_minus_exp1 0.581711471
 expected_decision exp1
 chunk_scale 0x43800000 256
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3f5c9bdc 0.861753225 0x3b5c9bdc 0.00336622354
 001 0xc3c5da5a -395.705872 0xbfc5da5a -1.54572606
@@ -6359,6 +6405,7 @@ err_exp2 2.21207428
 chunk_diff_exp2_minus_exp1 1.50444162
 expected_decision exp1
 chunk_scale 0x3c800000 0.015625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x3a0bbd18 0.000533060636 0x3d0bbd18 0.0341158807
 001 0xbcf7cfc7 -0.0302504431 0xbff7cfc7 -1.93602836
@@ -6496,6 +6543,7 @@ err_exp2 0.229037106
 chunk_diff_exp2_minus_exp1 -0.0625
 expected_decision exp2
 chunk_scale 0x40800000 4
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xc0c00000 -6 0xbfc00000 -1.5
 001 0xc0400000 -3 0xbf400000 -0.75
@@ -6633,6 +6681,7 @@ err_exp2 0.278191388
 chunk_diff_exp2_minus_exp1 0.125
 expected_decision exp1
 chunk_scale 0x3b800000 0.00390625
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0xbb87f000 -0.00414848328 0xbf87f000 -1.06201172
 001 0xbb881000 -0.00415229797 0xbf881000 -1.06298828
@@ -6770,6 +6819,7 @@ err_exp2 0
 chunk_diff_exp2_minus_exp1 0
 expected_decision exp1
 chunk_scale 0x3f800000 1
+# value_index raw_fp32_hex raw_fp32_dec scaled_fp32_hex scaled_fp32_dec
 VALUES_BEGIN
 000 0x00000000 0 0x00000000 0
 001 0x00000000 0 0x00000000 0
