@@ -11,11 +11,14 @@ try:
     from .dynamic_input_metrics import (
         DYNAMIC_INPUT_METRIC_ALIASES,
         IMPLEMENTED_DYNAMIC_INPUT_METRIC_CODES,
+        PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
         dynamic_input_metric_code,
         is_pseudo_mse_metric,
         normalize_dynamic_input_metric,
+        pseudo_mse_choose_exp2_from_diff,
+        pseudo_mse_e2_win_divisor_from_param,
+        pseudo_mse_err2_minus_err1_from_scaled,
         pseudo_mse_reconstruct_scaled_python,
-        pseudo_mse_sqerr_diff_from_scaled,
         reduce_dynamic_input_metric_python,
         validate_pseudo_mse_candidate_pairs,
     )
@@ -29,11 +32,14 @@ except ImportError:
     from src.quantization.dynamic_input_metrics import (
         DYNAMIC_INPUT_METRIC_ALIASES,
         IMPLEMENTED_DYNAMIC_INPUT_METRIC_CODES,
+        PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
         dynamic_input_metric_code,
         is_pseudo_mse_metric,
         normalize_dynamic_input_metric,
+        pseudo_mse_choose_exp2_from_diff,
+        pseudo_mse_e2_win_divisor_from_param,
+        pseudo_mse_err2_minus_err1_from_scaled,
         pseudo_mse_reconstruct_scaled_python,
-        pseudo_mse_sqerr_diff_from_scaled,
         reduce_dynamic_input_metric_python,
         validate_pseudo_mse_candidate_pairs,
     )
@@ -100,9 +106,14 @@ class DynamicInputQuantizer:
     ):
         self.model = model
         self.metric = self._normalize_metric(metric)
-        # Huber transition point (in the per-chunk scaled domain, where chunk
-        # amax maps to ~[1, 2)). Only used by the 'huber' metric.
-        self.metric_param = float(metric_param) if metric_param is not None else 0.0625
+        if is_pseudo_mse_metric(self.metric):
+            # pseudo_MSE uses metric_param as the exp=2 win divisor.  The
+            # default is divide-by-4; divide-by-2 is for L1-equivalence checks.
+            self.metric_param = float(pseudo_mse_e2_win_divisor_from_param(metric_param))
+        else:
+            # Huber transition point (in the per-chunk scaled domain, where
+            # chunk amax maps to ~[1, 2)). Only used by the 'huber' metric.
+            self.metric_param = float(metric_param) if metric_param is not None else 0.0625
         self.chunk_size = chunk_size
         self.restrict_post_relu_ufp = bool(restrict_post_relu_ufp)
         self.use_unsigned_input_candidates = bool(use_unsigned_input_candidates)
@@ -932,13 +943,16 @@ class DynamicInputQuantizer:
         scales = self._chunk_scale(ref_chunks)
         x_scaled = ref_chunks / scales
 
-        diff = pseudo_mse_sqerr_diff_from_scaled(
+        diff = pseudo_mse_err2_minus_err1_from_scaled(
             x_scaled,
             pair.exp1_mantissa_width,
             pair.exp1_mantissa_width - 1,
             pair.is_signed,
         )
-        choose_exp2 = diff.sum(dim=1) < 0
+        e2_win_divisor = pseudo_mse_e2_win_divisor_from_param(
+            getattr(self, "metric_param", PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR)
+        )
+        choose_exp2 = pseudo_mse_choose_exp2_from_diff(diff, e2_win_divisor)
 
         q_e1_scaled = pseudo_mse_reconstruct_scaled_python(
             x_scaled,

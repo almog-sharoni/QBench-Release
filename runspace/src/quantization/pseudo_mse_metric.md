@@ -2,6 +2,11 @@
 
 `pseudo_MSE` is a pairwise activation-format selection metric for comparing
 same-width floating-point candidates with exponent widths `1` and `2`.
+It is intentionally not the same selector as MSE: each element votes for the
+candidate using a bit-level pseudo `err2-err1` signal, then the exp=2 vote
+count is divided by an integer divisor before the chunk decision. The default
+divisor is `4`, matching the original `>> 2` behavior. A divisor of `2` is
+available as an L1-equivalence verification mode.
 
 For a given total bit width, the candidate pair is:
 
@@ -19,45 +24,43 @@ exp=2: ufpB_e2m(M-1)
 
 `M` is the mantissa width of the exp=1 format. The exp=2 format must have
 exactly one fewer mantissa bit, so both candidates have the same total width.
-Both candidates must use the same signedness.
+Both candidates must use the same signedness.  pseudo_MSE uses mantissa
+truncation for the selected quantized output in both Python and CUDA paths.
 
 ## Per-Element Definition
 
-For each scaled activation value `x`, the metric computes the exact signed
-difference between the squared reconstruction errors of the two candidate
-formats:
+For each scaled activation value `x`, the metric computes a signed bit-level
+pseudo difference `diff = err2 - err1`.  Let `a = abs(x)`, and define the
+exponent depth `d` by:
 
 ```text
-q_exp1 = decode_emb(encode_emb(x, e=1, m=M,   sgn), e=1, m=M,   sgn)
-q_exp2 = decode_emb(encode_emb(x, e=2, m=M-1, sgn), e=2, m=M-1, sgn)
-
-diff = (x - q_exp2)^2 - (x - q_exp1)^2
+d=0 for 1.0 <= a < 2.0
+d=1 for 0.5 <= a < 1.0
+d=2 for 0.25 <= a < 0.5
+...
 ```
 
-The sign is meaningful:
+Let `X_k` be the kth normalized mantissa bit after the hidden leading `1`, and
+let `M` be the higher mantissa width from the exp=1 format.  The per-element
+signal is:
 
 ```text
-diff < 0  => exp=2 has lower squared error for this element
-diff > 0  => exp=1 has lower squared error for this element
-diff == 0 => tie for this element
+d == 0       => +X_M
+d == 1       => 0
+1 < d < M+1  => -X_(M+1-d)
+d == M+1     => -1   # hidden leading 1
+d > M+1      => 0
 ```
 
-This is not the old bit-level pseudo-unit approximation. The implementation
-now compares the actual reconstructed values produced by `encode_emb` and
-`decode_emb`.
+The sign convention is:
+
+```text
+diff < 0  => exp=2 wins this element
+diff > 0  => exp=1 wins this element
+diff == 0 => tie for this element, no vote
+```
 
 ## Mathematical Function
-
-Let `Q_{e,m,s}(x)` be the reconstructed value after encoding and decoding `x`
-with exponent width `e`, mantissa width `m`, and signedness `s`:
-
-```math
-Q_{e,m,s}(x) =
-\operatorname{decode\_emb}(
-    \operatorname{encode\_emb}(x, e, m, s),
-    e, m, s
-)
-```
 
 For an exp=1 / exp=2 same-width pair:
 
@@ -65,100 +68,52 @@ For an exp=1 / exp=2 same-width pair:
 m_2 = m_1 - 1
 ```
 
-The per-element pseudo_MSE difference is:
+For a chunk `C`, define:
 
 ```math
-\Delta_{\mathrm{pseudo\_MSE}}(x; m_1, s)
-=
-\left(x - Q_{2,m_1-1,s}(x)\right)^2
--
-\left(x - Q_{1,m_1,s}(x)\right)^2
+W_1(C) = |\{x_i \in C : \mathrm{diff}_i > 0\}|
 ```
-
-For a chunk `C`, the chunk-level decision value is:
 
 ```math
-D(C; m_1, s)
-=
-\sum_{x_i \in C}
-\Delta_{\mathrm{pseudo\_MSE}}(x_i; m_1, s)
+W_2(C) = |\{x_i \in C : \mathrm{diff}_i < 0\}|
 ```
 
-The selected format is:
+Exact zero differences are ties and are excluded from both counts. The selected
+format uses divisor `D`, where `D=4` by default and `D=2` for the L1
+verification mode:
 
 ```math
 \operatorname{select}(C) =
 \begin{cases}
-\mathrm{exp}=2, & D(C; m_1, s) < 0 \\
-\mathrm{exp}=1, & D(C; m_1, s) \ge 0
+\mathrm{exp}=2, & \left\lfloor W_2(C) / D \right\rfloor \ge W_1(C) \\
+\mathrm{exp}=1, & \left\lfloor W_2(C) / D \right\rfloor < W_1(C)
 \end{cases}
-```
-
-## Actual Function
-
-The CUDA metric function is:
-
-```cpp
-__device__ __forceinline__ float pseudo_mse_sqerr_diff(
-    float scaled_v,
-    int m1,
-    int m2,
-    int sgn)
-{
-    const uint32_t p1 = encode_emb(scaled_v, 1, m1, sgn);
-    const uint32_t p2 = encode_emb(scaled_v, 2, m2, sgn);
-
-    const float q1 = decode_emb(p1, 1, m1, sgn);
-    const float q2 = decode_emb(p2, 2, m2, sgn);
-
-    const float d1 = scaled_v - q1;
-    const float d2 = scaled_v - q2;
-
-    return d2 * d2 - d1 * d1;
-}
-```
-
-The Python reference uses the same definition:
-
-```python
-def pseudo_mse_sqerr_diff_from_scaled(
-    scaled_values,
-    exp1_mantissa_width,
-    exp2_mantissa_width,
-    is_signed,
-):
-    m1 = int(exp1_mantissa_width)
-    m2 = int(exp2_mantissa_width)
-    if m2 != m1 - 1:
-        raise ValueError(f"pseudo_MSE requires m2 == m1 - 1; got m1={m1}, m2={m2}")
-
-    q1 = pseudo_mse_reconstruct_scaled_python(scaled_values, 1, m1, is_signed)
-    q2 = pseudo_mse_reconstruct_scaled_python(scaled_values, 2, m2, is_signed)
-
-    d1 = scaled_values.to(torch.float32) - q1
-    d2 = scaled_values.to(torch.float32) - q2
-    return d2 * d2 - d1 * d1
 ```
 
 ## Chunk Selection Rule
 
 Dynamic activation quantization selects one format per chunk. For a chunk,
-`pseudo_MSE` sums the signed per-element differences:
+`pseudo_MSE` counts the signed per-element winners:
 
 ```text
-chunk_diff = sum_i [(x_i - q_exp2_i)^2 - (x_i - q_exp1_i)^2]
+exp2_wins = count_i(diff_i < 0)
+exp1_wins = count_i(diff_i > 0)
+exp2_wins_shifted = floor(exp2_wins / e2_win_divisor)
 ```
 
 The selected format is:
 
 ```text
-if chunk_diff < 0:
+if exp2_wins_shifted >= exp1_wins:
     choose exp=2
 else:
     choose exp=1
 ```
 
-Ties choose exp=1.
+The unshifted `exp2_wins` count is still useful for debug and hardware-vector
+reporting, but only `exp2_wins_shifted` drives the decision. Hardware-vector
+exports also keep the legacy `expected_e2_wins_shift2` divide-by-4 diagnostic.
+Ties, including all-zero-vote chunks, choose exp=2.
 
 ## Constraints
 
@@ -199,9 +154,10 @@ m2 != m1 - 1
 
 ## Implementation
 
-The CUDA path computes `diff` per lane as a float, reduces it across the chunk
-with a signed sum, then chooses exp=2 only when the reduced value is negative.
-
-The Python reference path mirrors the same `encode_emb` and `decode_emb`
-behavior with vectorized PyTorch bit operations and is tested against the CUDA
-selector.
+The CUDA path computes the bit-level `diff` per lane from the FP32 exponent and
+mantissa bits, packs exp=1 and exp=2 votes into one exact reduction, divides
+the exp=2 count by the pseudo_MSE divisor, then chooses exp=2 when the shifted
+count is at least the exp=1 count.  The selected value is encoded with
+truncation.  The Python reference mirrors the same FP32 bit operations and
+truncating encode path, and is tested against the CUDA selector for both
+supported divisors.

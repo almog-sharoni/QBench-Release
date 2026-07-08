@@ -26,7 +26,7 @@ enum SearchMetric {
     METRIC_L0     = 4,  // count(diff != 0)       -- reduce SUM
     METRIC_HUBER  = 5,  // sum(huber(diff,delta)) -- reduce SUM
     METRIC_LOGSUM = 6,  // sum(floor(log2|diff|)) -- reduce SUM (log-domain L1)
-    METRIC_PSEUDO_MSE = 7,  // exact pairwise squared-error diff: exp=2 - exp=1
+    METRIC_PSEUDO_MSE = 7,  // bit-level pseudo err2-err1 selector
 };
 
 // Per-element contribution for the active metric (operates on the scaled error).
@@ -81,22 +81,40 @@ __device__ __forceinline__ float block_reduce_metric(float val, bool use_max, in
     return r;
 }
 
-__device__ __forceinline__ float pseudo_mse_sqerr_diff(
+__device__ __forceinline__ float pseudo_mse_err2_minus_err1(
     float scaled_v,
     int m1,
     int m2,
     int sgn)
 {
-    const uint32_t p1 = encode_emb(scaled_v, 1, m1, sgn);
-    const uint32_t p2 = encode_emb(scaled_v, 2, m2, sgn);
+    (void)sgn;
+    if (m2 != m1 - 1) {
+        return 0.0f;
+    }
 
-    const float q1 = decode_emb(p1, 1, m1, sgn);
-    const float q2 = decode_emb(p2, 2, m2, sgn);
+    const uint32_t mag = __float_as_uint(scaled_v) & 0x7FFFFFFFu;
+    const uint32_t exp_field = (mag >> 23) & 0xFFu;
+    if (exp_field == 0u) {
+        return 0.0f;
+    }
 
-    const float d1 = scaled_v - q1;
-    const float d2 = scaled_v - q2;
+    const int e_depth = 127 - static_cast<int>(exp_field);
+    const uint32_t mant = mag & 0x7FFFFFu;
 
-    return d2 * d2 - d1 * d1;
+    if (e_depth == 0) {
+        return static_cast<float>((mant >> (23 - m1)) & 1u);
+    }
+    if (e_depth == 1) {
+        return 0.0f;
+    }
+    if (e_depth > 1 && e_depth < m1 + 1) {
+        const int k = m1 + 1 - e_depth;
+        return -static_cast<float>((mant >> (23 - k)) & 1u);
+    }
+    if (e_depth == m1 + 1) {
+        return -1.0f;
+    }
+    return 0.0f;
 }
 
 // This kernel computes the best format per chunk, and directly decodes the values.
@@ -193,28 +211,42 @@ __global__ void search_and_quantize_chunk_kernel(
         int best_c = 0;
 
         if (e1_idx >= 0 && e2_idx >= 0 && exp1_m >= 1 && exp2_m == exp1_m - 1) {
-            // METRIC_PSEUDO_MSE computes the exact pairwise squared-error
-            // difference between exp=2 and exp=1 formats for the same total
-            // width. It does not use the old bit-level pseudo units.
-            const float diff = pseudo_mse_sqerr_diff(
+            const float diff = pseudo_mse_err2_minus_err1(
                 scaled_v,
                 exp1_m,
                 exp2_m,
                 pair_sgn);
 
-            const float chunk_diff =
-                block_reduce_metric(diff, false, lane);
+            // pseudo_MSE is a per-element winner vote, not a summed MSE.
+            // Sign convention:
+            //   diff < 0 means exp=2 wins
+            //   diff > 0 means exp=1 wins
+            // exact ties do not vote.
+            constexpr int COUNT_PACK = 1024;
+            const float packed_vote =
+                (diff > 0.0f) ? static_cast<float>(COUNT_PACK) :
+                ((diff < 0.0f) ? 1.0f : 0.0f);
+            const float chunk_packed_vote =
+                block_reduce_metric(packed_vote, false, lane);
 
-            // chunk_diff = sum_i [(x_i - q_exp2_i)^2 - (x_i - q_exp1_i)^2].
-            // Negative means exp=2 has lower total squared error.
-            // A tie selects exp=1.
-            best_c = (chunk_diff < 0.0f) ? e2_idx : e1_idx;
+            // Equivalent signed vote convention is exp=1 positive and
+            // exp=2 negative. The decision uses explicit counts and divides
+            // exp=2 wins by the pseudo_MSE divisor. A tie selects exp=2.
+            const int packed_count = static_cast<int>(chunk_packed_vote);
+            const int e1_wins = packed_count / COUNT_PACK;
+            const int e2_wins = packed_count - e1_wins * COUNT_PACK;
+            int e2_win_divisor = static_cast<int>(metric_param + 0.5f);
+            if (e2_win_divisor != 2 && e2_win_divisor != 4) {
+                e2_win_divisor = 4;
+            }
+            const int e2_wins_shifted = e2_wins / e2_win_divisor;
+            best_c = (e2_wins_shifted >= e1_wins) ? e2_idx : e1_idx;
         }
 
         const int e = cands_e[best_c];
         const int m = cands_m[best_c];
         const int sgn = cands_sgn[best_c];
-        std::uint32_t packed = encode_emb(scaled_v, e, m, sgn);
+        std::uint32_t packed = encode_emb_trunc(scaled_v, e, m, sgn);
         const float best_qv = decode_emb(packed, e, m, sgn);
 
         if (global_idx < N) {

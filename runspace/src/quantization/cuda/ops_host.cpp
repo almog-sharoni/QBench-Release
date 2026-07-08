@@ -735,7 +735,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, mod) {
             py::arg("metric_param") = 0.0625,
             "Fused search and quantize for chunk-mode dynamic quantization. "
             "metric selects the per-chunk error norm (0=L2, 1=L1, 2=Linf, 3=bias, "
-            "4=L0, 5=Huber, 6=logsum, 7=pseudo_MSE); metric_param is the Huber delta.");
+            "4=L0, 5=Huber, 6=logsum, 7=pseudo_MSE); metric_param is the Huber "
+            "delta, or the pseudo_MSE exp=2 win divisor (2 or 4).");
 
     mod.def("n_per_word",     &n_per_word_py,
             py::arg("e"), py::arg("m"),

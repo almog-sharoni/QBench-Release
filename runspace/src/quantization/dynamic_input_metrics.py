@@ -7,6 +7,8 @@ import torch
 
 PSEUDO_MSE_DISPLAY_NAME = "pseudo_MSE"
 PSEUDO_MSE_CANONICAL_NAME = "pseudo_mse"
+PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR = 4
+PSEUDO_MSE_SUPPORTED_E2_WIN_DIVISORS = (2, 4)
 
 
 @dataclass(frozen=True)
@@ -232,7 +234,7 @@ def _uint32_to_float32(bits):
 
 
 def pseudo_mse_encode_emb_python(values, exp_bits, mantissa_bits, is_signed):
-    """Vectorized Python equivalent of CUDA encode_emb for pseudo_MSE."""
+    """Vectorized Python equivalent of CUDA pseudo_MSE truncating encode."""
     e = int(exp_bits)
     m = int(mantissa_bits)
     sgn = bool(is_signed)
@@ -270,17 +272,6 @@ def pseudo_mse_encode_emb_python(values, exp_bits, mantissa_bits, is_signed):
         m_mask = torch.clamp((1 - b) - exp_f, min=0)
         shift = (23 - m) + m_mask
 
-        round_shift = torch.clamp(shift - 1, min=0, max=63)
-        round_bit_raw = torch.bitwise_and(
-            torch.bitwise_right_shift(mant_full, round_shift),
-            1,
-        )
-        round_bit = torch.where(
-            (shift >= 1) & (shift <= 24),
-            round_bit_raw,
-            torch.zeros_like(round_bit_raw),
-        )
-
         safe_shift = torch.clamp(shift, min=0, max=63)
         mant_shifted = torch.bitwise_left_shift(
             torch.bitwise_right_shift(mant_full, safe_shift),
@@ -291,11 +282,6 @@ def pseudo_mse_encode_emb_python(values, exp_bits, mantissa_bits, is_signed):
             torch.zeros_like(mant_shifted),
             mant_shifted,
         )
-        round_add = torch.bitwise_left_shift(
-            torch.ones_like(mant_trunc),
-            torch.clamp(shift, min=0, max=24),
-        )
-        mant_trunc = torch.where(round_bit != 0, mant_trunc + round_add, mant_trunc)
 
         overflow = torch.bitwise_and(torch.bitwise_right_shift(mant_trunc, 24), 1)
         exp_f = exp_f + overflow
@@ -375,21 +361,98 @@ def pseudo_mse_reconstruct_scaled_python(
     )
 
 
+def pseudo_mse_err2_minus_err1_from_scaled(
+    scaled_values,
+    exp1_mantissa_width,
+    exp2_mantissa_width,
+    is_signed,
+):
+    """Return the bit-level pseudo err2-err1 signal.
+
+    Values are already chunk-scaled into [-2, 2).  Let e be the exponent depth
+    of abs(x), where e=0 for [1, 2), e=1 for [0.5, 1), etc.  Let M be the
+    higher mantissa width from the exp=1 candidate.  The pseudo signal is:
+
+      e == 0       -> +X_M
+      e == 1       -> 0
+      1 < e < M+1  -> -X_(M+1-e)
+      e == M+1     -> -1  (the hidden leading 1)
+      e > M+1      -> 0
+
+    X_k is the kth normalized mantissa bit after the hidden leading 1.  The
+    sign convention is positive for exp=1 wins and negative for exp=2 wins.
+    """
+    m1 = int(exp1_mantissa_width)
+    m2 = int(exp2_mantissa_width)
+    if m2 != m1 - 1:
+        raise ValueError(f"pseudo_MSE requires m2 == m1 - 1; got m1={m1}, m2={m2}")
+
+    values = scaled_values.to(torch.float32).contiguous()
+    mag = torch.bitwise_and(_as_uint32_i64(values.view(torch.int32)), 0x7FFFFFFF)
+    exp_field = torch.bitwise_and(torch.bitwise_right_shift(mag, 23), 0xFF)
+    mant = torch.bitwise_and(mag, 0x7FFFFF)
+
+    nonzero_normal = exp_field != 0
+    e_depth = 127 - exp_field.to(torch.int64)
+    result = torch.zeros_like(values)
+
+    bit_m = torch.bitwise_and(torch.bitwise_right_shift(mant, 23 - m1), 1).to(torch.float32)
+    result = torch.where(nonzero_normal & (e_depth == 0), bit_m, result)
+
+    shifted_bit_valid = nonzero_normal & (e_depth > 1) & (e_depth < m1 + 1)
+    bit_pos = 23 - (m1 + 1 - e_depth)
+    safe_bit_pos = torch.clamp(bit_pos, min=0, max=63)
+    shifted_bit = torch.bitwise_and(
+        torch.bitwise_right_shift(mant, safe_bit_pos),
+        1,
+    ).to(torch.float32)
+    result = torch.where(shifted_bit_valid, -shifted_bit, result)
+    result = torch.where(nonzero_normal & (e_depth == m1 + 1), -torch.ones_like(result), result)
+    return result
+
+
 def pseudo_mse_sqerr_diff_from_scaled(
     scaled_values,
     exp1_mantissa_width,
     exp2_mantissa_width,
     is_signed,
 ):
-    """Return exact (scaled_v - q_exp2)^2 - (scaled_v - q_exp1)^2."""
-    m1 = int(exp1_mantissa_width)
-    m2 = int(exp2_mantissa_width)
-    if m2 != m1 - 1:
-        raise ValueError(f"pseudo_MSE requires m2 == m1 - 1; got m1={m1}, m2={m2}")
+    """Backward-compatible alias for the bit-level pseudo err2-err1 signal."""
+    return pseudo_mse_err2_minus_err1_from_scaled(
+        scaled_values,
+        exp1_mantissa_width,
+        exp2_mantissa_width,
+        is_signed,
+    )
 
-    q1 = pseudo_mse_reconstruct_scaled_python(scaled_values, 1, m1, is_signed)
-    q2 = pseudo_mse_reconstruct_scaled_python(scaled_values, 2, m2, is_signed)
 
-    d1 = scaled_values.to(torch.float32) - q1
-    d2 = scaled_values.to(torch.float32) - q2
-    return d2 * d2 - d1 * d1
+def pseudo_mse_win_counts_from_diff(diff):
+    """Return per-chunk (exp1_wins, exp2_wins), excluding exact ties."""
+    exp1_wins = (diff > 0).sum(dim=1)
+    exp2_wins = (diff < 0).sum(dim=1)
+    return exp1_wins, exp2_wins
+
+
+def pseudo_mse_e2_win_divisor_from_param(metric_param=None):
+    if metric_param is None:
+        return PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR
+    divisor_param = float(metric_param)
+    divisor = int(divisor_param)
+    if divisor_param != float(divisor) or divisor not in PSEUDO_MSE_SUPPORTED_E2_WIN_DIVISORS:
+        raise ValueError(
+            "pseudo_MSE e2 win divisor must be one of "
+            f"{PSEUDO_MSE_SUPPORTED_E2_WIN_DIVISORS}; got {metric_param!r}"
+        )
+    return divisor
+
+
+def pseudo_mse_shifted_e2_wins(exp2_wins, e2_win_divisor=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR):
+    """Return the exp=2 decision count after floor division by the divisor."""
+    divisor = pseudo_mse_e2_win_divisor_from_param(e2_win_divisor)
+    return torch.div(exp2_wins, divisor, rounding_mode="floor")
+
+
+def pseudo_mse_choose_exp2_from_diff(diff, e2_win_divisor=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR):
+    """Return True where floor(exp2_wins / divisor) is at least exp1_wins."""
+    exp1_wins, exp2_wins = pseudo_mse_win_counts_from_diff(diff)
+    return pseudo_mse_shifted_e2_wins(exp2_wins, e2_win_divisor) >= exp1_wins

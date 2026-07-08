@@ -147,6 +147,72 @@ uint32_t encode_emb(float y, int e, int m, int is_signed) {
 
 
 // ----------------------------------------------------------------------------
+// encode_emb_trunc(y, e, m, is_signed) -- FP32 -> w-bit field with truncation.
+//
+// pseudo_MSE hardware vectors and selectors intentionally use truncation, not
+// round-to-nearest. Keep this helper separate so legacy callers of encode_emb
+// keep their existing rounding behavior.
+// ----------------------------------------------------------------------------
+__device__ __forceinline__
+uint32_t encode_emb_trunc(float y, int e, int m, int is_signed) {
+    const uint32_t u    = __float_as_uint(y);
+    const uint32_t sign = (u >> 31) & 1u;
+    const uint32_t mag  = u & 0x7FFFFFFFu;
+
+    if (!is_signed && sign) {
+        return 0u;
+    }
+
+    if (mag == 0u) {
+        return is_signed ? (sign << (e + m)) : 0u;
+    }
+
+    const int      b        = (1 << e) - 1;
+    const uint32_t max_exp  = (uint32_t)b;
+    const uint32_t max_mant = (m == 0) ? 0u : ((1u << m) - 1u);
+
+    int32_t  exp_f     = (int32_t)((mag >> 23) & 0xFFu) - 127;
+    uint32_t mant_full = (mag & 0x7FFFFFu) | (1u << 23);
+
+    int m_mask = (1 - b) - exp_f;
+    if (m_mask < 0) m_mask = 0;
+    int shift = (23 - m) + m_mask;
+
+    uint32_t mant_trunc;
+    if (shift >= 24) {
+        mant_trunc = 0u;
+    } else {
+        mant_trunc = (mant_full >> shift) << shift;
+    }
+
+    const uint32_t overflow = (mant_trunc >> 24) & 1u;
+    if (overflow) exp_f += 1;
+
+    const uint32_t bits_23_24 = (mant_trunc >> 23) & 3u;
+    if (bits_23_24 == 0u) {
+        return is_signed ? (sign << (e + m)) : 0u;
+    }
+
+    const uint32_t sign_field = is_signed ? (sign << (e + m)) : 0u;
+
+    if (exp_f > 0) {
+        return sign_field | (max_exp << m) | max_mant;
+    }
+
+    uint32_t exp_t;
+    if (exp_f >= 1 - b) {
+        exp_t = (uint32_t)(exp_f + b);
+    } else {
+        exp_t = 0u;
+    }
+    const uint32_t mant_t = (m == 0) ? 0u
+                                     : ((mant_trunc >> shift) & max_mant);
+
+    return sign_field | (exp_t << m) | mant_t;
+}
+
+
+// ----------------------------------------------------------------------------
 // decode_emb(field, e, m, is_signed) -- w-bit field -> FP32.
 // ----------------------------------------------------------------------------
 __device__ __forceinline__
