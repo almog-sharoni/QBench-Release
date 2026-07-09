@@ -27,6 +27,7 @@ enum SearchMetric {
     METRIC_HUBER  = 5,  // sum(huber(diff,delta)) -- reduce SUM
     METRIC_LOGSUM = 6,  // sum(floor(log2|diff|)) -- reduce SUM (log-domain L1)
     METRIC_PSEUDO_MSE = 7,  // bit-level pseudo err2-err1 selector
+    METRIC_PSEUDO_MSE2 = 8,  // weighted bit-level pseudo err2-err1 selector
 };
 
 // Per-element contribution for the active metric (operates on the scaled error).
@@ -81,6 +82,26 @@ __device__ __forceinline__ float block_reduce_metric(float val, bool use_max, in
     return r;
 }
 
+__device__ __forceinline__ int pseudo_mse_mantissa_bit(uint32_t mant, int bit_index)
+{
+    if (bit_index < 1 || bit_index > 23) {
+        return 0;
+    }
+    return static_cast<int>((mant >> (23 - bit_index)) & 1u);
+}
+
+__device__ __forceinline__ float pseudo_mse_mantissa_tail_value(uint32_t mant, int start_bit)
+{
+    float value = 0.0f;
+    float weight = 1.0f;
+    #pragma unroll
+    for (int offset = 1; offset <= 23; ++offset) {
+        value += static_cast<float>(pseudo_mse_mantissa_bit(mant, start_bit + offset)) * weight;
+        weight *= 0.5f;
+    }
+    return value;
+}
+
 __device__ __forceinline__ float pseudo_mse_err2_minus_err1(
     float scaled_v,
     int m1,
@@ -113,6 +134,44 @@ __device__ __forceinline__ float pseudo_mse_err2_minus_err1(
     }
     if (e_depth == m1 + 1) {
         return -1.0f;
+    }
+    return 0.0f;
+}
+
+__device__ __forceinline__ float pseudo_mse2_err2_minus_err1(
+    float scaled_v,
+    int m1,
+    int m2,
+    int sgn)
+{
+    (void)sgn;
+    if (m2 != m1 - 1) {
+        return 0.0f;
+    }
+
+    const uint32_t mag = __float_as_uint(scaled_v) & 0x7FFFFFFFu;
+    const uint32_t exp_field = (mag >> 23) & 0xFFu;
+    if (exp_field == 0u) {
+        return 0.0f;
+    }
+
+    const int e_depth = 127 - static_cast<int>(exp_field);
+    const uint32_t mant = mag & 0x7FFFFFu;
+
+    if (e_depth == 0) {
+        const float x_m = static_cast<float>(pseudo_mse_mantissa_bit(mant, m1));
+        return x_m * (x_m + pseudo_mse_mantissa_tail_value(mant, m1));
+    }
+    if (e_depth == 1) {
+        return 0.0f;
+    }
+    if (e_depth > 1 && e_depth < m1 + 1) {
+        const int k = m1 + 1 - e_depth;
+        const float x_k = static_cast<float>(pseudo_mse_mantissa_bit(mant, k));
+        return -(x_k * (x_k + pseudo_mse_mantissa_tail_value(mant, k)));
+    }
+    if (e_depth == m1 + 1) {
+        return -(1.0f + pseudo_mse_mantissa_tail_value(mant, 0));
     }
     return 0.0f;
 }
@@ -176,7 +235,7 @@ __global__ void search_and_quantize_chunk_kernel(
     const float scaled_v = v * inv_s;
 
     // Step 2: Loop over candidates to find the format minimizing the metric.
-    if (metric == METRIC_PSEUDO_MSE) {
+    if (metric == METRIC_PSEUDO_MSE || metric == METRIC_PSEUDO_MSE2) {
         int e1_idx = -1;
         int e2_idx = -1;
         int exp1_m = -1;
@@ -211,35 +270,36 @@ __global__ void search_and_quantize_chunk_kernel(
         int best_c = 0;
 
         if (e1_idx >= 0 && e2_idx >= 0 && exp1_m >= 1 && exp2_m == exp1_m - 1) {
-            const float diff = pseudo_mse_err2_minus_err1(
-                scaled_v,
-                exp1_m,
-                exp2_m,
-                pair_sgn);
+            const float diff = (metric == METRIC_PSEUDO_MSE2)
+                ? pseudo_mse2_err2_minus_err1(
+                    scaled_v,
+                    exp1_m,
+                    exp2_m,
+                    pair_sgn)
+                : pseudo_mse_err2_minus_err1(
+                    scaled_v,
+                    exp1_m,
+                    exp2_m,
+                    pair_sgn);
 
-            // pseudo_MSE is a per-element winner vote, not a summed MSE.
+            // pseudo_MSE/pseudo_MSE2 are per-element winner votes, not summed MSE.
             // Sign convention:
             //   diff < 0 means exp=2 wins
             //   diff > 0 means exp=1 wins
-            // exact ties do not vote.
-            constexpr int COUNT_PACK = 1024;
-            const float packed_vote =
-                (diff > 0.0f) ? static_cast<float>(COUNT_PACK) :
-                ((diff < 0.0f) ? 1.0f : 0.0f);
-            const float chunk_packed_vote =
-                block_reduce_metric(packed_vote, false, lane);
+            // exact ties do not vote. pseudo_MSE2 uses fractional weighted sums.
+            const float exp1_vote = (diff > 0.0f) ? diff : 0.0f;
+            const float exp2_vote = (diff < 0.0f) ? -diff : 0.0f;
+            const float e1_wins = block_reduce_metric(exp1_vote, false, lane);
+            const float e2_wins = block_reduce_metric(exp2_vote, false, lane);
 
             // Equivalent signed vote convention is exp=1 positive and
             // exp=2 negative. The decision uses explicit counts and divides
             // exp=2 wins by the pseudo_MSE divisor. A tie selects exp=2.
-            const int packed_count = static_cast<int>(chunk_packed_vote);
-            const int e1_wins = packed_count / COUNT_PACK;
-            const int e2_wins = packed_count - e1_wins * COUNT_PACK;
             int e2_win_divisor = static_cast<int>(metric_param + 0.5f);
             if (e2_win_divisor != 2 && e2_win_divisor != 4) {
                 e2_win_divisor = 4;
             }
-            const int e2_wins_shifted = e2_wins / e2_win_divisor;
+            const float e2_wins_shifted = e2_wins / static_cast<float>(e2_win_divisor);
             best_c = (e2_wins_shifted >= e1_wins) ? e2_idx : e1_idx;
         }
 

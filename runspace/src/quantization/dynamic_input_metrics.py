@@ -7,6 +7,8 @@ import torch
 
 PSEUDO_MSE_DISPLAY_NAME = "pseudo_MSE"
 PSEUDO_MSE_CANONICAL_NAME = "pseudo_mse"
+PSEUDO_MSE2_DISPLAY_NAME = "pseudo_MSE2"
+PSEUDO_MSE2_CANONICAL_NAME = "pseudo_mse2"
 PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR = 4
 PSEUDO_MSE_SUPPORTED_E2_WIN_DIVISORS = (2, 4)
 
@@ -90,6 +92,13 @@ DYNAMIC_INPUT_METRICS = {
         None,
         pairwise=True,
     ),
+    PSEUDO_MSE2_CANONICAL_NAME: DynamicInputMetricSpec(
+        PSEUDO_MSE2_CANONICAL_NAME,
+        PSEUDO_MSE2_DISPLAY_NAME,
+        8,
+        None,
+        pairwise=True,
+    ),
 }
 
 DYNAMIC_INPUT_METRIC_ALIASES = {
@@ -103,6 +112,7 @@ DYNAMIC_INPUT_METRIC_ALIASES = {
     "logl1": "logsum",
     "logsum_exp": "logsum",
     "pseudo_mse": PSEUDO_MSE_CANONICAL_NAME,
+    "pseudo_mse2": PSEUDO_MSE2_CANONICAL_NAME,
 }
 
 IMPLEMENTED_DYNAMIC_INPUT_METRIC_CODES = {
@@ -149,6 +159,17 @@ def reduce_dynamic_input_metric_python(metric, diff, metric_param):
 
 def is_pseudo_mse_metric(metric):
     return normalize_dynamic_input_metric(metric) == PSEUDO_MSE_CANONICAL_NAME
+
+
+def is_pseudo_mse2_metric(metric):
+    return normalize_dynamic_input_metric(metric) == PSEUDO_MSE2_CANONICAL_NAME
+
+
+def is_pseudo_mse_family_metric(metric):
+    return normalize_dynamic_input_metric(metric) in (
+        PSEUDO_MSE_CANONICAL_NAME,
+        PSEUDO_MSE2_CANONICAL_NAME,
+    )
 
 
 _FP_RE = re.compile(r"^(?P<prefix>u?fp)(?P<bits>\d+)_e(?P<exp>\d+)m(?P<mant>\d+)$")
@@ -411,6 +432,87 @@ def pseudo_mse_err2_minus_err1_from_scaled(
     return result
 
 
+def _pseudo_mse_mantissa_bit(mant, bit_index):
+    """Return normalized mantissa bit X_bit_index, where X_1 is just after the hidden 1."""
+    valid = (bit_index >= 1) & (bit_index <= 23)
+    bit_pos = 23 - bit_index
+    safe_bit_pos = torch.clamp(bit_pos, min=0, max=63)
+    bit = torch.bitwise_and(
+        torch.bitwise_right_shift(mant, safe_bit_pos),
+        1,
+    ).to(torch.float32)
+    return torch.where(valid, bit, torch.zeros_like(bit))
+
+
+def _pseudo_mse_mantissa_tail_value(mant, start_bit):
+    """Return X_(start+1) + X_(start+2)/2 + ... through the last mantissa bit."""
+    offsets = torch.arange(1, 24, device=mant.device, dtype=start_bit.dtype)
+    bit_index = start_bit.unsqueeze(-1) + offsets
+    valid = (bit_index >= 1) & (bit_index <= 23)
+    bit_pos = 23 - bit_index
+    safe_bit_pos = torch.clamp(bit_pos, min=0, max=63)
+    bit = torch.bitwise_and(
+        torch.bitwise_right_shift(mant.unsqueeze(-1), safe_bit_pos),
+        1,
+    ).to(torch.float32)
+    weights = torch.pow(
+        torch.full((23,), 0.5, device=mant.device, dtype=torch.float32),
+        (offsets - 1).to(torch.float32),
+    )
+    return (torch.where(valid, bit, torch.zeros_like(bit)) * weights).sum(dim=-1)
+
+
+def pseudo_mse2_err2_minus_err1_from_scaled(
+    scaled_values,
+    exp1_mantissa_width,
+    exp2_mantissa_width,
+    is_signed,
+):
+    """Return the pseudo_MSE2 weighted bit-level err2-err1 signal.
+
+    This mirrors pseudo_MSE except the e=0 and 1<e<M+1 cases use weighted
+    votes:
+
+      e == 0       -> +X_M * (X_M + X_(M+1) + X_(M+2)/2 + ...)
+      e == 1       -> 0
+      1 < e < M+1  -> -X_k * (X_k + X_(k+1) + X_(k+2)/2 + ...), k=M+1-e
+      e == M+1     -> -(1 + X_1 + X_2/2 + ... + X_23/2^22)
+      e > M+1      -> 0
+
+    The weighted tail stops at X_23, so the number of terms depends on how many
+    explicit mantissa bits remain after the selected bit.
+    """
+    m1 = int(exp1_mantissa_width)
+    m2 = int(exp2_mantissa_width)
+    if m2 != m1 - 1:
+        raise ValueError(f"pseudo_MSE2 requires m2 == m1 - 1; got m1={m1}, m2={m2}")
+
+    values = scaled_values.to(torch.float32).contiguous()
+    mag = torch.bitwise_and(_as_uint32_i64(values.view(torch.int32)), 0x7FFFFFFF)
+    exp_field = torch.bitwise_and(torch.bitwise_right_shift(mag, 23), 0xFF)
+    mant = torch.bitwise_and(mag, 0x7FFFFF)
+
+    nonzero_normal = exp_field != 0
+    e_depth = 127 - exp_field.to(torch.int64)
+    result = torch.zeros_like(values)
+
+    bit_m = _pseudo_mse_mantissa_bit(mant, torch.full_like(e_depth, m1))
+    tail_m = _pseudo_mse_mantissa_tail_value(mant, torch.full_like(e_depth, m1))
+    positive_weight = bit_m * (bit_m + tail_m)
+    result = torch.where(nonzero_normal & (e_depth == 0), positive_weight, result)
+
+    shifted_bit_valid = nonzero_normal & (e_depth > 1) & (e_depth < m1 + 1)
+    k = m1 + 1 - e_depth
+    bit_k = _pseudo_mse_mantissa_bit(mant, k)
+    tail_k = _pseudo_mse_mantissa_tail_value(mant, k)
+    negative_weight = -(bit_k * (bit_k + tail_k))
+    result = torch.where(shifted_bit_valid, negative_weight, result)
+    hidden_tail = _pseudo_mse_mantissa_tail_value(mant, torch.zeros_like(e_depth))
+    hidden_weight = -(torch.ones_like(result) + hidden_tail)
+    result = torch.where(nonzero_normal & (e_depth == m1 + 1), hidden_weight, result)
+    return result
+
+
 def pseudo_mse_sqerr_diff_from_scaled(
     scaled_values,
     exp1_mantissa_width,
@@ -433,6 +535,13 @@ def pseudo_mse_win_counts_from_diff(diff):
     return exp1_wins, exp2_wins
 
 
+def pseudo_mse_weighted_win_counts_from_diff(diff):
+    """Return per-chunk weighted (exp1_wins, exp2_wins), excluding exact ties."""
+    exp1_wins = torch.clamp(diff, min=0).sum(dim=1)
+    exp2_wins = torch.clamp(-diff, min=0).sum(dim=1)
+    return exp1_wins, exp2_wins
+
+
 def pseudo_mse_e2_win_divisor_from_param(metric_param=None):
     if metric_param is None:
         return PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR
@@ -447,12 +556,19 @@ def pseudo_mse_e2_win_divisor_from_param(metric_param=None):
 
 
 def pseudo_mse_shifted_e2_wins(exp2_wins, e2_win_divisor=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR):
-    """Return the exp=2 decision count after floor division by the divisor."""
+    """Return the exp=2 decision count after division by the divisor."""
     divisor = pseudo_mse_e2_win_divisor_from_param(e2_win_divisor)
-    return torch.div(exp2_wins, divisor, rounding_mode="floor")
+    return torch.div(exp2_wins, divisor)
 
 
-def pseudo_mse_choose_exp2_from_diff(diff, e2_win_divisor=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR):
-    """Return True where floor(exp2_wins / divisor) is at least exp1_wins."""
-    exp1_wins, exp2_wins = pseudo_mse_win_counts_from_diff(diff)
+def pseudo_mse_choose_exp2_from_diff(
+    diff,
+    e2_win_divisor=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
+    weighted=False,
+):
+    """Return True where exp2_wins / divisor is at least exp1_wins."""
+    if weighted:
+        exp1_wins, exp2_wins = pseudo_mse_weighted_win_counts_from_diff(diff)
+    else:
+        exp1_wins, exp2_wins = pseudo_mse_win_counts_from_diff(diff)
     return pseudo_mse_shifted_e2_wins(exp2_wins, e2_win_divisor) >= exp1_wins

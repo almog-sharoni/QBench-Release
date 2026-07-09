@@ -85,9 +85,45 @@ verification mode:
 ```math
 \operatorname{select}(C) =
 \begin{cases}
-\mathrm{exp}=2, & \left\lfloor W_2(C) / D \right\rfloor \ge W_1(C) \\
-\mathrm{exp}=1, & \left\lfloor W_2(C) / D \right\rfloor < W_1(C)
+\mathrm{exp}=2, & W_2(C) / D \ge W_1(C) \\
+\mathrm{exp}=1, & W_2(C) / D < W_1(C)
 \end{cases}
+```
+
+## pseudo_MSE2 Variant
+
+`pseudo_MSE2` is a separate pairwise metric using CUDA metric code `8` and
+canonical metric name `pseudo_mse2`. It uses the same e1/e2 candidate
+constraints, truncating quantized output, exp=2 divisor default (`D=4`), and
+tie rule as `pseudo_MSE`, but its per-element `diff = err2 - err1` is weighted.
+
+The weighted per-element signal is:
+
+```text
+d == 0       => +X_M * (X_M + X_(M+1) + X_(M+2)/2 + ...)
+d == 1       => 0
+1 < d < M+1  => -X_k * (X_k + X_(k+1) + X_(k+2)/2 + ...), where k = M+1-d
+d == M+1     => -(1 + X_1 + X_2/2 + ... + X_23/2^22)
+d > M+1      => 0
+```
+
+The weighted tail stops at `X_23`, so the number of terms depends on how many
+explicit mantissa bits remain after the selected bit. The chunk decision uses
+weighted sums:
+
+```text
+exp1_wins = sum_i(max(diff_i, 0))
+exp2_wins = sum_i(max(-diff_i, 0))
+exp2_wins_shifted = exp2_wins / e2_win_divisor
+```
+
+The decision remains:
+
+```text
+if exp2_wins_shifted >= exp1_wins:
+    choose exp=2
+else:
+    choose exp=1
 ```
 
 ## Chunk Selection Rule
@@ -98,7 +134,7 @@ Dynamic activation quantization selects one format per chunk. For a chunk,
 ```text
 exp2_wins = count_i(diff_i < 0)
 exp1_wins = count_i(diff_i > 0)
-exp2_wins_shifted = floor(exp2_wins / e2_win_divisor)
+exp2_wins_shifted = exp2_wins / e2_win_divisor
 ```
 
 The selected format is:
@@ -155,9 +191,9 @@ m2 != m1 - 1
 ## Implementation
 
 The CUDA path computes the bit-level `diff` per lane from the FP32 exponent and
-mantissa bits, packs exp=1 and exp=2 votes into one exact reduction, divides
-the exp=2 count by the pseudo_MSE divisor, then chooses exp=2 when the shifted
-count is at least the exp=1 count.  The selected value is encoded with
+mantissa bits, separately reduces the exp=1 and exp=2 vote sums, divides the
+exp=2 sum by the pseudo_MSE divisor, then chooses exp=2 when the shifted sum is
+at least the exp=1 sum.  The selected value is encoded with
 truncation.  The Python reference mirrors the same FP32 bit operations and
 truncating encode path, and is tested against the CUDA selector for both
 supported divisors.
