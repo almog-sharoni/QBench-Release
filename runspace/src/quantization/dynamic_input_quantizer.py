@@ -1042,7 +1042,7 @@ class DynamicInputQuantizer:
 
         if is_pseudo_mse_family_metric(self.metric):
             validate_pseudo_mse_candidate_pairs(candidates)
-            if ref_chunks.is_cuda and not is_pseudo_mse3_metric(self.metric):
+            if ref_chunks.is_cuda:
                 cands_e, cands_m, cands_sgn = self._candidate_params(candidates, device=device)
                 best_indices, best_scales, best_qs_flat, best_unscaled_qs_flat = self._search_best_chunk_format_cuda(
                     ref_chunks,

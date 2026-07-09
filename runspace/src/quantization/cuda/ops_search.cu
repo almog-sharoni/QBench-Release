@@ -28,6 +28,7 @@ enum SearchMetric {
     METRIC_LOGSUM = 6,  // sum(floor(log2|diff|)) -- reduce SUM (log-domain L1)
     METRIC_PSEUDO_MSE = 7,  // bit-level pseudo err2-err1 selector
     METRIC_PSEUDO_MSE2 = 8,  // weighted bit-level pseudo err2-err1 selector
+    METRIC_PSEUDO_MSE3 = 9,  // exact sum(err2^2 - err1^2) selector
 };
 
 // Per-element contribution for the active metric (operates on the scaled error).
@@ -189,6 +190,25 @@ __device__ __forceinline__ float pseudo_mse2_err2_minus_err1(
     return 0.0f;
 }
 
+__device__ __forceinline__ float pseudo_mse3_err2_minus_err1(
+    float scaled_v,
+    int m1,
+    int m2,
+    int sgn)
+{
+    if (m2 != m1 - 1) {
+        return 0.0f;
+    }
+
+    const std::uint32_t packed_e1 = encode_emb_trunc(scaled_v, 1, m1, sgn);
+    const std::uint32_t packed_e2 = encode_emb_trunc(scaled_v, 2, m2, sgn);
+    const float q_e1 = decode_emb(packed_e1, 1, m1, sgn);
+    const float q_e2 = decode_emb(packed_e2, 2, m2, sgn);
+    const float err1 = scaled_v - q_e1;
+    const float err2 = scaled_v - q_e2;
+    return (err2 * err2) - (err1 * err1);
+}
+
 // This kernel computes the best format per chunk, and directly decodes the values.
 // We use 128 threads per block. Each block processes exactly 1 chunk.
 __global__ void search_and_quantize_chunk_kernel(
@@ -249,7 +269,9 @@ __global__ void search_and_quantize_chunk_kernel(
     const float scaled_v = v * inv_s;
 
     // Step 2: Loop over candidates to find the format minimizing the metric.
-    if (metric == METRIC_PSEUDO_MSE || metric == METRIC_PSEUDO_MSE2) {
+    if (metric == METRIC_PSEUDO_MSE ||
+        metric == METRIC_PSEUDO_MSE2 ||
+        metric == METRIC_PSEUDO_MSE3) {
         int e1_idx = -1;
         int e2_idx = -1;
         int exp1_m = -1;
@@ -284,38 +306,54 @@ __global__ void search_and_quantize_chunk_kernel(
         int best_c = 0;
 
         if (e1_idx >= 0 && e2_idx >= 0 && exp1_m >= 1 && exp2_m == exp1_m - 1) {
-            const float diff = (metric == METRIC_PSEUDO_MSE2)
-                ? pseudo_mse2_err2_minus_err1(
-                    scaled_v,
-                    exp1_m,
-                    exp2_m,
-                    pair_sgn,
-                    pseudo_mse2_mantissa_window_bits)
-                : pseudo_mse_err2_minus_err1(
+            float diff = 0.0f;
+            if (metric == METRIC_PSEUDO_MSE3) {
+                diff = pseudo_mse3_err2_minus_err1(
                     scaled_v,
                     exp1_m,
                     exp2_m,
                     pair_sgn);
-
-            // pseudo_MSE/pseudo_MSE2 are per-element winner votes, not summed MSE.
-            // Sign convention:
-            //   diff < 0 means exp=2 wins
-            //   diff > 0 means exp=1 wins
-            // exact ties do not vote. pseudo_MSE2 uses fractional weighted sums.
-            const float exp1_vote = (diff > 0.0f) ? diff : 0.0f;
-            const float exp2_vote = (diff < 0.0f) ? -diff : 0.0f;
-            const float e1_wins = block_reduce_metric(exp1_vote, false, lane);
-            const float e2_wins = block_reduce_metric(exp2_vote, false, lane);
-
-            // Equivalent signed vote convention is exp=1 positive and
-            // exp=2 negative. The decision uses explicit counts and divides
-            // exp=2 wins by the pseudo_MSE divisor. A tie selects exp=2.
-            int e2_win_divisor = static_cast<int>(metric_param + 0.5f);
-            if (e2_win_divisor != 2 && e2_win_divisor != 4) {
-                e2_win_divisor = 4;
+            } else if (metric == METRIC_PSEUDO_MSE2) {
+                diff = pseudo_mse2_err2_minus_err1(
+                    scaled_v,
+                    exp1_m,
+                    exp2_m,
+                    pair_sgn,
+                    pseudo_mse2_mantissa_window_bits);
+            } else {
+                diff = pseudo_mse_err2_minus_err1(
+                    scaled_v,
+                    exp1_m,
+                    exp2_m,
+                    pair_sgn);
             }
-            const float e2_wins_shifted = e2_wins / static_cast<float>(e2_win_divisor);
-            best_c = (e2_wins_shifted >= e1_wins) ? e2_idx : e1_idx;
+
+            if (metric == METRIC_PSEUDO_MSE3) {
+                // pseudo_MSE3 is the exact signed squared-error difference.
+                // Negative chunk sum means exp=2 has lower total squared error.
+                const float chunk_diff = block_reduce_metric(diff, false, lane);
+                best_c = (chunk_diff < 0.0f) ? e2_idx : e1_idx;
+            } else {
+                // pseudo_MSE/pseudo_MSE2 are per-element winner votes, not summed MSE.
+                // Sign convention:
+                //   diff < 0 means exp=2 wins
+                //   diff > 0 means exp=1 wins
+                // exact ties do not vote. pseudo_MSE2 uses fractional weighted sums.
+                const float exp1_vote = (diff > 0.0f) ? diff : 0.0f;
+                const float exp2_vote = (diff < 0.0f) ? -diff : 0.0f;
+                const float e1_wins = block_reduce_metric(exp1_vote, false, lane);
+                const float e2_wins = block_reduce_metric(exp2_vote, false, lane);
+
+                // Equivalent signed vote convention is exp=1 positive and
+                // exp=2 negative. The decision uses explicit counts and divides
+                // exp=2 wins by the pseudo_MSE divisor. A tie selects exp=2.
+                int e2_win_divisor = static_cast<int>(metric_param + 0.5f);
+                if (e2_win_divisor != 2 && e2_win_divisor != 4) {
+                    e2_win_divisor = 4;
+                }
+                const float e2_wins_shifted = e2_wins / static_cast<float>(e2_win_divisor);
+                best_c = (e2_wins_shifted >= e1_wins) ? e2_idx : e1_idx;
+            }
         }
 
         const int e = cands_e[best_c];

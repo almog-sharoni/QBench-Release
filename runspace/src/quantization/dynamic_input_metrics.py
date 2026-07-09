@@ -108,7 +108,7 @@ DYNAMIC_INPUT_METRICS = {
     PSEUDO_MSE3_CANONICAL_NAME: DynamicInputMetricSpec(
         PSEUDO_MSE3_CANONICAL_NAME,
         PSEUDO_MSE3_DISPLAY_NAME,
-        None,
+        9,
         None,
         pairwise=True,
     ),

@@ -597,6 +597,150 @@ def verify_python_vectors(num_chunks=NUM_CHUNKS, seed=SEED, max_mismatches=20):
     return total_mismatches
 
 
+def verify_cuda_vectors(num_chunks=NUM_CHUNKS, seed=SEED, max_mismatches=20):
+    from runspace.src.quantization.cuda import search_best_chunk_format
+    from runspace.src.quantization.dynamic_input_metrics import dynamic_input_metric_code
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available for --verify-cuda")
+
+    num_chunks = int(num_chunks)
+    seed = int(seed)
+    max_mismatches = int(max_mismatches)
+    raw_chunks = make_raw_chunks(num_chunks=num_chunks, seed=seed)
+    scales, scaled_chunks = scale_raw_chunks(raw_chunks)
+    raw_cuda = raw_chunks.cuda().contiguous()
+    metric_code = dynamic_input_metric_code("pseudo_mse3")
+    total_mismatches = 0
+
+    print("CUDA pseudo_MSE3 verification")
+    print(f"seed={seed} num_chunks={num_chunks} chunk_size={CHUNK_SIZE}")
+    print(f"metric_code={metric_code}")
+    print("mantissa_mode=truncate")
+
+    for bit_width in BIT_WIDTHS:
+        m1 = bit_width - 2
+        m2 = bit_width - 3
+        (
+            _err1,
+            _err2,
+            chunk_diff,
+            choose_exp2,
+            _expected_error,
+            _q1_bits,
+            _q2_bits,
+            _err_exp1_pre_square,
+            _err_exp2_pre_square,
+            _pseudo_diff,
+        ) = decision_for_bit_width(scaled_chunks, bit_width)
+
+        q1_scaled = pseudo_mse_reconstruct_scaled_export(
+            scaled_chunks,
+            exp_bits=1,
+            mantissa_bits=m1,
+            is_signed=True,
+        )
+        q2_scaled = pseudo_mse_reconstruct_scaled_export(
+            scaled_chunks,
+            exp_bits=2,
+            mantissa_bits=m2,
+            is_signed=True,
+        )
+        expected_indices = torch.where(
+            choose_exp2,
+            torch.ones_like(choose_exp2, dtype=torch.long),
+            torch.zeros_like(choose_exp2, dtype=torch.long),
+        )
+        expected_unscaled = torch.where(choose_exp2.unsqueeze(1), q2_scaled, q1_scaled)
+        expected_q = expected_unscaled * scales
+
+        cands_e = torch.tensor([1, 2], dtype=torch.int32, device="cuda")
+        cands_m = torch.tensor([m1, m2], dtype=torch.int32, device="cuda")
+        cands_sgn = torch.tensor([1, 1], dtype=torch.int32, device="cuda")
+        cuda_indices, cuda_scales, cuda_q_flat, cuda_unscaled_flat = search_best_chunk_format(
+            raw_cuda.reshape(-1).contiguous(),
+            cands_e,
+            cands_m,
+            cands_sgn,
+            True,
+            metric_code,
+            0.0,
+            0,
+        )
+        cuda_indices = cuda_indices.cpu()
+        cuda_scales = cuda_scales.cpu()
+        cuda_q = cuda_q_flat.view(num_chunks, CHUNK_SIZE).cpu()
+        cuda_unscaled = cuda_unscaled_flat.view(num_chunks, CHUNK_SIZE).cpu()
+
+        index_bad = cuda_indices != expected_indices
+        scale_bad = cuda_scales.view(-1, 1) != scales
+        q_bad = cuda_q != expected_q
+        unscaled_bad = cuda_unscaled != expected_unscaled
+        bad_chunks = (
+            index_bad
+            | scale_bad.view(-1)
+            | q_bad.reshape(num_chunks, CHUNK_SIZE).any(dim=1)
+            | unscaled_bad.reshape(num_chunks, CHUNK_SIZE).any(dim=1)
+        )
+        bad_count = int(bad_chunks.sum().item())
+        total_mismatches += bad_count
+
+        max_q_err = float((cuda_q - expected_q).abs().max().item())
+        max_unscaled_err = float((cuda_unscaled - expected_unscaled).abs().max().item())
+        max_scale_err = float((cuda_scales.view(-1, 1) - scales).abs().max().item())
+        print(
+            f"bit_width={bit_width} "
+            f"mismatched_chunks={bad_count}/{num_chunks} "
+            f"max_q_err={max_q_err:.9g} "
+            f"max_unscaled_err={max_unscaled_err:.9g} "
+            f"max_scale_err={max_scale_err:.9g}"
+        )
+
+        if bad_count == 0:
+            continue
+
+        bad_indices = torch.nonzero(bad_chunks, as_tuple=False).flatten().tolist()
+        remaining_budget = max(0, max_mismatches - (total_mismatches - bad_count))
+        for chunk_idx in bad_indices[:remaining_budget]:
+            ref_idx = int(expected_indices[chunk_idx].item())
+            cuda_idx = int(cuda_indices[chunk_idx].item())
+            print(
+                f"  mismatch bit_width={bit_width} chunk={chunk_idx} "
+                f"expected_idx={ref_idx} cuda_idx={cuda_idx} "
+                f"chunk_diff={fmt_float(chunk_diff[chunk_idx])}"
+            )
+            if bool(scale_bad.view(-1)[chunk_idx]):
+                print(
+                    "    scale "
+                    f"ref={fmt_float(scales[chunk_idx, 0])} "
+                    f"cuda={fmt_float(cuda_scales[chunk_idx])}"
+                )
+            if bool(q_bad[chunk_idx].any()):
+                value_idx, err = _first_abs_mismatch(cuda_q[chunk_idx], expected_q[chunk_idx])
+                print(
+                    "    q "
+                    f"value={value_idx} "
+                    f"ref={fmt_float(expected_q[chunk_idx, value_idx])} "
+                    f"cuda={fmt_float(cuda_q[chunk_idx, value_idx])} "
+                    f"abs_err={err:.9g}"
+                )
+            if bool(unscaled_bad[chunk_idx].any()):
+                value_idx, err = _first_abs_mismatch(
+                    cuda_unscaled[chunk_idx],
+                    expected_unscaled[chunk_idx],
+                )
+                print(
+                    "    unscaled_q "
+                    f"value={value_idx} "
+                    f"ref={fmt_float(expected_unscaled[chunk_idx, value_idx])} "
+                    f"cuda={fmt_float(cuda_unscaled[chunk_idx, value_idx])} "
+                    f"abs_err={err:.9g}"
+                )
+
+    print(f"TOTAL mismatched_chunks={total_mismatches}")
+    return total_mismatches
+
+
 def compare_pseudo_mse3_with_metric(
     mismatch_csv,
     compare_metric="l2",
@@ -811,6 +955,11 @@ def main():
         help="Exit nonzero on reported decision disagreements, including tie-policy disagreements.",
     )
     parser.add_argument(
+        "--verify-cuda",
+        action="store_true",
+        help="Verify CUDA pseudo_MSE3 search against the same PyTorch reference chunks.",
+    )
+    parser.add_argument(
         "--verify-python",
         action="store_true",
         help="Verify DynamicInputQuantizer's Python pseudo_MSE3 path against the same reference chunks.",
@@ -826,11 +975,18 @@ def main():
         default=20,
         help="Maximum detailed mismatch examples to print.",
     )
+    parser.add_argument(
+        "--cuda-build-dir",
+        default=None,
+        help="Optional fresh CUDA extension build directory for verification runs.",
+    )
     args = parser.parse_args()
     if args.num_chunks < 1:
         raise ValueError("--num-chunks must be at least 1")
-    if args.verify_only and not (args.verify_python or args.compare_metric):
-        raise ValueError("--verify-only requires --verify-python or --compare-metric")
+    if args.cuda_build_dir:
+        os.environ["QBENCH_CUDA_BUILD_DIR"] = args.cuda_build_dir
+    if args.verify_only and not (args.verify_cuda or args.verify_python or args.compare_metric):
+        raise ValueError("--verify-only requires --verify-cuda, --verify-python, or --compare-metric")
 
     if not args.verify_only:
         write_vectors(
@@ -870,6 +1026,12 @@ def main():
         )
     if args.verify_python:
         verify_mismatches += verify_python_vectors(
+            num_chunks=args.num_chunks,
+            seed=args.seed,
+            max_mismatches=args.max_mismatches,
+        )
+    if args.verify_cuda:
+        verify_mismatches += verify_cuda_vectors(
             num_chunks=args.num_chunks,
             seed=args.seed,
             max_mismatches=args.max_mismatches,

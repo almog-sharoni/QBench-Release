@@ -138,6 +138,31 @@ The chunk-level `e2_win_divisor` adjustment remains part of `pseudo_MSE`, but
 does not drive `pseudo_MSE2`; pseudo_MSE2 applies the exp=2 shift before
 accumulating per-chunk sums.
 
+## pseudo_MSE3
+
+`pseudo_MSE3` is a pairwise metric using CUDA metric code `9` and canonical
+metric name `pseudo_mse3`. It uses the same e1/e2 candidate constraints and
+truncating quantized output, but its per-element signal is the exact squared
+error difference:
+
+```text
+diff_i = err2_i^2 - err1_i^2
+```
+
+The chunk decision is:
+
+```text
+if sum_i(diff_i) < 0:
+    choose exp=2
+else:
+    choose exp=1
+```
+
+The reference implementation asserts that `diff_i * 2^(2M)` is zero, in
+`[1, 3)` for exp=1 wins, or in `(-3/4, -1/4]` for exp=2 wins. The CUDA search
+computes the same exact squared-error diff directly from the truncating e1/e2
+reconstructions.
+
 ## Chunk Selection Rule
 
 Dynamic activation quantization selects one format per chunk. For a chunk,

@@ -34,15 +34,14 @@ from runspace.src.quantization.dynamic_input_metrics import (  # noqa: E402
 )
 
 
-def test_pseudo_mse3_metric_is_python_pairwise_metric():
+def test_pseudo_mse3_metric_is_pairwise_cuda_metric():
     spec = get_dynamic_input_metric_spec("pseudo_MSE3")
 
     assert spec.name == "pseudo_mse3"
     assert spec.display_name == METRIC_NAME
     assert spec.implemented
-    assert spec.cuda_code is None
-    with pytest.raises(NotImplementedError, match="CUDA search code"):
-        dynamic_input_metric_code("pseudo_mse3")
+    assert spec.cuda_code == 9
+    assert dynamic_input_metric_code("pseudo_mse3") == 9
 
 
 def test_pseudo_mse3_exact_diff_matches_expected_scaled_ranges():
