@@ -37,6 +37,7 @@ from runspace.experiments.pseudo_mse2.generate_hw_vectors import (  # noqa: E402
     compare_pseudo_mse_with_metric,
     decision_for_bit_width,
     make_raw_chunks,
+    normalize_mantissa_window_bits,
     scale_raw_chunks,
 )
 from runspace.src.quantization.dynamic_input_metrics import (  # noqa: E402
@@ -49,8 +50,61 @@ from runspace.src.quantization.dynamic_input_metrics import (  # noqa: E402
 )
 
 
+def _pseudo_mse2_diff_vector(values, *, m1=6, mantissa_window_bits=None):
+    return pseudo_mse2_err2_minus_err1_from_scaled(
+        torch.tensor([values], dtype=torch.float32),
+        exp1_mantissa_width=m1,
+        exp2_mantissa_width=m1 - 1,
+        is_signed=True,
+        mantissa_window_bits=mantissa_window_bits,
+    )
+
+
+def _assert_pseudo_mse2_diff_tensor_ranges(diff):
+    assert diff.dtype == torch.int32
+
+    one = 1 << 24
+    three = 3 << 24
+    quarter = 1 << 22
+    three_quarters = 3 << 22
+
+    is_zero = diff == 0
+    positive_ok = (diff >= one) & (diff < three)
+    negative_ok = (diff <= -quarter) & (diff > -three_quarters)
+    bad = ~(is_zero | positive_ok | negative_ok)
+    assert not bool(bad.any()), diff[bad]
+    return diff
+
+
+def _assert_pseudo_mse2_diff_ranges(values, *, m1=6, mantissa_window_bits=None):
+    diff = _pseudo_mse2_diff_vector(
+        values,
+        m1=m1,
+        mantissa_window_bits=mantissa_window_bits,
+    )
+    return _assert_pseudo_mse2_diff_tensor_ranges(diff)
+
+
+def test_pseudo_mse2_diff_range_assertion_rejects_invalid_values():
+    _assert_pseudo_mse2_diff_tensor_ranges(
+        torch.tensor([[0, 1 << 24, (3 << 24) - 1, -(1 << 22), -((3 << 22) - 1)]], dtype=torch.int32)
+    )
+
+    invalid_values = [
+        1 << 23,     # positive but below 1.0
+        3 << 24,     # positive upper bound is exclusive
+        -(1 << 21),  # negative but above -1/4
+        -(3 << 22),  # negative lower bound is exclusive
+    ]
+    for invalid_value in invalid_values:
+        with pytest.raises(AssertionError):
+            _assert_pseudo_mse2_diff_tensor_ranges(
+                torch.tensor([[invalid_value]], dtype=torch.int32)
+            )
+
+
 def test_pseudo_mse_configs_use_fp32_weights_dynamic_activations_and_subset():
-    args = get_args([])
+    args = get_args(["--mantissa-window-bits", "3"])
     specs = build_pseudo_mse_sweep_specs(args)
 
     assert args.bit_widths == DEFAULT_BIT_WIDTHS
@@ -90,12 +144,14 @@ def test_pseudo_mse_configs_use_fp32_weights_dynamic_activations_and_subset():
     assert runtime_cfg["experiment"]["activation_dt"] == "dyn_a8_e1e2_pseudo_mse2"
     assert runtime_cfg["experiment"]["bit_width"] == 8
     assert runtime_cfg["experiment"]["candidate_formats"] == ["fp8_e1m6", "fp8_e2m5"]
+    assert runtime_cfg["experiment"]["mantissa_window_bits"] == 3
 
     assert input_quant_cfg["enabled"] is True
     assert input_quant_cfg["mode"] == "dynamic"
     assert input_quant_cfg["metric"] == METRIC_NAME
     assert input_quant_cfg["restrict_post_relu_ufp"] is False
     assert input_quant_cfg["candidate_formats"] == ["fp8_e1m6", "fp8_e2m5"]
+    assert input_quant_cfg["pseudo_mse2_mantissa_window_bits"] == 3
 
     mse_cfg = build_pseudo_mse_runtime_config(args, mse_spec)
     mse_input_quant_cfg = build_pseudo_mse_input_quant_cfg(args, mse_spec)
@@ -103,6 +159,7 @@ def test_pseudo_mse_configs_use_fp32_weights_dynamic_activations_and_subset():
     assert mse_cfg["experiment"]["metric_label"] == "MSE"
     assert mse_cfg["experiment"]["activation_dt"] == "dyn_a8_e1e2_mse"
     assert mse_input_quant_cfg["metric"] == BASELINE_METRIC_NAME
+    assert mse_input_quant_cfg["pseudo_mse2_mantissa_window_bits"] == 0
 
     l1_cfg = build_pseudo_mse_runtime_config(args, l1_spec)
     l1_input_quant_cfg = build_pseudo_mse_input_quant_cfg(args, l1_spec)
@@ -110,6 +167,7 @@ def test_pseudo_mse_configs_use_fp32_weights_dynamic_activations_and_subset():
     assert l1_cfg["experiment"]["metric_label"] == L1_METRIC_LABEL
     assert l1_cfg["experiment"]["activation_dt"] == "dyn_a8_e1e2_l1"
     assert l1_input_quant_cfg["metric"] == L1_METRIC_NAME
+    assert l1_input_quant_cfg["pseudo_mse2_mantissa_window_bits"] == 0
 
 
 def test_pseudo_mse_builds_metric_comparison_specs():
@@ -156,8 +214,8 @@ def test_pseudo_mse2_uses_weighted_shifted_e2_win_count():
 
     default_decision = pseudo_mse_choose_exp2_from_diff(diff, weighted=True)
     divisor2_decision = pseudo_mse_choose_exp2_from_diff(diff, e2_win_divisor=2, weighted=True)
-    assert default_decision.tolist() == [False, True, True, True]
-    assert divisor2_decision.tolist() == [False, True, True, True]
+    assert default_decision.tolist() == [True, True, True, False]
+    assert divisor2_decision.tolist() == [True, True, True, False]
 
 
 def test_pseudo_mse2_hw_vector_chunks_have_weighted_diff_range():
@@ -185,8 +243,7 @@ def test_pseudo_mse2_hw_vector_chunks_have_weighted_diff_range():
             e2_win_divisor=2,
         )
 
-        assert pseudo_diff.min().item() >= -3
-        assert pseudo_diff.max().item() <= 3
+        _assert_pseudo_mse2_diff_tensor_ranges(pseudo_diff)
         assert (pseudo_diff.abs() > 1).any()
         exp1_wins, exp2_wins = pseudo_mse_weighted_win_counts_from_diff(pseudo_diff)
         assert torch.equal(exp1_wins, _expected_e1_wins)
@@ -306,22 +363,63 @@ def test_pseudo_mse2_debug_chunk_sums_are_separate_columns():
     assert square_sum.tolist() == [768.0]
 
 
+def test_pseudo_mse2_diff_vector_assertion_starter():
+    m1 = 6
+    cases = [
+        (
+            "e0_xm_xm1_xm2",
+            1.0 + 2.0 ** -m1 + 2.0 ** -(m1 + 1) + 2.0 ** -(m1 + 2),
+            1,
+        ),
+        (
+            "e1_zero",
+            1.5 * 2.0 ** -1,
+            0,
+        ),
+        (
+            "e2_xk_xk1_xk2_shifted",
+            (1.0 + 2.0 ** -5 + 2.0 ** -6 + 2.0 ** -7) * 2.0 ** -2,
+            -1,
+        ),
+        (
+            "hidden_x1_x2_shifted",
+            (1.0 + 2.0 ** -1 + 2.0 ** -2) * 2.0 ** -(m1 + 1),
+            -1,
+        ),
+        (
+            "too_small_zero",
+            2.0 ** -(m1 + 2),
+            0,
+        ),
+    ]
+
+    labels = [label for label, _value, _expected in cases]
+    assert len(set(labels)) == len(labels)
+    diff = _assert_pseudo_mse2_diff_ranges(
+        [value for _label, value, _expected_sign in cases],
+        m1=m1,
+    )
+    assert torch.sign(diff.squeeze(0)).tolist() == [
+        expected_sign for _label, _value, expected_sign in cases
+    ]
+
+
 def test_pseudo_mse2_bit_level_err2_minus_err1_cases():
     m1 = 6
     full_mantissa = 1.0 + sum(2.0 ** -i for i in range(1, 24))
     values = torch.tensor(
         [
-            1.0 + 2.0 ** -m1 + 2.0 ** -(m1 + 1) + 2.0 ** -(m1 + 2),  # e=0 -> +2.5
-            1.0 + 2.0 ** -m1 + 2.0 ** -(m1 + 2),  # e=0 -> +1.5
-            1.0 + 2.0 ** -m1,             # e=0 -> +1
+            1.0 + 2.0 ** -m1 + 2.0 ** -(m1 + 1) + 2.0 ** -(m1 + 2),
+            1.0 + 2.0 ** -m1 + 2.0 ** -(m1 + 2),
+            1.0 + 2.0 ** -m1,
             1.0,                          # e=0 with X_M=0 -> 0
             1.5 * 2.0 ** -1,              # e=1 -> 0
-            (1.0 + 2.0 ** -5 + 2.0 ** -6 + 2.0 ** -7) * 2.0 ** -2,  # e=2 -> -2.5
-            (1.0 + 2.0 ** -5 + 2.0 ** -7) * 2.0 ** -2,  # e=2 -> -1.5
-            (1.0 + 2.0 ** -5) * 2.0 ** -2,  # e=2 -> -1
-            2.0 ** -(m1 + 1),             # e=M+1 -> hidden leading 1 -> -1
-            (1.0 + 2.0 ** -1 + 2.0 ** -2) * 2.0 ** -(m1 + 1),  # e=M+1 -> -2.5
-            full_mantissa * 2.0 ** -(m1 + 1),  # e=M+1 -> -(3 - 2^-22)
+            (1.0 + 2.0 ** -5 + 2.0 ** -6 + 2.0 ** -7) * 2.0 ** -2,
+            (1.0 + 2.0 ** -5 + 2.0 ** -7) * 2.0 ** -2,
+            (1.0 + 2.0 ** -5) * 2.0 ** -2,
+            2.0 ** -(m1 + 1),
+            (1.0 + 2.0 ** -1 + 2.0 ** -2) * 2.0 ** -(m1 + 1),
+            full_mantissa * 2.0 ** -(m1 + 1),
             2.0 ** -(m1 + 2),             # e>M+1 -> 0
         ],
         dtype=torch.float32,
@@ -335,19 +433,19 @@ def test_pseudo_mse2_bit_level_err2_minus_err1_cases():
     )
 
     expected = torch.tensor([[
-        2.5,
-        1.5,
-        1.0,
+        (1 << 24) + (1 << 24) + (1 << 23),
+        (1 << 24) + (1 << 23),
+        1 << 24,
         0.0,
         0.0,
-        -2.5,
-        -1.5,
-        -1.0,
-        -1.0,
-        -2.5,
-        -(3.0 - 2.0 ** -22),
+        -((1 << 22) + (1 << 22) + (1 << 21)),
+        -((1 << 22) + (1 << 21)),
+        -(1 << 22),
+        -(1 << 22),
+        -((1 << 22) + (1 << 22) + (1 << 21)),
+        -((3 << 22) - 1),
         0.0,
-    ]], dtype=torch.float32)
+    ]], dtype=torch.int32)
     torch.testing.assert_close(diff, expected)
 
 
@@ -380,13 +478,47 @@ def test_pseudo_mse2_bit_level_err2_minus_err1_limited_window():
     )
 
     full_expected = torch.tensor([[
-        3.0 - 2.0 ** -16,
-        -(3.0 - 2.0 ** -17),
-        -(3.0 - 2.0 ** -22),
-    ]], dtype=torch.float32)
-    limited_expected = torch.tensor([[2.5, -2.5, -2.75]], dtype=torch.float32)
+        (3 << 24) - (1 << 8),
+        -((3 << 22) - (1 << 5)),
+        -((3 << 22) - 1),
+    ]], dtype=torch.int32)
+    limited_expected = torch.tensor([[
+        (1 << 24) + (1 << 24) + (1 << 23),
+        -((1 << 22) + (1 << 22) + (1 << 21)),
+        -((1 << 22) + (1 << 22) + (1 << 21)),
+    ]], dtype=torch.int32)
     torch.testing.assert_close(full_diff, full_expected)
     torch.testing.assert_close(limited_diff, limited_expected)
+
+
+def test_pseudo_mse2_mantissa_window_24_matches_full_window():
+    m1 = 6
+    values = torch.tensor(
+        [
+            1.0 + sum(2.0 ** -i for i in range(m1, 24)),
+            (1.0 + sum(2.0 ** -i for i in range(5, 24))) * 2.0 ** -2,
+            (1.0 + sum(2.0 ** -i for i in range(1, 24))) * 2.0 ** -(m1 + 1),
+        ],
+        dtype=torch.float32,
+    ).unsqueeze(0)
+
+    full_diff = pseudo_mse2_err2_minus_err1_from_scaled(
+        values,
+        exp1_mantissa_width=m1,
+        exp2_mantissa_width=m1 - 1,
+        is_signed=True,
+    )
+    window_24_diff = pseudo_mse2_err2_minus_err1_from_scaled(
+        values,
+        exp1_mantissa_width=m1,
+        exp2_mantissa_width=m1 - 1,
+        is_signed=True,
+        mantissa_window_bits=24,
+    )
+
+    torch.testing.assert_close(window_24_diff, full_diff)
+    with pytest.raises(ValueError, match="at most 24"):
+        normalize_mantissa_window_bits(25)
 
 
 def test_pseudo_mse_encode_truncates_mantissa_bits():

@@ -94,42 +94,49 @@ verification mode:
 
 `pseudo_MSE2` is a separate pairwise metric using CUDA metric code `8` and
 canonical metric name `pseudo_mse2`. It uses the same e1/e2 candidate
-constraints, truncating quantized output, exp=2 divisor default (`D=4`), and
-tie rule as `pseudo_MSE`, but its per-element `diff = err2 - err1` is weighted.
+constraints, truncating quantized output, and tie rule as `pseudo_MSE`, but its
+per-element `diff = err2 - err1` is an int32 fixed-point window vote.
 
 The weighted per-element signal is:
 
 ```text
-d == 0       => +X_M * (X_M + X_(M+1) + X_(M+2)/2 + ...)
+d == 0       => +X_M * window_int(X_M, X_(M+1), X_(M+2), ...)
 d == 1       => 0
-1 < d < M+1  => -X_k * (X_k + X_(k+1) + X_(k+2)/2 + ...), where k = M+1-d
-d == M+1     => -(1 + X_1 + X_2/2 + ... + X_23/2^22)
+1 < d < M+1  => -X_k * (window_int(X_k, X_(k+1), X_(k+2), ...) >> 2), where k = M+1-d
+d == M+1     => -(window_int(1, X_1, X_2, ...) >> 2)
 d > M+1      => 0
 ```
 
-The weighted tail stops at `X_23`, so the number of terms depends on how many
-explicit mantissa bits remain after the selected bit. The chunk decision uses
-weighted sums:
+The selected window is represented as the old weighted value scaled by `2^24`,
+leaving two extra low bits before the exp=2 shift. For a full window this means
+`X_n` and `X_(n+1)` both have weight `2^24`, `X_(n+2)` has weight `2^23`, and
+so on down to weight `4`. Exp=2 shifts this value right by two before
+accumulation, preserving the old `2^22`-scaled precision. The default window
+size is 24, covering the full FP32 significand window.
 
 Implementations may limit this with `mantissa_window_bits=N`.  In that mode,
 the `M`/`k` cases use `X_n` through `X_(n+N-1)`, and the hidden-leading case
-uses `N` explicit mantissa bits after the hidden `1`.  The default uses all
-remaining FP32 mantissa bits.
+uses the same total window size: hidden `1` plus `N-1` explicit mantissa bits.
+The default uses all remaining FP32 mantissa bits, i.e. 24 total hidden-case
+terms.
 
 ```text
 exp1_wins = sum_i(max(diff_i, 0))
 exp2_wins = sum_i(max(-diff_i, 0))
-exp2_wins_shifted = exp2_wins / e2_win_divisor
 ```
 
-The decision remains:
+The decision is:
 
 ```text
-if exp2_wins_shifted >= exp1_wins:
+if exp2_wins > exp1_wins:
     choose exp=2
 else:
     choose exp=1
 ```
+
+The chunk-level `e2_win_divisor` adjustment remains part of `pseudo_MSE`, but
+does not drive `pseudo_MSE2`; pseudo_MSE2 applies the exp=2 shift before
+accumulating per-chunk sums.
 
 ## Chunk Selection Rule
 

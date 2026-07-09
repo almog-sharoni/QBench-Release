@@ -9,6 +9,8 @@ PSEUDO_MSE_DISPLAY_NAME = "pseudo_MSE"
 PSEUDO_MSE_CANONICAL_NAME = "pseudo_mse"
 PSEUDO_MSE2_DISPLAY_NAME = "pseudo_MSE2"
 PSEUDO_MSE2_CANONICAL_NAME = "pseudo_mse2"
+PSEUDO_MSE3_DISPLAY_NAME = "pseudo_MSE3"
+PSEUDO_MSE3_CANONICAL_NAME = "pseudo_mse3"
 PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR = 4
 PSEUDO_MSE_SUPPORTED_E2_WIN_DIVISORS = (2, 4)
 
@@ -23,7 +25,11 @@ class DynamicInputMetricSpec:
 
     @property
     def implemented(self):
-        return self.cuda_code is not None and (self.reducer is not None or self.pairwise)
+        return self.reducer is not None or self.pairwise
+
+    @property
+    def cuda_implemented(self):
+        return self.cuda_code is not None and self.implemented
 
 
 @dataclass(frozen=True)
@@ -99,6 +105,13 @@ DYNAMIC_INPUT_METRICS = {
         None,
         pairwise=True,
     ),
+    PSEUDO_MSE3_CANONICAL_NAME: DynamicInputMetricSpec(
+        PSEUDO_MSE3_CANONICAL_NAME,
+        PSEUDO_MSE3_DISPLAY_NAME,
+        None,
+        None,
+        pairwise=True,
+    ),
 }
 
 DYNAMIC_INPUT_METRIC_ALIASES = {
@@ -113,12 +126,13 @@ DYNAMIC_INPUT_METRIC_ALIASES = {
     "logsum_exp": "logsum",
     "pseudo_mse": PSEUDO_MSE_CANONICAL_NAME,
     "pseudo_mse2": PSEUDO_MSE2_CANONICAL_NAME,
+    "pseudo_mse3": PSEUDO_MSE3_CANONICAL_NAME,
 }
 
 IMPLEMENTED_DYNAMIC_INPUT_METRIC_CODES = {
     name: spec.cuda_code
     for name, spec in DYNAMIC_INPUT_METRICS.items()
-    if spec.implemented
+    if spec.cuda_implemented
 }
 
 
@@ -147,6 +161,8 @@ def assert_dynamic_input_metric_implemented(metric):
 
 def dynamic_input_metric_code(metric):
     spec = assert_dynamic_input_metric_implemented(metric)
+    if spec.cuda_code is None:
+        raise NotImplementedError(f"{spec.display_name} metric does not have a CUDA search code")
     return spec.cuda_code
 
 
@@ -165,10 +181,15 @@ def is_pseudo_mse2_metric(metric):
     return normalize_dynamic_input_metric(metric) == PSEUDO_MSE2_CANONICAL_NAME
 
 
+def is_pseudo_mse3_metric(metric):
+    return normalize_dynamic_input_metric(metric) == PSEUDO_MSE3_CANONICAL_NAME
+
+
 def is_pseudo_mse_family_metric(metric):
     return normalize_dynamic_input_metric(metric) in (
         PSEUDO_MSE_CANONICAL_NAME,
         PSEUDO_MSE2_CANONICAL_NAME,
+        PSEUDO_MSE3_CANONICAL_NAME,
     )
 
 
@@ -478,7 +499,62 @@ def _pseudo_mse2_window_bits(mantissa_window_bits):
     window_bits = int(mantissa_window_bits)
     if window_bits < 1:
         raise ValueError(f"mantissa_window_bits must be at least 1; got {mantissa_window_bits!r}")
+    if window_bits > 24:
+        raise ValueError(f"mantissa_window_bits must be at most 24; got {mantissa_window_bits!r}")
     return window_bits
+
+
+def _pseudo_mse2_window_size(window_bits):
+    return 24 if window_bits is None else int(window_bits)
+
+
+def _pseudo_mse2_mantissa_window_int(mant, start_bit, window_bits):
+    """Return the selected window as old weighted value scaled by 2^24."""
+    window_size = _pseudo_mse2_window_size(window_bits)
+    offsets = torch.arange(0, window_size, device=mant.device, dtype=torch.int64)
+    bit_index = start_bit.unsqueeze(-1) + offsets
+    valid = (bit_index >= 1) & (bit_index <= 23)
+    bit_pos = 23 - bit_index
+    safe_bit_pos = torch.clamp(bit_pos, min=0, max=63)
+    bits = torch.bitwise_and(
+        torch.bitwise_right_shift(mant.unsqueeze(-1), safe_bit_pos),
+        1,
+    ).to(torch.int64)
+    weight_exponents = torch.where(
+        offsets <= 1,
+        torch.full_like(offsets, 24),
+        25 - offsets,
+    )
+    weights = torch.bitwise_left_shift(
+        torch.ones((window_size,), device=mant.device, dtype=torch.int64),
+        weight_exponents,
+    )
+    return (torch.where(valid, bits, torch.zeros_like(bits)) * weights).sum(dim=-1)
+
+
+def _pseudo_mse2_hidden_window_int(mant, window_bits):
+    """Return the hidden-1/X_1... window as old weighted value scaled by 2^24."""
+    window_size = _pseudo_mse2_window_size(window_bits)
+    offsets = torch.arange(0, window_size, device=mant.device, dtype=torch.int64)
+    hidden = offsets == 0
+    bit_index = offsets
+    bit_pos = 23 - bit_index
+    safe_bit_pos = torch.clamp(bit_pos, min=0, max=63)
+    bits = torch.bitwise_and(
+        torch.bitwise_right_shift(mant.unsqueeze(-1), safe_bit_pos),
+        1,
+    ).to(torch.int64)
+    bits = torch.where(hidden, torch.ones_like(bits), bits)
+    weight_exponents = torch.where(
+        offsets <= 1,
+        torch.full_like(offsets, 24),
+        25 - offsets,
+    )
+    weights = torch.bitwise_left_shift(
+        torch.ones((window_size,), device=mant.device, dtype=torch.int64),
+        weight_exponents,
+    )
+    return (bits * weights).sum(dim=-1)
 
 
 def pseudo_mse2_err2_minus_err1_from_scaled(
@@ -488,29 +564,27 @@ def pseudo_mse2_err2_minus_err1_from_scaled(
     is_signed,
     mantissa_window_bits=None,
 ):
-    """Return the pseudo_MSE2 weighted bit-level err2-err1 signal.
+    """Return the pseudo_MSE2 fixed-point bit-level err2-err1 signal.
 
-    This mirrors pseudo_MSE except the e=0 and 1<e<M+1 cases use weighted
-    votes:
+    The selected window is represented as the old weighted value scaled by
+    2^24.  The default window size is 24, covering the full FP32 significand
+    window.  Exp=2 winner windows are shifted right by two before accumulation.
 
-      e == 0       -> +X_M * (X_M + X_(M+1) + X_(M+2)/2 + ...)
+      e == 0       -> +X_M * window_int(X_M...)
       e == 1       -> 0
-      1 < e < M+1  -> -X_k * (X_k + X_(k+1) + X_(k+2)/2 + ...), k=M+1-e
-      e == M+1     -> -(1 + X_1 + X_2/2 + ... + X_23/2^22)
+      1 < e < M+1  -> -X_k * (window_int(X_k...) >> 2), k=M+1-e
+      e == M+1     -> -(window_int(1, X_1, X_2, ...) >> 2)
       e > M+1      -> 0
 
-    The weighted tail stops at X_23, so the number of terms depends on how many
-    explicit mantissa bits remain after the selected bit.  When
-    mantissa_window_bits is set, the M/K cases use X_n through
-    X_(n+mantissa_window_bits-1), and the hidden case uses that many explicit
-    mantissa bits after the hidden leading 1.
+    When mantissa_window_bits=N is set, the M/K cases pack X_n through
+    X_(n+N-1), and the hidden case packs the same total window size: hidden 1
+    plus N-1 explicit bits.
     """
     m1 = int(exp1_mantissa_width)
     m2 = int(exp2_mantissa_width)
     if m2 != m1 - 1:
         raise ValueError(f"pseudo_MSE2 requires m2 == m1 - 1; got m1={m1}, m2={m2}")
     window_bits = _pseudo_mse2_window_bits(mantissa_window_bits)
-    tail_bits = None if window_bits is None else window_bits - 1
 
     values = scaled_values.to(torch.float32).contiguous()
     mag = torch.bitwise_and(_as_uint32_i64(values.view(torch.int32)), 0x7FFFFFFF)
@@ -519,23 +593,81 @@ def pseudo_mse2_err2_minus_err1_from_scaled(
 
     nonzero_normal = exp_field != 0
     e_depth = 127 - exp_field.to(torch.int64)
-    result = torch.zeros_like(values)
+    result = torch.zeros_like(values, dtype=torch.int32)
 
-    bit_m = _pseudo_mse_mantissa_bit(mant, torch.full_like(e_depth, m1))
-    tail_m = _pseudo_mse_mantissa_tail_value(mant, torch.full_like(e_depth, m1), tail_bits)
-    positive_weight = bit_m * (bit_m + tail_m)
+    m_bit_index = torch.full_like(e_depth, m1)
+    bit_m = _pseudo_mse_mantissa_bit(mant, m_bit_index).to(torch.int64)
+    positive_window = _pseudo_mse2_mantissa_window_int(mant, m_bit_index, window_bits)
+    positive_weight = (bit_m * positive_window).to(torch.int32)
     result = torch.where(nonzero_normal & (e_depth == 0), positive_weight, result)
 
     shifted_bit_valid = nonzero_normal & (e_depth > 1) & (e_depth < m1 + 1)
     k = m1 + 1 - e_depth
-    bit_k = _pseudo_mse_mantissa_bit(mant, k)
-    tail_k = _pseudo_mse_mantissa_tail_value(mant, k, tail_bits)
-    negative_weight = -(bit_k * (bit_k + tail_k))
+    bit_k = _pseudo_mse_mantissa_bit(mant, k).to(torch.int64)
+    negative_window = _pseudo_mse2_mantissa_window_int(mant, k, window_bits)
+    negative_weight = (-(bit_k * torch.bitwise_right_shift(negative_window, 2))).to(torch.int32)
     result = torch.where(shifted_bit_valid, negative_weight, result)
-    hidden_tail = _pseudo_mse_mantissa_tail_value(mant, torch.zeros_like(e_depth), window_bits)
-    hidden_weight = -(torch.ones_like(result) + hidden_tail)
+    hidden_window = _pseudo_mse2_hidden_window_int(mant, window_bits)
+    hidden_weight = (-torch.bitwise_right_shift(hidden_window, 2)).to(torch.int32)
     result = torch.where(nonzero_normal & (e_depth == m1 + 1), hidden_weight, result)
     return result
+
+
+def _assert_pseudo_mse3_scaled_diff_ranges(scaled_diff):
+    is_zero = scaled_diff == 0
+    positive_ok = (scaled_diff >= 1.0) & (scaled_diff < 3.0)
+    negative_ok = (scaled_diff <= -0.25) & (scaled_diff > -0.75)
+    bad = ~(is_zero | positive_ok | negative_ok)
+    if bool(bad.any()):
+        raise AssertionError(
+            "pseudo_MSE3 scaled diff outside expected ranges: "
+            f"{scaled_diff[bad].detach().cpu().tolist()}"
+        )
+
+
+def pseudo_mse3_err2_minus_err1_from_scaled(
+    scaled_values,
+    exp1_mantissa_width,
+    exp2_mantissa_width,
+    is_signed,
+):
+    """Return exact per-value squared-error diff err2^2 - err1^2.
+
+    Values are already chunk-scaled into [-2, 2).  The returned diff is the
+    exact floating-point squared-error difference between the exp=2 and exp=1
+    reconstructed values.  The assertion checks the normalized diff before the
+    per-chunk sum: diff * 2^(2*M) must be zero, in [1, 3) for exp=1 wins, or in
+    (-3/4, -1/4] for exp=2 wins.
+    """
+    m1 = int(exp1_mantissa_width)
+    m2 = int(exp2_mantissa_width)
+    if m2 != m1 - 1:
+        raise ValueError(f"pseudo_MSE3 requires m2 == m1 - 1; got m1={m1}, m2={m2}")
+
+    values = scaled_values.to(torch.float32).contiguous()
+    q1_scaled = pseudo_mse_reconstruct_scaled_python(
+        values,
+        exp_bits=1,
+        mantissa_bits=m1,
+        is_signed=is_signed,
+    )
+    q2_scaled = pseudo_mse_reconstruct_scaled_python(
+        values,
+        exp_bits=2,
+        mantissa_bits=m2,
+        is_signed=is_signed,
+    )
+
+    err1_sq = (values - q1_scaled).pow(2)
+    err2_sq = (values - q2_scaled).pow(2)
+    diff = err2_sq - err1_sq
+    _assert_pseudo_mse3_scaled_diff_ranges(diff * float(2.0 ** (2 * m1)))
+    return diff
+
+
+def pseudo_mse3_choose_exp2_from_diff(diff):
+    """Choose exp=2 exactly when its summed squared error is lower."""
+    return diff.sum(dim=1) < 0
 
 
 def pseudo_mse_sqerr_diff_from_scaled(
@@ -591,9 +723,10 @@ def pseudo_mse_choose_exp2_from_diff(
     e2_win_divisor=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
     weighted=False,
 ):
-    """Return True where exp2_wins / divisor is at least exp1_wins."""
+    """Return True where exp2's decision sum is greater than exp1's decision sum."""
     if weighted:
         exp1_wins, exp2_wins = pseudo_mse_weighted_win_counts_from_diff(diff)
+        return exp2_wins > exp1_wins
     else:
         exp1_wins, exp2_wins = pseudo_mse_win_counts_from_diff(diff)
     return pseudo_mse_shifted_e2_wins(exp2_wins, e2_win_divisor) >= exp1_wins

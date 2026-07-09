@@ -27,9 +27,9 @@ from runspace.src.quantization.dynamic_input_metrics import (  # noqa: E402
 )
 
 
-EXPERIMENT_TYPE = "pseudo_mse2"
+EXPERIMENT_TYPE = "pseudo_mse3"
 WEIGHT_DT = "fp32"
-METRIC_NAME = "pseudo_MSE2"
+METRIC_NAME = "pseudo_MSE3"
 BASELINE_METRIC_NAME = "mse"
 L1_METRIC_NAME = "l1"
 L1_METRIC_LABEL = "L1"
@@ -79,7 +79,7 @@ def _parse_csv(value, default):
 
 def get_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Evaluate a future pseudo_MSE2 dynamic activation metric on ImageNet."
+        description="Evaluate the pseudo_MSE3 exact squared-error dynamic activation metric on ImageNet."
     )
     parser.add_argument("--model_name", type=str, default="resnet50")
     parser.add_argument(
@@ -105,15 +105,6 @@ def get_args(argv=None):
     parser.add_argument("--random_subset_size", type=int, default=DEFAULT_RANDOM_SUBSET_SIZE)
     parser.add_argument("--random_seed", type=int, default=DEFAULT_RANDOM_SEED)
     parser.add_argument(
-        "--mantissa-window-bits",
-        type=int,
-        default=0,
-        help=(
-            "Total pseudo_MSE2 window size in bits, from 1 to 24. "
-            "0 or 24 uses the full FP32 significand window."
-        ),
-    )
-    parser.add_argument(
         "--output_dir",
         type=str,
         default=os.path.join(os.path.dirname(__file__), "results"),
@@ -124,11 +115,6 @@ def get_args(argv=None):
     args.bit_widths = _parse_int_csv(args.bit_widths, DEFAULT_BIT_WIDTHS)
     args.exp_bits = _parse_int_csv(args.exp_bits, DEFAULT_EXP_BITS)
     args.metrics = _parse_csv(args.metrics, DEFAULT_METRICS)
-    args.mantissa_window_bits = int(args.mantissa_window_bits or 0)
-    if args.mantissa_window_bits < 0:
-        raise ValueError("--mantissa-window-bits must be non-negative")
-    if args.mantissa_window_bits > 24:
-        raise ValueError("--mantissa-window-bits must be at most 24")
     return args
 
 
@@ -230,10 +216,10 @@ def _metric_label(metric):
         return "MSE"
     if normalized == "l1":
         return L1_METRIC_LABEL
-    if normalized == "pseudo_mse2":
+    if normalized == "pseudo_mse3":
         return METRIC_NAME
     raise ValueError(
-        f"pseudo_MSE2 comparison supports only mse, l1, and {METRIC_NAME}; got {metric!r}"
+        f"pseudo_MSE3 comparison supports only mse, l1, and {METRIC_NAME}; got {metric!r}"
     )
 
 
@@ -247,7 +233,7 @@ def _metric_config_value(metric):
         return BASELINE_METRIC_NAME
     if normalized == "l1":
         return L1_METRIC_NAME
-    if normalized == "pseudo_mse2":
+    if normalized == "pseudo_mse3":
         return METRIC_NAME
     raise ValueError(f"Unsupported comparison metric: {metric!r}")
 
@@ -323,7 +309,6 @@ def build_pseudo_mse_runtime_config(args, spec, model_name=None, weights=None):
             "candidate_formats": list(spec.candidate_formats),
             "random_subset_size": int(args.random_subset_size),
             "random_seed": int(args.random_seed),
-            "mantissa_window_bits": int(args.mantissa_window_bits),
         }
     )
     return cfg
@@ -338,11 +323,6 @@ def build_pseudo_mse_input_quant_cfg(args, spec, model_name=None):
         unsigned_input_sources=UNSIGNED_INPUT_SOURCES,
         dynamic_unsigned_input_candidates=True,
         model_name=model_name or args.model_name,
-        pseudo_mse2_mantissa_window_bits=(
-            int(args.mantissa_window_bits)
-            if normalize_dynamic_input_metric(spec.metric) == "pseudo_mse2"
-            else 0
-        ),
     )
 
 
@@ -529,10 +509,8 @@ def process_single_model(args, device=None):
         raise ValueError("No metric comparison specs were generated")
 
     print(f"\n{'=' * 72}")
-    print(f"PSEUDO_MSE2 METRIC COMPARISON: {model_name}")
+    print(f"PSEUDO_MSE3 METRIC COMPARISON: {model_name}")
     print(f"Metrics: {[spec.metric_label for spec in specs[:len(args.metrics)]]}")
-    if int(args.mantissa_window_bits) > 0:
-        print(f"pseudo_MSE2 mantissa_window_bits={int(args.mantissa_window_bits)}")
     print(f"{'=' * 72}")
 
     def loader_config_builder(current_args):

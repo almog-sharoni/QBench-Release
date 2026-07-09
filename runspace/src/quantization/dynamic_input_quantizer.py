@@ -14,12 +14,15 @@ try:
         PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
         dynamic_input_metric_code,
         is_pseudo_mse2_metric,
+        is_pseudo_mse3_metric,
         is_pseudo_mse_family_metric,
         normalize_dynamic_input_metric,
         pseudo_mse_choose_exp2_from_diff,
         pseudo_mse_e2_win_divisor_from_param,
         pseudo_mse_err2_minus_err1_from_scaled,
         pseudo_mse2_err2_minus_err1_from_scaled,
+        pseudo_mse3_choose_exp2_from_diff,
+        pseudo_mse3_err2_minus_err1_from_scaled,
         pseudo_mse_reconstruct_scaled_python,
         reduce_dynamic_input_metric_python,
         validate_pseudo_mse_candidate_pairs,
@@ -37,12 +40,15 @@ except ImportError:
         PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
         dynamic_input_metric_code,
         is_pseudo_mse2_metric,
+        is_pseudo_mse3_metric,
         is_pseudo_mse_family_metric,
         normalize_dynamic_input_metric,
         pseudo_mse_choose_exp2_from_diff,
         pseudo_mse_e2_win_divisor_from_param,
         pseudo_mse_err2_minus_err1_from_scaled,
         pseudo_mse2_err2_minus_err1_from_scaled,
+        pseudo_mse3_choose_exp2_from_diff,
+        pseudo_mse3_err2_minus_err1_from_scaled,
         pseudo_mse_reconstruct_scaled_python,
         reduce_dynamic_input_metric_python,
         validate_pseudo_mse_candidate_pairs,
@@ -111,7 +117,9 @@ class DynamicInputQuantizer:
     ):
         self.model = model
         self.metric = self._normalize_metric(metric)
-        if is_pseudo_mse_family_metric(self.metric):
+        if is_pseudo_mse3_metric(self.metric):
+            self.metric_param = float(metric_param) if metric_param is not None else 0.0
+        elif is_pseudo_mse_family_metric(self.metric):
             # pseudo_MSE/pseudo_MSE2 use metric_param as the exp=2 win divisor.  The
             # default is divide-by-4; divide-by-2 is for L1-equivalence checks.
             self.metric_param = float(pseudo_mse_e2_win_divisor_from_param(metric_param))
@@ -952,15 +960,19 @@ class DynamicInputQuantizer:
         scales = self._chunk_scale(ref_chunks)
         x_scaled = ref_chunks / scales
 
-        use_pseudo_mse2 = is_pseudo_mse2_metric(getattr(self, "metric", "pseudo_mse"))
-        diff_fn = (
-            pseudo_mse2_err2_minus_err1_from_scaled
-            if use_pseudo_mse2
-            else pseudo_mse_err2_minus_err1_from_scaled
-        )
-        if use_pseudo_mse2:
+        metric = getattr(self, "metric", "pseudo_mse")
+        use_pseudo_mse2 = is_pseudo_mse2_metric(metric)
+        use_pseudo_mse3 = is_pseudo_mse3_metric(metric)
+        if use_pseudo_mse3:
+            diff = pseudo_mse3_err2_minus_err1_from_scaled(
+                x_scaled,
+                pair.exp1_mantissa_width,
+                pair.exp1_mantissa_width - 1,
+                pair.is_signed,
+            )
+        elif use_pseudo_mse2:
             window_bits = int(getattr(self, "pseudo_mse2_mantissa_window_bits", 0) or 0)
-            diff = diff_fn(
+            diff = pseudo_mse2_err2_minus_err1_from_scaled(
                 x_scaled,
                 pair.exp1_mantissa_width,
                 pair.exp1_mantissa_width - 1,
@@ -968,20 +980,23 @@ class DynamicInputQuantizer:
                 mantissa_window_bits=(window_bits or None),
             )
         else:
-            diff = diff_fn(
+            diff = pseudo_mse_err2_minus_err1_from_scaled(
                 x_scaled,
                 pair.exp1_mantissa_width,
                 pair.exp1_mantissa_width - 1,
                 pair.is_signed,
             )
-        e2_win_divisor = pseudo_mse_e2_win_divisor_from_param(
-            getattr(self, "metric_param", PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR)
-        )
-        choose_exp2 = pseudo_mse_choose_exp2_from_diff(
-            diff,
-            e2_win_divisor,
-            weighted=use_pseudo_mse2,
-        )
+        if use_pseudo_mse3:
+            choose_exp2 = pseudo_mse3_choose_exp2_from_diff(diff)
+        else:
+            e2_win_divisor = pseudo_mse_e2_win_divisor_from_param(
+                getattr(self, "metric_param", PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR)
+            )
+            choose_exp2 = pseudo_mse_choose_exp2_from_diff(
+                diff,
+                e2_win_divisor,
+                weighted=use_pseudo_mse2,
+            )
 
         q_e1_scaled = pseudo_mse_reconstruct_scaled_python(
             x_scaled,
@@ -1027,7 +1042,7 @@ class DynamicInputQuantizer:
 
         if is_pseudo_mse_family_metric(self.metric):
             validate_pseudo_mse_candidate_pairs(candidates)
-            if ref_chunks.is_cuda:
+            if ref_chunks.is_cuda and not is_pseudo_mse3_metric(self.metric):
                 cands_e, cands_m, cands_sgn = self._candidate_params(candidates, device=device)
                 best_indices, best_scales, best_qs_flat, best_unscaled_qs_flat = self._search_best_chunk_format_cuda(
                     ref_chunks,

@@ -53,6 +53,8 @@ def normalize_mantissa_window_bits(value):
     value = int(value)
     if value < 1:
         raise ValueError("--mantissa-window-bits must be at least 1 when provided")
+    if value > 24:
+        raise ValueError("--mantissa-window-bits must be at most 24")
     return value
 
 
@@ -361,11 +363,8 @@ def decision_for_bit_width(
     err2 = err_exp2_pre_square.pow(2).sum(dim=1)
     chunk_diff = pseudo_diff.sum(dim=1)
     expected_e1_wins, expected_e2_wins = pseudo_mse_weighted_win_counts_from_diff(pseudo_diff)
-    expected_e2_wins_shifted = pseudo_mse_shifted_e2_wins(
-        expected_e2_wins,
-        e2_win_divisor,
-    )
-    choose_exp2 = expected_e2_wins_shifted >= expected_e1_wins
+    expected_e2_wins_shifted = expected_e2_wins
+    choose_exp2 = expected_e2_wins_shifted > expected_e1_wins
     expected_error = torch.where(choose_exp2, err2, err1)
     return (
         err1,
@@ -568,11 +567,11 @@ def write_vectors(
             f.write("# feed scaled_fp32 values to the pseudo_MSE2 block, or compute scaled_fp32 = raw_fp32 / chunk_scale\n")
         else:
             f.write("# do not apply a chunk scale before feeding these values to the pseudo_MSE2 block\n")
-        f.write("# decision rule: choose_exp2 if expected_e2_wins / e2_win_divisor >= expected_e1_wins else choose_exp1\n")
+        f.write("# decision rule: choose_exp2 if expected_e2_wins > expected_e1_wins else choose_exp1\n")
         f.write("# expected_error rows: selected chunk error matching expected_decision, as fp32_hex fp32_dec\n")
-        f.write("# expected_e1_wins/expected_e2_wins rows: weighted pseudo_diff winner sums; ties are not counted\n")
-        f.write("# expected_e2_wins_shifted row: expected_e2_wins / e2_win_divisor, used only for expected_decision\n")
-        f.write("# expected_e2_wins_shift2 row: legacy expected_e2_wins / 4 diagnostic\n")
+        f.write("# expected_e1_wins/expected_e2_wins rows: int32 fixed-point pseudo_diff sums; ties are not counted\n")
+        f.write("# expected_e2_wins_shifted row: decision-ready expected_e2_wins after per-value shift-right-2\n")
+        f.write("# expected_e2_wins_shift2 row: legacy expected_e2_wins / 4 diagnostic, not used for expected_decision\n")
         f.write("# mantissa mode: truncate\n")
         f.write("# q_exp*_bits are packed sign/exponent/mantissa fields after pseudo_MSE2 quantization\n")
         f.write("# q_exp*_exp_field and q_exp*_mant_field are the stored exponent and mantissa fields as integers\n")
@@ -1569,15 +1568,18 @@ def main():
         type=int,
         choices=(2, 4),
         default=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
-        help="Divisor for exp=2 wins before decision: 4 is default, 2 matches L1 selection.",
+        help=(
+            "Legacy diagnostic divisor for exp=2 wins. pseudo_MSE2 decisions "
+            "shift exp=2 windows per value and compare sums directly."
+        ),
     )
     parser.add_argument(
         "--mantissa-window-bits",
         type=int,
         default=None,
         help=(
-            "Number of selected pseudo_MSE2 mantissa bits to include. "
-            "Default uses all remaining FP32 mantissa bits."
+            "Total pseudo_MSE2 window size in bits, from 1 to 24. "
+            "24, or omitting this option, uses the full FP32 significand window."
         ),
     )
     parser.add_argument(
