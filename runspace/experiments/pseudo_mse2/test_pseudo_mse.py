@@ -351,6 +351,44 @@ def test_pseudo_mse2_bit_level_err2_minus_err1_cases():
     torch.testing.assert_close(diff, expected)
 
 
+def test_pseudo_mse2_bit_level_err2_minus_err1_limited_window():
+    m1 = 6
+    value_with_all_bits_from_m = 1.0 + sum(2.0 ** -i for i in range(m1, 24))
+    value_with_all_bits_from_k = (1.0 + sum(2.0 ** -i for i in range(5, 24))) * 2.0 ** -2
+    full_mantissa = 1.0 + sum(2.0 ** -i for i in range(1, 24))
+    values = torch.tensor(
+        [
+            value_with_all_bits_from_m,
+            value_with_all_bits_from_k,
+            full_mantissa * 2.0 ** -(m1 + 1),
+        ],
+        dtype=torch.float32,
+    ).unsqueeze(0)
+
+    full_diff = pseudo_mse2_err2_minus_err1_from_scaled(
+        values,
+        exp1_mantissa_width=m1,
+        exp2_mantissa_width=m1 - 1,
+        is_signed=True,
+    )
+    limited_diff = pseudo_mse2_err2_minus_err1_from_scaled(
+        values,
+        exp1_mantissa_width=m1,
+        exp2_mantissa_width=m1 - 1,
+        is_signed=True,
+        mantissa_window_bits=3,
+    )
+
+    full_expected = torch.tensor([[
+        3.0 - 2.0 ** -16,
+        -(3.0 - 2.0 ** -17),
+        -(3.0 - 2.0 ** -22),
+    ]], dtype=torch.float32)
+    limited_expected = torch.tensor([[2.5, -2.5, -2.75]], dtype=torch.float32)
+    torch.testing.assert_close(full_diff, full_expected)
+    torch.testing.assert_close(limited_diff, limited_expected)
+
+
 def test_pseudo_mse_encode_truncates_mantissa_bits():
     m1 = 6
     value = torch.tensor([1.0 + 0.75 * (2.0 ** -m1)], dtype=torch.float32)

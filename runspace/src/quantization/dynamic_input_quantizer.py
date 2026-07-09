@@ -107,6 +107,7 @@ class DynamicInputQuantizer:
         activation_exponents='all',
         collect_error_stats=True,
         collect_format_stats=True,
+        pseudo_mse2_mantissa_window_bits=0,
     ):
         self.model = model
         self.metric = self._normalize_metric(metric)
@@ -123,6 +124,9 @@ class DynamicInputQuantizer:
         self.use_unsigned_input_candidates = bool(use_unsigned_input_candidates)
         self.use_cache_sim_db = bool(use_cache_sim_db)
         self.skip_depthwise_input_quant = bool(skip_depthwise_input_quant)
+        self.pseudo_mse2_mantissa_window_bits = int(pseudo_mse2_mantissa_window_bits or 0)
+        if self.pseudo_mse2_mantissa_window_bits < 0:
+            raise ValueError("pseudo_mse2_mantissa_window_bits must be non-negative")
         self.layer_input_format_policy = input_format_policy or 'all'
         self.activation_exponents = activation_exponents or 'all'
         self.collect_error_stats = bool(collect_error_stats)
@@ -847,6 +851,7 @@ class DynamicInputQuantizer:
                 capture,
                 self.metric_code,
                 self.metric_param,
+                int(getattr(self, "pseudo_mse2_mantissa_window_bits", 0) or 0),
             )
 
         if total_chunks <= max_chunks:
@@ -953,12 +958,22 @@ class DynamicInputQuantizer:
             if use_pseudo_mse2
             else pseudo_mse_err2_minus_err1_from_scaled
         )
-        diff = diff_fn(
-            x_scaled,
-            pair.exp1_mantissa_width,
-            pair.exp1_mantissa_width - 1,
-            pair.is_signed,
-        )
+        if use_pseudo_mse2:
+            window_bits = int(getattr(self, "pseudo_mse2_mantissa_window_bits", 0) or 0)
+            diff = diff_fn(
+                x_scaled,
+                pair.exp1_mantissa_width,
+                pair.exp1_mantissa_width - 1,
+                pair.is_signed,
+                mantissa_window_bits=(window_bits or None),
+            )
+        else:
+            diff = diff_fn(
+                x_scaled,
+                pair.exp1_mantissa_width,
+                pair.exp1_mantissa_width - 1,
+                pair.is_signed,
+            )
         e2_win_divisor = pseudo_mse_e2_win_divisor_from_param(
             getattr(self, "metric_param", PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR)
         )

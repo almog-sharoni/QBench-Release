@@ -103,6 +103,7 @@ void launch_search_and_quantize_chunk(
     int          N,
     int          metric,
     float        metric_param,
+    int          pseudo_mse2_mantissa_window_bits,
     void*        stream);
 
 

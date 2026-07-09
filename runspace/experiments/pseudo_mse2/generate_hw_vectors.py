@@ -47,6 +47,15 @@ def fmt_bits(value, width):
     return format(int(value), f"0{int(width)}b")
 
 
+def normalize_mantissa_window_bits(value):
+    if value is None:
+        return None
+    value = int(value)
+    if value < 1:
+        raise ValueError("--mantissa-window-bits must be at least 1 when provided")
+    return value
+
+
 def packed_exp_field(value, exp_bits, mantissa_bits):
     return (int(value) >> int(mantissa_bits)) & ((1 << int(exp_bits)) - 1)
 
@@ -307,6 +316,7 @@ def decision_for_bit_width(
     scaled_chunks,
     bit_width,
     e2_win_divisor=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
+    mantissa_window_bits=None,
 ):
     e2_win_divisor = pseudo_mse_e2_win_divisor_from_param(e2_win_divisor)
     m1 = bit_width - 2
@@ -345,6 +355,7 @@ def decision_for_bit_width(
         exp1_mantissa_width=m1,
         exp2_mantissa_width=m2,
         is_signed=True,
+        mantissa_window_bits=mantissa_window_bits,
     )
     err1 = err_exp1_pre_square.pow(2).sum(dim=1)
     err2 = err_exp2_pre_square.pow(2).sum(dim=1)
@@ -530,10 +541,12 @@ def write_vectors(
     num_chunks=NUM_CHUNKS,
     seed=SEED,
     e2_win_divisor=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
+    mantissa_window_bits=None,
 ):
     num_chunks = int(num_chunks)
     seed = int(seed)
     e2_win_divisor = pseudo_mse_e2_win_divisor_from_param(e2_win_divisor)
+    mantissa_window_bits = normalize_mantissa_window_bits(mantissa_window_bits)
     raw_chunks = make_raw_chunks(num_chunks=num_chunks, seed=seed)
     scales, scaled_chunks = scale_raw_chunks(raw_chunks)
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -545,6 +558,7 @@ def write_vectors(
         f.write(f"# num_chunks_per_bit_width={num_chunks}\n")
         f.write(f"# chunk_size={CHUNK_SIZE}\n")
         f.write(f"# e2_win_divisor={e2_win_divisor}\n")
+        f.write(f"# mantissa_window_bits={mantissa_window_bits or 0}\n")
         f.write("# signedness: sgn=1 for every section in this file\n")
         f.write("# chunk scale source: DynamicInputQuantizer._chunk_scale(raw_chunk)\n")
         f.write("# chunk scale definition: pow2_floor(max(abs(raw_chunk))) with 1.0 for all-zero chunks\n")
@@ -591,6 +605,7 @@ def write_vectors(
                 scaled_chunks,
                 bit_width,
                 e2_win_divisor=e2_win_divisor,
+                mantissa_window_bits=mantissa_window_bits,
             )
             expected_e2_wins_shift2 = pseudo_mse_shifted_e2_wins(
                 expected_e2_wins,
@@ -783,10 +798,12 @@ def write_csv_vectors(
     num_chunks=NUM_CHUNKS,
     seed=SEED,
     e2_win_divisor=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
+    mantissa_window_bits=None,
 ):
     num_chunks = int(num_chunks)
     seed = int(seed)
     e2_win_divisor = pseudo_mse_e2_win_divisor_from_param(e2_win_divisor)
+    mantissa_window_bits = normalize_mantissa_window_bits(mantissa_window_bits)
     raw_chunks = make_raw_chunks(num_chunks=num_chunks, seed=seed)
     scales, scaled_chunks = scale_raw_chunks(raw_chunks)
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -817,6 +834,7 @@ def write_csv_vectors(
                 scaled_chunks,
                 bit_width,
                 e2_win_divisor=e2_win_divisor,
+                mantissa_window_bits=mantissa_window_bits,
             )
             expected_e2_wins_shift2 = pseudo_mse_shifted_e2_wins(
                 expected_e2_wins,
@@ -942,6 +960,7 @@ def compare_pseudo_mse_with_metric(
     num_chunks=NUM_CHUNKS,
     seed=SEED,
     e2_win_divisor=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
+    mantissa_window_bits=None,
     max_mismatches=20,
 ):
     compare_metric = _normalize_compare_metric(compare_metric)
@@ -950,6 +969,7 @@ def compare_pseudo_mse_with_metric(
     if compare_atol < 0.0:
         raise ValueError("--compare-atol must be non-negative")
     e2_win_divisor = pseudo_mse_e2_win_divisor_from_param(e2_win_divisor)
+    mantissa_window_bits = normalize_mantissa_window_bits(mantissa_window_bits)
     if compare_tie_policy not in ("min-error", "exp1", "exp2"):
         raise ValueError("--compare-tie-policy must be one of: min-error, exp1, exp2")
 
@@ -973,6 +993,7 @@ def compare_pseudo_mse_with_metric(
     print("pseudo_MSE2 metric comparison")
     print(f"seed={seed} num_chunks={num_chunks} chunk_size={CHUNK_SIZE}")
     print(f"e2_win_divisor={e2_win_divisor}")
+    print(f"mantissa_window_bits={mantissa_window_bits or 0}")
     print(f"compare_metric={compare_metric} compare_metric_param={fmt_float(compare_metric_param)}")
     print(f"compare_atol={fmt_float(compare_atol)}")
     print(f"compare_tie_policy={compare_tie_policy}")
@@ -1006,6 +1027,7 @@ def compare_pseudo_mse_with_metric(
                 scaled_chunks,
                 bit_width,
                 e2_win_divisor=e2_win_divisor,
+                mantissa_window_bits=mantissa_window_bits,
             )
             expected_e2_wins_shift2 = pseudo_mse_shifted_e2_wins(
                 expected_e2_wins,
@@ -1196,6 +1218,7 @@ def verify_cuda_vectors(
     seed=SEED,
     max_mismatches=20,
     e2_win_divisor=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
+    mantissa_window_bits=None,
 ):
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA verifier requires torch.cuda.is_available()")
@@ -1206,6 +1229,7 @@ def verify_cuda_vectors(
     seed = int(seed)
     max_mismatches = int(max_mismatches)
     e2_win_divisor = pseudo_mse_e2_win_divisor_from_param(e2_win_divisor)
+    mantissa_window_bits = normalize_mantissa_window_bits(mantissa_window_bits)
     raw_chunks = make_raw_chunks(num_chunks=num_chunks, seed=seed)
     scales, scaled_chunks = scale_raw_chunks(raw_chunks)
 
@@ -1216,6 +1240,7 @@ def verify_cuda_vectors(
     print(f"device={torch.cuda.get_device_name(0)}")
     print(f"seed={seed} num_chunks={num_chunks} chunk_size={CHUNK_SIZE}")
     print(f"e2_win_divisor={e2_win_divisor}")
+    print(f"mantissa_window_bits={mantissa_window_bits or 0}")
     print("mantissa_mode=truncate")
 
     for bit_width in BIT_WIDTHS:
@@ -1239,6 +1264,7 @@ def verify_cuda_vectors(
             scaled_chunks,
             bit_width,
             e2_win_divisor=e2_win_divisor,
+            mantissa_window_bits=mantissa_window_bits,
         )
 
         q1_scaled = pseudo_mse_reconstruct_scaled_export(
@@ -1272,6 +1298,7 @@ def verify_cuda_vectors(
             True,
             8,
             float(e2_win_divisor),
+            int(mantissa_window_bits or 0),
         )
         torch.cuda.synchronize()
 
@@ -1359,6 +1386,7 @@ def verify_python_vectors(
     seed=SEED,
     max_mismatches=20,
     e2_win_divisor=PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR,
+    mantissa_window_bits=None,
 ):
     from runspace.src.quantization.dynamic_input_quantizer import DynamicInputQuantizer
 
@@ -1366,16 +1394,19 @@ def verify_python_vectors(
     seed = int(seed)
     max_mismatches = int(max_mismatches)
     e2_win_divisor = pseudo_mse_e2_win_divisor_from_param(e2_win_divisor)
+    mantissa_window_bits = normalize_mantissa_window_bits(mantissa_window_bits)
     raw_chunks = make_raw_chunks(num_chunks=num_chunks, seed=seed)
     scales, scaled_chunks = scale_raw_chunks(raw_chunks)
     quantizer = object.__new__(DynamicInputQuantizer)
     quantizer.metric = "pseudo_mse2"
     quantizer.metric_param = float(e2_win_divisor)
+    quantizer.pseudo_mse2_mantissa_window_bits = int(mantissa_window_bits or 0)
     total_mismatches = 0
 
     print("Python pseudo_MSE2 verification")
     print(f"seed={seed} num_chunks={num_chunks} chunk_size={CHUNK_SIZE}")
     print(f"e2_win_divisor={e2_win_divisor}")
+    print(f"mantissa_window_bits={mantissa_window_bits or 0}")
     print("mantissa_mode=truncate")
 
     for bit_width in BIT_WIDTHS:
@@ -1400,6 +1431,7 @@ def verify_python_vectors(
             scaled_chunks,
             bit_width,
             e2_win_divisor=e2_win_divisor,
+            mantissa_window_bits=mantissa_window_bits,
         )
 
         q1_scaled = pseudo_mse_reconstruct_scaled_export(
@@ -1540,6 +1572,15 @@ def main():
         help="Divisor for exp=2 wins before decision: 4 is default, 2 matches L1 selection.",
     )
     parser.add_argument(
+        "--mantissa-window-bits",
+        type=int,
+        default=None,
+        help=(
+            "Number of selected pseudo_MSE2 mantissa bits to include. "
+            "Default uses all remaining FP32 mantissa bits."
+        ),
+    )
+    parser.add_argument(
         "--compare-metric",
         default=None,
         help="Compare pseudo_MSE2 decisions against a scalar metric such as l1, l2/mse, linf, bias, l0, huber, or logsum.",
@@ -1604,6 +1645,7 @@ def main():
     args = parser.parse_args()
     if args.num_chunks < 1:
         raise ValueError("--num-chunks must be at least 1")
+    args.mantissa_window_bits = normalize_mantissa_window_bits(args.mantissa_window_bits)
     if args.cuda_build_dir:
         os.environ["QBENCH_CUDA_BUILD_DIR"] = args.cuda_build_dir
     if args.verify_only and not (args.verify_cuda or args.verify_python or args.compare_metric):
@@ -1615,6 +1657,7 @@ def main():
             num_chunks=args.num_chunks,
             seed=args.seed,
             e2_win_divisor=args.e2_win_divisor,
+            mantissa_window_bits=args.mantissa_window_bits,
         )
         print(args.output)
         if args.csv_output is not None:
@@ -1624,6 +1667,7 @@ def main():
                 num_chunks=args.num_chunks,
                 seed=args.seed,
                 e2_win_divisor=args.e2_win_divisor,
+                mantissa_window_bits=args.mantissa_window_bits,
             )
             print(args.csv_output)
     verify_mismatches = 0
@@ -1644,6 +1688,7 @@ def main():
             num_chunks=args.num_chunks,
             seed=args.seed,
             e2_win_divisor=args.e2_win_divisor,
+            mantissa_window_bits=args.mantissa_window_bits,
             max_mismatches=args.max_mismatches,
         )
     if args.verify_python:
@@ -1652,6 +1697,7 @@ def main():
             seed=args.seed,
             max_mismatches=args.max_mismatches,
             e2_win_divisor=args.e2_win_divisor,
+            mantissa_window_bits=args.mantissa_window_bits,
         )
     if args.verify_cuda:
         verify_mismatches += verify_cuda_vectors(
@@ -1659,6 +1705,7 @@ def main():
             seed=args.seed,
             max_mismatches=args.max_mismatches,
             e2_win_divisor=args.e2_win_divisor,
+            mantissa_window_bits=args.mantissa_window_bits,
         )
     if verify_mismatches:
         raise SystemExit(1)

@@ -111,6 +111,11 @@ The weighted tail stops at `X_23`, so the number of terms depends on how many
 explicit mantissa bits remain after the selected bit. The chunk decision uses
 weighted sums:
 
+Implementations may limit this with `mantissa_window_bits=N`.  In that mode,
+the `M`/`k` cases use `X_n` through `X_(n+N-1)`, and the hidden-leading case
+uses `N` explicit mantissa bits after the hidden `1`.  The default uses all
+remaining FP32 mantissa bits.
+
 ```text
 exp1_wins = sum_i(max(diff_i, 0))
 exp2_wins = sum_i(max(-diff_i, 0))

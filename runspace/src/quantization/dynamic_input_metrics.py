@@ -444,9 +444,19 @@ def _pseudo_mse_mantissa_bit(mant, bit_index):
     return torch.where(valid, bit, torch.zeros_like(bit))
 
 
-def _pseudo_mse_mantissa_tail_value(mant, start_bit):
-    """Return X_(start+1) + X_(start+2)/2 + ... through the last mantissa bit."""
-    offsets = torch.arange(1, 24, device=mant.device, dtype=start_bit.dtype)
+def _pseudo_mse_mantissa_tail_value(mant, start_bit, tail_bits=None):
+    """Return X_(start+1) + X_(start+2)/2 + ... through the requested tail."""
+    if tail_bits is not None:
+        tail_bits = int(tail_bits)
+        if tail_bits < 0:
+            raise ValueError(f"tail_bits must be non-negative; got {tail_bits}")
+        if tail_bits == 0:
+            return torch.zeros_like(mant, dtype=torch.float32)
+        max_offset = min(tail_bits, 23)
+    else:
+        max_offset = 23
+
+    offsets = torch.arange(1, max_offset + 1, device=mant.device, dtype=start_bit.dtype)
     bit_index = start_bit.unsqueeze(-1) + offsets
     valid = (bit_index >= 1) & (bit_index <= 23)
     bit_pos = 23 - bit_index
@@ -456,10 +466,19 @@ def _pseudo_mse_mantissa_tail_value(mant, start_bit):
         1,
     ).to(torch.float32)
     weights = torch.pow(
-        torch.full((23,), 0.5, device=mant.device, dtype=torch.float32),
+        torch.full((max_offset,), 0.5, device=mant.device, dtype=torch.float32),
         (offsets - 1).to(torch.float32),
     )
     return (torch.where(valid, bit, torch.zeros_like(bit)) * weights).sum(dim=-1)
+
+
+def _pseudo_mse2_window_bits(mantissa_window_bits):
+    if mantissa_window_bits is None:
+        return None
+    window_bits = int(mantissa_window_bits)
+    if window_bits < 1:
+        raise ValueError(f"mantissa_window_bits must be at least 1; got {mantissa_window_bits!r}")
+    return window_bits
 
 
 def pseudo_mse2_err2_minus_err1_from_scaled(
@@ -467,6 +486,7 @@ def pseudo_mse2_err2_minus_err1_from_scaled(
     exp1_mantissa_width,
     exp2_mantissa_width,
     is_signed,
+    mantissa_window_bits=None,
 ):
     """Return the pseudo_MSE2 weighted bit-level err2-err1 signal.
 
@@ -480,12 +500,17 @@ def pseudo_mse2_err2_minus_err1_from_scaled(
       e > M+1      -> 0
 
     The weighted tail stops at X_23, so the number of terms depends on how many
-    explicit mantissa bits remain after the selected bit.
+    explicit mantissa bits remain after the selected bit.  When
+    mantissa_window_bits is set, the M/K cases use X_n through
+    X_(n+mantissa_window_bits-1), and the hidden case uses that many explicit
+    mantissa bits after the hidden leading 1.
     """
     m1 = int(exp1_mantissa_width)
     m2 = int(exp2_mantissa_width)
     if m2 != m1 - 1:
         raise ValueError(f"pseudo_MSE2 requires m2 == m1 - 1; got m1={m1}, m2={m2}")
+    window_bits = _pseudo_mse2_window_bits(mantissa_window_bits)
+    tail_bits = None if window_bits is None else window_bits - 1
 
     values = scaled_values.to(torch.float32).contiguous()
     mag = torch.bitwise_and(_as_uint32_i64(values.view(torch.int32)), 0x7FFFFFFF)
@@ -497,17 +522,17 @@ def pseudo_mse2_err2_minus_err1_from_scaled(
     result = torch.zeros_like(values)
 
     bit_m = _pseudo_mse_mantissa_bit(mant, torch.full_like(e_depth, m1))
-    tail_m = _pseudo_mse_mantissa_tail_value(mant, torch.full_like(e_depth, m1))
+    tail_m = _pseudo_mse_mantissa_tail_value(mant, torch.full_like(e_depth, m1), tail_bits)
     positive_weight = bit_m * (bit_m + tail_m)
     result = torch.where(nonzero_normal & (e_depth == 0), positive_weight, result)
 
     shifted_bit_valid = nonzero_normal & (e_depth > 1) & (e_depth < m1 + 1)
     k = m1 + 1 - e_depth
     bit_k = _pseudo_mse_mantissa_bit(mant, k)
-    tail_k = _pseudo_mse_mantissa_tail_value(mant, k)
+    tail_k = _pseudo_mse_mantissa_tail_value(mant, k, tail_bits)
     negative_weight = -(bit_k * (bit_k + tail_k))
     result = torch.where(shifted_bit_valid, negative_weight, result)
-    hidden_tail = _pseudo_mse_mantissa_tail_value(mant, torch.zeros_like(e_depth))
+    hidden_tail = _pseudo_mse_mantissa_tail_value(mant, torch.zeros_like(e_depth), window_bits)
     hidden_weight = -(torch.ones_like(result) + hidden_tail)
     result = torch.where(nonzero_normal & (e_depth == m1 + 1), hidden_weight, result)
     return result

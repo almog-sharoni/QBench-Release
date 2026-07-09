@@ -598,7 +598,8 @@ search_best_chunk_format(torch::Tensor x,
                          torch::Tensor cands_sgn,
                          bool return_capture,
                          int metric,
-                         double metric_param)
+                         double metric_param,
+                         int pseudo_mse2_mantissa_window_bits)
 {
     TORCH_CHECK(x.is_cuda() && x.scalar_type() == torch::kFloat32 && x.is_contiguous(),
                 "search_best_chunk_format: x must be contiguous CUDA float32");
@@ -614,6 +615,8 @@ search_best_chunk_format(torch::Tensor x,
                 cands_m.numel() == num_candidates &&
                 cands_sgn.numel() == num_candidates,
                 "search_best_chunk_format: candidate tensors must be same size > 0");
+    TORCH_CHECK(pseudo_mse2_mantissa_window_bits >= 0,
+                "search_best_chunk_format: pseudo_mse2_mantissa_window_bits must be non-negative");
 
     const int64_t N64 = x.numel();
     constexpr int CHUNK = 128;
@@ -651,6 +654,7 @@ search_best_chunk_format(torch::Tensor x,
         N,
         metric,
         (float)metric_param,
+        pseudo_mse2_mantissa_window_bits,
         current_stream_ptr());
 
     return {best_indices, best_scales, out, out_unscaled};
@@ -733,11 +737,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, mod) {
             py::arg("return_capture") = false,
             py::arg("metric") = 0,
             py::arg("metric_param") = 0.0625,
+            py::arg("pseudo_mse2_mantissa_window_bits") = 0,
             "Fused search and quantize for chunk-mode dynamic quantization. "
             "metric selects the per-chunk error norm (0=L2, 1=L1, 2=Linf, 3=bias, "
             "4=L0, 5=Huber, 6=logsum, 7=pseudo_MSE, 8=pseudo_MSE2); metric_param "
             "is the Huber delta, or the pseudo_MSE/pseudo_MSE2 exp=2 win divisor "
-            "(2 or 4).");
+            "(2 or 4). pseudo_mse2_mantissa_window_bits=0 uses all remaining bits.");
 
     mod.def("n_per_word",     &n_per_word_py,
             py::arg("e"), py::arg("m"),

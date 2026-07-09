@@ -90,12 +90,19 @@ __device__ __forceinline__ int pseudo_mse_mantissa_bit(uint32_t mant, int bit_in
     return static_cast<int>((mant >> (23 - bit_index)) & 1u);
 }
 
-__device__ __forceinline__ float pseudo_mse_mantissa_tail_value(uint32_t mant, int start_bit)
+__device__ __forceinline__ float pseudo_mse_mantissa_tail_value(
+    uint32_t mant,
+    int start_bit,
+    int tail_bits)
 {
+    const int max_offset = (tail_bits < 0) ? 23 : tail_bits;
     float value = 0.0f;
     float weight = 1.0f;
     #pragma unroll
     for (int offset = 1; offset <= 23; ++offset) {
+        if (offset > max_offset) {
+            break;
+        }
         value += static_cast<float>(pseudo_mse_mantissa_bit(mant, start_bit + offset)) * weight;
         weight *= 0.5f;
     }
@@ -142,12 +149,18 @@ __device__ __forceinline__ float pseudo_mse2_err2_minus_err1(
     float scaled_v,
     int m1,
     int m2,
-    int sgn)
+    int sgn,
+    int mantissa_window_bits)
 {
     (void)sgn;
     if (m2 != m1 - 1) {
         return 0.0f;
     }
+    if (mantissa_window_bits < 0) {
+        return 0.0f;
+    }
+    const int tail_bits = (mantissa_window_bits == 0) ? -1 : (mantissa_window_bits - 1);
+    const int hidden_tail_bits = (mantissa_window_bits == 0) ? -1 : mantissa_window_bits;
 
     const uint32_t mag = __float_as_uint(scaled_v) & 0x7FFFFFFFu;
     const uint32_t exp_field = (mag >> 23) & 0xFFu;
@@ -160,7 +173,7 @@ __device__ __forceinline__ float pseudo_mse2_err2_minus_err1(
 
     if (e_depth == 0) {
         const float x_m = static_cast<float>(pseudo_mse_mantissa_bit(mant, m1));
-        return x_m * (x_m + pseudo_mse_mantissa_tail_value(mant, m1));
+        return x_m * (x_m + pseudo_mse_mantissa_tail_value(mant, m1, tail_bits));
     }
     if (e_depth == 1) {
         return 0.0f;
@@ -168,10 +181,10 @@ __device__ __forceinline__ float pseudo_mse2_err2_minus_err1(
     if (e_depth > 1 && e_depth < m1 + 1) {
         const int k = m1 + 1 - e_depth;
         const float x_k = static_cast<float>(pseudo_mse_mantissa_bit(mant, k));
-        return -(x_k * (x_k + pseudo_mse_mantissa_tail_value(mant, k)));
+        return -(x_k * (x_k + pseudo_mse_mantissa_tail_value(mant, k, tail_bits)));
     }
     if (e_depth == m1 + 1) {
-        return -(1.0f + pseudo_mse_mantissa_tail_value(mant, 0));
+        return -(1.0f + pseudo_mse_mantissa_tail_value(mant, 0, hidden_tail_bits));
     }
     return 0.0f;
 }
@@ -191,7 +204,8 @@ __global__ void search_and_quantize_chunk_kernel(
     int             N,
     int             n_chunks,
     int             metric,
-    float           metric_param)
+    float           metric_param,
+    int             pseudo_mse2_mantissa_window_bits)
 {
     const int chunk = blockIdx.x;
     if (chunk >= n_chunks) return;
@@ -275,7 +289,8 @@ __global__ void search_and_quantize_chunk_kernel(
                     scaled_v,
                     exp1_m,
                     exp2_m,
-                    pair_sgn)
+                    pair_sgn,
+                    pseudo_mse2_mantissa_window_bits)
                 : pseudo_mse_err2_minus_err1(
                     scaled_v,
                     exp1_m,
@@ -375,6 +390,7 @@ void launch_search_and_quantize_chunk(
     int          N,
     int          metric,
     float        metric_param,
+    int          pseudo_mse2_mantissa_window_bits,
     void*        stream)
 {
     if (N == 0) return;
@@ -384,7 +400,7 @@ void launch_search_and_quantize_chunk(
     search_and_quantize_chunk_kernel<<<n_chunks, BLK, 0, cs>>>(
         x, cands_e, cands_m, cands_sgn, num_candidates,
         best_indices, best_scales, out, out_unscaled, N, n_chunks,
-        metric, metric_param);
+        metric, metric_param, pseudo_mse2_mantissa_window_bits);
 }
 
 } // namespace qbench_lp
