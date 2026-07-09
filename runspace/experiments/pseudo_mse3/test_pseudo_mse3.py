@@ -17,6 +17,14 @@ from runspace.experiments.pseudo_mse3.pseudo_mse import (  # noqa: E402
     build_pseudo_mse_runtime_config,
     get_args,
 )
+from runspace.experiments.pseudo_mse3.generate_hw_vectors import (  # noqa: E402
+    compare_pseudo_mse3_with_metric,
+    decision_for_bit_width,
+    make_raw_chunks,
+    scale_raw_chunks,
+    verify_python_vectors,
+    write_vectors,
+)
 from runspace.src.quantization.dynamic_input_metrics import (  # noqa: E402
     _assert_pseudo_mse3_scaled_diff_ranges,
     dynamic_input_metric_code,
@@ -100,6 +108,63 @@ def test_pseudo_mse3_decision_uses_exact_summed_diff():
     )
 
     assert pseudo_mse3_choose_exp2_from_diff(diff).tolist() == [False, True, False]
+
+
+def test_pseudo_mse3_hw_vector_decision_matches_exact_mse():
+    raw_chunks = make_raw_chunks(num_chunks=20, seed=42)
+    _scales, scaled_chunks = scale_raw_chunks(raw_chunks)
+
+    for bit_width in (8, 7, 6, 5, 4):
+        (
+            err1,
+            err2,
+            chunk_diff,
+            choose_exp2,
+            expected_error,
+            _q1_bits,
+            _q2_bits,
+            _err_exp1_pre_square,
+            _err_exp2_pre_square,
+            pseudo_diff,
+        ) = decision_for_bit_width(scaled_chunks, bit_width)
+
+        torch.testing.assert_close(chunk_diff, err2 - err1)
+        assert torch.equal(choose_exp2, err2 < err1)
+        torch.testing.assert_close(expected_error, torch.minimum(err1, err2))
+        scaled_diff = pseudo_diff * float(2.0 ** (2 * (bit_width - 2)))
+        _assert_pseudo_mse3_scaled_diff_ranges(scaled_diff)
+
+
+def test_pseudo_mse3_generate_hw_vectors_outputs_pytorch_reference(tmp_path):
+    output = tmp_path / "pseudo_mse3_hw_vectors.txt"
+
+    write_vectors(str(output), num_chunks=2, seed=42)
+
+    text = output.read_text()
+    assert "pseudo_MSE3 PyTorch hardware test vectors" in text
+    assert "implementation: PyTorch reference only" in text
+    assert "decision rule: choose_exp2 if sum(err2^2 - err1^2) < 0 else choose_exp1" in text
+    assert "BEGIN_BIT_WIDTH 8" in text
+    assert "pseudo_diff_times_2_2m" in text
+
+
+def test_pseudo_mse3_compare_to_l2_has_no_metric_min_mismatches(tmp_path):
+    csv_path = tmp_path / "pseudo_mse3_l2_mismatches.csv"
+
+    totals = compare_pseudo_mse3_with_metric(
+        str(csv_path),
+        compare_metric="mse",
+        num_chunks=20,
+        seed=42,
+        max_mismatches=5,
+    )
+
+    assert totals["metric_min_mismatched_chunks"] == 0
+    assert csv_path.exists()
+
+
+def test_pseudo_mse3_verify_python_vectors_matches_reference():
+    assert verify_python_vectors(num_chunks=10, seed=42, max_mismatches=5) == 0
 
 
 def test_pseudo_mse3_experiment_configs_use_metric_without_window_bits():
