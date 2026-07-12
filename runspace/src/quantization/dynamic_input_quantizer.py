@@ -23,6 +23,10 @@ try:
         pseudo_mse2_err2_minus_err1_from_scaled,
         pseudo_mse3_choose_exp2_from_diff,
         pseudo_mse3_err2_minus_err1_from_scaled,
+        normalize_pseudo_mse3_fixed_rounding,
+        normalize_pseudo_mse3_tie_break,
+        pseudo_mse3_fixed_rounding_code,
+        pseudo_mse3_tie_break_code,
         pseudo_mse_reconstruct_scaled_python,
         reduce_dynamic_input_metric_python,
         validate_pseudo_mse_candidate_pairs,
@@ -49,6 +53,10 @@ except ImportError:
         pseudo_mse2_err2_minus_err1_from_scaled,
         pseudo_mse3_choose_exp2_from_diff,
         pseudo_mse3_err2_minus_err1_from_scaled,
+        normalize_pseudo_mse3_fixed_rounding,
+        normalize_pseudo_mse3_tie_break,
+        pseudo_mse3_fixed_rounding_code,
+        pseudo_mse3_tie_break_code,
         pseudo_mse_reconstruct_scaled_python,
         reduce_dynamic_input_metric_python,
         validate_pseudo_mse_candidate_pairs,
@@ -114,11 +122,21 @@ class DynamicInputQuantizer:
         collect_error_stats=True,
         collect_format_stats=True,
         pseudo_mse2_mantissa_window_bits=0,
+        pseudo_mse3_fixed_rounding="floor",
+        pseudo_mse3_tie_break="exp1",
+        chunk_observer=None,
     ):
         self.model = model
         self.metric = self._normalize_metric(metric)
         if is_pseudo_mse3_metric(self.metric):
-            self.metric_param = float(metric_param) if metric_param is not None else 0.0
+            bits_to_take_param = float(metric_param or 0)
+            bits_to_take = int(bits_to_take_param)
+            if bits_to_take_param != float(bits_to_take):
+                raise ValueError(f"pseudo_MSE3 bits_to_take must be an integer; got {metric_param!r}")
+            if bits_to_take < 0:
+                raise ValueError(f"pseudo_MSE3 bits_to_take must be non-negative; got {bits_to_take}")
+            self.pseudo_mse3_bits_to_take = bits_to_take
+            self.metric_param = float(bits_to_take)
         elif is_pseudo_mse_family_metric(self.metric):
             # pseudo_MSE/pseudo_MSE2 use metric_param as the exp=2 win divisor.  The
             # default is divide-by-4; divide-by-2 is for L1-equivalence checks.
@@ -135,10 +153,25 @@ class DynamicInputQuantizer:
         self.pseudo_mse2_mantissa_window_bits = int(pseudo_mse2_mantissa_window_bits or 0)
         if self.pseudo_mse2_mantissa_window_bits < 0:
             raise ValueError("pseudo_mse2_mantissa_window_bits must be non-negative")
+        self.pseudo_mse3_fixed_rounding = normalize_pseudo_mse3_fixed_rounding(
+            pseudo_mse3_fixed_rounding
+        )
+        self.pseudo_mse3_fixed_rounding_code = pseudo_mse3_fixed_rounding_code(
+            self.pseudo_mse3_fixed_rounding
+        )
+        self.pseudo_mse3_tie_break = normalize_pseudo_mse3_tie_break(
+            pseudo_mse3_tie_break
+        )
+        self.pseudo_mse3_tie_break_code = pseudo_mse3_tie_break_code(
+            self.pseudo_mse3_tie_break
+        )
         self.layer_input_format_policy = input_format_policy or 'all'
         self.activation_exponents = activation_exponents or 'all'
         self.collect_error_stats = bool(collect_error_stats)
         self.collect_format_stats = bool(collect_format_stats)
+        if chunk_observer is not None and not callable(chunk_observer):
+            raise TypeError("chunk_observer must be callable or None")
+        self.chunk_observer = chunk_observer
         self._candidate_param_cache = {}
         self.unsigned_input_sources = {
             str(source).lower()
@@ -860,6 +893,8 @@ class DynamicInputQuantizer:
                 self.metric_code,
                 self.metric_param,
                 int(getattr(self, "pseudo_mse2_mantissa_window_bits", 0) or 0),
+                int(getattr(self, "pseudo_mse3_fixed_rounding_code", 0) or 0),
+                int(getattr(self, "pseudo_mse3_tie_break_code", 0) or 0),
             )
 
         if total_chunks <= max_chunks:
@@ -969,6 +1004,8 @@ class DynamicInputQuantizer:
                 pair.exp1_mantissa_width,
                 pair.exp1_mantissa_width - 1,
                 pair.is_signed,
+                bits_to_take=int(getattr(self, "pseudo_mse3_bits_to_take", 0) or 0),
+                fixed_rounding=getattr(self, "pseudo_mse3_fixed_rounding", "floor"),
             )
         elif use_pseudo_mse2:
             window_bits = int(getattr(self, "pseudo_mse2_mantissa_window_bits", 0) or 0)
@@ -987,7 +1024,10 @@ class DynamicInputQuantizer:
                 pair.is_signed,
             )
         if use_pseudo_mse3:
-            choose_exp2 = pseudo_mse3_choose_exp2_from_diff(diff)
+            choose_exp2 = pseudo_mse3_choose_exp2_from_diff(
+                diff,
+                tie_break=getattr(self, "pseudo_mse3_tie_break", "exp1"),
+            )
         else:
             e2_win_divisor = pseudo_mse_e2_win_divisor_from_param(
                 getattr(self, "metric_param", PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR)
@@ -1148,6 +1188,16 @@ class DynamicInputQuantizer:
             self.running_error = 0.0
         # self.running_error += best_errors.sum().item() # Removed for CUDA optimization
         self.total_chunks += total_chunks
+
+        chunk_observer = getattr(self, "chunk_observer", None)
+        if chunk_observer is not None:
+            # Observation is synchronous. Callbacks must copy any data they retain.
+            chunk_observer(
+                layer_name=layer_name,
+                candidates=tuple(candidates),
+                ref_chunks=ref_chunks.detach(),
+                best_indices=best_indices.detach(),
+            )
 
         return quantized_tensor, best_indices
 

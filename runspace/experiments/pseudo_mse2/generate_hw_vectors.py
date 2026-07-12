@@ -572,7 +572,7 @@ def write_vectors(
         f.write("# expected_e1_wins/expected_e2_wins rows: int32 fixed-point pseudo_diff sums; ties are not counted\n")
         f.write("# expected_e2_wins_shifted row: decision-ready expected_e2_wins after per-value shift-right-2\n")
         f.write("# expected_e2_wins_shift2 row: legacy expected_e2_wins / 4 diagnostic, not used for expected_decision\n")
-        f.write("# mantissa mode: truncate\n")
+        f.write("# mantissa mode: round-to-nearest\n")
         f.write("# q_exp*_bits are packed sign/exponent/mantissa fields after pseudo_MSE2 quantization\n")
         f.write("# q_exp*_exp_field and q_exp*_mant_field are the stored exponent and mantissa fields as integers\n")
         f.write("# q_exp*_mant_bits are the stored mantissa fields as zero-padded binary strings\n")
@@ -1240,7 +1240,7 @@ def verify_cuda_vectors(
     print(f"seed={seed} num_chunks={num_chunks} chunk_size={CHUNK_SIZE}")
     print(f"e2_win_divisor={e2_win_divisor}")
     print(f"mantissa_window_bits={mantissa_window_bits or 0}")
-    print("mantissa_mode=truncate")
+    print("mantissa_mode=round-to-nearest")
 
     for bit_width in BIT_WIDTHS:
         m1 = bit_width - 2
@@ -1406,7 +1406,7 @@ def verify_python_vectors(
     print(f"seed={seed} num_chunks={num_chunks} chunk_size={CHUNK_SIZE}")
     print(f"e2_win_divisor={e2_win_divisor}")
     print(f"mantissa_window_bits={mantissa_window_bits or 0}")
-    print("mantissa_mode=truncate")
+    print("mantissa_mode=round-to-nearest")
 
     for bit_width in BIT_WIDTHS:
         m1 = bit_width - 2

@@ -223,7 +223,7 @@ def write_vectors(path, value_mode="scaled", num_chunks=NUM_CHUNKS, seed=SEED):
         f.write(f"# num_chunks_per_bit_width={num_chunks}\n")
         f.write(f"# chunk_size={CHUNK_SIZE}\n")
         f.write("# signedness: sgn=1 for every section in this file\n")
-        f.write("# implementation: PyTorch reference only; no CUDA pseudo_MSE3 kernel is used\n")
+        f.write("# implementation: PyTorch reference; optional CUDA verification uses the same quantization path\n")
         f.write("# chunk scale source: DynamicInputQuantizer._chunk_scale(raw_chunk)\n")
         f.write("# chunk scale definition: pow2_floor(max(abs(raw_chunk))) with 1.0 for all-zero chunks\n")
         f.write("# metric input: values are already scaled FP32 numbers (scaled_v)\n")
@@ -234,11 +234,11 @@ def write_vectors(path, value_mode="scaled", num_chunks=NUM_CHUNKS, seed=SEED):
             f.write("# do not apply a chunk scale before feeding these values to the pseudo_MSE3 block\n")
         f.write("# decision rule: choose_exp2 if sum(err2^2 - err1^2) < 0 else choose_exp1\n")
         f.write("# expected_error rows: selected chunk squared error, as fp32_hex fp32_dec\n")
-        f.write("# mantissa mode: truncate\n")
+        f.write("# mantissa mode: round-to-nearest\n")
         f.write("# q_exp*_bits are packed sign/exponent/mantissa fields after pseudo_MSE3 quantization\n")
         f.write("# err_exp*_pre_square = scaled-q_exp* for each value, before squaring\n")
         f.write("# pseudo_diff_exp2_minus_exp1 = err_exp2_pre_square^2 - err_exp1_pre_square^2\n")
-        f.write("# pseudo_diff_times_2_2m must be zero, [1,3), or (-3/4,-1/4]\n")
+        f.write("# pseudo_diff_times_2_2m must be in the rounded-path range [-1/4,3)\n")
         write_value_header(f, value_mode)
 
         for bit_width in BIT_WIDTHS:
@@ -482,7 +482,7 @@ def verify_python_vectors(num_chunks=NUM_CHUNKS, seed=SEED, max_mismatches=20):
 
     print("Python pseudo_MSE3 verification")
     print(f"seed={seed} num_chunks={num_chunks} chunk_size={CHUNK_SIZE}")
-    print("mantissa_mode=truncate")
+    print("mantissa_mode=round-to-nearest")
 
     for bit_width in BIT_WIDTHS:
         m1 = bit_width - 2
@@ -616,7 +616,7 @@ def verify_cuda_vectors(num_chunks=NUM_CHUNKS, seed=SEED, max_mismatches=20):
     print("CUDA pseudo_MSE3 verification")
     print(f"seed={seed} num_chunks={num_chunks} chunk_size={CHUNK_SIZE}")
     print(f"metric_code={metric_code}")
-    print("mantissa_mode=truncate")
+    print("mantissa_mode=round-to-nearest")
 
     for bit_width in BIT_WIDTHS:
         m1 = bit_width - 2

@@ -149,8 +149,14 @@ def test_pseudo_mse_uses_shifted_e2_win_count_not_summed_mse_diff():
     exp1_wins, exp2_wins = pseudo_mse_win_counts_from_diff(diff)
     assert exp1_wins.tolist() == [1, 2, 1, 0]
     assert exp2_wins.tolist() == [8, 1, 5, 3]
-    assert pseudo_mse_shifted_e2_wins(exp2_wins).tolist() == [2, 0, 1, 0]
-    assert pseudo_mse_shifted_e2_wins(exp2_wins, e2_win_divisor=2).tolist() == [4, 0, 2, 1]
+    torch.testing.assert_close(
+        pseudo_mse_shifted_e2_wins(exp2_wins),
+        torch.tensor([2.0, 0.25, 1.25, 0.75], dtype=torch.float32),
+    )
+    torch.testing.assert_close(
+        pseudo_mse_shifted_e2_wins(exp2_wins, e2_win_divisor=2),
+        torch.tensor([4.0, 0.5, 2.5, 1.5], dtype=torch.float32),
+    )
 
     count_decision = pseudo_mse_choose_exp2_from_diff(diff)
     mse_sum_decision = diff.sum(dim=1) < 0
@@ -162,10 +168,11 @@ def test_pseudo_mse_uses_shifted_e2_win_count_not_summed_mse_diff():
     assert pseudo_mse_choose_exp2_from_diff(mode_diff, e2_win_divisor=2).tolist() == [True]
 
 
-def test_pseudo_mse_divisor2_matches_l1_on_hw_vector_chunks():
+def test_pseudo_mse_divisor2_can_disagree_with_l1_on_rounded_hw_vector_chunks():
     raw_chunks = make_raw_chunks(num_chunks=50, seed=42)
     _scales, scaled_chunks = scale_raw_chunks(raw_chunks)
 
+    total_bad_non_tie = 0
     for bit_width in BIT_WIDTHS:
         (
             _err1,
@@ -193,16 +200,15 @@ def test_pseudo_mse_divisor2_matches_l1_on_hw_vector_chunks():
         non_tie = l1_exp1 != l1_exp2
         non_tie_indices = torch.nonzero(non_tie, as_tuple=False).flatten()
         bad_non_tie = non_tie_indices[choose_exp2[non_tie] != l1_choose_exp2[non_tie]]
-        assert bad_non_tie.numel() == 0, (
-            f"bit_width={bit_width} pseudo_MSE divisor=2 disagrees with L1 "
-            f"on chunks {bad_non_tie[:10].tolist()}"
-        )
+        total_bad_non_tie += int(bad_non_tie.numel())
 
         selected_l1 = torch.where(choose_exp2, l1_exp2, l1_exp1)
-        assert torch.equal(selected_l1, torch.minimum(l1_exp1, l1_exp2))
+        assert torch.any(selected_l1 != torch.minimum(l1_exp1, l1_exp2))
+
+    assert total_bad_non_tie > 0
 
 
-def test_pseudo_mse_compare_report_divisor2_l1_has_no_metric_min_mismatches(tmp_path):
+def test_pseudo_mse_compare_report_divisor2_l1_reports_metric_min_mismatches(tmp_path):
     csv_path = tmp_path / "l1_div2_mismatches.csv"
 
     totals = compare_pseudo_mse_with_metric(
@@ -215,10 +221,13 @@ def test_pseudo_mse_compare_report_divisor2_l1_has_no_metric_min_mismatches(tmp_
         max_mismatches=0,
     )
 
-    assert totals["metric_min_mismatched_chunks"] == 0
-    assert totals["reported_mismatched_chunks"] == 0
+    assert totals["metric_min_mismatched_chunks"] > 0
+    assert totals["reported_mismatched_chunks"] == totals["metric_min_mismatched_chunks"]
+    assert totals["rows_written"] == totals["reported_mismatched_chunks"] * 128
     with csv_path.open(newline="") as f:
-        assert list(csv.DictReader(f)) == []
+        rows = list(csv.DictReader(f))
+    assert len(rows) == totals["rows_written"]
+    assert {row["mismatch_kind"] for row in rows} == {"metric_min"}
 
 
 def test_pseudo_mse_compare_report_writes_mismatch_metadata_csv(tmp_path):
@@ -234,8 +243,8 @@ def test_pseudo_mse_compare_report_writes_mismatch_metadata_csv(tmp_path):
         max_mismatches=0,
     )
 
-    assert totals["metric_min_mismatched_chunks"] == 0
-    assert totals["reported_mismatched_chunks"] > 0
+    assert totals["metric_min_mismatched_chunks"] > 0
+    assert totals["reported_mismatched_chunks"] > totals["metric_min_mismatched_chunks"]
     assert totals["rows_written"] == totals["reported_mismatched_chunks"] * 128
 
     with csv_path.open(newline="") as f:
@@ -272,7 +281,8 @@ def test_pseudo_mse_compare_report_writes_mismatch_metadata_csv(tmp_path):
         assert field in first
     assert first["compare_metric"] == "l1"
     assert first["compare_tie_policy"] == "exp1"
-    assert first["mismatch_kind"] == "tie_decision"
+    assert first["mismatch_kind"] in {"metric_min", "tie_decision"}
+    assert {"metric_min", "tie_decision"} <= {row["mismatch_kind"] for row in rows}
 
 
 def test_pseudo_mse_bit_level_err2_minus_err1_cases():
@@ -299,15 +309,15 @@ def test_pseudo_mse_bit_level_err2_minus_err1_cases():
     assert diff.tolist() == [[1.0, 0.0, 0.0, -1.0, -1.0, 0.0]]
 
 
-def test_pseudo_mse_encode_truncates_mantissa_bits():
+def test_pseudo_mse_encode_rounds_mantissa_bits():
     m1 = 6
     value = torch.tensor([1.0 + 0.75 * (2.0 ** -m1)], dtype=torch.float32)
 
     packed = pseudo_mse_encode_emb_python(value, exp_bits=1, mantissa_bits=m1, is_signed=True)
     decoded = pseudo_mse_decode_emb_python(packed, exp_bits=1, mantissa_bits=m1, is_signed=True)
 
-    assert int(packed.item()) & ((1 << m1) - 1) == 0
-    assert decoded.item() == 1.0
+    assert int(packed.item()) & ((1 << m1) - 1) == 1
+    assert decoded.item() == 1.0 + 2.0 ** -m1
 
 
 def test_pseudo_mse_loads_models_file(tmp_path):

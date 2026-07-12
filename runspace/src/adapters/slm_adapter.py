@@ -1,8 +1,43 @@
 import os
+from dataclasses import dataclass
+from typing import Callable
+
 import torch
 import torch.nn as nn
 
 from .generic_adapter import GenericAdapter
+
+
+@dataclass(frozen=True)
+class SLMArchitectureWrapper:
+    """Architecture-specific wrapper hook for functional decoder internals."""
+
+    name: str
+    description: str
+    loader: Callable[[], tuple[Callable[[nn.Module], bool], Callable[[nn.Module, dict], None]]]
+
+
+def _load_opt_attention_wrapper():
+    """Return match/convert callbacks for HuggingFace OPT attention."""
+    from transformers.models.opt.modeling_opt import OPTAttention
+    from ..ops.quant_opt_attention import QuantOPTAttention
+
+    def matches(module: nn.Module) -> bool:
+        return isinstance(module, OPTAttention) and not isinstance(module, QuantOPTAttention)
+
+    def convert(module: nn.Module, quant_kwargs: dict) -> None:
+        QuantOPTAttention.convert(module, **quant_kwargs)
+
+    return matches, convert
+
+
+SLM_ARCHITECTURE_WRAPPERS = (
+    SLMArchitectureWrapper(
+        name="opt_attention",
+        description="OPTAttention score path: qk bmm, softmax, and attn-value bmm",
+        loader=_load_opt_attention_wrapper,
+    ),
+)
 
 
 class SLMAdapter(GenericAdapter):
@@ -101,47 +136,67 @@ class SLMAdapter(GenericAdapter):
         outputs = model(input_ids=input_ids)
         return outputs.logits if hasattr(outputs, "logits") else outputs
 
+    architecture_wrappers = SLM_ARCHITECTURE_WRAPPERS
+
     def build_model(self, quantized: bool = False) -> nn.Module:
-        """Build the model, then (when quantized) also quantize the attention
-        score path — the QKᵀ / softmax / attn·V ops that live as functional
-        calls inside the HF attention module and so are missed by the
-        module-swap recursive replace."""
+        """Build the model, then apply architecture-specific quant wrappers.
+
+        HuggingFace decoder blocks commonly hide important compute in Python
+        functional calls that are not FX-traceable in this adapter. The wrapper
+        registry keeps those architecture-specific conversions explicit: each
+        registered wrapper swaps a known HF module to a Quant* module that is
+        composed from existing QBench ops. Unsupported architectures can still
+        build, but their missing wrappers are reported by the SLM support probe.
+        """
         model = super().build_model(quantized=quantized)
         if quantized:
-            self._quantize_attention(model)
+            self._apply_architecture_wrappers(model)
         return model
 
-    def _quantize_attention(self, model: nn.Module):
-        """Swap each eager OPT attention module to QuantOPTAttention, attaching
-        quantized bmm/softmax sub-ops configured from this adapter's settings."""
-        try:
-            from transformers.models.opt.modeling_opt import OPTAttention
-        except Exception:
-            return
-        from ..ops.quant_opt_attention import QuantOPTAttention
+    def _architecture_quant_kwargs(self, layer_name: str) -> dict:
+        return {
+            "q_type": self.quantization_type,
+            "quant_mode": self.quant_mode,
+            "chunk_size": self.input_chunk_size if self.input_chunk_size is not None else self.chunk_size,
+            "layer_name": layer_name,
+            "run_id": getattr(self, "run_id", "default"),
+        }
 
+    def _apply_architecture_wrappers(self, model: nn.Module):
+        """Apply all registered architecture wrappers that match this model."""
         try:
             device = next(model.parameters()).device
         except StopIteration:
             device = torch.device("cpu")
 
-        count = 0
-        for name, module in model.named_modules():
-            # Match eager OPTAttention but skip already-converted instances.
-            if isinstance(module, OPTAttention) and not isinstance(module, QuantOPTAttention):
-                QuantOPTAttention.convert(
-                    module,
-                    q_type=self.quantization_type,
-                    quant_mode=self.quant_mode,
-                    chunk_size=self.input_chunk_size if self.input_chunk_size is not None else self.chunk_size,
-                    layer_name=name,
-                    run_id=getattr(self, "run_id", "default"),
-                )
+        self.applied_architecture_wrappers = {}
+        self.unavailable_architecture_wrappers = {}
+
+        for wrapper in self.architecture_wrappers:
+            try:
+                matches, convert = wrapper.loader()
+            except Exception as exc:
+                self.unavailable_architecture_wrappers[wrapper.name] = f"{type(exc).__name__}: {exc}"
+                continue
+
+            count = 0
+            for name, module in list(model.named_modules()):
+                if not matches(module):
+                    continue
+                convert(module, self._architecture_quant_kwargs(name))
                 module.to(device)
                 count += 1
-        if count:
-            print(f"SLMAdapter: quantized attention score path in {count} attention blocks "
-                  f"(QKᵀ / softmax / attn·V -> QuantBMM/QuantSoftmax).")
+
+            if count:
+                self.applied_architecture_wrappers[wrapper.name] = count
+                print(
+                    f"SLMAdapter: applied {wrapper.name} to {count} modules "
+                    f"({wrapper.description})."
+                )
+
+    def _quantize_attention(self, model: nn.Module):
+        """Compatibility alias for older callers."""
+        self._apply_architecture_wrappers(model)
 
     def build_reference_model(self) -> nn.Module:
         """Build an FP reference model (no quantization)."""

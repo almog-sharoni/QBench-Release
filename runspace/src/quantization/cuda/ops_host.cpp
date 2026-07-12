@@ -599,7 +599,9 @@ search_best_chunk_format(torch::Tensor x,
                          bool return_capture,
                          int metric,
                          double metric_param,
-                         int pseudo_mse2_mantissa_window_bits)
+                         int pseudo_mse2_mantissa_window_bits,
+                         int pseudo_mse3_fixed_rounding_mode,
+                         int pseudo_mse3_tie_break_mode)
 {
     TORCH_CHECK(x.is_cuda() && x.scalar_type() == torch::kFloat32 && x.is_contiguous(),
                 "search_best_chunk_format: x must be contiguous CUDA float32");
@@ -617,6 +619,12 @@ search_best_chunk_format(torch::Tensor x,
                 "search_best_chunk_format: candidate tensors must be same size > 0");
     TORCH_CHECK(pseudo_mse2_mantissa_window_bits >= 0,
                 "search_best_chunk_format: pseudo_mse2_mantissa_window_bits must be non-negative");
+    TORCH_CHECK(
+        pseudo_mse3_fixed_rounding_mode == 0 || pseudo_mse3_fixed_rounding_mode == 1,
+        "search_best_chunk_format: pseudo_mse3_fixed_rounding_mode must be 0 (floor) or 1 (nearest)");
+    TORCH_CHECK(
+        pseudo_mse3_tie_break_mode == 0 || pseudo_mse3_tie_break_mode == 1,
+        "search_best_chunk_format: pseudo_mse3_tie_break_mode must be 0 (exp1/<) or 1 (exp2/<=)");
 
     const int64_t N64 = x.numel();
     constexpr int CHUNK = 128;
@@ -655,6 +663,8 @@ search_best_chunk_format(torch::Tensor x,
         metric,
         (float)metric_param,
         pseudo_mse2_mantissa_window_bits,
+        pseudo_mse3_fixed_rounding_mode,
+        pseudo_mse3_tie_break_mode,
         current_stream_ptr());
 
     return {best_indices, best_scales, out, out_unscaled};
@@ -738,11 +748,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, mod) {
             py::arg("metric") = 0,
             py::arg("metric_param") = 0.0625,
             py::arg("pseudo_mse2_mantissa_window_bits") = 0,
+            py::arg("pseudo_mse3_fixed_rounding_mode") = 0,
+            py::arg("pseudo_mse3_tie_break_mode") = 0,
             "Fused search and quantize for chunk-mode dynamic quantization. "
             "metric selects the per-chunk error norm (0=L2, 1=L1, 2=Linf, 3=bias, "
             "4=L0, 5=Huber, 6=logsum, 7=pseudo_MSE, 8=pseudo_MSE2, 9=pseudo_MSE3); metric_param "
-            "is the Huber delta, or the pseudo_MSE/pseudo_MSE2 exp=2 win divisor "
-            "(2 or 4). pseudo_mse2_mantissa_window_bits=0 uses all remaining bits.");
+            "is the Huber delta, the pseudo_MSE/pseudo_MSE2 exp=2 win divisor "
+            "(2 or 4), or pseudo_MSE3 bits_to_take. pseudo_mse2_mantissa_window_bits=0 "
+            "uses all remaining bits. pseudo_mse3_fixed_rounding_mode is 0 for floor "
+            "or 1 for activation-style round-to-nearest with half away from zero. "
+            "pseudo_mse3_tie_break_mode is 0 for exp1/< or 1 for exp2/<=.");
 
     mod.def("n_per_word",     &n_per_word_py,
             py::arg("e"), py::arg("m"),

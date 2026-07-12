@@ -24,8 +24,9 @@ exp=2: ufpB_e2m(M-1)
 
 `M` is the mantissa width of the exp=1 format. The exp=2 format must have
 exactly one fewer mantissa bit, so both candidates have the same total width.
-Both candidates must use the same signedness.  pseudo_MSE uses mantissa
-truncation for the selected quantized output in both Python and CUDA paths.
+Both candidates must use the same signedness.  The pseudo_MSE family uses the
+same round-to-nearest quantized output path as the generic MSE selector in both
+Python and CUDA paths.
 
 ## Per-Element Definition
 
@@ -94,7 +95,7 @@ verification mode:
 
 `pseudo_MSE2` is a separate pairwise metric using CUDA metric code `8` and
 canonical metric name `pseudo_mse2`. It uses the same e1/e2 candidate
-constraints, truncating quantized output, and tie rule as `pseudo_MSE`, but its
+constraints, rounded quantized output, and tie rule as `pseudo_MSE`, but its
 per-element `diff = err2 - err1` is an int32 fixed-point window vote.
 
 The weighted per-element signal is:
@@ -142,7 +143,7 @@ accumulating per-chunk sums.
 
 `pseudo_MSE3` is a pairwise metric using CUDA metric code `9` and canonical
 metric name `pseudo_mse3`. It uses the same e1/e2 candidate constraints and
-truncating quantized output, but its per-element signal is the exact squared
+rounded quantized output, but its per-element signal is the exact squared
 error difference:
 
 ```text
@@ -158,10 +159,23 @@ else:
     choose exp=1
 ```
 
-The reference implementation asserts that `diff_i * 2^(2M)` is zero, in
-`[1, 3)` for exp=1 wins, or in `(-3/4, -1/4]` for exp=2 wins. The CUDA search
-computes the same exact squared-error diff directly from the truncating e1/e2
-reconstructions.
+The reference implementation asserts that `diff_i * 2^(2M)` is in the
+rounded-path range `[-1/4, 3)`. The CUDA search computes the same exact
+squared-error diff directly from the rounded e1/e2 reconstructions.
+
+The `runspace/experiments/pseudo_mse3/pseudo_mse.py` experiment also accepts
+`--bits-to-take N`. The default `N=0` keeps the exact floating-point
+`err2^2 - err1^2` sum. Positive `N` converts each per-value signal to fixed
+point before the chunk sum. `--fixed-rounding floor` preserves the original
+`floor(diff_i * 2^N)` behavior. `--fixed-rounding nearest` matches activation
+`encode_emb` rounding by rounding magnitude to nearest with exact half cases
+away from zero. The fused CUDA selector receives `N` as `metric_param` and a
+separate fixed-rounding mode code, and applies the same conversion.
+
+The decision tie policy is independently configurable. `--tie-break exp1`
+uses the legacy strict comparison `sum(diff_i) < 0`, so exact accumulator ties
+select e1. `--tie-break exp2` changes only the comparison to
+`sum(diff_i) <= 0`, so exact accumulator ties select e2.
 
 ## Chunk Selection Rule
 
@@ -230,7 +244,7 @@ m2 != m1 - 1
 The CUDA path computes the bit-level `diff` per lane from the FP32 exponent and
 mantissa bits, separately reduces the exp=1 and exp=2 vote sums, divides the
 exp=2 sum by the pseudo_MSE divisor, then chooses exp=2 when the shifted sum is
-at least the exp=1 sum.  The selected value is encoded with
-truncation.  The Python reference mirrors the same FP32 bit operations and
-truncating encode path, and is tested against the CUDA selector for both
-supported divisors.
+at least the exp=1 sum. The selected value is encoded with round-to-nearest,
+matching the generic MSE selector. The Python reference mirrors the same FP32
+bit operations and rounded encode path, and is tested against the CUDA selector
+for both supported divisors.

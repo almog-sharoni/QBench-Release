@@ -521,15 +521,15 @@ def test_pseudo_mse2_mantissa_window_24_matches_full_window():
         normalize_mantissa_window_bits(25)
 
 
-def test_pseudo_mse_encode_truncates_mantissa_bits():
+def test_pseudo_mse_encode_rounds_mantissa_bits():
     m1 = 6
     value = torch.tensor([1.0 + 0.75 * (2.0 ** -m1)], dtype=torch.float32)
 
     packed = pseudo_mse_encode_emb_python(value, exp_bits=1, mantissa_bits=m1, is_signed=True)
     decoded = pseudo_mse_decode_emb_python(packed, exp_bits=1, mantissa_bits=m1, is_signed=True)
 
-    assert int(packed.item()) & ((1 << m1) - 1) == 0
-    assert decoded.item() == 1.0
+    assert int(packed.item()) & ((1 << m1) - 1) == 1
+    assert decoded.item() == 1.0 + 2.0 ** -m1
 
 
 def test_pseudo_mse_loads_models_file(tmp_path):

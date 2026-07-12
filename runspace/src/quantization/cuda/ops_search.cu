@@ -31,6 +31,16 @@ enum SearchMetric {
     METRIC_PSEUDO_MSE3 = 9,  // exact sum(err2^2 - err1^2) selector
 };
 
+enum PseudoMse3FixedRounding {
+    PSEUDO_MSE3_FIXED_FLOOR = 0,
+    PSEUDO_MSE3_FIXED_NEAREST = 1,
+};
+
+enum PseudoMse3TieBreak {
+    PSEUDO_MSE3_TIE_EXP1 = 0,
+    PSEUDO_MSE3_TIE_EXP2 = 1,
+};
+
 // Per-element contribution for the active metric (operates on the scaled error).
 __device__ __forceinline__ float metric_elem(float diff, int metric, float param)
 {
@@ -200,13 +210,39 @@ __device__ __forceinline__ float pseudo_mse3_err2_minus_err1(
         return 0.0f;
     }
 
-    const std::uint32_t packed_e1 = encode_emb_trunc(scaled_v, 1, m1, sgn);
-    const std::uint32_t packed_e2 = encode_emb_trunc(scaled_v, 2, m2, sgn);
+    const std::uint32_t packed_e1 = encode_emb(scaled_v, 1, m1, sgn);
+    const std::uint32_t packed_e2 = encode_emb(scaled_v, 2, m2, sgn);
     const float q_e1 = decode_emb(packed_e1, 1, m1, sgn);
     const float q_e2 = decode_emb(packed_e2, 2, m2, sgn);
     const float err1 = scaled_v - q_e1;
     const float err2 = scaled_v - q_e2;
-    return (err2 * err2) - (err1 * err1);
+    // Keep the two squares and subtraction separately rounded. With fast-math,
+    // contraction can otherwise leave a tiny signed residual when q_e1 == q_e2;
+    // fixed-point conversion can otherwise amplify that mathematical tie.
+    const float err1_sq = __fmul_rn(err1, err1);
+    const float err2_sq = __fmul_rn(err2, err2);
+    return __fsub_rn(err2_sq, err1_sq);
+}
+
+__device__ __forceinline__ float pseudo_mse3_apply_bits_to_take(
+    float diff,
+    int bits_to_take,
+    int fixed_rounding_mode)
+{
+    if (bits_to_take <= 0) {
+        return diff;
+    }
+    const float scale = ldexpf(1.0f, bits_to_take);
+    const float scaled = __fmul_rn(diff, scale);
+    int fixed;
+    if (fixed_rounding_mode == PSEUDO_MSE3_FIXED_NEAREST) {
+        const float rounded_magnitude = floorf(__fadd_rn(fabsf(scaled), 0.5f));
+        const int fixed_magnitude = __float2int_rz(rounded_magnitude);
+        fixed = (scaled < 0.0f) ? -fixed_magnitude : fixed_magnitude;
+    } else {
+        fixed = __float2int_rd(scaled);
+    }
+    return static_cast<float>(fixed);
 }
 
 // This kernel computes the best format per chunk, and directly decodes the values.
@@ -225,7 +261,9 @@ __global__ void search_and_quantize_chunk_kernel(
     int             n_chunks,
     int             metric,
     float           metric_param,
-    int             pseudo_mse2_mantissa_window_bits)
+    int             pseudo_mse2_mantissa_window_bits,
+    int             pseudo_mse3_fixed_rounding_mode,
+    int             pseudo_mse3_tie_break_mode)
 {
     const int chunk = blockIdx.x;
     if (chunk >= n_chunks) return;
@@ -313,6 +351,11 @@ __global__ void search_and_quantize_chunk_kernel(
                     exp1_m,
                     exp2_m,
                     pair_sgn);
+                const int bits_to_take = static_cast<int>(metric_param + 0.5f);
+                diff = pseudo_mse3_apply_bits_to_take(
+                    diff,
+                    bits_to_take,
+                    pseudo_mse3_fixed_rounding_mode);
             } else if (metric == METRIC_PSEUDO_MSE2) {
                 diff = pseudo_mse2_err2_minus_err1(
                     scaled_v,
@@ -332,7 +375,11 @@ __global__ void search_and_quantize_chunk_kernel(
                 // pseudo_MSE3 is the exact signed squared-error difference.
                 // Negative chunk sum means exp=2 has lower total squared error.
                 const float chunk_diff = block_reduce_metric(diff, false, lane);
-                best_c = (chunk_diff < 0.0f) ? e2_idx : e1_idx;
+                const bool choose_e2 =
+                    (chunk_diff < 0.0f) ||
+                    (pseudo_mse3_tie_break_mode == PSEUDO_MSE3_TIE_EXP2 &&
+                     chunk_diff == 0.0f);
+                best_c = choose_e2 ? e2_idx : e1_idx;
             } else {
                 // pseudo_MSE/pseudo_MSE2 are per-element winner votes, not summed MSE.
                 // Sign convention:
@@ -359,7 +406,7 @@ __global__ void search_and_quantize_chunk_kernel(
         const int e = cands_e[best_c];
         const int m = cands_m[best_c];
         const int sgn = cands_sgn[best_c];
-        std::uint32_t packed = encode_emb_trunc(scaled_v, e, m, sgn);
+        std::uint32_t packed = encode_emb(scaled_v, e, m, sgn);
         const float best_qv = decode_emb(packed, e, m, sgn);
 
         if (global_idx < N) {
@@ -429,6 +476,8 @@ void launch_search_and_quantize_chunk(
     int          metric,
     float        metric_param,
     int          pseudo_mse2_mantissa_window_bits,
+    int          pseudo_mse3_fixed_rounding_mode,
+    int          pseudo_mse3_tie_break_mode,
     void*        stream)
 {
     if (N == 0) return;
@@ -438,7 +487,8 @@ void launch_search_and_quantize_chunk(
     search_and_quantize_chunk_kernel<<<n_chunks, BLK, 0, cs>>>(
         x, cands_e, cands_m, cands_sgn, num_candidates,
         best_indices, best_scales, out, out_unscaled, N, n_chunks,
-        metric, metric_param, pseudo_mse2_mantissa_window_bits);
+        metric, metric_param, pseudo_mse2_mantissa_window_bits,
+        pseudo_mse3_fixed_rounding_mode, pseudo_mse3_tie_break_mode);
 }
 
 } // namespace qbench_lp

@@ -273,6 +273,7 @@ def build_dynamic_input_quant_cfg(
     use_cache_sim_db=False,
     model_name=None,
     skip_depthwise_input_quant=False,
+    pseudo_mse2_mantissa_window_bits=0,
 ):
     """Build the dynamic layer-input quantizer config used by input quant experiments."""
     if not enabled:
@@ -297,6 +298,7 @@ def build_dynamic_input_quant_cfg(
         'use_cache_sim_db': use_cache_sim_db,
         'model_name': model_name,
         'skip_depthwise_input_quant': bool(skip_depthwise_input_quant),
+        'pseudo_mse2_mantissa_window_bits': int(pseudo_mse2_mantissa_window_bits or 0),
     }
 
 

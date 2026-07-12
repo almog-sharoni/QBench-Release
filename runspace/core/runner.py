@@ -1243,12 +1243,23 @@ class Runner:
             candidate_formats: [...], # dynamic optional
           }
         """
-        cfg = copy.deepcopy(input_quant_cfg or {})
+        source_cfg = input_quant_cfg or {}
+        chunk_observer = source_cfg.get('chunk_observer')
+        copy_source = dict(source_cfg)
+        copy_source.pop('chunk_observer', None)
+        cfg = copy.deepcopy(copy_source)
         if not cfg and dynamic_input_quant_cfg:
-            dyn = copy.deepcopy(dynamic_input_quant_cfg)
+            dynamic_chunk_observer = dynamic_input_quant_cfg.get('chunk_observer')
+            if chunk_observer is None:
+                chunk_observer = dynamic_chunk_observer
+            dyn_source = dict(dynamic_input_quant_cfg)
+            dyn_source.pop('chunk_observer', None)
+            dyn = copy.deepcopy(dyn_source)
             if dyn.get('enabled', False):
                 dyn['mode'] = 'dynamic'
             cfg = dyn
+        if chunk_observer is not None:
+            cfg['chunk_observer'] = chunk_observer
         cfg.setdefault('enabled', False)
         if cfg.get('enabled') and 'mode' not in cfg:
             cfg['mode'] = 'dynamic'
@@ -1313,6 +1324,19 @@ class Runner:
                 activation_exponents=input_quant_cfg.get('activation_exponents', 'all'),
                 collect_error_stats=input_quant_cfg.get('collect_error_stats', True),
                 collect_format_stats=input_quant_cfg.get('collect_format_stats', True),
+                pseudo_mse2_mantissa_window_bits=input_quant_cfg.get(
+                    'pseudo_mse2_mantissa_window_bits',
+                    0,
+                ),
+                pseudo_mse3_fixed_rounding=input_quant_cfg.get(
+                    'pseudo_mse3_fixed_rounding',
+                    'floor',
+                ),
+                pseudo_mse3_tie_break=input_quant_cfg.get(
+                    'pseudo_mse3_tie_break',
+                    'exp1',
+                ),
+                chunk_observer=input_quant_cfg.get('chunk_observer'),
             )
             quantizer.register_hooks()
             print(
@@ -1820,9 +1844,11 @@ class Runner:
             'status': 'FAILED',
             'acc1': 0.0,
             'acc5': 0.0,
+            'ppl': 0.0,
             'certainty': 0.0,
             'ref_acc1': 0.0,
             'ref_acc5': 0.0,
+            'ref_ppl': 0.0,
             'ref_certainty': 0.0,
             'acc_drop': 0.0,
             'weight_comp_red': 0.0,

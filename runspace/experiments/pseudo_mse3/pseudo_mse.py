@@ -24,6 +24,8 @@ from runspace.experiments.utils.common import (  # noqa: E402
 from runspace.src.quantization.dynamic_input_metrics import (  # noqa: E402
     assert_dynamic_input_metric_implemented,
     normalize_dynamic_input_metric,
+    normalize_pseudo_mse3_fixed_rounding,
+    normalize_pseudo_mse3_tie_break,
 )
 
 
@@ -95,13 +97,43 @@ def get_args(argv=None):
     parser.add_argument("--model_source", type=str, default="auto")
     parser.add_argument("--dataset_name", type=str, default="imagenet")
     parser.add_argument("--dataset_path", type=str, default="/data/imagenet/val")
-    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--num_workers", type=int, default=16)
     parser.add_argument("--limit_batches", type=int, default=-1)
     parser.add_argument("--chunk_size", type=int, default=128)
     parser.add_argument("--metrics", type=str, default=",".join(DEFAULT_METRICS))
     parser.add_argument("--bit_widths", type=str, default=",".join(str(b) for b in DEFAULT_BIT_WIDTHS))
     parser.add_argument("--exp_bits", type=str, default=",".join(str(e) for e in DEFAULT_EXP_BITS))
+    parser.add_argument(
+        "--bits-to-take",
+        "--bits_to_take",
+        dest="bits_to_take",
+        type=int,
+        default=0,
+        help=(
+            "pseudo_MSE3 fixed-point diff bits. 0 keeps exact floating-point "
+            "err2^2-err1^2; N converts diff * 2^N before accumulating."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-rounding",
+        "--fixed_rounding",
+        type=normalize_pseudo_mse3_fixed_rounding,
+        choices=("floor", "nearest"),
+        default="floor",
+        help=(
+            "Fixed-point conversion for pseudo_MSE3. nearest matches activation "
+            "rounding: round-to-nearest with exact half away from zero."
+        ),
+    )
+    parser.add_argument(
+        "--tie-break",
+        "--tie_break",
+        type=normalize_pseudo_mse3_tie_break,
+        choices=("exp1", "exp2"),
+        default="exp1",
+        help="Exact chunk-sum tie policy: exp1 uses < 0; exp2 uses <= 0.",
+    )
     parser.add_argument("--random_subset_size", type=int, default=DEFAULT_RANDOM_SUBSET_SIZE)
     parser.add_argument("--random_seed", type=int, default=DEFAULT_RANDOM_SEED)
     parser.add_argument(
@@ -115,6 +147,8 @@ def get_args(argv=None):
     args.bit_widths = _parse_int_csv(args.bit_widths, DEFAULT_BIT_WIDTHS)
     args.exp_bits = _parse_int_csv(args.exp_bits, DEFAULT_EXP_BITS)
     args.metrics = _parse_csv(args.metrics, DEFAULT_METRICS)
+    if int(args.bits_to_take) < 0:
+        raise ValueError("--bits-to-take must be non-negative")
     return args
 
 
@@ -307,6 +341,9 @@ def build_pseudo_mse_runtime_config(args, spec, model_name=None, weights=None):
             "activation_dt": spec.activation_dt,
             "bit_width": int(spec.bit_width),
             "candidate_formats": list(spec.candidate_formats),
+            "bits_to_take": int(args.bits_to_take),
+            "fixed_rounding": args.fixed_rounding,
+            "tie_break": args.tie_break,
             "random_subset_size": int(args.random_subset_size),
             "random_seed": int(args.random_seed),
         }
@@ -315,7 +352,7 @@ def build_pseudo_mse_runtime_config(args, spec, model_name=None, weights=None):
 
 
 def build_pseudo_mse_input_quant_cfg(args, spec, model_name=None):
-    return build_dynamic_input_quant_cfg(
+    cfg = build_dynamic_input_quant_cfg(
         metric=spec.metric,
         chunk_size=args.chunk_size,
         candidate_formats=spec.candidate_formats,
@@ -324,6 +361,11 @@ def build_pseudo_mse_input_quant_cfg(args, spec, model_name=None):
         dynamic_unsigned_input_candidates=True,
         model_name=model_name or args.model_name,
     )
+    if normalize_dynamic_input_metric(spec.metric) == "pseudo_mse3":
+        cfg["metric_param"] = float(args.bits_to_take)
+        cfg["pseudo_mse3_fixed_rounding"] = args.fixed_rounding
+        cfg["pseudo_mse3_tie_break"] = args.tie_break
+    return cfg
 
 
 def _effective_dataset_size(args, loader):
@@ -350,6 +392,19 @@ def _format_value(value, digits=4):
     return f"{float(value):.{digits}f}"
 
 
+def _bits_to_take_suffix(
+    bits_to_take,
+    fixed_rounding="floor",
+    tie_break="exp1",
+):
+    suffix = f"bits_to_take{int(bits_to_take)}"
+    if fixed_rounding != "floor":
+        suffix += f"_{fixed_rounding}"
+    if tie_break != "exp1":
+        suffix += f"_tie_{tie_break}"
+    return suffix
+
+
 def _metric_plot_order(rows):
     preferred = ["MSE", L1_METRIC_LABEL, METRIC_NAME]
     labels = []
@@ -362,16 +417,28 @@ def _metric_plot_order(rows):
     ]
 
 
-def _write_model_summary(output_dir, model_name, rows, dataset_label):
+def _write_model_summary(
+    output_dir,
+    model_name,
+    rows,
+    dataset_label,
+    bits_to_take=0,
+    fixed_rounding="floor",
+    tie_break="exp1",
+):
     os.makedirs(output_dir, exist_ok=True)
-    csv_path = os.path.join(output_dir, f"{model_name}_summary.csv")
-    txt_path = os.path.join(output_dir, f"{model_name}_summary.txt")
+    suffix = _bits_to_take_suffix(bits_to_take, fixed_rounding, tie_break)
+    csv_path = os.path.join(output_dir, f"{model_name}_{suffix}_summary.csv")
+    txt_path = os.path.join(output_dir, f"{model_name}_{suffix}_summary.txt")
     fields = [
         "model",
         "metric",
         "bit_width",
         "activation_dt",
         "candidate_formats",
+        "bits_to_take",
+        "fixed_rounding",
+        "tie_break",
         "dataset_size",
         "random_seed",
         "limit_batches",
@@ -391,14 +458,20 @@ def _write_model_summary(output_dir, model_name, rows, dataset_label):
     lines = [
         f"SUMMARY: {model_name}",
         f"Dataset: {dataset_label}",
-        "metric | bits | acc1 | acc5 | certainty | norm_mse | norm_l1 | status",
-        "-" * 86,
+        f"bits_to_take: {int(bits_to_take)}",
+        f"fixed_rounding: {fixed_rounding}",
+        f"tie_break: {tie_break}",
+        "metric | bits_to_take | fixed_rounding | tie_break | bits | acc1 | acc5 | certainty | norm_mse | norm_l1 | status",
+        "-" * 132,
     ]
     for row in rows:
         lines.append(
             " | ".join(
                 [
                     str(row["metric"]),
+                    str(row.get("bits_to_take", int(bits_to_take))),
+                    str(row.get("fixed_rounding", fixed_rounding)),
+                    str(row.get("tie_break", tie_break)),
                     str(row["bit_width"]),
                     _format_value(row["acc1"], 2),
                     _format_value(row["acc5"], 2),
@@ -414,18 +487,32 @@ def _write_model_summary(output_dir, model_name, rows, dataset_label):
     return csv_path, txt_path
 
 
-def _write_combined_summary(output_dir, rows):
+def _write_combined_summary(
+    output_dir,
+    rows,
+    bits_to_take=None,
+    fixed_rounding="floor",
+    tie_break="exp1",
+):
     if not rows:
         return None
 
     os.makedirs(output_dir, exist_ok=True)
-    path = os.path.join(output_dir, "summary.csv")
+    suffix = (
+        f"_{_bits_to_take_suffix(bits_to_take, fixed_rounding, tie_break)}"
+        if bits_to_take is not None
+        else ""
+    )
+    path = os.path.join(output_dir, f"summary{suffix}.csv")
     fields = [
         "model",
         "metric",
         "bit_width",
         "activation_dt",
         "candidate_formats",
+        "bits_to_take",
+        "fixed_rounding",
+        "tie_break",
         "dataset_size",
         "random_seed",
         "limit_batches",
@@ -444,7 +531,15 @@ def _write_combined_summary(output_dir, rows):
     return path
 
 
-def _plot_model_summary(output_dir, model_name, rows, dataset_label):
+def _plot_model_summary(
+    output_dir,
+    model_name,
+    rows,
+    dataset_label,
+    bits_to_take=0,
+    fixed_rounding="floor",
+    tie_break="exp1",
+):
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
@@ -456,10 +551,11 @@ def _plot_model_summary(output_dir, model_name, rows, dataset_label):
         return []
 
     paths = []
+    suffix = _bits_to_take_suffix(bits_to_take, fixed_rounding, tie_break)
     plot_specs = [
-        ("acc1", "Top-1 Accuracy", f"{model_name}_accuracy_vs_bits.png"),
-        ("norm_mse", "Normalized L2 Error", f"{model_name}_norm_mse_vs_bits.png"),
-        ("norm_l1", "Normalized L1 Error", f"{model_name}_norm_l1_vs_bits.png"),
+        ("acc1", "Top-1 Accuracy", f"{model_name}_{suffix}_accuracy_vs_bits.png"),
+        ("norm_mse", "Normalized L2 Error", f"{model_name}_{suffix}_norm_mse_vs_bits.png"),
+        ("norm_l1", "Normalized L1 Error", f"{model_name}_{suffix}_norm_l1_vs_bits.png"),
     ]
     for key, ylabel, filename in plot_specs:
         plt.figure(figsize=(8, 5))
@@ -483,7 +579,10 @@ def _plot_model_summary(output_dir, model_name, rows, dataset_label):
             continue
         plt.xlabel("Activation Bit Width")
         plt.ylabel(ylabel)
-        plt.title(f"{model_name}: {ylabel} by Metric\n{dataset_label}")
+        plt.title(
+            f"{model_name}: {ylabel} by Metric, bits_to_take={int(bits_to_take)}, "
+            f"fixed_rounding={fixed_rounding}, tie_break={tie_break}\n{dataset_label}"
+        )
         plt.grid(alpha=0.3)
         plt.legend(title="Metric")
         plt.tight_layout()
@@ -511,6 +610,9 @@ def process_single_model(args, device=None):
     print(f"\n{'=' * 72}")
     print(f"PSEUDO_MSE3 METRIC COMPARISON: {model_name}")
     print(f"Metrics: {[spec.metric_label for spec in specs[:len(args.metrics)]]}")
+    print(f"bits_to_take={int(args.bits_to_take)}")
+    print(f"fixed_rounding={args.fixed_rounding}")
+    print(f"tie_break={args.tie_break}")
     print(f"{'=' * 72}")
 
     def loader_config_builder(current_args):
@@ -547,6 +649,9 @@ def process_single_model(args, device=None):
             "bit_width": int(spec.bit_width),
             "activation_dt": spec.activation_dt,
             "candidate_formats": ",".join(spec.candidate_formats),
+            "bits_to_take": int(args.bits_to_take),
+            "fixed_rounding": args.fixed_rounding,
+            "tie_break": args.tie_break,
             "dataset_size": int(dataset_size),
             "random_seed": int(args.random_seed),
             "limit_batches": int(args.limit_batches),
@@ -600,10 +705,26 @@ def process_single_model(args, device=None):
                 torch.cuda.empty_cache()
         rows.append(row)
 
-    _csv_path, txt_path = _write_model_summary(model_out_dir, model_name, rows, dataset_label)
+    _csv_path, txt_path = _write_model_summary(
+        model_out_dir,
+        model_name,
+        rows,
+        dataset_label,
+        bits_to_take=args.bits_to_take,
+        fixed_rounding=args.fixed_rounding,
+        tie_break=args.tie_break,
+    )
     print(f"\nSummary written to {txt_path}")
     if not args.no_plot:
-        for path in _plot_model_summary(model_out_dir, model_name, rows, dataset_label):
+        for path in _plot_model_summary(
+            model_out_dir,
+            model_name,
+            rows,
+            dataset_label,
+            bits_to_take=args.bits_to_take,
+            fixed_rounding=args.fixed_rounding,
+            tie_break=args.tie_break,
+        ):
             print(f"Plot written to {path}")
     return rows
 
@@ -625,7 +746,13 @@ def main(argv=None):
         combined_rows.extend(rows)
 
     if models_file:
-        path = _write_combined_summary(args.output_dir, combined_rows)
+        path = _write_combined_summary(
+            args.output_dir,
+            combined_rows,
+            bits_to_take=args.bits_to_take,
+            fixed_rounding=args.fixed_rounding,
+            tie_break=args.tie_break,
+        )
         if path:
             print(f"\nCombined summary written to {path}")
 

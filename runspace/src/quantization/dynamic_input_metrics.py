@@ -11,6 +11,33 @@ PSEUDO_MSE2_DISPLAY_NAME = "pseudo_MSE2"
 PSEUDO_MSE2_CANONICAL_NAME = "pseudo_mse2"
 PSEUDO_MSE3_DISPLAY_NAME = "pseudo_MSE3"
 PSEUDO_MSE3_CANONICAL_NAME = "pseudo_mse3"
+PSEUDO_MSE3_FIXED_ROUNDING_FLOOR = "floor"
+PSEUDO_MSE3_FIXED_ROUNDING_NEAREST = "nearest"
+PSEUDO_MSE3_FIXED_ROUNDING_CODES = {
+    PSEUDO_MSE3_FIXED_ROUNDING_FLOOR: 0,
+    PSEUDO_MSE3_FIXED_ROUNDING_NEAREST: 1,
+}
+PSEUDO_MSE3_FIXED_ROUNDING_ALIASES = {
+    "floor": PSEUDO_MSE3_FIXED_ROUNDING_FLOOR,
+    "nearest": PSEUDO_MSE3_FIXED_ROUNDING_NEAREST,
+    "rtn": PSEUDO_MSE3_FIXED_ROUNDING_NEAREST,
+    "round_to_nearest": PSEUDO_MSE3_FIXED_ROUNDING_NEAREST,
+    "activation": PSEUDO_MSE3_FIXED_ROUNDING_NEAREST,
+}
+PSEUDO_MSE3_TIE_BREAK_EXP1 = "exp1"
+PSEUDO_MSE3_TIE_BREAK_EXP2 = "exp2"
+PSEUDO_MSE3_TIE_BREAK_CODES = {
+    PSEUDO_MSE3_TIE_BREAK_EXP1: 0,
+    PSEUDO_MSE3_TIE_BREAK_EXP2: 1,
+}
+PSEUDO_MSE3_TIE_BREAK_ALIASES = {
+    "exp1": PSEUDO_MSE3_TIE_BREAK_EXP1,
+    "lt": PSEUDO_MSE3_TIE_BREAK_EXP1,
+    "strict": PSEUDO_MSE3_TIE_BREAK_EXP1,
+    "exp2": PSEUDO_MSE3_TIE_BREAK_EXP2,
+    "le": PSEUDO_MSE3_TIE_BREAK_EXP2,
+    "less_equal": PSEUDO_MSE3_TIE_BREAK_EXP2,
+}
 PSEUDO_MSE_DEFAULT_E2_WIN_DIVISOR = 4
 PSEUDO_MSE_SUPPORTED_E2_WIN_DIVISORS = (2, 4)
 
@@ -193,6 +220,38 @@ def is_pseudo_mse_family_metric(metric):
     )
 
 
+def normalize_pseudo_mse3_fixed_rounding(mode=None):
+    normalized = str(mode or PSEUDO_MSE3_FIXED_ROUNDING_FLOOR).strip().lower()
+    normalized = PSEUDO_MSE3_FIXED_ROUNDING_ALIASES.get(normalized, normalized)
+    if normalized not in PSEUDO_MSE3_FIXED_ROUNDING_CODES:
+        raise ValueError(
+            f"Unsupported pseudo_MSE3 fixed rounding mode: {mode!r}. "
+            f"Expected one of {sorted(PSEUDO_MSE3_FIXED_ROUNDING_CODES)}."
+        )
+    return normalized
+
+
+def pseudo_mse3_fixed_rounding_code(mode=None):
+    return PSEUDO_MSE3_FIXED_ROUNDING_CODES[
+        normalize_pseudo_mse3_fixed_rounding(mode)
+    ]
+
+
+def normalize_pseudo_mse3_tie_break(mode=None):
+    normalized = str(mode or PSEUDO_MSE3_TIE_BREAK_EXP1).strip().lower()
+    normalized = PSEUDO_MSE3_TIE_BREAK_ALIASES.get(normalized, normalized)
+    if normalized not in PSEUDO_MSE3_TIE_BREAK_CODES:
+        raise ValueError(
+            f"Unsupported pseudo_MSE3 tie break: {mode!r}. "
+            f"Expected one of {sorted(PSEUDO_MSE3_TIE_BREAK_CODES)}."
+        )
+    return normalized
+
+
+def pseudo_mse3_tie_break_code(mode=None):
+    return PSEUDO_MSE3_TIE_BREAK_CODES[normalize_pseudo_mse3_tie_break(mode)]
+
+
 _FP_RE = re.compile(r"^(?P<prefix>u?fp)(?P<bits>\d+)_e(?P<exp>\d+)m(?P<mant>\d+)$")
 
 
@@ -276,7 +335,7 @@ def _uint32_to_float32(bits):
 
 
 def pseudo_mse_encode_emb_python(values, exp_bits, mantissa_bits, is_signed):
-    """Vectorized Python equivalent of CUDA pseudo_MSE truncating encode."""
+    """Vectorized Python equivalent of CUDA round-to-nearest encode_emb."""
     e = int(exp_bits)
     m = int(mantissa_bits)
     sgn = bool(is_signed)
@@ -324,6 +383,18 @@ def pseudo_mse_encode_emb_python(values, exp_bits, mantissa_bits, is_signed):
             torch.zeros_like(mant_shifted),
             mant_shifted,
         )
+        safe_round_shift = torch.clamp(shift - 1, min=0, max=63)
+        round_bit = torch.where(
+            (shift >= 1) & (shift <= 24),
+            torch.bitwise_and(torch.bitwise_right_shift(mant_full, safe_round_shift), 1),
+            torch.zeros_like(mant_full),
+        )
+        round_add = torch.where(
+            round_bit != 0,
+            torch.bitwise_left_shift(torch.ones_like(mant_full), safe_shift),
+            torch.zeros_like(mant_full),
+        )
+        mant_trunc = mant_trunc + round_add
 
         overflow = torch.bitwise_and(torch.bitwise_right_shift(mant_trunc, 24), 1)
         exp_f = exp_f + overflow
@@ -614,10 +685,8 @@ def pseudo_mse2_err2_minus_err1_from_scaled(
 
 
 def _assert_pseudo_mse3_scaled_diff_ranges(scaled_diff):
-    is_zero = scaled_diff == 0
-    positive_ok = (scaled_diff >= 1.0) & (scaled_diff < 3.0)
-    negative_ok = (scaled_diff <= -0.25) & (scaled_diff > -0.75)
-    bad = ~(is_zero | positive_ok | negative_ok)
+    ok = (scaled_diff >= -0.25) & (scaled_diff < 3.0)
+    bad = ~ok
     if bool(bad.any()):
         raise AssertionError(
             "pseudo_MSE3 scaled diff outside expected ranges: "
@@ -625,25 +694,64 @@ def _assert_pseudo_mse3_scaled_diff_ranges(scaled_diff):
         )
 
 
+def pseudo_mse3_fixed_point_from_diff(diff, bits_to_take, fixed_rounding="floor"):
+    """Convert signed squared-error differences to pseudo_MSE3 fixed point.
+
+    ``nearest`` matches activation ``encode_emb`` rounding: round magnitude to
+    nearest with exact half cases away from zero. ``floor`` preserves the
+    original pseudo_MSE3 behavior.
+    """
+    bits_to_take_param = float(bits_to_take or 0)
+    bits_to_take = int(bits_to_take_param)
+    if bits_to_take_param != float(bits_to_take):
+        raise ValueError(f"bits_to_take must be an integer; got {bits_to_take_param!r}")
+    if bits_to_take < 0:
+        raise ValueError(f"bits_to_take must be non-negative; got {bits_to_take}")
+    fixed_rounding = normalize_pseudo_mse3_fixed_rounding(fixed_rounding)
+    if bits_to_take == 0:
+        return diff
+
+    scaled = diff * float(2.0**bits_to_take)
+    if fixed_rounding == PSEUDO_MSE3_FIXED_ROUNDING_NEAREST:
+        rounded_magnitude = torch.floor(scaled.abs() + 0.5)
+        fixed = torch.where(scaled < 0, -rounded_magnitude, rounded_magnitude)
+    else:
+        fixed = torch.floor(scaled)
+
+    int32_info = torch.iinfo(torch.int32)
+    invalid = (
+        ~torch.isfinite(fixed)
+        | (fixed < int32_info.min)
+        | (fixed > int32_info.max)
+    )
+    if bool(invalid.any()):
+        raise OverflowError(
+            f"bits_to_take={bits_to_take} produces contributions outside int32"
+        )
+    return fixed.to(torch.int32)
+
+
 def pseudo_mse3_err2_minus_err1_from_scaled(
     scaled_values,
     exp1_mantissa_width,
     exp2_mantissa_width,
     is_signed,
+    bits_to_take=0,
+    fixed_rounding="floor",
 ):
     """Return exact per-value squared-error diff err2^2 - err1^2.
 
     Values are already chunk-scaled into [-2, 2).  The returned diff is the
     exact floating-point squared-error difference between the exp=2 and exp=1
     reconstructed values.  The assertion checks the normalized diff before the
-    per-chunk sum: diff * 2^(2*M) must be zero, in [1, 3) for exp=1 wins, or in
-    (-3/4, -1/4] for exp=2 wins.
+    per-chunk sum: diff * 2^(2*M) must be in the rounded-path range [-1/4, 3).
+    When bits_to_take is positive, the per-value diff is converted to int32
+    fixed point using ``fixed_rounding`` before accumulation.
     """
     m1 = int(exp1_mantissa_width)
     m2 = int(exp2_mantissa_width)
     if m2 != m1 - 1:
         raise ValueError(f"pseudo_MSE3 requires m2 == m1 - 1; got m1={m1}, m2={m2}")
-
     values = scaled_values.to(torch.float32).contiguous()
     q1_scaled = pseudo_mse_reconstruct_scaled_python(
         values,
@@ -662,12 +770,19 @@ def pseudo_mse3_err2_minus_err1_from_scaled(
     err2_sq = (values - q2_scaled).pow(2)
     diff = err2_sq - err1_sq
     _assert_pseudo_mse3_scaled_diff_ranges(diff * float(2.0 ** (2 * m1)))
-    return diff
+    return pseudo_mse3_fixed_point_from_diff(
+        diff,
+        bits_to_take,
+        fixed_rounding=fixed_rounding,
+    )
 
 
-def pseudo_mse3_choose_exp2_from_diff(diff):
-    """Choose exp=2 exactly when its summed squared error is lower."""
-    return diff.sum(dim=1) < 0
+def pseudo_mse3_choose_exp2_from_diff(diff, tie_break="exp1"):
+    """Choose exp=2 from the chunk sum under the requested exact-tie policy."""
+    chunk_sum = diff.sum(dim=1)
+    if normalize_pseudo_mse3_tie_break(tie_break) == PSEUDO_MSE3_TIE_BREAK_EXP2:
+        return chunk_sum <= 0
+    return chunk_sum < 0
 
 
 def pseudo_mse_sqerr_diff_from_scaled(

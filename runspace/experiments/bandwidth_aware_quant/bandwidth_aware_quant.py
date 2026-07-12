@@ -378,6 +378,58 @@ def get_best_chunk_formats(weight_tensor, formats, chunk_size=128, layer_name=No
     return [valid_formats[i] for i in best_indices][:num_chunks_total]
 
 
+def is_slm_run(args):
+    return getattr(args, 'adapter_type', 'generic') == 'slm'
+
+
+def resolved_model_source(args):
+    source = getattr(args, 'model_source', None)
+    if source:
+        return source
+    return 'huggingface' if is_slm_run(args) else None
+
+
+def build_model_config(args, model_name, weights):
+    model_cfg = {'name': model_name, 'weights': weights}
+    source = resolved_model_source(args)
+    if source:
+        model_cfg['source'] = source
+    return model_cfg
+
+
+def build_dataset_config(args):
+    dataset_cfg = {
+        'name': args.dataset_name,
+        'batch_size': args.batch_size,
+        'num_workers': args.num_workers,
+    }
+    if args.dataset_path:
+        dataset_cfg['path'] = args.dataset_path
+    if args.dataset_name == 'wikitext2_lm':
+        dataset_cfg['seq_len'] = args.seq_len
+        if args.max_blocks is not None:
+            dataset_cfg['max_blocks'] = args.max_blocks
+    return dataset_cfg
+
+
+def build_slm_dummy_input(args):
+    seq_len = int(getattr(args, 'seq_len', 128) or 128)
+    batch_size = int(getattr(args, 'batch_size', 1) or 1)
+    return torch.zeros((batch_size, seq_len), dtype=torch.long)
+
+
+def apply_slm_cli_defaults(args):
+    """Keep legacy vision defaults unless the caller explicitly asks for SLM."""
+    if not is_slm_run(args):
+        return
+    if args.dataset_name == 'imagenet':
+        args.dataset_name = 'wikitext2_lm'
+    if args.batch_size == 128:
+        args.batch_size = 1
+    if args.num_workers == 1:
+        args.num_workers = 0
+
+
 def build_bandwidth_fp32_config(args, model_name, weights):
     """Build the model-load config used to materialize the FP32 reference.
 
@@ -389,20 +441,44 @@ def build_bandwidth_fp32_config(args, model_name, weights):
     they are later calibrated per-layer in `create_bandwidth_aware_state_dict`.
     """
     config = build_fp32_runtime_config(args, model_name=model_name, weights=weights)
+    config['model'] = build_model_config(args, model_name, weights)
+    config['dataset'] = build_dataset_config(args)
     adapter_cfg = config.setdefault('adapter', {})
-    adapter_cfg.update({
-        'type': 'generic',
-        'quantized_ops': ['all'],
-        'build_quantized': True,
-        'input_quantization': False,
-        'weight_quantization': False,
-        'fold_input_norm': True,
-        'quantize_first_layer': True,
-    })
+    if is_slm_run(args):
+        adapter_cfg.update({
+            'type': 'slm',
+            'quantized_ops': ['all'],
+            'build_quantized': True,
+            'input_quantization': False,
+            'weight_quantization': False,
+            'fold_layers': False,
+            'fold_input_norm': False,
+            'quantize_first_layer': False,
+        })
+        config.setdefault('quantization', {}).update({
+            'format': 'fp8_e4m3',
+            'mode': 'chunk',
+            'chunk_size': 128,
+            'weight_mode': 'chunk',
+            'weight_chunk_size': 128,
+            'act_mode': 'chunk',
+            'act_chunk_size': 128,
+        })
+    else:
+        adapter_cfg.update({
+            'type': 'generic',
+            'quantized_ops': ['all'],
+            'build_quantized': True,
+            'input_quantization': False,
+            'weight_quantization': False,
+            'fold_input_norm': True,
+            'quantize_first_layer': True,
+        })
     config.setdefault('evaluation', {})
     config['evaluation'].update({
         'mode': 'evaluate',
         'max_batches': args.limit_batches,
+        'generate_graph_svg': False if is_slm_run(args) else config['evaluation'].get('generate_graph_svg', True),
     })
     return config
 
@@ -426,14 +502,17 @@ def get_cached_fp32_acc1(model_name):
     return ref_acc1
 
 
-def run_cache_simulation(model_name, cache_size_M, batch_size=1, num_banks=16, metadata_bits=0, device="cuda"):
+def run_cache_simulation(model_name, cache_size_M, batch_size=1, num_banks=16, metadata_bits=0, device="cuda",
+                         model_cfg=None, adapter_cfg=None, dummy_input=None):
     """Run cache simulation to classify layers as on-chip or off-chip."""
     cache_elements = int(cache_size_M * 1_000_000)
     bank_size = cache_elements // num_banks if num_banks > 0 else 0
     
     # 1. Analyze model
-    layers = analyze_model(model_name, batch_size=batch_size, device=device,
-                           cache_elements=cache_elements, bank_size=bank_size, metadata_bits=metadata_bits)
+    layers = analyze_model(model_cfg or model_name, batch_size=batch_size, device=device,
+                           adapter_cfg=adapter_cfg, cache_elements=cache_elements,
+                           bank_size=bank_size, metadata_bits=metadata_bits,
+                           dummy_input=dummy_input)
     
     # 2. Evaluate stay status
     results = []
@@ -997,22 +1076,43 @@ def build_eval_config(model_name, args, weights_path, b, layer_need_input_transf
     folded input norm) so the loaded state_dict's weight_fp8/weight_scale buffers
     are consumed by the same module graph. Inputs always use dynamic input quant.
     """
-    return {
-        'model': {'name': model_name, 'weights': os.path.abspath(weights_path)},
-        'adapter': {
-            'type': 'generic',
-            'quantized_ops': ['all'],
-            'build_quantized': True,
-            'input_quantization': True,
-            'weight_quantization': True,
-            'fold_input_norm': True,
-            'quantize_first_layer': True,
-        },
+    model_cfg = build_model_config(args, model_name, os.path.abspath(weights_path))
+    adapter_cfg = {
+        'type': 'generic',
+        'quantized_ops': ['all'],
+        'build_quantized': True,
+        'input_quantization': True,
+        'weight_quantization': True,
+        'fold_input_norm': True,
+        'quantize_first_layer': True,
+    }
+    quant_cfg = {}
+    if is_slm_run(args):
+        adapter_cfg.update({
+            'type': 'slm',
+            'fold_layers': False,
+            'fold_input_norm': False,
+            'quantize_first_layer': False,
+        })
+        quant_cfg.update({
+            'format': 'fp8_e4m3',
+            'mode': 'chunk',
+            'chunk_size': 128,
+            'weight_mode': 'chunk',
+            'weight_chunk_size': 128,
+            'act_mode': 'chunk',
+            'act_chunk_size': 128,
+        })
+
+    config = {
+        'model': model_cfg,
+        'adapter': adapter_cfg,
         'evaluation': {
             'mode': args.mode,
             'max_batches': args.limit_batches,
             'compare_batches': args.compare_batches,
             'compare_mode': args.compare_mode,
+            'generate_graph_svg': False if is_slm_run(args) else True,
             'dynamic_input_quant': {
                 'enabled': True,
                 'metric': args.activation_metric,
@@ -1027,13 +1127,11 @@ def build_eval_config(model_name, args, weights_path, b, layer_need_input_transf
                 'unsigned_input_sources': UNSIGNED_INPUT_SOURCES,
             }
         },
-        'dataset': {
-            'name': args.dataset_name,
-            'path': args.dataset_path,
-            'batch_size': args.batch_size,
-            'num_workers': args.num_workers,
-        }
+        'dataset': build_dataset_config(args),
     }
+    if quant_cfg:
+        config['quantization'] = quant_cfg
+    return config
 
 
 def run_descent_for_cache(model, model_name, args, runner, sim_layers, cache_sim_map,
@@ -1132,10 +1230,18 @@ def main():
     parser = argparse.ArgumentParser(description="Recreation of bandwidth-aware quantization sweeps.")
     parser.add_argument("--model_name", type=str, default="resnet18", help="Model name or path to a YAML file with a list of models")
     parser.add_argument("--weights", type=str, default="DEFAULT", help="Model weights")
+    parser.add_argument("--adapter_type", type=str, default="generic", choices=["generic", "slm"],
+                        help="Adapter family to use. Use 'slm' for HuggingFace causal LMs.")
+    parser.add_argument("--model_source", type=str, default=None,
+                        help="Optional model source override. SLM runs default to 'huggingface'.")
     parser.add_argument("--dataset_name", type=str, default="imagenet", help="Dataset name")
     parser.add_argument("--dataset_path", type=str, default="/data/imagenet/val", help="Dataset path")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size for accuracy evaluation")
     parser.add_argument("--num_workers", type=int, default=1, help="Number of workers for dataset loader")
+    parser.add_argument("--seq_len", type=int, default=128,
+                        help="Sequence length for wikitext2_lm SLM evaluation.")
+    parser.add_argument("--max_blocks", type=int, default=None,
+                        help="Maximum token blocks for wikitext2_lm SLM evaluation.")
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of evaluation batches (-1 = all)")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     parser.add_argument("--device", type=str, default="cuda", help="Execution device")
@@ -1173,6 +1279,7 @@ def main():
                              "freezing the formats already decided for higher-bit layers.")
     args = parser.parse_args()
 
+    apply_slm_cli_defaults(args)
     configure_activation_metric_args(parser, args)
 
     if args.descent and args.use_best_weights:
@@ -1227,6 +1334,9 @@ def main():
 
         # 1. Load the reference FP32 model and obtain weight state dict
         ref_config = build_bandwidth_fp32_config(args, model_name, model_weights)
+        slm_cache_model_cfg = ref_config.get('model') if is_slm_run(args) else None
+        slm_cache_adapter_cfg = ref_config.get('adapter') if is_slm_run(args) else None
+        slm_cache_dummy_input = build_slm_dummy_input(args) if is_slm_run(args) else None
         model_order_dir = os.path.join(model_output_dir, "ref_fp32_loader")
         os.makedirs(model_order_dir, exist_ok=True)
         model, _, _ = runner.prepare_model_with_materialized_weights(config=ref_config, output_dir=model_order_dir)
@@ -1258,7 +1368,15 @@ def main():
         cache_sims = {}
         for cs in cache_sizes:
             print(f"\n--- Running cache simulation for Cache Size: {cs}MB ---")
-            sim_layers, cache_sim_map = run_cache_simulation(model_name, cs, batch_size=1, device=args.device)
+            sim_layers, cache_sim_map = run_cache_simulation(
+                model_name,
+                cs,
+                batch_size=1,
+                device=args.device,
+                model_cfg=slm_cache_model_cfg,
+                adapter_cfg=slm_cache_adapter_cfg,
+                dummy_input=slm_cache_dummy_input,
+            )
             cache_sims[cs] = (sim_layers, cache_sim_map)
             
             # Log summary of stay decisions
@@ -1295,12 +1413,18 @@ def main():
         print(f"  FP32 0MB reference baseline cycles: {ref_baseline_cycles:,}")
 
         ref_acc1 = get_cached_fp32_acc1(model_name)
+        ref_ppl = 0.0
+        ref_acc5 = 0.0
+        ref_certainty = 0.0
         if ref_acc1 is None:
             try:
                 print("Running reference FP32 evaluation...")
                 ref_eval_results = runner.run_single(ref_config, output_root=model_output_dir)
                 ref_acc1 = ref_eval_results.get('acc1', 0.0)
-                print(f"Reference FP32: Top-1 Acc = {ref_acc1:.3f}%")
+                ref_acc5 = ref_eval_results.get('acc5', 0.0)
+                ref_certainty = ref_eval_results.get('certainty', 0.0)
+                ref_ppl = ref_eval_results.get('ppl', 0.0)
+                print(f"Reference FP32: Top-1 Acc = {ref_acc1:.3f}%, PPL = {ref_ppl:.3f}")
             except Exception as e:
                 print(f"Error during reference evaluation: {e}")
                 ref_acc1 = 0.0
@@ -1309,6 +1433,7 @@ def main():
 
         # 4. Sweep loops
         evaluated_points = {}  # (cache_size, b_bits) -> (accuracy, cycles)
+        evaluated_metrics = {}  # (cache_size, b_bits) -> extra metric dict
         descent_data = {}      # cache_size -> {'policy_by_bits':..., 'per_level':...}
 
         temp_weights_dir = os.path.join(model_output_dir, "temp_weights")
@@ -1328,6 +1453,7 @@ def main():
                 )
                 for b, (acc1, cyc) in points.items():
                     evaluated_points[(cs, b)] = (acc1, cyc)
+                    evaluated_metrics[(cs, b)] = {}
                 descent_data[cs] = {'policy_by_bits': policy_by_bits, 'per_level': per_level}
             unique_runs = []
         else:
@@ -1395,16 +1521,22 @@ def main():
                 eval_results = runner.run_single(eval_config, output_root=model_output_dir)
                 acc1 = eval_results.get('acc1', 0.0)
                 acc5 = eval_results.get('acc5', 0.0)
-                print(f"Accuracy results: Top-1 Acc = {acc1:.3f}%, Top-5 Acc = {acc5:.3f}%")
+                ppl = eval_results.get('ppl', 0.0)
+                print(f"Accuracy results: Top-1 Acc = {acc1:.3f}%, Top-5 Acc = {acc5:.3f}%, PPL = {ppl:.3f}")
             except Exception as e:
                 print(f"Error during evaluation: {e}")
                 acc1 = 0.0
                 acc5 = 0.0
+                ppl = 0.0
                 import traceback
                 traceback.print_exc()
 
             # Save evaluated point
             evaluated_points[(cs, b)] = (acc1, cycles)
+            evaluated_metrics[(cs, b)] = {
+                'acc5': acc5,
+                'ppl': ppl,
+            }
 
             # Save weight-choice verification for this (cache_size, b) run
             verification_path = os.path.join(model_output_dir, f"weight_choice_verification_cs{cs}_b{b}.json")
@@ -1433,16 +1565,29 @@ def main():
                     acc1, cycles = evaluated_points[(cs, b)]
                     results_data[min_bits][cs].append((b, acc1, cycles))
 
+        def result_record(cache_size, point):
+            rec = {'b': point[0], 'accuracy': point[1], 'cycles': point[2]}
+            rec.update(evaluated_metrics.get((cache_size, point[0]), {}))
+            return rec
+
         # 5. Save results to JSON file
         results_path = os.path.join(model_output_dir, "bandwidth_aware_quant_results.json")
         serializable_results = {
             'model_name': model_name,
             'ref_fp32': {
                 'accuracy': ref_acc1,
+                'acc5': ref_acc5,
+                'ppl': ref_ppl,
+                'certainty': ref_certainty,
                 'baseline_cycles': ref_baseline_cycles,
                 'cycles_per_cache_size': ref_cycles_per_cs,
             },
             'experiment_config': {
+                'adapter_type': args.adapter_type,
+                'model_source': resolved_model_source(args),
+                'dataset_name': args.dataset_name,
+                'seq_len': args.seq_len if args.dataset_name == 'wikitext2_lm' else None,
+                'max_blocks': args.max_blocks if args.dataset_name == 'wikitext2_lm' else None,
                 'input_format_policy': args.input_format_policy,
                 'activation_exponents': args.activation_exponents,
                 'activation_metric': args.activation_metric,
@@ -1455,7 +1600,7 @@ def main():
             },
             'min_bits_sweeps': {
                 str(mb): {
-                    str(cs): [{'b': p[0], 'accuracy': p[1], 'cycles': p[2]} for p in points]
+                    str(cs): [result_record(cs, p) for p in points]
                     for cs, points in cache_data.items()
                 }
                 for mb, cache_data in results_data.items()

@@ -149,9 +149,8 @@ uint32_t encode_emb(float y, int e, int m, int is_signed) {
 // ----------------------------------------------------------------------------
 // encode_emb_trunc(y, e, m, is_signed) -- FP32 -> w-bit field with truncation.
 //
-// pseudo_MSE hardware vectors and selectors intentionally use truncation, not
-// round-to-nearest. Keep this helper separate so legacy callers of encode_emb
-// keep their existing rounding behavior.
+// Explicit truncating encode helper. Most dynamic search paths use encode_emb
+// above, which applies round-to-nearest.
 // ----------------------------------------------------------------------------
 __device__ __forceinline__
 uint32_t encode_emb_trunc(float y, int e, int m, int is_signed) {

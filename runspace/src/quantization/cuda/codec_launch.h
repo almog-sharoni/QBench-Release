@@ -104,6 +104,8 @@ void launch_search_and_quantize_chunk(
     int          metric,
     float        metric_param,
     int          pseudo_mse2_mantissa_window_bits,
+    int          pseudo_mse3_fixed_rounding_mode,
+    int          pseudo_mse3_tie_break_mode,
     void*        stream);
 
 
