@@ -137,6 +137,28 @@ class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
         q_type = getattr(self, 'q_type', 'fp8_e4m3')
         capture = getattr(self, 'capture_activations', False)
 
+        if not getattr(self, 'input_quantization', True):
+            affine_weight = self.weight
+            if (
+                getattr(self, 'weight_quantization', True)
+                and self.weight_fp8 is not None
+                and self.weight_scale is not None
+            ):
+                affine_weight = self.weight_fp8.float() * self.weight_scale
+            output = F.layer_norm(
+                input,
+                self.normalized_shape,
+                affine_weight,
+                self.bias,
+                self.eps,
+            )
+            if capture:
+                self.last_quant_input = input.detach()
+                self.last_quant_inputs_unscaled = []
+                self.last_quant_input_formats = []
+                self.last_quant_output_unscaled = output.detach()
+            return self.quantize_output(output)
+
         n = float(input.shape[-1])
         inv_n = 1.0 / n
 
@@ -179,7 +201,14 @@ class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
         standardized = self.quantize_input(standardized, internal=True)
         
         # quantize gamma and beta
-        quantized_gamma = self.quantize_input(self.weight, internal=True)
+        if (
+            getattr(self, 'weight_quantization', True)
+            and self.weight_fp8 is not None
+            and self.weight_scale is not None
+        ):
+            quantized_gamma = self.weight_fp8.float() * self.weight_scale
+        else:
+            quantized_gamma = self.quantize_input(self.weight, internal=True)
         quantized_betta = self.quantize_input(self.bias, internal=True)
 
 
@@ -200,5 +229,3 @@ class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
             self.last_quant_output_unscaled = out.detach()
 
         return self.quantize_output(out)
-
-

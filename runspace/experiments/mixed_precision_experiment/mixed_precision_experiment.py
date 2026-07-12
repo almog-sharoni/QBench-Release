@@ -8,23 +8,42 @@ import matplotlib.pyplot as plt
 import yaml
 import copy
 from tqdm import tqdm
-from typing import Dict, List, Any, Tuple
+from typing import Dict
 
 # Add project root to sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from runspace.core.runner import Runner
-from runspace.core.config_factory import ConfigFactory
-from src.registry.op_registry import OpRegistry
-from src.ops.quant_base import QuantizedLayerMixin
+from runspace.core.runner import Runner  # noqa: E402
+from runspace.core.config_factory import ConfigFactory  # noqa: E402
+from src.registry.op_registry import OpRegistry  # noqa: E402
+from src.ops.quant_base import QuantizedLayerMixin  # noqa: E402
+from src.quantization.uniform_input_quantizer import UniformInputQuantizer  # noqa: E402
+
+
+_UNSUPPORTED_INT8_MESSAGE = (
+    "INT8 activation mode is not supported by ActivationPacket transport. "
+    "Use an fp/ufp activation format such as fp8_e4m3, or add an INT8 packet "
+    "codec before running this comparison."
+)
+
 
 class MetricCollector:
-    def __init__(self, ref_model: nn.Module, quant_model: nn.Module, device: torch.device):
+    def __init__(
+        self,
+        ref_model: nn.Module,
+        quant_model: nn.Module,
+        device: torch.device,
+        *,
+        activation_transport: str = "encoded",
+        activation_chunk_size: int = 128,
+    ):
         self.ref_model = ref_model
         self.quant_model = quant_model
         self.device = device
+        self.activation_transport = activation_transport
+        self.activation_chunk_size = int(activation_chunk_size)
         self.ref_activations = {}
         self.quant_activations = {}
         self.hooks = []
@@ -32,6 +51,39 @@ class MetricCollector:
         # Storage for metrics
         # Structure: layer_name -> { 'ref': {stats}, 'int8': {stats}, 'fp8': {stats} }
         self.layer_metrics = {}
+
+    @staticmethod
+    def _resolve_activation_format(mode: str) -> str | None:
+        normalized = str(mode).strip().lower()
+        if normalized == 'ref':
+            return None
+        if normalized.startswith('int'):
+            raise ValueError(_UNSUPPORTED_INT8_MESSAGE)
+        if normalized == 'fp8':
+            return 'fp8_e4m3'
+        if (normalized.startswith('fp') or normalized.startswith('ufp')) and '_e' in normalized:
+            return normalized
+        raise ValueError(
+            f"Unsupported activation mode {mode!r}; expected 'ref' or an "
+            "ActivationPacket fp/ufp format."
+        )
+
+    def _build_activation_quantizer(self, activation_format: str):
+        return UniformInputQuantizer(
+            self.quant_model,
+            fmt=activation_format,
+            chunk_size=self.activation_chunk_size,
+            quant_mode='chunk',
+            transport=self.activation_transport,
+            collect_error_stats=False,
+        )
+
+    def _validate_transport_device(self):
+        if self.activation_transport == 'encoded' and self.device.type != 'cuda':
+            raise RuntimeError(
+                "Encoded activation transport requires a CUDA device; use "
+                "activation_transport='reference' only for development tests."
+            )
 
     def _get_ref_hook(self, name):
         def hook(module, input, output):
@@ -90,8 +142,6 @@ class MetricCollector:
         # Percentiles (approximate if tensor is large, but exact is fine for batch)
         # Flatten for percentile
         t_flat = t_abs.flatten()
-        k99 = int(0.99 * t_flat.numel())
-        k999 = int(0.999 * t_flat.numel())
         
         # topk is faster than sort for high percentiles
         # but for 99%, sort might be better or quantile
@@ -178,70 +228,61 @@ class MetricCollector:
                     self.layer_metrics[name]['ref'].append(stats)
 
     def collect_quant_metrics(self, data_loader, num_batches, quant_type):
+        activation_format = self._resolve_activation_format(quant_type)
+        if activation_format is None:
+            raise ValueError("collect_quant_metrics requires a quantized activation format")
+        self._validate_transport_device()
         self.quant_model.eval()
         self.quant_model.to(self.device)
-        
-        # Update quantization type for all layers
-        # We assume the model is already instantiated. We just change the q_type attribute.
-        for module in self.quant_model.modules():
-            if isinstance(module, QuantizedLayerMixin):
-                module.q_type = quant_type
-                # Also reset scales if needed? 
-                # calibrate_weights should be called if we change q_type?
-                # Yes, scales depend on q_type (bias, max_val mapping).
-                # But we are in "simulate" mode usually.
-                # GenericAdapter has _calibrate_model.
-                # We should re-calibrate.
-                pass
-        
-        # Re-calibrate weights
-        # We need to call calibrate_weights on all modules
-        for module in self.quant_model.modules():
-            if hasattr(module, 'calibrate_weights'):
-                module.calibrate_weights()
-                
+        self._set_quant_type(activation_format)
         print(f"Collecting {quant_type} metrics on {num_batches} batches...")
-        
-        key = 'int8' if 'int8' in quant_type else 'fp8'
-        
-        with torch.no_grad():
-            for i, batch in tqdm(enumerate(data_loader), total=num_batches):
-                if i >= num_batches:
-                    break
-                
-                inputs, _ = batch
-                inputs = inputs.to(self.device)
-                
-                # We need REF activations for comparison on the SAME input
-                # So we run REF again? Or did we store them?
-                # Storing all activations for all batches is memory intensive.
-                # Better to run REF and QUANT in lockstep.
-                
-                # Run REF
-                self.ref_activations.clear()
-                self.ref_model(inputs)
-                
-                # Run QUANT
-                self.quant_activations.clear()
-                self.quant_model(inputs)
-                
-                # Compare
-                for name, quant_act in self.quant_activations.items():
-                    if name in self.ref_activations:
-                        ref_act = self.ref_activations[name]
-                        
-                        if name not in self.layer_metrics:
-                            # Should have been created in collect_ref_metrics if we ran it separately
-                            # But if we run lockstep, we create it here.
-                            self.layer_metrics[name] = {'ref': [], 'int8': [], 'fp8': []}
-                        
-                        stats = self._compute_compare_stats(ref_act, quant_act)
-                        self.layer_metrics[name][key].append(stats)
 
-    def run_lockstep_collection(self, data_loader, num_batches, modes=['ref', 'int8', 'fp8']):
-        """
-        Runs Ref, Int8, and FP8 in lockstep for each batch to save memory and ensure alignment.
-        """
+        input_quantizer = self._build_activation_quantizer(activation_format)
+        input_quantizer.register_hooks()
+        try:
+            with torch.no_grad():
+                for i, batch in tqdm(enumerate(data_loader), total=num_batches):
+                    if i >= num_batches:
+                        break
+                
+                    inputs, _ = batch
+                    inputs = inputs.to(self.device)
+
+                    self.ref_activations.clear()
+                    self.ref_model(inputs)
+
+                    self.quant_activations.clear()
+                    self.quant_model(inputs)
+
+                    for name, quant_act in self.quant_activations.items():
+                        if name not in self.ref_activations:
+                            continue
+                        ref_act = self.ref_activations[name]
+
+                        if name not in self.layer_metrics:
+                            self.layer_metrics[name] = {'ref': [], 'int8': [], 'fp8': []}
+
+                        stats = self._compute_compare_stats(ref_act, quant_act)
+                        self.layer_metrics[name]['fp8'].append(stats)
+        finally:
+            input_quantizer.cleanup()
+
+    def run_lockstep_collection(self, data_loader, num_batches, modes=('ref', 'fp8')):
+        """Run reference and one transported FP activation format in lockstep."""
+        requested_formats = [
+            self._resolve_activation_format(mode)
+            for mode in modes
+            if str(mode).strip().lower() != 'ref'
+        ]
+        if len(requested_formats) > 1:
+            raise ValueError(
+                "Lockstep collection supports one transported activation format "
+                "per run; run the collector separately for each fp/ufp format."
+            )
+        activation_format = requested_formats[0] if requested_formats else None
+        if activation_format is not None:
+            self._validate_transport_device()
+
         self.ref_model.eval()
         self.quant_model.eval()
         self.ref_model.to(self.device)
@@ -249,51 +290,46 @@ class MetricCollector:
         
         print(f"Running lockstep collection for {modes} on {num_batches} batches...")
         
-        with torch.no_grad():
-            for i, batch in tqdm(enumerate(data_loader), total=num_batches):
-                if i >= num_batches:
-                    break
-                
-                inputs, _ = batch
-                inputs = inputs.to(self.device)
-                
-                # 1. Run REF
-                self.ref_activations.clear()
-                self.ref_model(inputs)
-                
-                # Store REF stats
-                for name, act in self.ref_activations.items():
-                    if name not in self.layer_metrics:
-                        self.layer_metrics[name] = {'ref': [], 'int8': [], 'fp8': []}
-                    
-                    # Only compute ref stats once (e.g. during first mode pass or just always)
-                    # We append to list, so we should do it once per batch.
-                    stats = self._compute_ref_stats(act)
-                    self.layer_metrics[name]['ref'].append(stats)
+        input_quantizer = None
+        if activation_format is not None:
+            self._set_quant_type(activation_format)
+            input_quantizer = self._build_activation_quantizer(activation_format)
+            input_quantizer.register_hooks()
 
-                # 2. Run INT8
-                if 'int8' in modes:
-                    # Set to INT8
-                    self._set_quant_type('int8')
-                    self.quant_activations.clear()
-                    self.quant_model(inputs)
+        try:
+            with torch.no_grad():
+                for i, batch in tqdm(enumerate(data_loader), total=num_batches):
+                    if i >= num_batches:
+                        break
+                
+                    inputs, _ = batch
+                    inputs = inputs.to(self.device)
+                
+                    # 1. Run REF
+                    self.ref_activations.clear()
+                    self.ref_model(inputs)
+                
+                    # Store REF stats
+                    for name, act in self.ref_activations.items():
+                        if name not in self.layer_metrics:
+                            self.layer_metrics[name] = {'ref': [], 'int8': [], 'fp8': []}
                     
-                    for name, quant_act in self.quant_activations.items():
-                        if name in self.ref_activations:
-                            stats = self._compute_compare_stats(self.ref_activations[name], quant_act)
-                            self.layer_metrics[name]['int8'].append(stats)
+                        stats = self._compute_ref_stats(act)
+                        self.layer_metrics[name]['ref'].append(stats)
 
-                # 3. Run FP8
-                if 'fp8' in modes:
-                    # Set to FP8
-                    self._set_quant_type('fp8_e4m3')
-                    self.quant_activations.clear()
-                    self.quant_model(inputs)
-                    
-                    for name, quant_act in self.quant_activations.items():
-                        if name in self.ref_activations:
-                            stats = self._compute_compare_stats(self.ref_activations[name], quant_act)
-                            self.layer_metrics[name]['fp8'].append(stats)
+                    if activation_format is not None:
+                        self.quant_activations.clear()
+                        self.quant_model(inputs)
+
+                        for name, quant_act in self.quant_activations.items():
+                            if name in self.ref_activations:
+                                stats = self._compute_compare_stats(
+                                    self.ref_activations[name], quant_act
+                                )
+                                self.layer_metrics[name]['fp8'].append(stats)
+        finally:
+            if input_quantizer is not None:
+                input_quantizer.cleanup()
 
     def _set_quant_type(self, q_type):
         for module in self.quant_model.modules():
@@ -436,7 +472,7 @@ def main():
     # We can take args or hardcode for the experiment
     # Let's use a default base config and model
     
-    base_config_path = os.path.join(PROJECT_ROOT, 'runspace/inputs/base_configs/advanced_full_config_int8.yaml')
+    base_config_path = os.path.join(PROJECT_ROOT, 'runspace/inputs/base_configs/advanced_full_config_fp8e4m3.yaml')
     model_name = 'resnet18' # Default test model
     
     # Allow overriding via args
@@ -474,7 +510,7 @@ def main():
     # 3. Collect Metrics
     output_dir = os.path.join(os.path.dirname(__file__), 'results', model_name)
     os.makedirs(output_dir, exist_ok=True)
-    csv_path = os.path.join(output_dir, 'layer_metrics.csv')
+    csv_path = os.path.join(output_dir, 'layer_metrics_activation_transport_v1.csv')
     
     if os.path.exists(csv_path):
         print(f"Loading existing metrics from {csv_path}...")
@@ -485,7 +521,7 @@ def main():
         
         # Run on ~512 samples (batch size 32 -> 16 batches)
         num_batches = 16
-        collector.run_lockstep_collection(data_loader, num_batches, modes=['ref', 'int8', 'fp8'])
+        collector.run_lockstep_collection(data_loader, num_batches, modes=['ref', 'fp8'])
         
         collector.clear_hooks()
         
@@ -496,6 +532,14 @@ def main():
     
     visualize_metrics(df, output_dir)
     
+    if 'cosine_int8' not in df.columns:
+        print(
+            "INT8/FP8 mixed recommendations were not generated: INT8 activation "
+            "packets are unsupported. FP8 metrics above use hardware activation "
+            "transport."
+        )
+        return
+
     # 5. Decide & Generate Config
     recommendations = decide_precision(df)
     

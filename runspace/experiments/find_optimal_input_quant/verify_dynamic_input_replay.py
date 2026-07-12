@@ -7,8 +7,8 @@ import argparse
 import copy
 import os
 import sys
-from collections import Counter, defaultdict
-from typing import Dict, List
+from collections import Counter, defaultdict, deque
+from dataclasses import dataclass
 
 import torch
 
@@ -21,15 +21,31 @@ if PROJECT_ROOT not in sys.path:
 os.environ.setdefault("TORCH_HOME", "/tmp/torch")
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
-from runspace.core.runner import Runner
+from runspace.core.runner import Runner  # noqa: E402
 from runspace.experiments.find_optimal_input_quant.find_optimal_input_quant import (  # noqa: E402
     _build_input_quant_config,
     candidate_formats as DEFAULT_CANDIDATE_FORMATS,
 )
 from src.eval.metrics import MetricsEngine  # noqa: E402
-from src.ops.quant_base import quantize_tensor  # noqa: E402
+from src.quantization.activation_transport import (  # noqa: E402
+    ActivationTransport,
+    normalize_activation_transport,
+)
+from src.quantization.activation_transport_runtime import (  # noqa: E402
+    ActivationTransportRuntime,
+)
 from src.quantization.dynamic_input_quantizer import DynamicInputQuantizer  # noqa: E402
-from src.registry.op_registry import OpRegistry  # noqa: E402
+
+
+@dataclass(frozen=True)
+class StageFormatSelection:
+    """One producer transmission's exact candidate table and per-chunk IDs."""
+
+    candidate_formats: tuple[str, ...]
+    format_ids: bytes
+
+
+BatchPlan = dict[str, list[StageFormatSelection]]
 
 
 class BatchRecordingDynamicInputQuantizer(DynamicInputQuantizer):
@@ -37,169 +53,192 @@ class BatchRecordingDynamicInputQuantizer(DynamicInputQuantizer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._fmt_to_idx = {fmt: idx for idx, fmt in enumerate(self.candidate_formats)}
-        self.current_batch_plan: Dict[str, List[bytes]] = {}
+        self.current_batch_plan: BatchPlan = {}
 
     def begin_batch(self):
         self.current_batch_plan = {}
 
-    def consume_batch_plan(self) -> Dict[str, List[bytes]]:
+    def consume_batch_plan(self) -> BatchPlan:
         plan = self.current_batch_plan
         self.current_batch_plan = {}
         return plan
 
-    def _get_hook(self, layer_name):
-        def hook_fn(module, args):
-            x = args[0]
-            if not isinstance(x, torch.Tensor):
-                return None
+    def _quantize_input_tensor(self, tensor, layer_name, candidates, module=None):
+        quantized, best_indices = super()._quantize_input_tensor(
+            tensor,
+            layer_name,
+            candidates,
+            module,
+        )
+        candidate_formats = tuple(str(fmt) for fmt in candidates)
+        if len(candidate_formats) > 256:
+            raise ValueError(
+                "Replay capture supports at most 256 candidate formats per producer; "
+                f"got {len(candidate_formats)} for {layer_name!r}."
+            )
 
-            if layer_name in self.post_relu_layers:
-                candidates = self.ufp_candidates or self.non_ufp_candidates
-            else:
-                candidates = self.non_ufp_candidates or self.ufp_candidates
-
-            x_quantized, chunk_formats = self._select_best_format(x, layer_name, candidates)
-
-            # Store exact chunk choices for this layer invocation in this batch.
-            encoded = bytes(self._fmt_to_idx[fmt] for fmt in chunk_formats)
-            self.current_batch_plan.setdefault(layer_name, []).append(encoded)
-
-            module.input_quantization = True
-            module.input_mode = "chunk"
-            module.input_chunk_size = self.chunk_size
-            module.input_chunk_formats = chunk_formats
-            if chunk_formats:
-                module.input_q_type = chunk_formats[0]
-            module.rounding = "nearest"
-
-            with torch.no_grad():
-                diff = x - x_quantized
-                diff_flat = diff.reshape(-1)
-                x_flat = x.reshape(-1)
-
-                updates = {
-                    "sum_mse_err": diff_flat.pow(2).sum(),
-                    "sum_l2_norm": x_flat.pow(2).sum(),
-                }
-                for key, value in updates.items():
-                    if self.stats[key] is None:
-                        self.stats[key] = value.detach()
-                    else:
-                        self.stats[key] += value.detach()
-
-            return None
-
-        return hook_fn
+        indices = best_indices.detach().to(device="cpu", dtype=torch.int64).reshape(-1)
+        if indices.numel():
+            minimum = int(indices.min().item())
+            maximum = int(indices.max().item())
+            if minimum < 0 or maximum >= len(candidate_formats):
+                raise RuntimeError(
+                    f"Selector returned format IDs [{minimum}, {maximum}] for "
+                    f"{len(candidate_formats)} candidates at producer {layer_name!r}."
+                )
+        selection = StageFormatSelection(
+            candidate_formats=candidate_formats,
+            format_ids=bytes(indices.tolist()),
+        )
+        self.current_batch_plan.setdefault(layer_name, []).append(selection)
+        return quantized, best_indices
 
 
 class BatchReplayInputQuantizer:
-    """Replay exact per-batch per-layer chunk-format choices captured earlier."""
+    """Replay exact per-batch producer-stage format choices through transport."""
 
-    def __init__(self, model, chunk_size=128, candidate_formats=None):
+    def __init__(
+        self,
+        model,
+        chunk_size=128,
+        candidate_formats=None,
+        transport="encoded",
+    ):
         self.model = model
-        self.chunk_size = chunk_size
+        self.chunk_size = int(chunk_size)
         self.candidate_formats = list(candidate_formats or DEFAULT_CANDIDATE_FORMATS)
-        self._idx_to_fmt = dict(enumerate(self.candidate_formats))
-        self.hooks = []
-        self.hooked_modules = []
-        self.supported_ops = tuple(OpRegistry.get_supported_ops().values())
-        self.current_batch_plan: Dict[str, List[bytes]] = {}
-        self.current_offsets: Dict[str, int] = defaultdict(int)
+        self.transport = normalize_activation_transport(transport)
+        self.activation_transport = None
+        self._transport_runtime = None
+        self.current_batch_plan: BatchPlan = {}
+        self.current_offsets: dict[str, int] = defaultdict(int)
+        self._pending_stats = defaultdict(deque)
         self.layer_stats = {}
         self.stats = {
-            "sum_mse_err": 0.0,
-            "sum_l2_norm": 0.0,
+            "sum_mse_err": None,
+            "sum_l2_norm": None,
         }
 
     def register_hooks(self):
-        for name, module in self.model.named_modules():
-            if isinstance(module, self.supported_ops):
-                self.hooks.append(module.register_forward_pre_hook(self._get_hook(name)))
-                self.hooked_modules.append(module)
+        """Install producer-stage replay; retained name keeps the utility API stable."""
+        if self._transport_runtime is not None:
+            return
 
-    def load_batch_plan(self, batch_plan: Dict[str, List[bytes]]):
+        self.activation_transport = ActivationTransport(
+            mode=self.transport,
+            chunk_size=self.chunk_size,
+        )
+
+        def encode_stage(stage, tensor):
+            selection = self._consume_stage_selection(stage.stage_id)
+            format_ids = torch.tensor(
+                list(selection.format_ids),
+                dtype=torch.int32,
+                device=tensor.device,
+            )
+            transmitted = self.activation_transport.transmit_dynamic(
+                tensor,
+                format_ids,
+                selection.candidate_formats,
+                producer_id=stage.stage_id,
+            )
+            self._pending_stats[stage.stage_id].append(
+                (stage, tensor.detach(), selection)
+            )
+            return transmitted
+
+        def observe_decode(stage_id, quantized):
+            pending = self._pending_stats[stage_id]
+            if not pending:
+                return
+            stage, tensor, selection = pending.popleft()
+            self._update_stats(stage, tensor, quantized, selection)
+
+        self._transport_runtime = ActivationTransportRuntime(
+            self.model,
+            self.activation_transport,
+            encode_stage,
+            decode_observer=observe_decode,
+        ).install()
+
+    def load_batch_plan(self, batch_plan: BatchPlan):
         self.current_batch_plan = batch_plan
         self.current_offsets = defaultdict(int)
 
     def assert_batch_fully_consumed(self):
         leftovers = []
-        for layer_name, encoded_runs in self.current_batch_plan.items():
-            used = self.current_offsets.get(layer_name, 0)
-            if used != len(encoded_runs):
-                leftovers.append(f"{layer_name}: used {used}/{len(encoded_runs)}")
+        for stage_id, selections in self.current_batch_plan.items():
+            used = self.current_offsets.get(stage_id, 0)
+            if used != len(selections):
+                leftovers.append(f"{stage_id}: used {used}/{len(selections)}")
         if leftovers:
-            raise RuntimeError("Replay did not consume all recorded layer invocations: " + "; ".join(leftovers[:10]))
+            raise RuntimeError(
+                "Replay did not consume all recorded producer transmissions: "
+                + "; ".join(leftovers[:10])
+            )
 
-    def _decode_chunk_formats(self, encoded: bytes) -> List[str]:
-        return [self._idx_to_fmt[idx] for idx in encoded]
+    def _consume_stage_selection(self, stage_id: str) -> StageFormatSelection:
+        stage_plan = self.current_batch_plan.get(stage_id)
+        if stage_plan is None:
+            raise RuntimeError(
+                f"No replay plan found for producer stage {stage_id!r} in current batch."
+            )
+        offset = self.current_offsets[stage_id]
+        if offset >= len(stage_plan):
+            raise RuntimeError(
+                f"Replay plan exhausted early for producer stage {stage_id!r}."
+            )
+        self.current_offsets[stage_id] += 1
+        return stage_plan[offset]
 
-    def _get_hook(self, layer_name):
-        def hook_fn(module, args):
-            x = args[0]
-            if not isinstance(x, torch.Tensor):
-                return None
+    def _update_stats(self, stage, tensor, quantized, selection):
+        with torch.no_grad():
+            diff = tensor - quantized
+            updates = {
+                "sum_mse_err": diff.pow(2).sum(),
+                "sum_l2_norm": tensor.pow(2).sum(),
+            }
+            for key, value in updates.items():
+                if self.stats[key] is None:
+                    self.stats[key] = value.detach()
+                else:
+                    self.stats[key] += value.detach()
 
-            layer_plan = self.current_batch_plan.get(layer_name)
-            if layer_plan is None:
-                raise RuntimeError(f"No replay plan found for layer '{layer_name}' in current batch.")
-
-            offset = self.current_offsets[layer_name]
-            if offset >= len(layer_plan):
-                raise RuntimeError(f"Replay plan exhausted early for layer '{layer_name}'.")
-
-            encoded = layer_plan[offset]
-            self.current_offsets[layer_name] += 1
-            chunk_formats = self._decode_chunk_formats(encoded)
-
-            module.input_quantization = True
-            module.input_mode = "chunk"
-            module.input_chunk_size = self.chunk_size
-            module.input_chunk_formats = chunk_formats
-            if chunk_formats:
-                module.input_q_type = chunk_formats[0]
-            module.rounding = "nearest"
-
-            with torch.no_grad():
-                x_quantized, _ = quantize_tensor(
-                    x,
-                    q_type=chunk_formats[0] if chunk_formats else "fp32",
-                    mode="chunk",
-                    chunk_size=self.chunk_size,
-                    chunk_formats=chunk_formats,
-                )
-                diff = x - x_quantized
-                diff_flat = diff.reshape(-1)
-                x_flat = x.reshape(-1)
-
-                self.stats["sum_mse_err"] += diff_flat.pow(2).sum().item()
-                self.stats["sum_l2_norm"] += x_flat.pow(2).sum().item()
-
-            counts = self.layer_stats.setdefault(layer_name, {"format_counts": {}, "type": module.__class__.__name__})
-            fmt_counts = counts["format_counts"]
-            for fmt in chunk_formats:
-                fmt_counts[fmt] = fmt_counts.get(fmt, 0) + 1
-
-            return None
-
-        return hook_fn
+        stage_stats = self.layer_stats.setdefault(
+            stage.stage_id,
+            {
+                "format_counts": {},
+                "type": stage.kind.value,
+                "producer_nodes": list(stage.node_names),
+                "consumer_nodes": list(stage.consumer_nodes),
+                "is_unsigned": bool(stage.is_unsigned),
+            },
+        )
+        format_counts = stage_stats["format_counts"]
+        for format_id, count in Counter(selection.format_ids).items():
+            fmt = selection.candidate_formats[format_id]
+            format_counts[fmt] = format_counts.get(fmt, 0) + count
 
     def get_final_stats(self):
-        norm_mse = self.stats["sum_mse_err"] / self.stats["sum_l2_norm"] if self.stats["sum_l2_norm"] > 0 else 0.0
-        return {
-            "norm_mse": norm_mse,
-            "total_mse": self.stats["sum_mse_err"],
+        sum_mse_err = self.stats["sum_mse_err"]
+        sum_l2_norm = self.stats["sum_l2_norm"]
+        total_mse = sum_mse_err.item() if isinstance(sum_mse_err, torch.Tensor) else 0.0
+        total_l2 = sum_l2_norm.item() if isinstance(sum_l2_norm, torch.Tensor) else 0.0
+        result = {
+            "transport": self.transport,
+            "norm_mse": total_mse / total_l2 if total_l2 > 0 else 0.0,
+            "total_mse": total_mse,
         }
+        if self._transport_runtime is not None:
+            result.update(self._transport_runtime.transport_stats())
+        return result
 
     def cleanup(self):
-        for hook in self.hooks:
-            hook.remove()
-        self.hooks = []
-
-        for module in self.hooked_modules:
-            if hasattr(module, "input_chunk_formats"):
-                module.input_chunk_formats = None
-        self.hooked_modules = []
+        if self._transport_runtime is not None:
+            self._transport_runtime.cleanup()
+            self._transport_runtime = None
+        self.activation_transport = None
+        self._pending_stats.clear()
 
 
 def parse_args() -> argparse.Namespace:
@@ -215,6 +254,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit_batches", type=int, default=4, help="Number of batches to verify")
     parser.add_argument("--chunk_size", type=int, default=128, help="Chunk size")
     parser.add_argument("--metric", type=str, default="mse", help="Dynamic metric. Only mse is supported.")
+    parser.add_argument(
+        "--transport",
+        choices=("encoded", "reference"),
+        default="encoded",
+        help="Activation transport implementation (default: encoded hardware packets)",
+    )
     parser.add_argument(
         "--excluded_ops",
         type=str,
@@ -298,14 +343,28 @@ def main() -> None:
             metric=args.metric,
             chunk_size=args.chunk_size,
             candidate_formats=args.candidate_formats,
+            transport=args.transport,
         )
         replay_quantizer = BatchReplayInputQuantizer(
             model=replay_model,
             chunk_size=args.chunk_size,
             candidate_formats=args.candidate_formats,
+            transport=args.transport,
         )
         dynamic_quantizer.register_hooks()
         replay_quantizer.register_hooks()
+
+        dynamic_stage_ids = tuple(
+            stage.stage_id for stage in dynamic_quantizer._transport_runtime.plan.stages
+        )
+        replay_stage_ids = tuple(
+            stage.stage_id for stage in replay_quantizer._transport_runtime.plan.stages
+        )
+        if dynamic_stage_ids != replay_stage_ids:
+            raise RuntimeError(
+                "Capture and replay models produced different activation-stage plans: "
+                f"capture={dynamic_stage_ids!r}, replay={replay_stage_ids!r}"
+            )
 
         with torch.no_grad():
             for batch_idx, batch in enumerate(loader):
@@ -321,9 +380,10 @@ def main() -> None:
                 dynamic_metrics.update(dynamic_outputs, targets)
                 batch_plan = dynamic_quantizer.consume_batch_plan()
 
-                for layer_runs in batch_plan.values():
-                    for encoded in layer_runs:
-                        aggregate_counts.update(args.candidate_formats[idx] for idx in encoded)
+                for stage_selections in batch_plan.values():
+                    for selection in stage_selections:
+                        for format_id, count in Counter(selection.format_ids).items():
+                            aggregate_counts[selection.candidate_formats[format_id]] += count
 
                 replay_quantizer.load_batch_plan(copy.deepcopy(batch_plan))
                 replay_outputs = replay_adapter.forward(replay_model, (inputs, targets))
@@ -356,6 +416,7 @@ def main() -> None:
         print("Replay Verification Summary")
         print(f"Model: {args.model_name}")
         print(f"Metric: {args.metric}")
+        print(f"Transport: {args.transport}")
         print(f"Batches checked: {len(batch_top1_matches)}")
         print(f"Examples checked: {total_examples}")
         print()

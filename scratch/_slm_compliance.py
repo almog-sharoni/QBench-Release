@@ -30,9 +30,11 @@ config = {
 runner = Runner()
 data_loader = runner.setup_data_loader(config)
 
-quant_adapter = create_adapter(config)
+quant_adapter = create_adapter(runner._adapter_build_config(config))
 quant_model = quant_adapter.model.to(runner.device).eval()
-ref_model = quant_adapter.build_reference_model().to(runner.device).eval()
+ref_config = runner._build_reference_config(config)
+ref_adapter = create_adapter(ref_config)
+ref_model = ref_adapter.model.to(runner.device).eval()
 
 cmp = LayerComparator(
     ref_model=ref_model,
@@ -43,7 +45,14 @@ cmp = LayerComparator(
     device=runner.device,
     compare_mode="propagated",
 )
-cmp.compare(data_loader, num_batches=1)
+input_quantizer = runner._build_layer_input_quantizer(
+    quant_model,
+    runner._implicit_uniform_input_quant_cfg(config),
+)
+try:
+    cmp.compare(data_loader, num_batches=1)
+finally:
+    input_quantizer.cleanup()
 
 print("\n\n##### COVERAGE SUMMARY #####")
 for line in cmp.coverage_report_lines:

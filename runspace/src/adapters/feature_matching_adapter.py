@@ -118,6 +118,7 @@ class FeatureMatchingAdapter(GenericAdapter):
             if not self.skip_calibration:
                 self._calibrate_model(model)
 
+        self._install_activation_transport_guard(model)
         return model
 
     def create_metrics(self):

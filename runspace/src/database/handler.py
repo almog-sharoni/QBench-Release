@@ -30,6 +30,7 @@ class RunDatabase:
                 CREATE TABLE IF NOT EXISTS runs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     model_name TEXT NOT NULL,
+                    run_identity TEXT,
                     weight_dt TEXT,
                     activation_dt TEXT,
                     output_dt TEXT,
@@ -78,6 +79,8 @@ class RunDatabase:
             except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE runs ADD COLUMN input_map_json TEXT")
             except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN activation_map_json TEXT")
+            except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE runs ADD COLUMN output_map_json TEXT")
             except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE runs ADD COLUMN output_dt TEXT")
@@ -86,6 +89,12 @@ class RunDatabase:
             except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE runs ADD COLUMN cli_command TEXT")
             except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE runs ADD COLUMN run_identity TEXT")
+            except sqlite3.OperationalError: pass
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_runs_identity "
+                "ON runs(model_name, experiment_type, run_identity, status)"
+            )
             
             # Create model_graphs table for storing quantization visualizations
             # Drop old table to clean up SVG space as user requested
@@ -125,6 +134,7 @@ class RunDatabase:
                 CREATE TABLE IF NOT EXISTS fm_runs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     model_name TEXT NOT NULL,
+                    run_identity TEXT,
                     weight_dt TEXT,
                     activation_dt TEXT,
                     output_dt TEXT,
@@ -148,6 +158,7 @@ class RunDatabase:
                     ref_pose_auc_10 REAL,
                     ref_pose_auc_20 REAL,
                     config_json TEXT,
+                    activation_map_json TEXT,
                     output_map_json TEXT,
                     cli_command TEXT
                 )
@@ -157,8 +168,16 @@ class RunDatabase:
             except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE fm_runs ADD COLUMN output_map_json TEXT")
             except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE fm_runs ADD COLUMN activation_map_json TEXT")
+            except sqlite3.OperationalError: pass
             try: cursor.execute("ALTER TABLE fm_runs ADD COLUMN cli_command TEXT")
             except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE fm_runs ADD COLUMN run_identity TEXT")
+            except sqlite3.OperationalError: pass
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fm_runs_identity "
+                "ON fm_runs(model_name, experiment_type, run_identity, status)"
+            )
 
             self._init_cache_sim_table(cursor)
 
@@ -167,12 +186,16 @@ class RunDatabase:
     def log_run(self, model_name, weight_dt, activation_dt, acc1, acc5, status="SUCCESS",
                 ref_acc1=None, ref_acc5=None, ref_certainty=None, experiment_type=None, run_date=None,
                 mse=None, l1=None, certainty=None, quant_map_json=None, input_map_json=None,
-                config_json=None, output_dt=None, output_map_json=None, cli_command=None):
+                activation_map_json=None,
+                config_json=None, output_dt=None, output_map_json=None, cli_command=None,
+                run_identity=None):
         """
         Logs a new run to the database.
         quant_map_json  : JSON string mapping layer -> weight format.
         input_map_json  : JSON string mapping layer -> dominant input format
                           (from DynamicInputQuantizer layer_stats).
+        activation_map_json: JSON string describing producer stages and encoded
+                             transport counters for the run.
         output_map_json : JSON string mapping layer -> output format / per-layer
                           override resolved at runtime.
         output_dt       : Global output quantization format string (e.g. fp8_e5m2);
@@ -187,20 +210,29 @@ class RunDatabase:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO runs (
-                    model_name, weight_dt, activation_dt, output_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
+                    model_name, run_identity, weight_dt, activation_dt, output_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
                     experiment_type, run_date, status, mse, l1, certainty, quant_map_json, input_map_json,
-                    output_map_json, config_json, cli_command
+                    activation_map_json, output_map_json, config_json, cli_command
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                model_name, weight_dt, activation_dt, output_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
+                model_name, run_identity, weight_dt, activation_dt, output_dt, acc1, acc5, ref_acc1, ref_acc5, ref_certainty,
                 experiment_type, run_date, status, mse, l1, certainty, quant_map_json, input_map_json,
-                output_map_json, config_json, cli_command
+                activation_map_json, output_map_json, config_json, cli_command
             ))
             conn.commit()
             print(f"Logged run for {model_name} to {self.db_path}")
 
-    def run_exists(self, model_name, experiment_type=None, weight_dt=None, activation_dt=None, status="SUCCESS"):
+    def run_exists(
+        self,
+        model_name,
+        experiment_type=None,
+        weight_dt=None,
+        activation_dt=None,
+        status="SUCCESS",
+        config_json=None,
+        run_identity=None,
+    ):
         """Return True if at least one matching run exists."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -216,6 +248,12 @@ class RunDatabase:
             if activation_dt is not None:
                 query += " AND activation_dt = ?"
                 params.append(activation_dt)
+            if config_json is not None:
+                query += " AND config_json = ?"
+                params.append(config_json)
+            if run_identity is not None:
+                query += " AND run_identity = ?"
+                params.append(run_identity)
             if status is not None:
                 query += " AND status = ?"
                 params.append(status)
@@ -467,7 +505,8 @@ class RunDatabase:
                    pose_auc_20=None, ref_matching_precision=None, ref_matching_score=None,
                    ref_mean_num_matches=None, ref_pose_auc_5=None, ref_pose_auc_10=None,
                    ref_pose_auc_20=None, config_json=None,
-                   output_dt=None, output_map_json=None, cli_command=None):
+                   output_dt=None, output_map_json=None, activation_map_json=None,
+                   cli_command=None, run_identity=None):
         """Logs a feature-matching run to the fm_runs table."""
         if run_date is None:
             run_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -475,29 +514,37 @@ class RunDatabase:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO fm_runs (
-                    model_name, weight_dt, activation_dt, output_dt, experiment_type, run_date, status,
+                    model_name, run_identity, weight_dt, activation_dt, output_dt, experiment_type, run_date, status,
                     fm_num_keypoints, fm_mean_score, fm_desc_norm, fm_repeatability,
                     matching_precision, matching_score, mean_num_matches,
                     pose_auc_5, pose_auc_10, pose_auc_20,
                     ref_matching_precision, ref_matching_score, ref_mean_num_matches,
                     ref_pose_auc_5, ref_pose_auc_10, ref_pose_auc_20,
-                    output_map_json, config_json, cli_command
+                    output_map_json, activation_map_json, config_json, cli_command
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                model_name, weight_dt, activation_dt, output_dt, experiment_type, run_date, status,
+                model_name, run_identity, weight_dt, activation_dt, output_dt, experiment_type, run_date, status,
                 fm_num_keypoints, fm_mean_score, fm_desc_norm, fm_repeatability,
                 matching_precision, matching_score, mean_num_matches,
                 pose_auc_5, pose_auc_10, pose_auc_20,
                 ref_matching_precision, ref_matching_score, ref_mean_num_matches,
                 ref_pose_auc_5, ref_pose_auc_10, ref_pose_auc_20,
-                output_map_json, config_json, cli_command
+                output_map_json, activation_map_json, config_json, cli_command
             ))
             conn.commit()
             print(f"Logged FM run for {model_name} to {self.db_path}")
 
-    def fm_run_exists(self, model_name, experiment_type=None, weight_dt=None,
-                      activation_dt=None, status="SUCCESS"):
+    def fm_run_exists(
+        self,
+        model_name,
+        experiment_type=None,
+        weight_dt=None,
+        activation_dt=None,
+        status="SUCCESS",
+        config_json=None,
+        run_identity=None,
+    ):
         """Return True if a matching fm_runs row exists."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -512,6 +559,12 @@ class RunDatabase:
             if activation_dt is not None:
                 query += " AND activation_dt = ?"
                 params.append(activation_dt)
+            if config_json is not None:
+                query += " AND config_json = ?"
+                params.append(config_json)
+            if run_identity is not None:
+                query += " AND run_identity = ?"
+                params.append(run_identity)
             if status is not None:
                 query += " AND status = ?"
                 params.append(status)

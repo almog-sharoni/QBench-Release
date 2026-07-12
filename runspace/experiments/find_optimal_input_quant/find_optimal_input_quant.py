@@ -19,6 +19,7 @@ from runspace.src.registry.op_registry import OpRegistry
 from runspace.core.runner import Runner
 from runspace.experiments.utils.common import (
     build_uniform_input_quant_cfg as _build_uniform_input_quant_cfg,
+    row_uses_encoded_activation_transport,
 )
 # from runspace.src.quantization.constants import get_quantization_bias
 
@@ -282,13 +283,18 @@ def _input_quant_run_exists(db, model_name, experiment_type, activation_dt):
     runs = db.get_runs()
     if runs.empty:
         return False
-    return not runs[
+    matches = runs[
         (runs['model_name']      == model_name) &
         (runs['experiment_type'] == experiment_type) &
         (runs['weight_dt']       == 'fp32') &
         (runs['activation_dt']   == activation_dt) &
         (runs['status']          == 'SUCCESS')
-    ].empty
+    ]
+    if str(activation_dt).strip().lower() != 'fp32':
+        matches = matches[
+            matches.apply(row_uses_encoded_activation_transport, axis=1)
+        ]
+    return not matches.empty
 
 
 def run_baselines(args, device, formats, on_result=None):
@@ -327,6 +333,17 @@ def run_baselines(args, device, formats, on_result=None):
                 quantize_first_layer=False,
                 input_quantization=input_quantization
             )
+            baseline_input_quant_cfg = _build_uniform_input_quant_cfg(
+                fmt,
+                args.chunk_size,
+                unsigned_input_sources=args.unsigned_input_sources,
+                use_unsigned_input_candidates=args.dynamic_unsigned_input_candidates,
+                collect_error_stats=not args.skip_input_error_stats,
+            )
+            if baseline_input_quant_cfg is not None:
+                config.setdefault('evaluation', {})['input_quant'] = copy.deepcopy(
+                    baseline_input_quant_cfg
+                )
             baseline_run_dir = os.path.join(args.output_dir, args.model_name, f"baseline_{fmt}")
             model, adapter, _ = runner.prepare_model_with_materialized_weights(
                 config=config,
@@ -339,13 +356,7 @@ def run_baselines(args, device, formats, on_result=None):
                 adapter=adapter,
                 max_batches=args.limit_batches,
                 desc=f"Baseline ({fmt})",
-                input_quant_cfg=_build_uniform_input_quant_cfg(
-                    fmt,
-                    args.chunk_size,
-                    unsigned_input_sources=args.unsigned_input_sources,
-                    use_unsigned_input_candidates=args.dynamic_unsigned_input_candidates,
-                    collect_error_stats=not args.skip_input_error_stats,
-                ),
+                input_quant_cfg=baseline_input_quant_cfg,
             )
             acc1 = eval_results.get('acc1', 0.0)
             acc5 = eval_results.get('acc5', 0.0)
@@ -669,6 +680,8 @@ def process_single_model(args, model_config, device, metrics):
                     config.setdefault('evaluation', {})
                     config['evaluation']['dynamic_input_quant'] = {
                         'enabled': True,
+                        'mode': 'dynamic',
+                        'transport': 'encoded',
                         'metric': metric,
                         'chunk_size': args.chunk_size,
                         'candidate_formats': args.candidate_formats,

@@ -1,6 +1,7 @@
 import os
 import sys
 import copy
+import hashlib
 import json
 from tqdm import tqdm
 import torch
@@ -15,6 +16,7 @@ if PROJECT_ROOT not in sys.path:
 
 from src.adapters.adapter_factory import create_adapter
 from src.eval.comparator import LayerComparator
+from src.quantization.constants import DEFAULT_QUANTIZATION_TYPE  # noqa: E402
 
 
 class Runner:
@@ -206,6 +208,81 @@ class Runner:
         return json.dumps(value, default=str)
 
     @classmethod
+    def _run_identity(cls, config: Dict[str, Any]) -> str:
+        """Hash runtime semantics while ignoring logging/cache control fields."""
+        semantic = {
+            key: copy.deepcopy(config[key])
+            for key in ('model', 'adapter', 'quantization', 'dataset', 'evaluation')
+            if key in config
+        }
+        evaluation = semantic.setdefault('evaluation', {})
+        if not isinstance(evaluation, dict):
+            evaluation = {}
+            semantic['evaluation'] = evaluation
+
+        if 'input_quant' in evaluation:
+            input_quant = evaluation['input_quant']
+        elif 'dynamic_input_quant' in evaluation:
+            input_quant = evaluation['dynamic_input_quant']
+        else:
+            input_quant = cls._implicit_uniform_input_quant_cfg(config)
+            if input_quant:
+                evaluation['input_quant'] = input_quant
+
+        if isinstance(input_quant, dict):
+            input_quant.pop('chunk_observer', None)
+            if input_quant.get('enabled', False):
+                input_quant['mode'] = str(
+                    input_quant.get('mode', 'dynamic')
+                ).strip().lower()
+                input_quant['transport'] = str(
+                    input_quant.get('transport') or 'encoded'
+                ).strip().lower()
+                if input_quant['mode'] == 'dynamic':
+                    from src.quantization.dynamic_input_metrics import (
+                        normalize_dynamic_input_metric,
+                    )
+
+                    input_quant['metric'] = normalize_dynamic_input_metric(
+                        input_quant.get('metric', 'l2')
+                    )
+
+        experiment = copy.deepcopy(config.get('experiment', {}) or {})
+        for key in (
+            'skip_if_exists',
+            'force_rerun',
+            'log_to_db',
+            'resolve_ref_from_db',
+            'ref_acc1',
+            'ref_acc5',
+            'ref_certainty',
+            'metrics',
+            'config_json',
+            'cli_command',
+            'activation_map_json',
+            'input_map_json',
+            'output_map_json',
+            'quant_map_json',
+        ):
+            experiment.pop(key, None)
+        materialize = experiment.get('materialize_weights')
+        if isinstance(materialize, dict):
+            materialize.pop('force_rebuild', None)
+            if not materialize:
+                experiment.pop('materialize_weights', None)
+        if experiment:
+            semantic['experiment'] = experiment
+
+        canonical = json.dumps(
+            semantic,
+            default=str,
+            sort_keys=True,
+            separators=(',', ':'),
+        )
+        digest = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+        return f"hardware-stage-v1:{digest}"
+
+    @classmethod
     def _build_input_map_json(cls, layer_stats: Optional[Dict[str, Any]]):
         if not layer_stats:
             return None
@@ -251,12 +328,53 @@ class Runner:
                 'total_chunks': total_chunks,
                 'dominant_format': str(dominant_format),
                 'stays_on_chip': stats.get('stays_on_chip', True),
+                'producer_nodes': list(stats.get('producer_nodes', [])),
+                'consumer_nodes': list(stats.get('consumer_nodes', [])),
+                'is_unsigned': bool(stats.get('is_unsigned', False)),
+                'unsigned_source': stats.get('unsigned_source'),
+                'candidate_formats': list(stats.get('candidate_formats', [])),
             }
 
         enriched = cls._enrich_quant_map(result)
         if enriched is None:
             return None
         return json.dumps(enriched, default=str)
+
+    @staticmethod
+    def _build_activation_map_json(input_quant: Optional[Dict[str, Any]]):
+        if not isinstance(input_quant, dict) or not input_quant.get('activation_plan'):
+            return None
+        stages = copy.deepcopy(input_quant.get('activation_plan', {}))
+        layer_stats = input_quant.get('layer_stats', {}) or {}
+        for stage_id, stage in stages.items():
+            format_stats = layer_stats.get(stage_id)
+            if not isinstance(stage, dict) or not isinstance(format_stats, dict):
+                continue
+            format_counts = dict(format_stats.get('format_counts', {}) or {})
+            stage['format_counts'] = format_counts
+            stage['candidate_formats'] = list(
+                format_stats.get('candidate_formats', format_counts)
+            )
+            stage['total_chunks'] = int(
+                format_stats.get('total_chunks', sum(format_counts.values()))
+            )
+            if format_counts:
+                stage['dominant_format'] = max(
+                    format_counts,
+                    key=format_counts.get,
+                )
+        payload = {
+            'transport': input_quant.get('transport', 'encoded'),
+            'planner_version': input_quant.get('planner_version', 1),
+            'stage_count': int(input_quant.get('stage_count', 0)),
+            'unsigned_stage_count': int(input_quant.get('unsigned_stage_count', 0)),
+            'transmission_count': int(input_quant.get('transmission_count', 0)),
+            'packet_count': int(input_quant.get('packet_count', 0)),
+            'decode_reads': int(input_quant.get('decode_reads', 0)),
+            'encoded_bytes': int(input_quant.get('encoded_bytes', 0)),
+            'stages': stages,
+        }
+        return json.dumps(payload, default=str)
 
     @staticmethod
     def _safe_json_load(raw_value):
@@ -539,8 +657,7 @@ class Runner:
         exp_cfg = config.get('experiment', {})
         model_name = config.get('model', {}).get('name', 'unknown')
         experiment_type = exp_cfg.get('type') or exp_cfg.get('name')
-        weight_dt = exp_cfg.get('weight_dt')
-        activation_dt = exp_cfg.get('activation_dt')
+        run_identity = self._run_identity(config)
         if not experiment_type:
             return False
         is_fm = config.get('adapter', {}).get('type') == 'feature_matching'
@@ -549,15 +666,13 @@ class Runner:
             return db.fm_run_exists(
                 model_name=model_name,
                 experiment_type=experiment_type,
-                weight_dt=weight_dt,
-                activation_dt=activation_dt,
+                run_identity=run_identity,
                 status="SUCCESS",
             )
         return db.run_exists(
             model_name=model_name,
             experiment_type=experiment_type,
-            weight_dt=weight_dt,
-            activation_dt=activation_dt,
+            run_identity=run_identity,
             status="SUCCESS",
         )
 
@@ -847,11 +962,203 @@ class Runner:
         return config.get('adapter', {}).get('type') == 'feature_matching'
 
     @staticmethod
+    def _activation_transport_mode(config: Dict[str, Any]) -> Optional[str]:
+        evaluation_cfg = config.get('evaluation', {}) or {}
+        explicit_present = 'input_quant' in evaluation_cfg
+        if explicit_present:
+            explicit = evaluation_cfg['input_quant']
+        else:
+            explicit_present = 'dynamic_input_quant' in evaluation_cfg
+            explicit = evaluation_cfg.get('dynamic_input_quant')
+        if isinstance(explicit, dict):
+            if not explicit.get('enabled', False):
+                return None
+            mode = str(explicit.get('mode', 'dynamic')).strip().lower()
+            if mode not in ('dynamic', 'uniform', 'input_only'):
+                raise ValueError(
+                    'evaluation.input_quant.mode must be dynamic, uniform, or '
+                    f'input_only; got {explicit.get("mode")!r}'
+                )
+            return mode
+        if explicit is not None and explicit is not False:
+            raise TypeError('evaluation.input_quant must be a mapping')
+        if explicit_present:
+            return None
+
+        if Runner._legacy_activation_transport_policy(config) is not None:
+            return 'uniform'
+        return None
+
+    @staticmethod
+    def _legacy_activation_layer_map(config: Dict[str, Any]) -> Dict[str, Any]:
+        adapter_cfg = config.get('adapter', {}) or {}
+        quant_cfg = config.get('quantization', {}) or {}
+        layers = quant_cfg.get('layers')
+        if layers is None:
+            layers = adapter_cfg.get('layers', adapter_cfg.get('layer_config'))
+        return layers if isinstance(layers, dict) else {}
+
+    @staticmethod
+    def _legacy_activation_transport_policy(
+        config: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Translate legacy module boundaries into producer-stage policies."""
+        adapter_cfg = config.get('adapter', {}) or {}
+        quant_cfg = config.get('quantization', {}) or {}
+        global_format = quant_cfg.get('format', DEFAULT_QUANTIZATION_TYPE)
+        input_enabled = adapter_cfg.get('input_quantization', True) is True
+        output_enabled = adapter_cfg.get('output_quantization') is True
+        input_format = str(quant_cfg.get('input_format') or global_format)
+        output_format = str(quant_cfg.get('output_format') or global_format)
+
+        active_global_formats = {
+            fmt.strip().lower()
+            for enabled, fmt in (
+                (input_enabled, input_format),
+                (output_enabled, output_format),
+            )
+            if enabled and fmt.strip().lower() != 'fp32'
+        }
+        if len(active_global_formats) > 1:
+            raise ValueError(
+                'Producer-stage activation transport requires one shared format, '
+                'but legacy boundary settings disagree '
+                f'(input={input_format}, output={output_format}). Configure '
+                'evaluation.input_quant explicitly.'
+            )
+
+        producer_overrides = {}
+        consumer_overrides = {}
+        for layer_name, layer_cfg in Runner._legacy_activation_layer_map(config).items():
+            if not isinstance(layer_cfg, dict):
+                continue
+
+            if input_enabled:
+                if 'input_format' in layer_cfg:
+                    consumer_overrides[str(layer_name)] = str(
+                        layer_cfg['input_format']
+                    )
+                elif not quant_cfg.get('input_format') and (
+                    'type' in layer_cfg or 'format' in layer_cfg
+                ):
+                    consumer_overrides[str(layer_name)] = str(
+                        layer_cfg.get('type', layer_cfg.get('format'))
+                    )
+
+            if 'output_quantization' in layer_cfg:
+                layer_output_enabled = bool(layer_cfg['output_quantization'])
+            elif any(
+                key in layer_cfg
+                for key in ('output_format', 'output_mode', 'output_chunk_size')
+            ):
+                layer_output_enabled = True
+            else:
+                layer_output_enabled = output_enabled
+            if layer_cfg.get('skip_quantization', False):
+                layer_output_enabled = False
+
+            if layer_output_enabled:
+                layer_q_type = layer_cfg.get(
+                    'output_format',
+                    layer_cfg.get(
+                        'type',
+                        layer_cfg.get('format', output_format),
+                    ),
+                )
+                producer_overrides[str(layer_name)] = str(layer_q_type)
+            elif output_enabled and (
+                layer_cfg.get('skip_quantization', False)
+                or 'output_quantization' in layer_cfg
+            ):
+                producer_overrides[str(layer_name)] = 'fp32'
+
+        non_fp32_formats = []
+        if input_enabled and input_format.strip().lower() != 'fp32':
+            non_fp32_formats.append(input_format)
+        if output_enabled and output_format.strip().lower() != 'fp32':
+            non_fp32_formats.append(output_format)
+        non_fp32_formats.extend(
+            fmt
+            for fmt in (*producer_overrides.values(), *consumer_overrides.values())
+            if fmt.strip().lower() != 'fp32'
+        )
+        if not non_fp32_formats:
+            return None
+
+        return {
+            'format': non_fp32_formats[0],
+            'stage_format_policy': {
+                'producer_default': output_format if output_enabled else None,
+                'consumer_default': input_format if input_enabled else None,
+                'producer_overrides': producer_overrides,
+                'consumer_overrides': consumer_overrides,
+            },
+        }
+
+    @staticmethod
+    def _legacy_activation_transport_format(config: Dict[str, Any]) -> Optional[str]:
+        policy = Runner._legacy_activation_transport_policy(config)
+        return policy.get('format') if policy is not None else None
+
+    @staticmethod
+    def _activation_transport_requested(config: Dict[str, Any]) -> bool:
+        return Runner._activation_transport_mode(config) is not None
+
+    @staticmethod
     def _adapter_build_config(config: Dict[str, Any]) -> Dict[str, Any]:
         """Drop runner-only metadata before passing config to adapters."""
         cfg = copy.deepcopy(config)
         for key in ('experiment', 'meta', 'debug'):
             cfg.pop(key, None)
+        transport_mode = Runner._activation_transport_mode(config)
+        adapter_cfg = cfg.setdefault('adapter', {})
+        # Runner never permits the retired per-module activation fake-quant
+        # flags to reach an adapter. The original config above decides whether
+        # a transport runtime is installed or activation quantization is off.
+        adapter_cfg['input_quantization'] = False
+        adapter_cfg['output_quantization'] = False
+        layer_maps = (
+            (cfg.get('quantization', {}) or {}).get('layers'),
+            adapter_cfg.get('layers'),
+            adapter_cfg.get('layer_config'),
+        )
+        for layer_map in layer_maps:
+            if not isinstance(layer_map, dict):
+                continue
+            for layer_cfg in layer_map.values():
+                if not isinstance(layer_cfg, dict):
+                    continue
+                layer_cfg['input_quantization'] = False
+                layer_cfg['output_quantization'] = False
+        if transport_mode is not None:
+            if transport_mode == 'input_only':
+                return cfg
+
+            # Stage transport keeps wrappers only to expose decomposed attention
+            # and functional operations to the FX boundary planner.
+            adapter_cfg['build_quantized'] = True
+
+            requested_ops = adapter_cfg.get('quantized_ops')
+            if requested_ops is None:
+                # Preserve AdapterFactory's historical default: an omitted
+                # quantized_ops means all registered weight/compute ops.
+                requested_ops = ['all']
+            if not isinstance(requested_ops, list):
+                requested_ops = [requested_ops]
+            adapter_cfg['quantized_ops'] = requested_ops
+            normalized_ops = {str(op).strip().lower() for op in requested_ops}
+            if not normalized_ops.intersection({'all', '-1'}):
+                required_ops = (
+                    'Linear',
+                    'QuantMatMul',
+                    'QuantMul',
+                    'QuantAdd',
+                    'QuantCat',
+                )
+                for op_name in required_ops:
+                    if op_name.lower() not in normalized_ops:
+                        requested_ops.append(op_name)
+                        normalized_ops.add(op_name.lower())
         return cfg
 
     def _build_reference_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -860,6 +1167,10 @@ class Runner:
         the structure of the quantized model (same ops, folding, etc) but with 
         quantization disabled.
         """
+        transport_requested = self._activation_transport_requested(config)
+        transport_build_cfg = (
+            self._adapter_build_config(config) if transport_requested else None
+        )
         ref_cfg = copy.deepcopy(config)
         
         # 1. Disable all quantization flags in adapter
@@ -867,6 +1178,15 @@ class Runner:
         adapter_cfg['input_quantization'] = False
         adapter_cfg['weight_quantization'] = False
         adapter_cfg['fold_input_norm'] = False
+        if transport_build_cfg is not None:
+            transport_adapter_cfg = transport_build_cfg.get('adapter', {})
+            adapter_cfg['build_quantized'] = transport_adapter_cfg.get(
+                'build_quantized',
+                True,
+            )
+            adapter_cfg['quantized_ops'] = copy.deepcopy(
+                transport_adapter_cfg.get('quantized_ops', ['all'])
+            )
         
         # 2. Set global format to fp32
         quant_cfg = ref_cfg.setdefault('quantization', {})
@@ -898,7 +1218,7 @@ class Runner:
         2) rebuild model and load from that file
         """
         if self._adapter_manages_own_weights(config):
-            adapter = create_adapter(config)
+            adapter = create_adapter(self._adapter_build_config(config))
             adapter.model.to(self.device)
             adapter.model.eval()
             return adapter.model, adapter, None
@@ -928,7 +1248,12 @@ class Runner:
 
         weights_dir = os.path.join(output_dir, "weights")
         os.makedirs(weights_dir, exist_ok=True)
-        weight_filename = materialize_cfg.get('file_name', "materialized_weights.pt")
+        default_weight_filename = (
+            "materialized_weights_activation_transport_v2.pt"
+            if self._activation_transport_requested(config)
+            else "materialized_weights.pt"
+        )
+        weight_filename = materialize_cfg.get('file_name', default_weight_filename)
         weight_file_path = os.path.join(weights_dir, weight_filename)
 
         source_is_file = self._is_file_backed_weights(source_weights)
@@ -1062,6 +1387,68 @@ class Runner:
             or "fp32"
         )
 
+    @classmethod
+    def _effective_activation_dt(
+        cls,
+        config: Dict[str, Any],
+        input_quant: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        exp_cfg = config.get('experiment', {}) or {}
+        explicit_activation_dt = exp_cfg.get('activation_dt')
+        if explicit_activation_dt is not None:
+            return str(explicit_activation_dt)
+
+        evaluation_cfg = config.get('evaluation', {}) or {}
+        if 'input_quant' in evaluation_cfg:
+            configured_quant = evaluation_cfg['input_quant']
+        elif 'dynamic_input_quant' in evaluation_cfg:
+            configured_quant = evaluation_cfg['dynamic_input_quant']
+        else:
+            configured_quant = cls._implicit_uniform_input_quant_cfg(config)
+
+        active_quant = input_quant if isinstance(input_quant, dict) else configured_quant
+        if not isinstance(active_quant, dict):
+            return 'fp32'
+        if active_quant.get('enabled') is False:
+            return 'fp32'
+
+        mode = str(active_quant.get('mode', '')).strip().lower()
+        if mode == 'dynamic':
+            from src.quantization.dynamic_input_metrics import (
+                normalize_dynamic_input_metric,
+            )
+
+            metric = normalize_dynamic_input_metric(
+                active_quant.get('metric', 'l2')
+            )
+            return f"dyn_input_{metric}"
+        if mode not in ('uniform', 'input_only'):
+            return 'fp32'
+
+        policy = active_quant.get('stage_format_policy')
+        if not isinstance(policy, dict) and isinstance(configured_quant, dict):
+            policy = configured_quant.get('stage_format_policy')
+        policy_formats = set()
+        if isinstance(policy, dict):
+            for key in ('producer_default', 'consumer_default'):
+                value = policy.get(key)
+                if value is not None and str(value).strip().lower() != 'fp32':
+                    policy_formats.add(str(value))
+            for key in ('producer_overrides', 'consumer_overrides'):
+                overrides = policy.get(key, {})
+                if not isinstance(overrides, dict):
+                    continue
+                policy_formats.update(
+                    str(value)
+                    for value in overrides.values()
+                    if str(value).strip().lower() != 'fp32'
+                )
+        if len(policy_formats) > 1:
+            return f"mixed:{'+'.join(sorted(policy_formats))}"
+        if policy_formats:
+            return next(iter(policy_formats))
+        return str(active_quant.get('format') or 'fp32')
+
     def log_experiment_result(
         self,
         config: Dict[str, Any],
@@ -1083,15 +1470,12 @@ class Runner:
         output_dt = exp_cfg.get('output_dt') or self._resolve_output_format(config)
         output_dt = str(output_dt).strip().lower() if output_dt else 'fp32'
 
-        activation_dt = exp_cfg.get('activation_dt')
-        if activation_dt is None:
-            input_quant = result.get('input_quant') or result.get('dynamic_input_quant')
-            if isinstance(input_quant, dict) and input_quant.get('mode') == 'dynamic':
-                activation_dt = f"dyn_input_{input_quant.get('metric', 'mse')}"
-            elif isinstance(input_quant, dict) and input_quant.get('mode') in ('uniform', 'input_only'):
-                activation_dt = input_quant.get('format', 'fp32')
-            else:
-                activation_dt = config.get('quantization', {}).get('input_format', 'fp32')
+        input_quant = result.get('input_quant') or result.get('dynamic_input_quant')
+        activation_map_json = self._to_json_string(exp_cfg.get('activation_map_json'))
+        if activation_map_json is None:
+            activation_map_json = self._build_activation_map_json(input_quant)
+
+        activation_dt = self._effective_activation_dt(config, input_quant)
 
         if is_fm:
             def _fm_val(key):
@@ -1104,7 +1488,9 @@ class Runner:
                 activation_dt=str(activation_dt),
                 output_dt=str(output_dt),
                 output_map_json=self._resolve_output_map_json(config, result, exp_cfg),
+                activation_map_json=activation_map_json,
                 experiment_type=experiment_type,
+                run_identity=self._run_identity(config),
                 status=result.get('status', 'SUCCESS'),
                 fm_num_keypoints=_fm_val('fm_num_keypoints'),
                 fm_mean_score=_fm_val('fm_mean_score'),
@@ -1164,11 +1550,11 @@ class Runner:
             input_map_json = self._to_json_string(self._build_input_map_json(input_quant.get('layer_stats')))
         if input_map_json is None and result.get('input_quant_map') is not None:
             input_map_json = self._to_json_string(result.get('input_quant_map'))
-
         output_map_json = self._resolve_output_map_json(config, result, exp_cfg)
 
         payload = {
             'model_name': model_name,
+            'run_identity': self._run_identity(config),
             'weight_dt': str(weight_dt),
             'activation_dt': str(activation_dt),
             'output_dt': str(output_dt),
@@ -1184,6 +1570,7 @@ class Runner:
             'certainty': float(metrics_cfg.get('certainty', result.get('certainty', 0.0)) or 0.0),
             'quant_map_json': quant_map_json,
             'input_map_json': input_map_json,
+            'activation_map_json': activation_map_json,
             'output_map_json': output_map_json,
             'config_json': self._to_json_string(exp_cfg.get('config_json') or config),
             'cli_command': " ".join(sys.argv),
@@ -1241,14 +1628,27 @@ class Runner:
             format: fp*_e*m*,         # uniform/input_only
             chunk_size: int,
             candidate_formats: [...], # dynamic optional
+            transport: encoded|reference,
           }
         """
-        source_cfg = input_quant_cfg or {}
+        if input_quant_cfg is False:
+            source_cfg = {}
+            dynamic_input_quant_cfg = None
+        elif input_quant_cfg is None:
+            source_cfg = {}
+        elif isinstance(input_quant_cfg, dict):
+            source_cfg = input_quant_cfg
+        else:
+            raise TypeError('input_quant_cfg must be a mapping, false, or None')
         chunk_observer = source_cfg.get('chunk_observer')
         copy_source = dict(source_cfg)
         copy_source.pop('chunk_observer', None)
         cfg = copy.deepcopy(copy_source)
-        if not cfg and dynamic_input_quant_cfg:
+        if input_quant_cfg is None and not cfg and dynamic_input_quant_cfg:
+            if not isinstance(dynamic_input_quant_cfg, dict):
+                raise TypeError(
+                    'dynamic_input_quant_cfg must be a mapping, false, or None'
+                )
             dynamic_chunk_observer = dynamic_input_quant_cfg.get('chunk_observer')
             if chunk_observer is None:
                 chunk_observer = dynamic_chunk_observer
@@ -1261,21 +1661,30 @@ class Runner:
         if chunk_observer is not None:
             cfg['chunk_observer'] = chunk_observer
         cfg.setdefault('enabled', False)
-        if cfg.get('enabled') and 'mode' not in cfg:
-            cfg['mode'] = 'dynamic'
+        if cfg.get('enabled'):
+            mode = str(cfg.get('mode', 'dynamic')).strip().lower()
+            if mode not in ('dynamic', 'uniform', 'input_only'):
+                raise ValueError(
+                    'input_quant.mode must be dynamic, uniform, or input_only; '
+                    f'got {cfg.get("mode")!r}'
+                )
+            cfg['mode'] = mode
+            transport = str(cfg.get('transport') or 'encoded').strip().lower()
+            if transport not in ('encoded', 'reference'):
+                raise ValueError(
+                    "input_quant.transport must be 'encoded' or 'reference', "
+                    f"got {cfg.get('transport')!r}"
+                )
+            cfg['transport'] = transport
         return cfg
 
     @staticmethod
     def _implicit_uniform_input_quant_cfg(config: Dict[str, Any]) -> Dict[str, Any]:
-        adapter_cfg = config.get('adapter', {}) or {}
         quant_cfg = config.get('quantization', {}) or {}
-
-        if adapter_cfg.get('input_quantization') is not True:
+        policy = Runner._legacy_activation_transport_policy(config)
+        if policy is None:
             return {}
-
-        fmt = quant_cfg.get('input_format') or quant_cfg.get('format')
-        if not fmt or str(fmt).strip().lower() == 'fp32':
-            return {}
+        fmt = policy['format']
 
         unsigned_input_sources = quant_cfg.get('unsigned_input_sources', []) or []
         if isinstance(unsigned_input_sources, str):
@@ -1286,7 +1695,15 @@ class Runner:
         return {
             'enabled': True,
             'mode': 'uniform',
+            'transport': str(
+                quant_cfg.get(
+                    'activation_transport',
+                    quant_cfg.get('transport', 'encoded'),
+                )
+                or 'encoded'
+            ).strip().lower(),
             'format': fmt,
+            'stage_format_policy': copy.deepcopy(policy['stage_format_policy']),
             'chunk_size': int(quant_cfg.get('chunk_size', 128) or 128),
             'quant_mode': str(quant_cfg.get('mode', 'chunk') or 'chunk'),
             'unsigned_input_sources': list(unsigned_input_sources),
@@ -1300,6 +1717,7 @@ class Runner:
 
         mode = input_quant_cfg.get('mode')
         chunk_size = int(input_quant_cfg.get('chunk_size', 128))
+        transport = str(input_quant_cfg.get('transport', 'encoded'))
 
         if mode == 'dynamic':
             from src.quantization.dynamic_input_quantizer import DynamicInputQuantizer
@@ -1312,6 +1730,7 @@ class Runner:
                 metric=metric,
                 metric_param=input_quant_cfg.get('metric_param'),
                 chunk_size=chunk_size,
+                transport=transport,
                 candidate_formats=candidate_formats,
                 restrict_post_relu_ufp=input_quant_cfg.get('restrict_post_relu_ufp', False),
                 unsigned_input_sources=input_quant_cfg.get('unsigned_input_sources', []),
@@ -1341,7 +1760,8 @@ class Runner:
             quantizer.register_hooks()
             print(
                 "Input quantization enabled: "
-                f"mode=dynamic metric={quantizer.metric.upper()} chunk_size={chunk_size}"
+                f"mode=dynamic metric={quantizer.metric.upper()} transport={transport} "
+                f"chunk_size={chunk_size}"
             )
             return quantizer
 
@@ -1356,25 +1776,40 @@ class Runner:
                 fmt=fmt,
                 chunk_size=chunk_size,
                 quant_mode=quant_mode,
+                transport=transport,
                 unsigned_input_sources=input_quant_cfg.get('unsigned_input_sources', []),
                 use_unsigned_input_candidates=input_quant_cfg.get('uniform_unsigned_input_candidates', True),
                 collect_error_stats=input_quant_cfg.get('collect_error_stats', True),
+                stage_format_policy=input_quant_cfg.get('stage_format_policy'),
             )
             quantizer.register_hooks()
             stats_msg = "on" if input_quant_cfg.get('collect_error_stats', True) else "off"
             print(
                 f"Input quantization enabled: mode=uniform format={fmt} "
-                f"quant_mode={quant_mode} chunk_size={chunk_size} error_stats={stats_msg}"
+                f"quant_mode={quant_mode} transport={transport} "
+                f"chunk_size={chunk_size} error_stats={stats_msg}"
             )
             return quantizer
 
-        # input_only is handled in the evaluation loop
         if mode == 'input_only':
+            from src.quantization.input_only_quantizer import InputOnlyActivationQuantizer
+
+            fmt = input_quant_cfg.get('format')
+            if not fmt:
+                raise ValueError("input_quant.mode=input_only requires input_quant.format")
+            quantizer = InputOnlyActivationQuantizer(
+                model=model,
+                fmt=fmt,
+                chunk_size=chunk_size,
+                transport=transport,
+                collect_error_stats=input_quant_cfg.get('collect_error_stats', True),
+            )
+            quantizer.register_hooks()
             print(
                 "Input quantization enabled: mode=input_only "
-                f"format={input_quant_cfg.get('format')} chunk_size={chunk_size}"
+                f"format={fmt} transport={transport} chunk_size={chunk_size}"
             )
-            return None
+            return quantizer
 
         raise ValueError(f"Unsupported input quantization mode: {mode}")
 
@@ -1405,7 +1840,19 @@ class Runner:
 
         stats = {
             'mode': mode,
+            'transport': final_stats.get(
+                'transport',
+                input_quant_cfg.get('transport', 'encoded'),
+            ),
             'chunk_size': int(input_quant_cfg.get('chunk_size', 128)),
+            'transmission_count': int(final_stats.get('transmission_count', 0)),
+            'packet_count': int(final_stats.get('packet_count', 0)),
+            'decode_reads': int(final_stats.get('decode_reads', 0)),
+            'encoded_bytes': int(final_stats.get('encoded_bytes', 0)),
+            'planner_version': final_stats.get('planner_version', 1),
+            'stage_count': int(final_stats.get('stage_count', 0)),
+            'unsigned_stage_count': int(final_stats.get('unsigned_stage_count', 0)),
+            'activation_plan': final_stats.get('activation_plan', {}),
             'norm_l1': final_stats.get('norm_l1', 0.0),
             'norm_mse': final_stats.get('norm_mse', 0.0),
             'total_l1': final_stats.get('total_l1', 0.0),
@@ -1414,8 +1861,12 @@ class Runner:
         }
         if mode == 'dynamic':
             stats['metric'] = getattr(quantizer, 'metric', input_quant_cfg.get('metric', 'l2'))
-        if mode == 'uniform':
+        if mode in ('uniform', 'input_only'):
             stats['format'] = input_quant_cfg.get('format')
+        if isinstance(input_quant_cfg.get('stage_format_policy'), dict):
+            stats['stage_format_policy'] = copy.deepcopy(
+                input_quant_cfg['stage_format_policy']
+            )
         return stats
 
     def evaluate_model(
@@ -1450,11 +1901,6 @@ class Runner:
         else:
             total_batches = loader_len
 
-        input_only_stats = {
-            'sum_mse_err': 0.0,
-            'sum_l2_norm': 0.0,
-        }
-
         try:
             input_quantizer = self._build_layer_input_quantizer(
                 model,
@@ -1477,27 +1923,17 @@ class Runner:
                     inputs = self._to_device(inputs)
                     targets = self._to_device(targets)
 
-                    if normalized_input_quant_cfg.get('enabled', False) and normalized_input_quant_cfg.get('mode') == 'input_only':
-                        from src.ops.quant_base import quantize_tensor
-                        fmt = normalized_input_quant_cfg.get('format')
-                        if not fmt:
-                            raise ValueError("input_quant.mode=input_only requires input_quant.format")
-                        chunk_size = int(normalized_input_quant_cfg.get('chunk_size', 128))
-                        q_inputs, _ = quantize_tensor(
-                            inputs,
-                            q_type=fmt,
-                            mode='chunk',
-                            chunk_size=chunk_size,
-                        )
-                        diff = inputs - q_inputs
-                        input_only_stats['sum_mse_err'] += diff.pow(2).sum().item()
-                        input_only_stats['sum_l2_norm'] += inputs.pow(2).sum().item()
-                        inputs = q_inputs
-
                     outputs = adapter.forward(model, (inputs, targets))
                     metrics_engine.update(outputs, targets)
                     if batch_callback is not None:
-                        batch_callback(inputs, targets, outputs, batch_idx)
+                        callback_inputs = inputs
+                        if (
+                            normalized_input_quant_cfg.get('mode') == 'input_only'
+                            and input_quantizer is not None
+                            and input_quantizer.last_quantized_input is not None
+                        ):
+                            callback_inputs = input_quantizer.last_quantized_input
+                        batch_callback(callback_inputs, targets, outputs, batch_idx)
 
                     pbar.update(1)
                     acc1, acc5 = self._running_accuracy(metrics_engine)
@@ -1513,29 +1949,13 @@ class Runner:
                 pbar.close()
         finally:
             if input_quantizer is not None:
-                input_quant_stats = self._collect_layer_input_quant_stats(
-                    input_quantizer,
-                    input_quant_cfg=normalized_input_quant_cfg
-                )
-                input_quantizer.cleanup()
-
-        if (
-            input_quant_stats is None
-            and normalized_input_quant_cfg.get('enabled', False)
-            and normalized_input_quant_cfg.get('mode') == 'input_only'
-        ):
-            norm_mse = (
-                input_only_stats['sum_mse_err'] / input_only_stats['sum_l2_norm']
-                if input_only_stats['sum_l2_norm'] > 0 else 0.0
-            )
-            input_quant_stats = {
-                'mode': 'input_only',
-                'format': normalized_input_quant_cfg.get('format'),
-                'chunk_size': int(normalized_input_quant_cfg.get('chunk_size', 128)),
-                'norm_mse': norm_mse,
-                'total_mse': input_only_stats['sum_mse_err'],
-                'layer_stats': {},
-            }
+                try:
+                    input_quant_stats = self._collect_layer_input_quant_stats(
+                        input_quantizer,
+                        input_quant_cfg=normalized_input_quant_cfg
+                    )
+                finally:
+                    input_quantizer.cleanup()
 
         eval_results = metrics_engine.compute()
         if input_quant_stats is not None:
@@ -1892,6 +2312,7 @@ class Runner:
         data_loader=None,
     ) -> Dict[str, Any]:
         """Runs a single configuration and returns the results."""
+        config = copy.deepcopy(config)
         model_config = config.get('model', {})
         self._resolve_paths(model_config, ('weights', 'repo_path', 'root', 'path'))
         model_name = model_config.get('name', 'unknown')
@@ -1992,9 +2413,13 @@ class Runner:
 
             # Check evaluation mode
             eval_mode = config.get('evaluation', {}).get('mode', 'compare')
-            dynamic_input_quant_cfg = config.get('evaluation', {}).get('dynamic_input_quant', {})
-            input_quant_cfg = config.get('evaluation', {}).get('input_quant', {})
-            if not input_quant_cfg and not dynamic_input_quant_cfg:
+            evaluation_cfg = config.get('evaluation', {}) or {}
+            dynamic_input_quant_cfg = evaluation_cfg.get('dynamic_input_quant')
+            input_quant_cfg = evaluation_cfg.get('input_quant')
+            if (
+                'input_quant' not in evaluation_cfg
+                and 'dynamic_input_quant' not in evaluation_cfg
+            ):
                 input_quant_cfg = self._implicit_uniform_input_quant_cfg(config)
 
             if eval_mode == 'evaluate':
@@ -2071,14 +2496,10 @@ class Runner:
                 dynamic_quantizer = None
                 dynamic_stats = None
                 try:
-                    # compare-mode currently supports hook-based modes only.
                     compare_input_quant_cfg = self._normalize_input_quant_cfg(
                         input_quant_cfg=input_quant_cfg,
                         dynamic_input_quant_cfg=dynamic_input_quant_cfg
                     )
-                    if compare_input_quant_cfg.get('enabled', False) and compare_input_quant_cfg.get('mode') == 'input_only':
-                        print("Warning: input_quant.mode=input_only is not supported in compare mode. Ignoring.")
-                        compare_input_quant_cfg['enabled'] = False
                     dynamic_quantizer = self._build_layer_input_quantizer(
                         model,
                         input_quant_cfg=compare_input_quant_cfg
@@ -2088,8 +2509,13 @@ class Runner:
                     comparator.compare(data_loader, num_batches=compare_batches, global_metrics=None)
                 finally:
                     if dynamic_quantizer is not None:
-                        dynamic_stats = self._collect_layer_input_quant_stats(dynamic_quantizer, compare_input_quant_cfg)
-                        dynamic_quantizer.cleanup()
+                        try:
+                            dynamic_stats = self._collect_layer_input_quant_stats(
+                                dynamic_quantizer,
+                                compare_input_quant_cfg,
+                            )
+                        finally:
+                            dynamic_quantizer.cleanup()
                 
                 # Retrieve metrics from comparator
                 print("Retrieving metrics from comparator...")

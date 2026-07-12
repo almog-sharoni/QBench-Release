@@ -41,10 +41,17 @@ def count_quant(model):
     return dict(c)
 
 # --- Quantized model ---
-q_adapter = create_adapter(config)
+q_adapter = create_adapter(runner._adapter_build_config(config))
 q_model = q_adapter.model.to(runner.device).eval()
 print("QUANT layers:", count_quant(q_model))
-q_res = runner.evaluate_model(q_model, data_loader, q_adapter, max_batches=-1, desc="FP8")
+q_res = runner.evaluate_model(
+    q_model,
+    data_loader,
+    q_adapter,
+    max_batches=-1,
+    desc="FP8",
+    input_quant_cfg=runner._implicit_uniform_input_quant_cfg(config),
+)
 
 # --- FP reference ---
 ref_cfg = copy.deepcopy(config)

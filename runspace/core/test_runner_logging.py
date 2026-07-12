@@ -1,8 +1,11 @@
 import os
+import sqlite3
 import sys
 import tempfile
 import json
+import copy
 
+import pytest
 import torch
 import torch.nn as nn
 
@@ -11,7 +14,10 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from runspace.core.runner import Runner
-from runspace.experiments.utils.common import build_uniform_input_quant_cfg
+from runspace.experiments.utils.common import (
+    build_dynamic_input_quant_cfg,
+    build_uniform_input_quant_cfg,
+)
 from src.ops.quant_arithmetic import QuantAdd, QuantCat
 from src.ops.quant_dropout import QuantDropout
 from src.ops.quant_matmul import QuantMatMul
@@ -60,6 +66,125 @@ def test_runner_logs_fp32_weight_dt_when_weight_quantization_disabled():
             os.remove(db_path)
 
 
+def test_run_exists_requires_exact_activation_transport_config():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        runner = Runner(device="cpu")
+        config = {
+            "model": {"name": "resnet18"},
+            "adapter": {
+                "type": "generic",
+                "weight_quantization": False,
+                "input_quantization": False,
+            },
+            "evaluation": {
+                "input_quant": {
+                    "enabled": True,
+                    "mode": "uniform",
+                    "transport": "encoded",
+                    "format": "fp8_e1m6",
+                }
+            },
+            "experiment": {
+                "type": "transport_identity",
+                "resolve_ref_from_db": False,
+            },
+        }
+        result = {
+            "model_name": "resnet18",
+            "status": "SUCCESS",
+            "input_quant": {
+                "mode": "uniform",
+                "transport": "encoded",
+                "format": "fp8_e1m6",
+                "stage_count": 0,
+                "activation_plan": {},
+            },
+        }
+
+        runner.log_experiment_result(config, result, db_path=db_path)
+
+        reference_config = copy.deepcopy(config)
+        reference_config["evaluation"]["input_quant"]["transport"] = "reference"
+        other_format_config = copy.deepcopy(config)
+        other_format_config["evaluation"]["input_quant"]["format"] = "fp8_e2m5"
+        control_only_config = copy.deepcopy(config)
+        control_only_config["experiment"].update(
+            skip_if_exists=True,
+            force_rerun=True,
+            materialize_weights={"force_rebuild": True},
+            config_json="{}",
+        )
+        assert runner.run_exists_for_config(config, db_path=db_path)
+        assert runner.run_exists_for_config(control_only_config, db_path=db_path)
+        assert not runner.run_exists_for_config(reference_config, db_path=db_path)
+        assert not runner.run_exists_for_config(other_format_config, db_path=db_path)
+    finally:
+        if os.path.exists(db_path):
+            os.remove(db_path)
+
+
+def test_effective_activation_dt_identifies_mixed_stage_formats():
+    config = {
+        "evaluation": {
+            "input_quant": {
+                "enabled": True,
+                "mode": "uniform",
+                "transport": "encoded",
+                "format": "fp4_e1m2",
+                "stage_format_policy": {
+                    "producer_default": "fp4_e1m2",
+                    "consumer_default": "fp4_e1m2",
+                    "producer_overrides": {"head": "fp8_e1m6"},
+                    "consumer_overrides": {},
+                },
+            }
+        }
+    }
+
+    assert Runner._effective_activation_dt(config) == "mixed:fp4_e1m2+fp8_e1m6"
+
+
+def test_runner_logs_activation_map_for_feature_matching_runs():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        db_path = os.path.join(temp_dir, "runs.db")
+        fm_db_path = os.path.join(temp_dir, "fm_runs.db")
+        runner = Runner(device="cpu")
+        config = {
+            "model": {"name": "feature_pipeline"},
+            "adapter": {"type": "feature_matching"},
+            "experiment": {"type": "fm_transport_test"},
+        }
+        result = {
+            "model_name": "feature_pipeline",
+            "status": "SUCCESS",
+            "input_quant": {
+                "mode": "uniform",
+                "format": "fp8_e2m5",
+                "transport": "encoded",
+                "stage_count": 1,
+                "activation_plan": {
+                    "stage_0000": {
+                        "producer_nodes": ["head"],
+                        "consumer_nodes": ["output"],
+                    }
+                },
+            },
+        }
+
+        runner.log_experiment_result(config, result, db_path=db_path)
+
+        with sqlite3.connect(fm_db_path) as conn:
+            raw_map = conn.execute(
+                "SELECT activation_map_json FROM fm_runs"
+            ).fetchone()[0]
+        activation_map = json.loads(raw_map)
+        assert activation_map["transport"] == "encoded"
+        assert activation_map["stage_count"] == 1
+
+
 def test_materialized_cache_detects_weight_quant_buffers():
     with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as f:
         weight_path = f.name
@@ -91,13 +216,76 @@ def test_runner_synthesizes_uniform_input_quant_config():
     assert input_quant_cfg == {
         "enabled": True,
         "mode": "uniform",
+        "transport": "encoded",
         "format": "fp8_e4m3",
+        "stage_format_policy": {
+            "producer_default": None,
+            "consumer_default": "fp8_e4m3",
+            "producer_overrides": {},
+            "consumer_overrides": {},
+        },
         "chunk_size": 128,
         "quant_mode": "chunk",
         "unsigned_input_sources": [],
         "uniform_unsigned_input_candidates": True,
         "collect_error_stats": True,
     }
+
+
+def test_runner_preserves_factory_default_activation_quant_via_transport():
+    config = {
+        "adapter": {"weight_quantization": True},
+        "quantization": {"format": "fp8_e4m3", "chunk_size": 128},
+    }
+
+    input_quant_cfg = Runner._implicit_uniform_input_quant_cfg(config)
+    build_config = Runner._adapter_build_config(config)
+
+    assert input_quant_cfg["mode"] == "uniform"
+    assert input_quant_cfg["transport"] == "encoded"
+    assert input_quant_cfg["format"] == "fp8_e4m3"
+    assert input_quant_cfg["stage_format_policy"]["consumer_default"] == "fp8_e4m3"
+    assert input_quant_cfg["stage_format_policy"]["producer_default"] is None
+    assert build_config["adapter"]["input_quantization"] is False
+    assert build_config["adapter"]["output_quantization"] is False
+    assert build_config["adapter"]["quantized_ops"] == ["all"]
+
+
+def test_explicit_disabled_input_quant_turns_all_activation_quantization_off():
+    config = {
+        "adapter": {
+            "input_quantization": True,
+            "output_quantization": True,
+        },
+        "quantization": {"format": "fp8_e4m3"},
+        "evaluation": {"input_quant": {"enabled": False}},
+    }
+
+    build_config = Runner._adapter_build_config(config)
+
+    assert Runner._activation_transport_mode(config) is None
+    assert build_config["adapter"]["input_quantization"] is False
+    assert build_config["adapter"]["output_quantization"] is False
+
+
+def test_boolean_false_input_quant_turns_all_activation_quantization_off():
+    config = {
+        "adapter": {
+            "input_quantization": True,
+            "output_quantization": True,
+        },
+        "quantization": {"format": "fp8_e4m3"},
+        "evaluation": {"input_quant": False},
+    }
+    runner = object.__new__(Runner)
+
+    build_config = Runner._adapter_build_config(config)
+    normalized = runner._normalize_input_quant_cfg(input_quant_cfg=False)
+
+    assert Runner._activation_transport_mode(config) is None
+    assert normalized == {"enabled": False}
+    assert build_config["adapter"]["input_quantization"] is False
+    assert build_config["adapter"]["output_quantization"] is False
 
 
 def test_uniform_input_quant_cfg_carries_unsigned_sources():
@@ -111,12 +299,356 @@ def test_uniform_input_quant_cfg_carries_unsigned_sources():
     assert input_quant_cfg == {
         "enabled": True,
         "mode": "uniform",
+        "transport": "encoded",
         "format": "fp8_e1m6",
         "chunk_size": 128,
         "unsigned_input_sources": ["relu", "softmax"],
         "uniform_unsigned_input_candidates": False,
         "collect_error_stats": True,
     }
+
+
+def test_input_quant_transport_defaults_to_encoded_and_accepts_reference():
+    runner = object.__new__(Runner)
+
+    default_cfg = runner._normalize_input_quant_cfg(
+        input_quant_cfg={"enabled": True, "mode": "dynamic"},
+    )
+    reference_cfg = runner._normalize_input_quant_cfg(
+        input_quant_cfg={
+            "enabled": True,
+            "mode": "uniform",
+            "transport": " REFERENCE ",
+        },
+    )
+    input_only_cfg = runner._normalize_input_quant_cfg(
+        input_quant_cfg={
+            "enabled": True,
+            "mode": "input_only",
+            "format": "fp8_e1m6",
+        },
+    )
+
+    assert default_cfg["transport"] == "encoded"
+    assert reference_cfg["transport"] == "reference"
+    assert input_only_cfg["transport"] == "encoded"
+
+
+def test_input_quant_mode_is_normalized_before_dispatch():
+    runner = object.__new__(Runner)
+
+    normalized = runner._normalize_input_quant_cfg(
+        input_quant_cfg={
+            "enabled": True,
+            "mode": " Uniform ",
+            "format": "fp8_e1m6",
+        },
+    )
+
+    assert normalized["mode"] == "uniform"
+
+
+def test_evaluate_model_cleans_quantizer_when_stats_collection_fails(monkeypatch):
+    class FakeQuantizer:
+        last_quantized_input = None
+
+        def __init__(self):
+            self.cleaned = False
+
+        def get_final_stats(self):
+            raise RuntimeError("stats failed")
+
+        def cleanup(self):
+            self.cleaned = True
+
+    class FakeMetrics:
+        def compute(self):
+            return {}
+
+    class FakeAdapter:
+        def create_metrics(self):
+            return FakeMetrics()
+
+        def prepare_batch(self, batch):
+            return batch
+
+    runner = object.__new__(Runner)
+    quantizer = FakeQuantizer()
+    monkeypatch.setattr(
+        runner,
+        "_build_layer_input_quantizer",
+        lambda *_args, **_kwargs: quantizer,
+    )
+
+    with pytest.raises(RuntimeError, match="stats failed"):
+        runner.evaluate_model(
+            model=nn.Identity(),
+            data_loader=[],
+            adapter=FakeAdapter(),
+            input_quant_cfg={
+                "enabled": True,
+                "mode": "uniform",
+                "format": "fp8_e1m6",
+                "transport": "reference",
+            },
+        )
+
+    assert quantizer.cleaned is True
+
+
+def test_transport_build_config_disables_fake_quant_and_exposes_attention():
+    config = {
+        "adapter": {
+            "build_quantized": False,
+            "input_quantization": True,
+            "weight_quantization": False,
+            "quantized_ops": [],
+        },
+        "quantization": {"input_format": "fp8_e1m6"},
+    }
+
+    build_config = Runner._adapter_build_config(config)
+
+    assert build_config["adapter"]["build_quantized"] is True
+    assert build_config["adapter"]["input_quantization"] is False
+    assert build_config["adapter"]["output_quantization"] is False
+    assert set(build_config["adapter"]["quantized_ops"]) >= {
+        "Linear",
+        "QuantMatMul",
+        "QuantMul",
+        "QuantAdd",
+        "QuantCat",
+    }
+    assert config["adapter"]["build_quantized"] is False
+    assert config["adapter"]["input_quantization"] is True
+
+
+def test_transport_build_config_disables_per_layer_fake_quant_flags():
+    config = {
+        "adapter": {
+            "input_quantization": False,
+            "output_quantization": True,
+        },
+        "quantization": {
+            "format": "fp8_e2m5",
+            "layers": {
+                "head": {
+                    "output_format": "fp8_e3m4",
+                    "output_quantization": True,
+                }
+            },
+        },
+    }
+
+    build_config = Runner._adapter_build_config(config)
+
+    assert build_config["quantization"]["layers"]["head"]["input_quantization"] is False
+    assert build_config["quantization"]["layers"]["head"]["output_quantization"] is False
+    assert build_config["quantization"]["layers"]["head"]["output_format"] == "fp8_e3m4"
+    assert config["quantization"]["layers"]["head"]["output_quantization"] is True
+
+
+def test_input_only_build_config_disables_fake_quant_without_forcing_wrappers():
+    config = {
+        "adapter": {
+            "build_quantized": False,
+            "input_quantization": True,
+            "weight_quantization": False,
+            "quantized_ops": [],
+        },
+        "evaluation": {
+            "input_quant": {
+                "enabled": True,
+                "mode": "input_only",
+                "format": "fp8_e1m6",
+            }
+        },
+    }
+
+    build_config = Runner._adapter_build_config(config)
+
+    assert build_config["adapter"]["input_quantization"] is False
+    assert build_config["adapter"]["output_quantization"] is False
+    assert build_config["adapter"]["build_quantized"] is False
+    assert build_config["adapter"]["quantized_ops"] == []
+
+
+def test_runner_translates_output_only_fake_quant_to_uniform_transport():
+    config = {
+        "adapter": {
+            "input_quantization": False,
+            "output_quantization": True,
+        },
+        "quantization": {
+            "format": "fp8_e4m3",
+            "output_format": "fp8_e1m6",
+            "chunk_size": 128,
+        },
+    }
+
+    input_quant_cfg = Runner._implicit_uniform_input_quant_cfg(config)
+    build_config = Runner._adapter_build_config(config)
+
+    assert input_quant_cfg["mode"] == "uniform"
+    assert input_quant_cfg["transport"] == "encoded"
+    assert input_quant_cfg["format"] == "fp8_e1m6"
+    assert input_quant_cfg["stage_format_policy"]["producer_default"] == "fp8_e1m6"
+    assert input_quant_cfg["stage_format_policy"]["consumer_default"] is None
+    assert build_config["adapter"]["input_quantization"] is False
+    assert build_config["adapter"]["output_quantization"] is False
+
+
+def test_runner_rejects_conflicting_legacy_boundary_formats():
+    config = {
+        "adapter": {
+            "input_quantization": True,
+            "output_quantization": True,
+        },
+        "quantization": {
+            "input_format": "fp8_e4m3",
+            "output_format": "fp8_e1m6",
+        },
+    }
+
+    with pytest.raises(ValueError, match="one shared format"):
+        Runner._implicit_uniform_input_quant_cfg(config)
+
+
+def test_runner_preserves_per_layer_activation_formats_in_stage_policy():
+    config = {
+        "adapter": {
+            "input_quantization": False,
+            "output_quantization": True,
+        },
+        "quantization": {
+            "format": "fp8_e2m5",
+            "layers": {
+                "head": {"output_format": "fp8_e3m4"},
+                "softmax": {"skip_quantization": True},
+            },
+        },
+    }
+
+    input_quant_cfg = Runner._implicit_uniform_input_quant_cfg(config)
+    policy = input_quant_cfg["stage_format_policy"]
+
+    assert input_quant_cfg["format"] == "fp8_e2m5"
+    assert policy["producer_default"] == "fp8_e2m5"
+    assert policy["consumer_default"] is None
+    assert policy["producer_overrides"] == {
+        "head": "fp8_e3m4",
+        "softmax": "fp32",
+    }
+
+
+def test_per_layer_output_format_alone_enables_stage_transport():
+    config = {
+        "adapter": {
+            "input_quantization": False,
+            "output_quantization": False,
+        },
+        "quantization": {
+            "format": "fp32",
+            "layers": {"head": {"output_format": "fp8_e3m4"}},
+        },
+    }
+
+    input_quant_cfg = Runner._implicit_uniform_input_quant_cfg(config)
+
+    assert Runner._activation_transport_mode(config) == "uniform"
+    assert input_quant_cfg["format"] == "fp8_e3m4"
+    assert input_quant_cfg["stage_format_policy"]["producer_default"] is None
+    assert input_quant_cfg["stage_format_policy"]["producer_overrides"] == {
+        "head": "fp8_e3m4"
+    }
+
+
+def test_layer_format_remains_consumer_override_without_global_input_format():
+    config = {
+        "adapter": {"input_quantization": True, "output_quantization": False},
+        "quantization": {
+            "format": "fp8_e2m5",
+            "layers": {"head": {"format": "fp4_e1m2"}},
+        },
+    }
+
+    policy = Runner._implicit_uniform_input_quant_cfg(config)["stage_format_policy"]
+
+    assert policy["consumer_default"] == "fp8_e2m5"
+    assert policy["consumer_overrides"] == {"head": "fp4_e1m2"}
+
+
+def test_transport_reference_config_keeps_decomposed_adapter_shape():
+    runner = object.__new__(Runner)
+    config = {
+        "adapter": {
+            "build_quantized": False,
+            "input_quantization": True,
+            "weight_quantization": False,
+            "quantized_ops": [],
+        },
+        "quantization": {"input_format": "fp8_e1m6"},
+        "evaluation": {"mode": "compare"},
+    }
+
+    reference_config = runner._build_reference_config(config)
+
+    assert reference_config["adapter"]["build_quantized"] is True
+    assert reference_config["adapter"]["input_quantization"] is False
+    assert "Linear" in reference_config["adapter"]["quantized_ops"]
+    assert reference_config["evaluation"]["input_quant"] is None
+
+
+def test_common_input_quant_configs_record_transport():
+    dynamic_cfg = build_dynamic_input_quant_cfg(
+        "mse",
+        128,
+        ["fp8_e1m6", "fp8_e2m5"],
+    )
+    uniform_cfg = build_uniform_input_quant_cfg(
+        "fp8_e1m6",
+        128,
+        transport="reference",
+    )
+
+    assert dynamic_cfg["transport"] == "encoded"
+    assert uniform_cfg["transport"] == "reference"
+
+
+def test_runner_passes_reference_transport_to_dynamic_quantizer(monkeypatch):
+    monkeypatch.setattr(DynamicInputQuantizer, "register_hooks", lambda self: None)
+    runner = object.__new__(Runner)
+
+    quantizer = runner._build_layer_input_quantizer(
+        nn.Sequential(nn.Linear(4, 4)),
+        {
+            "enabled": True,
+            "mode": "dynamic",
+            "transport": "reference",
+            "chunk_size": 128,
+            "candidate_formats": ["fp8_e1m6", "fp8_e2m5"],
+        },
+    )
+
+    assert quantizer.transport == "reference"
+
+
+def test_runner_passes_reference_transport_to_uniform_quantizer(monkeypatch):
+    monkeypatch.setattr(UniformInputQuantizer, "register_hooks", lambda self: None)
+    runner = object.__new__(Runner)
+
+    quantizer = runner._build_layer_input_quantizer(
+        nn.Sequential(nn.Linear(4, 4)),
+        {
+            "enabled": True,
+            "mode": "uniform",
+            "transport": "reference",
+            "format": "fp8_e1m6",
+            "chunk_size": 128,
+        },
+    )
+
+    assert quantizer.transport == "reference"
 
 
 def test_uniform_input_quantizer_can_skip_error_stats():
@@ -150,10 +682,31 @@ def test_runner_logs_dynamic_input_map_from_processed_layer_stats():
                 "norm_mse": 0.125,
                 "total_l1": 10.0,
                 "total_mse": 5.0,
+                "transport": "encoded",
+                "transmission_count": 7,
+                "packet_count": 7,
+                "decode_reads": 9,
+                "encoded_bytes": 2048,
+                "planner_version": 1,
+                "stage_count": 1,
+                "unsigned_stage_count": 1,
+                "activation_plan": {
+                    "stage_0000": {
+                        "producer_nodes": ["conv", "relu"],
+                        "consumer_nodes": ["next_conv"],
+                        "is_unsigned": True,
+                        "unsigned_source": "relu",
+                    }
+                },
                 "layer_stats": {
                     "0": {
                         "format_counts": {"fp8_e4m3": 3, "fp4_e1m2": 1},
                         "total_chunks": 4,
+                        "producer_nodes": ["conv", "relu"],
+                        "consumer_nodes": ["next_conv"],
+                        "is_unsigned": True,
+                        "unsigned_source": "relu",
+                        "candidate_formats": ["ufp8_e4m4", "ufp4_e1m3"],
                     }
                 },
             }
@@ -164,11 +717,52 @@ def test_runner_logs_dynamic_input_map_from_processed_layer_stats():
     )
     input_map_json = Runner._build_input_map_json(stats["layer_stats"])
     input_map = json.loads(input_map_json)
+    activation_map = json.loads(Runner._build_activation_map_json(stats))
 
     assert stats["layer_stats"]["0"]["type"] == "Conv2d"
+    assert stats["transport"] == "encoded"
+    assert stats["packet_count"] == 7
+    assert stats["decode_reads"] == 9
+    assert stats["encoded_bytes"] == 2048
+    assert stats["planner_version"] == 1
+    assert stats["transmission_count"] == 7
+    assert activation_map["transport"] == "encoded"
+    assert activation_map["stage_count"] == 1
+    assert activation_map["stages"]["stage_0000"]["unsigned_source"] == "relu"
     assert input_map["0"]["format_counts"] == {"fp8_e4m3": 3, "fp4_e1m2": 1}
     assert input_map["0"]["total_chunks"] == 4
     assert input_map["0"]["dominant_format"] == "fp8_e4m3"
+    assert input_map["0"]["producer_nodes"] == ["conv", "relu"]
+    assert input_map["0"]["is_unsigned"] is True
+    assert input_map["0"]["unsigned_source"] == "relu"
+
+
+def test_activation_map_includes_stage_packet_format_metadata():
+    stats = {
+        "transport": "encoded",
+        "stage_count": 1,
+        "activation_plan": {
+            "stage_0000": {
+                "producer_nodes": ["conv", "relu"],
+                "consumer_nodes": ["next_conv"],
+            }
+        },
+        "layer_stats": {
+            "stage_0000": {
+                "format_counts": {"ufp8_e1m7": 3, "ufp8_e2m6": 1},
+                "candidate_formats": ["ufp8_e1m7", "ufp8_e2m6"],
+                "total_chunks": 4,
+            }
+        },
+    }
+
+    stage = json.loads(Runner._build_activation_map_json(stats))["stages"][
+        "stage_0000"
+    ]
+
+    assert stage["dominant_format"] == "ufp8_e1m7"
+    assert stage["total_chunks"] == 4
+    assert stage["candidate_formats"] == ["ufp8_e1m7", "ufp8_e2m6"]
 
 
 def test_dynamic_input_quantizer_uses_unsigned_candidates_after_source_dropout():
@@ -231,25 +825,18 @@ def test_dynamic_input_quantizer_targets_actual_consumer_after_softmax_dropout()
     assert quantizer._candidates_for_layer("out_proj", model.out_proj) == ["fp4_e1m2", "fp4_e2m1"]
 
 
-def test_dynamic_input_quantizer_logs_multihead_attention_inputs():
+def test_dynamic_input_quantizer_rejects_opaque_multihead_attention():
     model = nn.MultiheadAttention(embed_dim=8, num_heads=2, batch_first=True)
     quantizer = DynamicInputQuantizer(
         model,
         metric="mse",
         chunk_size=4,
         candidate_formats=["fp4_e1m2", "fp4_e2m1"],
+        transport="reference",
     )
 
-    quantizer.register_hooks()
-    x = torch.randn(2, 3, 8)
-    model(x, x, x, need_weights=False)
-    layer_stats = quantizer.get_final_stats()["layer_stats"]
-    quantizer.cleanup()
-
-    assert "query_input" in layer_stats
-    assert "key_input" in layer_stats
-    assert "value_input" in layer_stats
-    assert layer_stats["query_input"]["total_chunks"] > 0
+    with pytest.raises(RuntimeError, match="must be lowered"):
+        quantizer.register_hooks()
 
 
 def test_uniform_input_quantizer_uses_fixed_unsigned_format_after_source_dropout():
@@ -263,6 +850,7 @@ def test_uniform_input_quantizer_uses_fixed_unsigned_format_after_source_dropout
         fmt="fp4_e1m2",
         chunk_size=4,
         unsigned_input_sources=["relu"],
+        transport="reference",
     )
 
     assert "2" in quantizer.post_unsigned_layers
@@ -281,6 +869,7 @@ def test_uniform_input_quantizer_uses_fixed_unsigned_format_after_source_dropout
         fmt="fp4_e1m2",
         chunk_size=4,
         unsigned_input_sources=["relu"],
+        transport="reference",
     )
     forward_quantizer._quantize_with_format = lambda x, fmt: x
     forward_quantizer.register_hooks()
@@ -288,8 +877,13 @@ def test_uniform_input_quantizer_uses_fixed_unsigned_format_after_source_dropout
     layer_stats = forward_quantizer.get_final_stats()["layer_stats"]
     forward_quantizer.cleanup()
 
-    assert set(layer_stats["2"]["format_counts"]) == {"ufp4_e1m3"}
-    assert layer_stats["2"]["total_chunks"] > 0
+    relu_stats = next(
+        entry
+        for entry in layer_stats.values()
+        if entry.get("unsigned_source") == "relu"
+    )
+    assert set(relu_stats["format_counts"]) == {"ufp4_e1m3"}
+    assert relu_stats["total_chunks"] > 0
 
 
 def test_uniform_input_quantizer_targets_actual_consumer_after_softmax_dropout():

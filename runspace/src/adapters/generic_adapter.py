@@ -131,6 +131,9 @@ class GenericAdapter(BaseAdapter):
                 "(no quantized ops/layer overrides requested)."
             )
         self.model = self.build_model(quantized=self.build_quantized)
+        self._activation_transport_guard_handle = (
+            self._install_activation_transport_guard(self.model)
+        )
 
     @property
     def quant_config(self) -> dict:
@@ -420,8 +423,7 @@ class GenericAdapter(BaseAdapter):
                 raise RuntimeError(f"Failed to load weights from {self.weights}: {e}")
             return model
 
-        model = timm.create_model(self.model_name, pretrained=pretrained, **create_kwargs)
-        return model
+        return timm.create_model(self.model_name, pretrained=pretrained, **create_kwargs)
 
     def _calibrate_model(self, model: nn.Module):
         """Calibrate quantized layers (pre-compute scales)."""
@@ -1060,7 +1062,8 @@ class GenericAdapter(BaseAdapter):
                     
             if self.unsigned_input_sources:
                 self._propagate_unsigned_inputs(model)
-        
+
+        self._install_activation_transport_guard(model)
         return model
 
     def _propagate_unsigned_inputs(self, model: nn.Module):

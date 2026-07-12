@@ -612,6 +612,8 @@ def _run_config_matches(config_json, spec, limit_batches, chunk_size):
         return False
 
     input_quant = _input_quant_from_config_json(config_json)
+    if str(input_quant.get("transport", "")).strip().lower() != "encoded":
+        return False
     logged_chunk_size = input_quant.get("chunk_size")
     if logged_chunk_size is not None:
         try:

@@ -6,7 +6,6 @@ import os
 # Set PYTHONPATH to include the project root
 sys.path.append('/data/almog/Projects/QBench-Release/')
 
-from runspace.src.ops.quant_ln import QuantLayerNorm
 from runspace.src.quantization.dynamic_input_quantizer import DynamicInputQuantizer
 
 def test_dynamic_chunks():
@@ -20,8 +19,7 @@ def test_dynamic_chunks():
     class Model(nn.Module):
         def __init__(self):
             super().__init__()
-            self.ln = QuantLayerNorm(normalized_shape, q_type="fp8_e4m3")
-            self.ln.capture_activations = True
+            self.ln = nn.LayerNorm(normalized_shape)
         def forward(self, x):
             return self.ln(x)
     
@@ -29,10 +27,22 @@ def test_dynamic_chunks():
     
     # 2. Setup Dynamic Quantizer
     candidates = ['fp8_e4m3', 'fp8_e1m6', 'fp8_e7m0', 'fp8_e5m2', 'fp8_e2m5']
+    observations = []
+
+    def observe_chunks(*, layer_name, candidates, best_indices, **_kwargs):
+        observations.append(
+            {
+                'stage': layer_name,
+                'candidates': tuple(candidates),
+                'best_indices': best_indices.detach().cpu(),
+            }
+        )
+
     dq = DynamicInputQuantizer(
         model, 
         chunk_size=128, 
-        candidate_formats=candidates
+        candidate_formats=candidates,
+        chunk_observer=observe_chunks,
     )
     dq.register_hooks()
     
@@ -60,21 +70,25 @@ def test_dynamic_chunks():
     
     # 5. Debugging: Check MSE manually for Chunk 1
     print("\n--- Manual MSE check for Chunk 1 (Wide Distribution) ---")
-    chunk1 = input_tensor[0, 128:256].unsqueeze(0).unsqueeze(0) # [1, 1, 128]
+    chunk1 = input_tensor[0, 128:256].unsqueeze(0)  # [1, 128]
     for i, fmt in enumerate(candidates):
         from runspace.src.ops.quant_base import quantize_tensor
         q_tensor, _ = quantize_tensor(chunk1, q_type=fmt, mode='chunk', chunk_size=128)
         mse = torch.mean((chunk1 - q_tensor)**2).item()
         print(f"Format: {fmt:10} | MSE: {mse:.4e}")
 
-    # 6. Check selected formats
-    best_indices = model.ln.input_chunk_format_indices
-    best_candidates = model.ln.input_chunk_candidates
-    
-    print(f"Selected format indices (TENSOR): {best_indices}")
-    print(f"Candidates: {best_candidates}")
-    
-    unique_indices = torch.unique(best_indices)
+    # 6. Check selected formats from the hardware transport observer.
+    for observation in observations:
+        print(
+            f"Stage {observation['stage']}: indices="
+            f"{observation['best_indices'].tolist()} "
+            f"candidates={observation['candidates']}"
+        )
+
+    all_indices = torch.cat(
+        [observation['best_indices'].reshape(-1) for observation in observations]
+    )
+    unique_indices = torch.unique(all_indices)
     print(f"Unique indices chosen: {unique_indices.tolist()}")
     
     if len(unique_indices) > 1:
@@ -82,21 +96,15 @@ def test_dynamic_chunks():
     else:
         print("WARNING: Only one format was chosen. This might happen if one format is strictly better for all tested chunks, or if the distribution isn't diverse enough.")
 
-    # 6. Check internal quantization stages
-    print(f"\nLayer input_quantization state: {model.ln.input_quantization}")
-    
-    unscaled_list = getattr(model.ln, 'last_quant_inputs_unscaled', [])
-    print(f"Captured internal unscaled stages: {len(unscaled_list)}")
-    for i, stage in enumerate(unscaled_list):
-        if stage is not None:
-            print(f"  Stage {i}: Shape {tuple(stage.shape)}, Min {stage.min():.4f}, Max {stage.max():.4f}")
-        else:
-            print(f"  Stage {i}: None")
-    
-    if len(unscaled_list) > 0 and unscaled_list[0] is not None:
-        print("SUCCESS: Internal quantization stages were captured!")
-    else:
-        print("WARNING: Internal quantization stages are missing or empty.")
+    stats = dq.get_final_stats()
+    print(
+        "Hardware transport: "
+        f"packets={stats['packet_count']} decode_reads={stats['decode_reads']} "
+        f"stages={stats['stage_count']}"
+    )
+    assert stats['packet_count'] > 0
+    assert stats['decode_reads'] > 0
+    dq.cleanup()
 
 if __name__ == "__main__":
     if not torch.cuda.is_available():

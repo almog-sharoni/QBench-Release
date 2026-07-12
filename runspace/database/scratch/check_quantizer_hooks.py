@@ -7,14 +7,20 @@ if PROJECT_ROOT not in sys.path: sys.path.insert(0, PROJECT_ROOT)
 from runspace.src.adapters.generic_adapter import GenericAdapter
 from runspace.src.quantization.dynamic_input_quantizer import DynamicInputQuantizer
 
-adapter = GenericAdapter(model_name='vit_b_16')
-model = adapter.build_model(quantized=True)
+adapter = GenericAdapter(
+    model_name='vit_b_16',
+    input_quantization=False,
+    output_quantization=False,
+)
+model = adapter.model
 quantizer = DynamicInputQuantizer(model)
 quantizer.register_hooks()
-print(f'Total hooked modules: {len(quantizer.hooked_modules)}')
+plan = quantizer._transport_runtime.plan
+print(f'Total activation transport stages: {len(plan.stages)}')
 types = {}
-for m in quantizer.hooked_modules:
-    t = type(m).__name__
+for stage in plan.stages:
+    t = stage.kind.value
     types[t] = types.get(t, 0) + 1
 for t, c in sorted(types.items()):
     print(f'{t}: {c}')
+quantizer.cleanup()

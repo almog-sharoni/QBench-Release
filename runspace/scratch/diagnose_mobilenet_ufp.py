@@ -19,11 +19,12 @@ def diagnose_mobilenet_v3():
     adapter = GenericAdapter(
         model_name="mobilenet_v3_large",
         unsigned_input_sources=["relu", "relu6", "hardsigmoid"],
-        input_quantization=True,
+        input_quantization=False,
+        output_quantization=False,
         enable_fx_quantization=True
     )
-    
-    model = adapter.build_model(quantized=True)
+
+    model = adapter.model
     
     _, _, gm = trace_quant_aware(model)
     modules = dict(gm.named_modules())

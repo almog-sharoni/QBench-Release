@@ -2309,7 +2309,8 @@ else:
         
                 # Clean up and reorder columns for display
                 cols_to_drop = [
-                    'run_date_dt', 'id', 'quant_map_json', 'input_map_json', 'config_json',
+                    'run_date_dt', 'id', 'quant_map_json', 'input_map_json',
+                    'activation_map_json', 'config_json', 'run_identity',
                     'ref_acc1_effective', 'ref_acc5_effective', 'ref_certainty_effective'
                 ]
                 display_df = filtered_df.drop(columns=[c for c in cols_to_drop if c in filtered_df.columns])

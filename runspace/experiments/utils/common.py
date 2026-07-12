@@ -196,7 +196,36 @@ def run_exists(db, model_name, experiment_type, weight_dt, activation_dt):
         (runs['activation_dt'] == activation_dt) &
         (runs['status'] == 'SUCCESS')
     ]
+    if str(activation_dt).strip().lower() != 'fp32':
+        match = match[match.apply(row_uses_encoded_activation_transport, axis=1)]
     return not match.empty
+
+
+def row_uses_encoded_activation_transport(row):
+    """Reject pre-transport/reference DB rows when resuming activation runs."""
+    for column in ('activation_map_json', 'config_json'):
+        raw = row.get(column)
+        if not raw or not isinstance(raw, str):
+            continue
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            continue
+        if column == 'activation_map_json':
+            transport = payload.get('transport') if isinstance(payload, dict) else None
+        else:
+            evaluation = payload.get('evaluation', {}) if isinstance(payload, dict) else {}
+            input_quant = evaluation.get('input_quant') or evaluation.get(
+                'dynamic_input_quant'
+            )
+            transport = (
+                input_quant.get('transport')
+                if isinstance(input_quant, dict)
+                else None
+            )
+        if str(transport).strip().lower() == 'encoded':
+            return True
+    return False
 
 
 def layer_types_from_model(model):
@@ -243,13 +272,21 @@ def build_uniform_input_quant_cfg(
     unsigned_input_sources=None,
     use_unsigned_input_candidates=True,
     collect_error_stats=True,
+    transport='encoded',
 ):
     """Build the uniform layer-input quantizer config used by input quant baselines."""
     if not enabled or str(fmt).strip().lower() == 'fp32':
         return None
+    transport = str(transport or 'encoded').strip().lower()
+    if transport not in ('encoded', 'reference'):
+        raise ValueError(
+            "transport must be 'encoded' or 'reference', "
+            f"got {transport!r}"
+        )
     return {
         'enabled': True,
         'mode': 'uniform',
+        'transport': transport,
         'format': fmt,
         'chunk_size': int(chunk_size),
         'unsigned_input_sources': (
@@ -274,13 +311,21 @@ def build_dynamic_input_quant_cfg(
     model_name=None,
     skip_depthwise_input_quant=False,
     pseudo_mse2_mantissa_window_bits=0,
+    transport='encoded',
 ):
     """Build the dynamic layer-input quantizer config used by input quant experiments."""
     if not enabled:
         return None
+    transport = str(transport or 'encoded').strip().lower()
+    if transport not in ('encoded', 'reference'):
+        raise ValueError(
+            "transport must be 'encoded' or 'reference', "
+            f"got {transport!r}"
+        )
     return {
         'enabled': True,
         'mode': 'dynamic',
+        'transport': transport,
         'metric': metric,
         'chunk_size': int(chunk_size),
         'candidate_formats': (

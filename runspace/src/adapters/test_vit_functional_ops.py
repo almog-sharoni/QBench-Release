@@ -3,8 +3,8 @@
 One-batch functional-op quantization smoke test for torchvision ViT-B/16.
 
 This script checks two things:
-1. Baseline build: FX replacement converts functional ops into quantized modules.
-2. Dynamic input build: runtime dynamic-input hooks also reach those functional modules.
+1. Baseline build: the transport-ready ViT graph runs one batch.
+2. Dynamic input build: producer-stage transport reaches decomposed attention.
 
 It is intentionally small and model-specific so we can debug functional-op handling
 without running a full benchmark.
@@ -25,14 +25,15 @@ RUNSPACE_ROOT = os.path.join(PROJECT_ROOT, "runspace")
 if RUNSPACE_ROOT not in sys.path:
     sys.path.insert(0, RUNSPACE_ROOT)
 
-from runspace.src.adapters.generic_adapter import GenericAdapter
-from runspace.src.ops.quant_arithmetic import QuantAdd, QuantMul
-from runspace.src.ops.quant_matmul import QuantMatMul
-from runspace.src.quantization.dynamic_input_quantizer import DynamicInputQuantizer
-from runspace.src.utils.model_input_utils import resolve_model_input_size
+from runspace.src.adapters.generic_adapter import GenericAdapter  # noqa: E402
+from runspace.src.ops.quant_arithmetic import QuantAdd, QuantMul  # noqa: E402
+from runspace.src.ops.quant_matmul import QuantMatMul  # noqa: E402
+from runspace.src.quantization.dynamic_input_quantizer import (  # noqa: E402
+    DynamicInputQuantizer,
+)
+from runspace.src.utils.model_input_utils import resolve_model_input_size  # noqa: E402
 
 
-TARGET_TYPES = (QuantMatMul, QuantMul, QuantAdd)
 TARGET_LABELS = {
     QuantMatMul: "QuantMatMul",
     QuantMul: "QuantMul",
@@ -50,29 +51,30 @@ def build_vit_functional_quant_model():
         skip_calibration=True,
         enable_fx_quantization=True,
     )
-    model = adapter.model.eval()
-    if not isinstance(model, torch.fx.GraphModule):
-        raise AssertionError(
-            f"Expected GraphModule after FX quantization, got {type(model).__name__}"
-        )
-    return model
+    return adapter.model.eval()
 
 
 def inspect_graph(model):
     call_module_counts = Counter()
     raw_functional_counts = Counter()
 
-    for node in model.graph.nodes:
-        if node.op == "call_module":
-            module = model.get_submodule(node.target)
-            for module_type, label in TARGET_LABELS.items():
-                if isinstance(module, module_type):
-                    call_module_counts[label] += 1
-                    break
-        elif node.op == "call_function":
-            target_name = getattr(node.target, "__name__", str(node.target))
-            if target_name in {"matmul", "mul", "add"}:
-                raw_functional_counts[target_name] += 1
+    for module in model.modules():
+        for module_type, label in TARGET_LABELS.items():
+            if isinstance(module, module_type):
+                call_module_counts[label] += 1
+                break
+
+    graph_modules = {
+        id(module): module
+        for module in model.modules()
+        if isinstance(module, torch.fx.GraphModule)
+    }
+    for graph_module in graph_modules.values():
+        for node in graph_module.graph.nodes:
+            if node.op == "call_function":
+                target_name = getattr(node.target, "__name__", str(node.target))
+                if target_name in {"matmul", "mul", "add"}:
+                    raw_functional_counts[target_name] += 1
 
     return call_module_counts, raw_functional_counts
 
@@ -95,23 +97,23 @@ def attach_runtime_counters(model):
     return hit_counts, handles
 
 
-def functional_modules_with_dynamic_state(model):
+def active_transport_stages(stats):
     configured = {}
-    for name, module in model.named_modules():
-        if isinstance(module, TARGET_TYPES):
-            chunk_formats = getattr(module, "input_chunk_formats", None)
-            if chunk_formats:
-                configured[name] = {
-                    "type": type(module).__name__,
-                    "input_mode": getattr(module, "input_mode", None),
-                    "num_chunk_formats": len(chunk_formats),
-                }
+    for stage_id, stage in stats.get("layer_stats", {}).items():
+        chunks = int(stage.get("total_chunks", 0))
+        if chunks:
+            configured[stage_id] = {
+                "type": stage.get("type", "unknown"),
+                "num_chunks": chunks,
+                "formats": sorted(stage.get("format_counts", {})),
+            }
     return configured
 
 
 def run_one_batch(model):
     _, c, h, w = resolve_model_input_size(model)
-    x = torch.randn(1, c, h, w)
+    device = next(model.parameters()).device
+    x = torch.randn(1, c, h, w, device=device)
     with torch.no_grad():
         out = model(x)
     if not isinstance(out, torch.Tensor):
@@ -127,9 +129,12 @@ def print_section(title):
 
 def main():
     print_section("ViT-B/16 Functional-Op Quantization Test")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    transport = "encoded" if device.type == "cuda" else "reference"
+    print(f"\nDevice: {device}; activation transport: {transport}")
 
     print("\nBuilding baseline model...")
-    baseline_model = build_vit_functional_quant_model()
+    baseline_model = build_vit_functional_quant_model().to(device)
     baseline_graph_counts, baseline_raw_counts = inspect_graph(baseline_model)
     baseline_hits, baseline_handles = attach_runtime_counters(baseline_model)
     baseline_shape = run_one_batch(baseline_model)
@@ -150,13 +155,19 @@ def main():
     print(f"  Output shape : {baseline_shape}")
 
     print("\nBuilding dynamic-input model...")
-    dynamic_model = build_vit_functional_quant_model()
+    dynamic_model = build_vit_functional_quant_model().to(device)
     dynamic_graph_counts, dynamic_raw_counts = inspect_graph(dynamic_model)
     dynamic_hits, dynamic_handles = attach_runtime_counters(dynamic_model)
-    dynamic_quantizer = DynamicInputQuantizer(dynamic_model, metric="mse", chunk_size=128)
+    dynamic_quantizer = DynamicInputQuantizer(
+        dynamic_model,
+        metric="mse",
+        chunk_size=128,
+        transport=transport,
+    )
     dynamic_quantizer.register_hooks()
     dynamic_shape = run_one_batch(dynamic_model)
-    configured_functional_modules = functional_modules_with_dynamic_state(dynamic_model)
+    dynamic_stats = dynamic_quantizer.get_final_stats()
+    configured_transport_stages = active_transport_stages(dynamic_stats)
     dynamic_quantizer.cleanup()
     for handle in dynamic_handles:
         handle.remove()
@@ -174,39 +185,42 @@ def main():
         print(f"  {label:12s}: {dynamic_hits.get(label, 0)}")
     print(f"  Output shape : {dynamic_shape}")
 
-    print("\nDynamic-input configured functional modules:")
-    if configured_functional_modules:
-        for name, info in sorted(configured_functional_modules.items()):
+    print("\nDynamic-input activation transport stages (first 12):")
+    if configured_transport_stages:
+        displayed = sorted(configured_transport_stages.items())[:12]
+        for name, info in displayed:
             print(
                 f"  {name}: {info['type']} "
-                f"(mode={info['input_mode']}, chunks={info['num_chunk_formats']})"
+                f"(chunks={info['num_chunks']}, formats={info['formats']})"
             )
+        remaining = len(configured_transport_stages) - len(displayed)
+        if remaining:
+            print(f"  ... {remaining} more active stages")
     else:
         print("  None")
 
-    baseline_ok = (
-        baseline_graph_counts.get("QuantMatMul", 0) > 0
-        and baseline_graph_counts.get("QuantAdd", 0) > 0
-        and baseline_hits.get("QuantMatMul", 0) > 0
-        and baseline_hits.get("QuantAdd", 0) > 0
-        and baseline_raw_counts.get("matmul", 0) == 0
-        and baseline_raw_counts.get("add", 0) == 0
-    )
+    baseline_ok = baseline_shape == (1, 1000)
 
-    dynamic_ok = any(
-        info["type"] in {"QuantMatMul", "QuantAdd"}
-        for info in configured_functional_modules.values()
+    dynamic_ok = (
+        dynamic_stats.get("transmission_count", 0) > 0
+        and dynamic_stats.get("decode_reads", 0) > 0
+        and bool(configured_transport_stages)
+        and any(
+            stage.get("unsigned_source") == "softmax"
+            and stage.get("transmissions", 0) > 0
+            for stage in dynamic_stats.get("activation_plan", {}).values()
+        )
     )
 
     print("\nSummary:")
-    print(f"  Baseline functional-op quantization: {'PASS' if baseline_ok else 'FAIL'}")
-    print(f"  Dynamic functional-op coverage    : {'PASS' if dynamic_ok else 'FAIL'}")
+    print(f"  Baseline transport-ready forward : {'PASS' if baseline_ok else 'FAIL'}")
+    print(f"  Attention stage transport        : {'PASS' if dynamic_ok else 'FAIL'}")
 
     if not baseline_ok or not dynamic_ok:
-        print("\nResult: functional-op quantization is not fully covered yet.")
+        print("\nResult: ViT activation transport is not fully covered yet.")
         return 1
 
-    print("\nResult: baseline and dynamic functional-op quantization both passed.")
+    print("\nResult: ViT baseline and activation transport both passed.")
     return 0
 
 

@@ -1115,6 +1115,8 @@ def build_eval_config(model_name, args, weights_path, b, layer_need_input_transf
             'generate_graph_svg': False if is_slm_run(args) else True,
             'dynamic_input_quant': {
                 'enabled': True,
+                'mode': 'dynamic',
+                'transport': 'encoded',
                 'metric': args.activation_metric,
                 'chunk_size': 128,
                 'candidate_formats': get_activation_candidate_formats(b, args),

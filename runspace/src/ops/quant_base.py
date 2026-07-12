@@ -499,6 +499,8 @@ class QuantizedLayerMixin:
             # Capture the raw input format on every call (regardless of input_quantization),
             # so the comparator can runtime-detect what format actually arrived at this layer.
             self.last_pre_quant_input = input.detach()
+        if getattr(self, '_qbench_activation_transport_active', False):
+            return input
             
         # Use input_q_type if available, otherwise fallback to q_type
         q_type = override_q_type or getattr(self, 'input_q_type', getattr(self, 'q_type', 'fp8_e4m3'))
@@ -510,9 +512,9 @@ class QuantizedLayerMixin:
         rounding = getattr(self, 'rounding', 'nearest') # Default to nearest for inputs
         chunk_formats = getattr(self, 'input_chunk_formats', None) # Per-chunk input formats
         
-        # Check if input quantization is enabled
-        # If internal=True, we ALWAYS quantize (bypassing DynamicInputQuantizer's disablement)
-        if not internal and not getattr(self, 'input_quantization', True):
+        # Disabled means activation-off for both module inputs and internal
+        # arithmetic. Transport returns above as an additional fail-closed belt.
+        if not getattr(self, 'input_quantization', True):
             # If disabled, return input as-is (cast to float if needed) and scale=1.0
             # But we still need to return max_val for stats?
             # The signature is (input_fp8, max_val) or (input_fp8, scale) depending on return_scale

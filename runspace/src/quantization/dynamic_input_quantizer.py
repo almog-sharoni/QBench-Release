@@ -4,10 +4,12 @@ import torch.nn as nn
 try:
     from ..registry.op_registry import OpRegistry
     from ..ops.quant_base import quantize_tensor
-    from ..ops.quant_base import _quantize_tensor_cuda
     from ..cuda import search_best_chunk_format
     from .constants import get_format_params
     from .chunking import chunk_tensor_by_context, unchunk_tensor_by_context
+    from .quantizer import quantize
+    from .activation_transport import ActivationTransport, normalize_activation_transport
+    from .activation_transport_runtime import ActivationBypass, ActivationTransportRuntime
     from .dynamic_input_metrics import (
         DYNAMIC_INPUT_METRIC_ALIASES,
         IMPLEMENTED_DYNAMIC_INPUT_METRIC_CODES,
@@ -34,10 +36,18 @@ try:
 except ImportError:
     from src.registry.op_registry import OpRegistry
     from src.ops.quant_base import quantize_tensor
-    from src.ops.quant_base import _quantize_tensor_cuda
     from src.quantization.cuda import search_best_chunk_format
     from src.quantization.constants import get_format_params
     from src.quantization.chunking import chunk_tensor_by_context, unchunk_tensor_by_context
+    from src.quantization.quantizer import quantize
+    from src.quantization.activation_transport import (
+        ActivationTransport,
+        normalize_activation_transport,
+    )
+    from src.quantization.activation_transport_runtime import (
+        ActivationBypass,
+        ActivationTransportRuntime,
+    )
     from src.quantization.dynamic_input_metrics import (
         DYNAMIC_INPUT_METRIC_ALIASES,
         IMPLEMENTED_DYNAMIC_INPUT_METRIC_CODES,
@@ -62,10 +72,6 @@ except ImportError:
         validate_pseudo_mse_candidate_pairs,
     )
 
-import os
-import json
-
-
 DEFAULT_DYNAMIC_INPUT_CANDIDATES = [
     'fp2_e1m0', 'fp3_e1m1', 'fp4_e1m2', 'fp5_e1m3', 'fp6_e1m4', 'fp7_e1m5', 'fp8_e1m6',
     'fp3_e2m0', 'fp4_e3m0', 'fp5_e4m0', 'fp6_e5m0', 'fp7_e6m0', 'fp8_e7m0',
@@ -79,12 +85,17 @@ DEFAULT_DYNAMIC_INPUT_CANDIDATES = [
 ]
 
 
+class ActivationProducerPolicyConflict(RuntimeError):
+    """Raised when consumers request incompatible formats for one packet."""
+
+
 class DynamicInputQuantizer:
     """
-    Runtime dynamic input quantizer.
+    Runtime dynamic producer-stage activation quantizer.
 
-    Registers forward pre-hooks on quantized modules and selects per-chunk
-    input formats by minimizing a configurable error metric.
+    The selector minimizes a configurable error metric per chunk. Encoded
+    transport carries the selected representation between FX stages; reference
+    transport uses the same stage plan with decoded FP32 values.
     """
     _RELU_TYPES = (nn.ReLU, nn.ReLU6)
     _COMPUTE_TYPES = (nn.Conv2d, nn.Linear)
@@ -125,6 +136,7 @@ class DynamicInputQuantizer:
         pseudo_mse3_fixed_rounding="floor",
         pseudo_mse3_tie_break="exp1",
         chunk_observer=None,
+        transport="encoded",
     ):
         self.model = model
         self.metric = self._normalize_metric(metric)
@@ -172,6 +184,9 @@ class DynamicInputQuantizer:
         if chunk_observer is not None and not callable(chunk_observer):
             raise TypeError("chunk_observer must be callable or None")
         self.chunk_observer = chunk_observer
+        self.transport = normalize_activation_transport(transport)
+        self.activation_transport = None
+        self._transport_runtime = None
         self._candidate_param_cache = {}
         self.unsigned_input_sources = {
             str(source).lower()
@@ -214,6 +229,9 @@ class DynamicInputQuantizer:
         self.ufp_candidates = [f for f in self.candidate_formats if f.startswith('ufp')]
         self.non_ufp_candidates = [f for f in self.candidate_formats if not f.startswith('ufp')]
         self.unsigned_candidate_formats = self._make_unsigned_candidates(self.candidate_formats)
+        self.signed_candidate_formats = [
+            fmt for fmt in self.candidate_formats if not self._is_unsigned_format(fmt)
+        ]
 
         self.cache_sim_map = {}
         self.layer_residual_input_bits_map = {}
@@ -582,57 +600,168 @@ class DynamicInputQuantizer:
         )
 
     def register_hooks(self):
-        count_dynamic = 0
-        count_ufp = 0
-        count_unsigned_candidate_layers = 0
-        count_skipped_depthwise = 0
+        """Install producer-stage hardware transport as the only runtime path."""
+        if self._transport_runtime is not None:
+            return
 
-        for name, module in self.model.named_modules():
-            if isinstance(module, self.input_hook_ops):
-                if self.skip_depthwise_input_quant and self._is_depthwise_conv(module):
-                    module.input_quantization = False
-                    module.input_mode = 'fp32'
-                    self.skipped_depthwise_modules.append(module)
-                    count_skipped_depthwise += 1
-                    continue
+        self.activation_transport = ActivationTransport(
+            mode=self.transport,
+            chunk_size=int(self.chunk_size),
+        )
 
-                hook = self._get_attention_hook(name) if isinstance(module, self._ATTENTION_TYPES) else self._get_hook(name)
-                self.hooks.append(module.register_forward_pre_hook(hook))
-                self.hooked_modules.append(module)
-                uses_unsigned_candidates = (
-                    self._layer_uses_unsigned_input(name, input_index=0)
-                    or bool(self.layer_unsigned_input_indices.get(name))
+        def encode_stage(stage, tensor):
+            candidates = self._producer_candidates(stage)
+            if candidates is None:
+                return ActivationBypass(tensor)
+            quantized, best_indices = self._quantize_input_tensor(
+                tensor,
+                stage.stage_id,
+                candidates,
+                module=None,
+            )
+            if self.transport == 'reference':
+                transmitted = quantized
+            else:
+                transmitted = self.activation_transport.transmit_dynamic(
+                    tensor,
+                    best_indices,
+                    candidates,
+                    producer_id=stage.stage_id,
                 )
-                if uses_unsigned_candidates:
-                    count_unsigned_candidate_layers += 1
-                if uses_unsigned_candidates or name in self.post_relu_layers:
-                    count_ufp += 1
-                else:
-                    count_dynamic += 1
+            stats = self.layer_stats.get(stage.stage_id)
+            if stats is not None:
+                stats.update(
+                    {
+                        'type': stage.kind.value,
+                        'producer_nodes': list(stage.node_names),
+                        'consumer_nodes': list(stage.consumer_nodes),
+                        'is_unsigned': bool(stage.is_unsigned),
+                        'unsigned_source': stage.unsigned_source,
+                        'candidate_formats': list(candidates),
+                    }
+                )
+            return transmitted
 
-        if self.restrict_post_relu_ufp:
-            print(
-                f"Registered hooks on {count_dynamic + count_ufp} layers: "
-                f"{count_ufp} post-ReLU (UFP candidates), "
-                f"{count_dynamic} other (non-UFP candidates, metric={self.metric.upper()})."
-            )
-            if not self.ufp_candidates:
-                print("  No UFP formats in candidates; deriving post-ReLU UFP candidates from non-UFP formats.")
-            if not self.non_ufp_candidates:
-                print("  WARNING: no non-UFP formats in candidates; other layers use UFP.")
+        runtime = ActivationTransportRuntime(
+            self.model,
+            self.activation_transport,
+            encode_stage,
+        ).install()
+        self._transport_runtime = runtime
+        try:
+            for stage in runtime.plan.stages:
+                self._producer_candidates(stage)
+        except Exception:
+            runtime.cleanup()
+            self._transport_runtime = None
+            raise
+        signed_stages = sum(
+            not stage.is_unsigned for stage in self._transport_runtime.plan.stages
+        )
+        unsigned_stages = sum(
+            stage.is_unsigned for stage in self._transport_runtime.plan.stages
+        )
+        print(
+            "Activation transport enabled: "
+            f"mode=dynamic transport={self.transport} metric={self.metric.upper()} "
+            f"chunk_size={self.chunk_size} stages={signed_stages + unsigned_stages} "
+            f"unsigned_stages={unsigned_stages}"
+        )
+
+    @staticmethod
+    def _iter_fx_nodes(value):
+        if isinstance(value, torch.fx.Node):
+            yield value
+        elif isinstance(value, (tuple, list)):
+            for item in value:
+                yield from DynamicInputQuantizer._iter_fx_nodes(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                yield from DynamicInputQuantizer._iter_fx_nodes(item)
+
+    def _consumer_policy(self, stage, consumer_node, modules):
+        plan = self._transport_runtime.plan
+        layer_name = (
+            str(consumer_node.target)
+            if consumer_node.op == 'call_module'
+            else consumer_node.name
+        )
+        module = modules.get(str(consumer_node.target)) if consumer_node.op == 'call_module' else None
+
+        input_index = 0
+        tensor_index = 0
+        for input_node in self._iter_fx_nodes((consumer_node.args, consumer_node.kwargs)):
+            source_ids = plan.node_sources.get(input_node.name, ())
+            if not source_ids:
+                continue
+            if stage.stage_id in source_ids:
+                input_index = tensor_index
+                break
+            tensor_index += 1
+
+        if self.skip_depthwise_input_quant and module is not None and self._is_depthwise_conv(module):
+            return layer_name, input_index, None
+
+        candidates = self._candidates_for_layer(
+            layer_name,
+            module,
+            input_index=input_index,
+        )
+        if stage.is_unsigned and self.use_unsigned_input_candidates:
+            candidates = self._make_unsigned_candidates(candidates)
         else:
-            print(
-                f"Registered hooks on {count_dynamic + count_ufp} layers: "
-                f"all layers use all {len(self.candidate_formats)} candidates "
-                f"(metric={self.metric.upper()})."
+            candidates = [
+                fmt for fmt in candidates if not self._is_unsigned_format(fmt)
+            ]
+        return layer_name, input_index, tuple(candidates)
+
+    def _producer_candidates(self, stage):
+        if self._transport_runtime is None or self._transport_runtime.plan is None:
+            raise RuntimeError("Activation transport plan is not installed")
+
+        plan = self._transport_runtime.plan
+        nodes = {node.name: node for node in plan.graph_module.graph.nodes}
+        modules = dict(plan.graph_module.named_modules())
+        policies = []
+        for consumer_name in stage.consumer_nodes:
+            consumer_node = nodes[consumer_name]
+            policies.append(self._consumer_policy(stage, consumer_node, modules))
+
+        if not policies:
+            candidates = (
+                self.unsigned_candidate_formats
+                if stage.is_unsigned and self.use_unsigned_input_candidates
+                else self.signed_candidate_formats
             )
-        if self.use_unsigned_input_candidates:
-            print(f"{count_unsigned_candidate_layers} layers are using UFP candidates.")
-        if self.skip_depthwise_input_quant:
-            print(
-                f"Depthwise input-quant ablation: skipped input quantization "
-                f"for {count_skipped_depthwise} depthwise Conv2d layers."
+            if not candidates:
+                kind = "unsigned" if stage.is_unsigned else "signed"
+                raise ValueError(
+                    f"Producer {stage.stage_id!r} requires {kind} candidates, "
+                    f"but candidate_formats={self.candidate_formats!r} supplies none"
+                )
+            return list(candidates)
+
+        unique_policies = {policy for _name, _index, policy in policies}
+        if len(unique_policies) != 1:
+            details = ", ".join(
+                f"{name}[input{index}]={list(policy) if policy is not None else 'bypass'}"
+                for name, index, policy in policies
             )
+            raise ActivationProducerPolicyConflict(
+                f"Producer {stage.stage_id!r} fans out to incompatible activation "
+                f"policies: {details}. Hardware transport requires one shared packet."
+            )
+
+        selected = unique_policies.pop()
+        if selected is None:
+            return None
+        if not selected:
+            kind = "unsigned" if stage.is_unsigned else "signed"
+            raise ValueError(
+                f"Producer {stage.stage_id!r} requires {kind} candidates, but its "
+                "consumer policy supplies none"
+            )
+        return list(selected)
 
     def _formats_for_bits(self, bits, unsigned=False):
         def matches_width(fmt):
@@ -965,12 +1094,7 @@ class DynamicInputQuantizer:
         best_qs_scaled = torch.zeros_like(ref_chunks)
 
         for c_idx, fmt in enumerate(candidates):
-            q_scaled, _max_val = quantize_tensor(
-                x_scaled.contiguous(),
-                q_type=fmt,
-                mode='chunk',
-                chunk_size=chunk_size,
-            )
+            q_scaled = quantize(x_scaled.contiguous(), q_type=fmt)
             diff = x_scaled - q_scaled
             reduced = self._reduce_metric_python(diff)
 
@@ -1108,7 +1232,7 @@ class DynamicInputQuantizer:
                     scale_chunks = best_scales.unsqueeze(-1).expand(-1, chunk_size).contiguous()
                 else:
                     scale_chunks = None
-        elif len(candidates) == 1:
+        elif len(candidates) == 1 and ref_chunks.is_cuda:
             best_indices = torch.zeros(total_chunks, dtype=torch.long, device=device)
             if capture:
                 best_qs, best_unscaled_qs, _max_val, scale_chunks, _scale_p = quantize_tensor(
@@ -1225,17 +1349,25 @@ class DynamicInputQuantizer:
                 for idx, count in enumerate(counts_tensor.tolist()):
                     if count > 0:
                         counts_dict[candidates[idx]] = count
-                processed_layer_stats[layer_name] = {
-                    'format_counts': counts_dict,
-                    'total_chunks': int(counts_tensor.sum().item()),
-                    'stays_on_chip': self.cache_sim_map.get(layer_name, True)
+                processed = {
+                    key: value
+                    for key, value in stats.items()
+                    if key not in {'format_counts_tensor', 'candidates'}
                 }
+                processed.update(
+                    {
+                        'format_counts': counts_dict,
+                        'total_chunks': int(counts_tensor.sum().item()),
+                        'stays_on_chip': self.cache_sim_map.get(layer_name, True),
+                    }
+                )
+                processed_layer_stats[layer_name] = processed
             else:
                 stats_copy = dict(stats)
                 stats_copy['stays_on_chip'] = self.cache_sim_map.get(layer_name, True)
                 processed_layer_stats[layer_name] = stats_copy
 
-        return {
+        result = {
             'norm_l1': norm_l1,
             'norm_mse': norm_mse,
             'total_l1': scalar_stats['sum_l1_err'],
@@ -1243,8 +1375,28 @@ class DynamicInputQuantizer:
             'layer_stats': processed_layer_stats,
             'collect_error_stats': self.collect_error_stats,
         }
+        if self._transport_runtime is not None:
+            result.update(self._transport_runtime.transport_stats())
+        else:
+            result.update(
+                {
+                    "transport": self.transport,
+                    "transmission_count": 0,
+                    "packet_count": 0,
+                    "decode_reads": 0,
+                    "encoded_bytes": 0,
+                    "planner_version": 1,
+                    "stage_count": 0,
+                    "unsigned_stage_count": 0,
+                    "activation_plan": {},
+                }
+            )
+        return result
 
     def cleanup(self):
+        if self._transport_runtime is not None:
+            self._transport_runtime.cleanup()
+            self._transport_runtime = None
         for hook in self.hooks:
             hook.remove()
         self.hooks = []

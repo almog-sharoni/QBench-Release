@@ -1,3 +1,5 @@
+from collections import deque
+
 import torch
 import torch.nn as nn
 
@@ -5,16 +7,28 @@ try:
     from ..registry.op_registry import OpRegistry
     from ..ops.quant_base import quantize_tensor
     from .chunking import count_context_chunks, chunk_tensor_by_context, unchunk_tensor_by_context
+    from .activation_transport import ActivationTransport, normalize_activation_transport
+    from .activation_transport_runtime import ActivationBypass, ActivationTransportRuntime
 except ImportError:
     from src.registry.op_registry import OpRegistry
     from src.ops.quant_base import quantize_tensor
     from src.quantization.chunking import count_context_chunks, chunk_tensor_by_context, unchunk_tensor_by_context
+    from src.quantization.activation_transport import (
+        ActivationTransport,
+        normalize_activation_transport,
+    )
+    from src.quantization.activation_transport_runtime import (
+        ActivationBypass,
+        ActivationTransportRuntime,
+    )
 
 
 class UniformInputQuantizer:
     """
-    Applies one fixed quantization format to layer inputs through pre-hooks.
-    Captures quantization error statistics for reporting/logging.
+    Applies one fixed format at producer-stage activation boundaries.
+
+    Encoded transport is the hardware path. Reference transport keeps the same
+    FX boundary plan while carrying decoded FP32 tensors for development.
     """
     _FUNCTIONAL_OP_NAMES = (
         "QuantMatMul",
@@ -35,6 +49,8 @@ class UniformInputQuantizer:
         unsigned_input_sources=None,
         use_unsigned_input_candidates=True,
         collect_error_stats=True,
+        transport="encoded",
+        stage_format_policy=None,
     ):
         self.model = model
         self.fmt = fmt
@@ -43,6 +59,15 @@ class UniformInputQuantizer:
         self.quant_mode = quant_mode
         self.use_unsigned_input_candidates = bool(use_unsigned_input_candidates)
         self.collect_error_stats = bool(collect_error_stats)
+        self.transport = normalize_activation_transport(transport)
+        self.activation_transport = None
+        self._transport_runtime = None
+        self.stage_format_policy = self._normalize_stage_format_policy(
+            stage_format_policy
+        )
+        self._stage_formats = {}
+        self._graph_nodes = {}
+        self._pending_error_inputs = {}
         self.unsigned_input_sources = {
             str(source).lower()
             for source in (unsigned_input_sources or [])
@@ -68,6 +93,124 @@ class UniformInputQuantizer:
             'sum_l1_norm': 0.0,
             'sum_l2_norm': 0.0,
         }
+
+    @staticmethod
+    def _normalize_stage_format_policy(policy):
+        if policy is None:
+            return None
+        if not isinstance(policy, dict):
+            raise TypeError("stage_format_policy must be a mapping")
+
+        normalized = {}
+        for key in ('producer_default', 'consumer_default'):
+            value = policy.get(key)
+            normalized[key] = str(value) if value is not None else None
+        for key in ('producer_overrides', 'consumer_overrides'):
+            value = policy.get(key, {})
+            if not isinstance(value, dict):
+                raise TypeError(f"stage_format_policy.{key} must be a mapping")
+            normalized[key] = {
+                str(layer_name): str(fmt)
+                for layer_name, fmt in value.items()
+            }
+        return normalized
+
+    def _stage_format(self, stage):
+        output_node = self._graph_nodes.get(stage.output_node)
+        if output_node is not None and output_node.meta.get(
+            "qbench_activation_bypass"
+        ):
+            return None
+        if self.stage_format_policy is None:
+            selected = self.fmt
+        else:
+            producer_default = self.stage_format_policy['producer_default']
+            producer_overrides = self.stage_format_policy['producer_overrides']
+            producer_targets = []
+            for node_name in stage.node_names:
+                node = self._graph_nodes.get(node_name)
+                if node is None or node.op != 'call_module':
+                    continue
+                producer_targets.append(str(node.target))
+
+            output_target = (
+                str(output_node.target)
+                if output_node is not None and output_node.op == 'call_module'
+                else None
+            )
+            if output_target in producer_overrides:
+                producer_requests = [
+                    (f"producer {output_target}", producer_overrides[output_target])
+                ]
+            else:
+                producer_requests = [
+                    (f"producer {target}", producer_overrides[target])
+                    for target in producer_targets
+                    if target in producer_overrides
+                ]
+                if not producer_requests and producer_targets and producer_default is not None:
+                    producer_requests = [
+                        (f"producer {producer_targets[-1]}", producer_default)
+                    ]
+
+            producer_formats = {
+                fmt.strip().lower()
+                for _source, fmt in producer_requests
+                if fmt.strip().lower() != 'fp32'
+            }
+            if len(producer_formats) > 1:
+                details = ', '.join(
+                    f"{source}={fmt}" for source, fmt in producer_requests
+                )
+                raise ValueError(
+                    f"Producer stage {stage.stage_id!r} has incompatible legacy "
+                    f"output formats ({details}); one hardware packet must be "
+                    "shared by the fused producer stage."
+                )
+            producer_format = next(iter(producer_formats), None)
+
+            consumer_default = self.stage_format_policy['consumer_default']
+            consumer_overrides = self.stage_format_policy['consumer_overrides']
+            consumer_requests = []
+            for node_name in stage.consumer_nodes:
+                node = self._graph_nodes.get(node_name)
+                if node is None or node.op != 'call_module':
+                    continue
+                target = str(node.target)
+                fmt = consumer_overrides.get(target, consumer_default)
+                if fmt is not None:
+                    consumer_requests.append((f"consumer {target}", fmt))
+
+            consumer_formats = {
+                fmt.strip().lower() for _source, fmt in consumer_requests
+            }
+            if producer_format is not None:
+                incompatible = {
+                    fmt for fmt in consumer_formats
+                    if fmt != 'fp32' and fmt != producer_format
+                }
+                selected = producer_format
+            else:
+                incompatible = consumer_formats if len(consumer_formats) > 1 else set()
+                selected = next(iter(consumer_formats), None)
+
+            if incompatible:
+                requests = producer_requests + consumer_requests
+                details = ', '.join(
+                    f"{source}={fmt}" for source, fmt in requests
+                )
+                raise ValueError(
+                    f"Producer stage {stage.stage_id!r} has incompatible legacy "
+                    f"activation formats ({details}); one hardware packet must be "
+                    "shared by every consumer. Configure evaluation.input_quant "
+                    "with one producer-stage policy."
+                )
+
+        if selected is None or selected.strip().lower() == 'fp32':
+            return None
+        if stage.is_unsigned and self.use_unsigned_input_candidates:
+            return self._to_unsigned_format(selected)
+        return selected
 
     def _quantize_context(self, x, fmt):
         """Per-context fixed-format quant via chunk_tensor_by_context.
@@ -398,11 +541,106 @@ class UniformInputQuantizer:
         return hook
 
     def register_hooks(self):
-        for name, module in self.model.named_modules():
-            if isinstance(module, self.hookable_ops) or isinstance(module, (nn.Conv2d, nn.Linear)):
-                self.hooks.append(module.register_forward_pre_hook(self._make_hook(name)))
+        """Install producer-stage hardware transport as the only runtime path."""
+        if self._transport_runtime is not None:
+            return
+        if self.transport == "encoded" and self.quant_mode != "chunk":
+            raise ValueError(
+                "Encoded activation transport only supports quant_mode='chunk'; "
+                f"got {self.quant_mode!r}."
+            )
+
+        self.activation_transport = ActivationTransport(
+            mode=self.transport,
+            chunk_size=int(self.chunk_size),
+        )
+
+        def encode_stage(stage, tensor):
+            fmt = self._stage_formats[stage.stage_id]
+            if fmt is None:
+                return ActivationBypass(tensor)
+            if self.quant_mode == "chunk":
+                transmitted = self.activation_transport.transmit_uniform(
+                    tensor,
+                    fmt,
+                    producer_id=stage.stage_id,
+                )
+            else:
+                transmitted = self._quantize_with_format(tensor, fmt)
+
+            if self.collect_error_stats:
+                self._pending_error_inputs.setdefault(
+                    stage.stage_id,
+                    deque(),
+                ).append(tensor.detach())
+
+            if self.quant_mode == 'chunk':
+                total_chunks = count_context_chunks(tensor, self.chunk_size)
+            else:
+                total_chunks = tensor.shape[0] if tensor.dim() > 0 else 1
+            stats = self.layer_stats.setdefault(
+                stage.stage_id,
+                {
+                    'format_counts': {},
+                    'total_chunks': 0,
+                    'type': stage.kind.value,
+                    'producer_nodes': list(stage.node_names),
+                    'consumer_nodes': list(stage.consumer_nodes),
+                    'is_unsigned': bool(stage.is_unsigned),
+                    'unsigned_source': stage.unsigned_source,
+                    'candidate_formats': [fmt],
+                },
+            )
+            stats['format_counts'][fmt] = stats['format_counts'].get(fmt, 0) + total_chunks
+            stats['total_chunks'] += total_chunks
+            return transmitted
+
+        def observe_decode(stage_id, quantized):
+            pending = self._pending_error_inputs.get(stage_id)
+            if not pending:
+                return
+            tensor = pending.popleft()
+            with torch.no_grad():
+                diff = tensor - quantized
+                self.stats['sum_l1_err'] += diff.abs().sum().item()
+                self.stats['sum_mse_err'] += diff.pow(2).sum().item()
+                self.stats['sum_l1_norm'] += tensor.abs().sum().item()
+                self.stats['sum_l2_norm'] += tensor.pow(2).sum().item()
+
+        self._transport_runtime = ActivationTransportRuntime(
+            self.model,
+            self.activation_transport,
+            encode_stage,
+            decode_observer=observe_decode,
+        ).install()
+        plan = self._transport_runtime.plan
+        self._graph_nodes = {node.name: node for node in plan.graph_module.graph.nodes}
+        try:
+            self._stage_formats = {
+                stage.stage_id: self._stage_format(stage)
+                for stage in plan.stages
+            }
+        except Exception:
+            self._transport_runtime.cleanup()
+            self._transport_runtime = None
+            self._graph_nodes = {}
+            raise
+        unsigned_stages = sum(stage.is_unsigned for stage in plan.stages)
+        quantized_stages = sum(fmt is not None for fmt in self._stage_formats.values())
+        print(
+            "Activation transport enabled: "
+            f"mode=uniform transport={self.transport} format={self.fmt} "
+            f"chunk_size={self.chunk_size} stages={quantized_stages}/{len(plan.stages)} "
+            f"unsigned_stages={unsigned_stages}"
+        )
 
     def cleanup(self):
+        if self._transport_runtime is not None:
+            self._transport_runtime.cleanup()
+            self._transport_runtime = None
+        self._stage_formats = {}
+        self._graph_nodes = {}
+        self._pending_error_inputs.clear()
         for hook in self.hooks:
             hook.remove()
         self.hooks = []
@@ -410,7 +648,7 @@ class UniformInputQuantizer:
     def get_final_stats(self):
         norm_l1 = self.stats['sum_l1_err'] / self.stats['sum_l1_norm'] if self.stats['sum_l1_norm'] > 0 else 0.0
         norm_mse = self.stats['sum_mse_err'] / self.stats['sum_l2_norm'] if self.stats['sum_l2_norm'] > 0 else 0.0
-        return {
+        result = {
             'norm_l1': norm_l1,
             'norm_mse': norm_mse,
             'total_l1': self.stats['sum_l1_err'],
@@ -418,3 +656,20 @@ class UniformInputQuantizer:
             'layer_stats': self.layer_stats,
             'collect_error_stats': self.collect_error_stats,
         }
+        if self._transport_runtime is not None:
+            result.update(self._transport_runtime.transport_stats())
+        else:
+            result.update(
+                {
+                    'transport': self.transport,
+                    'transmission_count': 0,
+                    'packet_count': 0,
+                    'decode_reads': 0,
+                    'encoded_bytes': 0,
+                    'planner_version': 1,
+                    'stage_count': 0,
+                    'unsigned_stage_count': 0,
+                    'activation_plan': {},
+                }
+            )
+        return result

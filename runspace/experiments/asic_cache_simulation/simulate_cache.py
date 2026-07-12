@@ -424,6 +424,13 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
             'adapter': {'type': 'generic', 'build_quantized': True}
         }
 
+    # Cache analysis records topology, tensor shapes, and transfer sizes. It is
+    # not an activation-accuracy run, so make that intent explicit instead of
+    # falling through to the retired module-level fake-quant path.
+    adapter_config = config.setdefault('adapter', {})
+    adapter_config['input_quantization'] = False
+    adapter_config['output_quantization'] = False
+
     adapter = create_adapter(config)
     model = adapter.model
     model.eval()
