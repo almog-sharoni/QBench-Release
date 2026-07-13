@@ -82,6 +82,29 @@ void launch_encode_chunk(
     int             e, int m, int is_signed,
     void*           stream);
 
+void launch_encode_decode_chunk(
+    const float*    x,
+    std::uint32_t*  out,
+    float*          scales,
+    float*          decoded,
+    int             N,
+    int             e, int m, int is_signed,
+    void*           stream);
+
+void launch_encode_selected_chunk(
+    const float*    x,
+    const int*      format_ids,
+    const int*      cands_e,
+    const int*      cands_m,
+    const int*      cands_sgn,
+    int             num_candidates,
+    const std::int64_t* word_offsets,
+    std::uint32_t*  out,
+    float*          scales,
+    float*          decoded,
+    int             n_chunks,
+    void*           stream);
+
 void launch_decode_chunk(
     const std::uint32_t* in,
     const float*         scales,

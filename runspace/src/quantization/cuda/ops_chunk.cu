@@ -23,6 +23,7 @@ static __global__ void encode_chunk_kernel_t(
     const float*    __restrict__ x,
     std::uint32_t*  __restrict__ out,
     float*          __restrict__ scales,
+    float*          __restrict__ decoded,
     int N, int n_chunks)
 {
     constexpr int W   = (IS_SIGNED ? 1 : 0) + E + M;
@@ -71,6 +72,9 @@ static __global__ void encode_chunk_kernel_t(
             }
             const std::uint32_t f = encode_emb(v * inv_s, E, M, IS_SIGNED);
             packed |= (f << (k * W));
+            if (decoded != nullptr && local_idx < CHUNK && global_idx < N) {
+                decoded[global_idx] = decode_emb(f, E, M, IS_SIGNED) * s;
+            }
         }
         o_chunk[word] = packed;
     }
@@ -115,7 +119,7 @@ static __global__ void decode_chunk_kernel_t(
 
 template <int E, int M, int IS_SIGNED>
 static void launch_encode_chunk_t(
-    const float* x, std::uint32_t* out, float* scales,
+    const float* x, std::uint32_t* out, float* scales, float* decoded,
     int N, void* stream)
 {
     if (N == 0) return;
@@ -123,7 +127,7 @@ static void launch_encode_chunk_t(
     const int n_chunks = (N + CHUNK - 1) / CHUNK;
     const int grid     = (n_chunks + CHUNKS_PER_BLOCK - 1) / CHUNKS_PER_BLOCK;
     encode_chunk_kernel_t<E, M, IS_SIGNED><<<grid, BLK, 0, cs>>>(
-        x, out, scales, N, n_chunks);
+        x, out, scales, decoded, N, n_chunks);
 }
 
 template <int E, int M, int IS_SIGNED>
@@ -157,10 +161,106 @@ void launch_encode_chunk(
     const int key = LP_KEY(e, m, is_signed);
     switch (key) {
     #define CASE(E, M, S) case LP_KEY(E, M, S): \
-        launch_encode_chunk_t<E, M, S>(x, out, scales, N, stream); return;
+        launch_encode_chunk_t<E, M, S>(x, out, scales, nullptr, N, stream); return;
     LP_FORMAT_LIST(CASE)
     #undef CASE
     }
+}
+
+void launch_encode_decode_chunk(
+    const float*    x,
+    std::uint32_t*  out,
+    float*          scales,
+    float*          decoded,
+    int             N,
+    int             e, int m, int is_signed,
+    void*           stream)
+{
+    const int key = LP_KEY(e, m, is_signed);
+    switch (key) {
+    #define CASE(E, M, S) case LP_KEY(E, M, S): \
+        launch_encode_chunk_t<E, M, S>(x, out, scales, decoded, N, stream); return;
+    LP_FORMAT_LIST(CASE)
+    #undef CASE
+    }
+}
+
+static __global__ void encode_selected_chunk_kernel(
+    const float*    __restrict__ x,
+    const int*      __restrict__ format_ids,
+    const int*      __restrict__ cands_e,
+    const int*      __restrict__ cands_m,
+    const int*      __restrict__ cands_sgn,
+    int             num_candidates,
+    const std::int64_t* __restrict__ word_offsets,
+    std::uint32_t*  __restrict__ out,
+    float*          __restrict__ scales,
+    float*          __restrict__ decoded,
+    int             n_chunks)
+{
+    const int chunk_in_block = threadIdx.x >> 5;
+    const int lane           = threadIdx.x & (WARP - 1);
+    const int chunk          = blockIdx.x * CHUNKS_PER_BLOCK + chunk_in_block;
+    if (chunk >= n_chunks) return;
+
+    const int format_id = format_ids[chunk];
+    if (format_id < 0 || format_id >= num_candidates) return;
+    const int e          = cands_e[format_id];
+    const int m          = cands_m[format_id];
+    const int is_signed  = cands_sgn[format_id];
+    const int element_bits = is_signed + e + m;
+    const int npw        = 32 / element_bits;
+    const int wpc        = (CHUNK + npw - 1) / npw;
+    const int chunk_base = chunk * CHUNK;
+
+    const float4 v4 = reinterpret_cast<const float4*>(x)[(chunk_base >> 2) + lane];
+    float local_max = fmaxf(fmaxf(fabsf(v4.x), fabsf(v4.y)),
+                            fmaxf(fabsf(v4.z), fabsf(v4.w)));
+    const float s     = pow2_floor_nonneg(warp_amax(local_max));
+    const float inv_s = 1.0f / s;
+    if (lane == 0) scales[chunk] = s;
+
+    std::uint32_t* o_chunk = out + (size_t)word_offsets[chunk];
+    #pragma unroll 1
+    for (int word = lane; word < wpc; word += WARP) {
+        const int elem_base = word * npw;
+        std::uint32_t packed = 0u;
+        #pragma unroll 1
+        for (int k = 0; k < npw; ++k) {
+            const int local_idx = elem_base + k;
+            float value = 0.0f;
+            if (local_idx < CHUNK) value = x[chunk_base + local_idx];
+            const std::uint32_t field = encode_emb(value * inv_s, e, m, is_signed);
+            packed |= field << (k * element_bits);
+            if (local_idx < CHUNK) {
+                decoded[chunk_base + local_idx] =
+                    decode_emb(field, e, m, is_signed) * s;
+            }
+        }
+        o_chunk[word] = packed;
+    }
+}
+
+void launch_encode_selected_chunk(
+    const float*    x,
+    const int*      format_ids,
+    const int*      cands_e,
+    const int*      cands_m,
+    const int*      cands_sgn,
+    int             num_candidates,
+    const std::int64_t* word_offsets,
+    std::uint32_t*  out,
+    float*          scales,
+    float*          decoded,
+    int             n_chunks,
+    void*           stream)
+{
+    if (n_chunks == 0) return;
+    auto cs = static_cast<cudaStream_t>(stream);
+    const int grid = (n_chunks + CHUNKS_PER_BLOCK - 1) / CHUNKS_PER_BLOCK;
+    encode_selected_chunk_kernel<<<grid, BLK, 0, cs>>>(
+        x, format_ids, cands_e, cands_m, cands_sgn, num_candidates,
+        word_offsets, out, scales, decoded, n_chunks);
 }
 
 void launch_decode_chunk(

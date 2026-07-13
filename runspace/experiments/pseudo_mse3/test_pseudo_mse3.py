@@ -69,16 +69,15 @@ def test_pseudo_mse3_exact_diff_matches_expected_scaled_ranges():
         is_signed=True,
     )
 
-    scaled_diff = diff * float(2.0 ** (2 * m1))
     q1_scaled = pseudo_mse_reconstruct_scaled_python(values, 1, m1, True)
     q2_scaled = pseudo_mse_reconstruct_scaled_python(values, 2, m1 - 1, True)
     expected = ((values - q2_scaled).pow(2) - (values - q1_scaled).pow(2)) * float(
         2.0 ** (2 * m1)
     )
-    torch.testing.assert_close(scaled_diff, expected)
-    assert bool((scaled_diff < 0).any())
-    assert bool((scaled_diff == 0).any())
-    assert bool((scaled_diff > 0).any())
+    torch.testing.assert_close(diff, expected)
+    assert bool((diff < 0).any())
+    assert bool((diff == 0).any())
+    assert bool((diff > 0).any())
 
 
 def test_pseudo_mse3_bits_to_take_returns_fixed_point_diff():
@@ -141,7 +140,7 @@ def test_pseudo_mse3_bits_to_take_returns_fixed_point_diff():
         bits_to_take=1,
         fixed_rounding="nearest",
     )
-    assert nearest.tolist() == [[0, 1, 1, 0, -1, -1]]
+    assert nearest.tolist() == [[0, 4, 4, -2, -2, -2]]
     assert torch.equal(
         pseudo_mse3_fixed_point_from_diff(
             direct_diff,
@@ -185,15 +184,25 @@ def test_pseudo_mse3_decision_uses_exact_summed_diff():
             [2.5, -0.625, -0.625],
             [0.0, -0.625, 0.0],
             [0.0, 0.0, 0.0],
+            [0.2, -0.625, 0.0],
         ],
         dtype=torch.float32,
     )
 
-    assert pseudo_mse3_choose_exp2_from_diff(diff).tolist() == [False, True, False]
+    assert pseudo_mse3_choose_exp2_from_diff(diff).tolist() == [False, True, False, True]
     assert pseudo_mse3_choose_exp2_from_diff(
         diff,
         tie_break="exp2",
-    ).tolist() == [False, True, True]
+    ).tolist() == [False, True, True, True]
+    assert pseudo_mse3_choose_exp2_from_diff(
+        diff,
+        fixed_rounding="nearest",
+    ).tolist() == [False, True, False, True]
+    assert pseudo_mse3_choose_exp2_from_diff(
+        diff,
+        tie_break="exp2",
+        fixed_rounding="nearest",
+    ).tolist() == [False, True, True, True]
 
 
 def test_pseudo_mse3_hw_vector_decision_matches_exact_mse():
@@ -214,11 +223,11 @@ def test_pseudo_mse3_hw_vector_decision_matches_exact_mse():
             pseudo_diff,
         ) = decision_for_bit_width(scaled_chunks, bit_width)
 
-        torch.testing.assert_close(chunk_diff, err2 - err1)
+        normalization = float(2.0 ** (2 * (bit_width - 2)))
+        torch.testing.assert_close(chunk_diff, (err2 - err1) * normalization)
         assert torch.equal(choose_exp2, err2 < err1)
         torch.testing.assert_close(expected_error, torch.minimum(err1, err2))
-        scaled_diff = pseudo_diff * float(2.0 ** (2 * (bit_width - 2)))
-        _assert_pseudo_mse3_scaled_diff_ranges(scaled_diff)
+        _assert_pseudo_mse3_scaled_diff_ranges(pseudo_diff)
 
 
 def test_pseudo_mse3_generate_hw_vectors_outputs_pytorch_reference(tmp_path):

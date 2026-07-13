@@ -3,7 +3,6 @@ import csv
 from dataclasses import dataclass
 import gc
 import json
-import math
 import os
 import struct
 import sys
@@ -92,6 +91,7 @@ class BaseChunkAnalysis:
     err1_sum: torch.Tensor
     err2_sum: torch.Tensor
     exact_diff: torch.Tensor
+    pseudo_diff: torch.Tensor
     exact_sum: torch.Tensor
     reference_choose_exp2: torch.Tensor
     exact_choose_exp2: torch.Tensor
@@ -104,24 +104,45 @@ class FixedChunkAnalysis:
     choose_exp2: torch.Tensor
 
 
-def analyze_chunks(ref_chunks, candidates):
-    """Compute the two-candidate MSE reference on already formed raw chunks."""
+def _analyze_chunks_impl(ref_chunks, candidates, *, use_cuda_codec):
     pair = validate_pseudo_mse_candidate_pairs(candidates)[0]
     chunks = ref_chunks.to(torch.float32).contiguous()
-    scales = DynamicInputQuantizer._chunk_scale(chunks)
-    scaled_chunks = chunks / scales
-    q1_scaled = pseudo_mse_reconstruct_scaled_python(
-        scaled_chunks,
-        exp_bits=1,
-        mantissa_bits=pair.exp1_mantissa_width,
-        is_signed=pair.is_signed,
-    )
-    q2_scaled = pseudo_mse_reconstruct_scaled_python(
-        scaled_chunks,
-        exp_bits=2,
-        mantissa_bits=pair.exp1_mantissa_width - 1,
-        is_signed=pair.is_signed,
-    )
+    if use_cuda_codec and chunks.is_cuda:
+        from runspace.src.quantization.cuda import encode_decode_chunk_rows
+
+        _payload1, scales_flat, q1 = encode_decode_chunk_rows(
+            chunks,
+            1,
+            pair.exp1_mantissa_width,
+            pair.is_signed,
+        )
+        _payload2, scales2, q2 = encode_decode_chunk_rows(
+            chunks,
+            2,
+            pair.exp1_mantissa_width - 1,
+            pair.is_signed,
+        )
+        scales = scales_flat.unsqueeze(1)
+        scaled_chunks = chunks / scales
+        q1_scaled = q1 / scales
+        q2_scaled = q2 / scales
+        if scales2.shape != scales_flat.shape:
+            raise RuntimeError("CUDA pseudo_MSE3 codecs returned inconsistent scales")
+    else:
+        scales = DynamicInputQuantizer._chunk_scale(chunks)
+        scaled_chunks = chunks / scales
+        q1_scaled = pseudo_mse_reconstruct_scaled_python(
+            scaled_chunks,
+            exp_bits=1,
+            mantissa_bits=pair.exp1_mantissa_width,
+            is_signed=pair.is_signed,
+        )
+        q2_scaled = pseudo_mse_reconstruct_scaled_python(
+            scaled_chunks,
+            exp_bits=2,
+            mantissa_bits=pair.exp1_mantissa_width - 1,
+            is_signed=pair.is_signed,
+        )
     err1_pre_square = scaled_chunks - q1_scaled
     err2_pre_square = scaled_chunks - q2_scaled
     err1_sq = err1_pre_square.pow(2)
@@ -129,6 +150,7 @@ def analyze_chunks(ref_chunks, candidates):
     err1_sum = err1_sq.sum(dim=1)
     err2_sum = err2_sq.sum(dim=1)
     exact_diff = err2_sq - err1_sq
+    pseudo_diff = exact_diff * float(2.0 ** (2 * pair.exp1_mantissa_width))
     exact_sum = exact_diff.sum(dim=1)
     return BaseChunkAnalysis(
         pair=pair,
@@ -143,10 +165,20 @@ def analyze_chunks(ref_chunks, candidates):
         err1_sum=err1_sum,
         err2_sum=err2_sum,
         exact_diff=exact_diff,
+        pseudo_diff=pseudo_diff,
         exact_sum=exact_sum,
         reference_choose_exp2=err2_sum < err1_sum,
         exact_choose_exp2=exact_sum < 0,
     )
+
+
+def analyze_chunks(ref_chunks, candidates):
+    """Compute the two-candidate MSE reference on already formed raw chunks."""
+    return _analyze_chunks_impl(ref_chunks, candidates, use_cuda_codec=True)
+
+
+def _analyze_chunks_reference(ref_chunks, candidates):
+    return _analyze_chunks_impl(ref_chunks, candidates, use_cuda_codec=False)
 
 
 def fixed_analysis_from_diff(
@@ -174,6 +206,69 @@ def fixed_analysis_from_diff(
     )
 
 
+def fixed_analyses_from_diff(
+    exact_diff,
+    bits_to_take_values,
+    fixed_rounding="floor",
+    tie_break="exp1",
+):
+    """Vectorize all fixed-point widths while preserving scalar semantics."""
+    bits_values = tuple(int(value) for value in bits_to_take_values)
+    fixed_rounding = normalize_pseudo_mse3_fixed_rounding(fixed_rounding)
+    tie_break = normalize_pseudo_mse3_tie_break(tie_break)
+    analyses = {}
+
+    if 0 in bits_values:
+        chunk_sum = exact_diff.sum(dim=1)
+        choose_exp2 = chunk_sum <= 0 if tie_break == "exp2" else chunk_sum < 0
+        analyses[0] = FixedChunkAnalysis(
+            contributions=exact_diff,
+            chunk_sum=chunk_sum,
+            choose_exp2=choose_exp2,
+        )
+
+    positive_bits = tuple(value for value in bits_values if value > 0)
+    if positive_bits:
+        scales = torch.tensor(
+            [float(2.0**value) for value in positive_bits],
+            dtype=exact_diff.dtype,
+            device=exact_diff.device,
+        ).view(-1, 1, 1)
+        scaled = exact_diff.unsqueeze(0) * scales
+        if fixed_rounding == "nearest":
+            negative = scaled < 0
+            scaled_positive = torch.where(scaled > 0, scaled, 0)
+            scaled_negative = torch.where(negative, scaled, 0) * 4.0
+            rounded_positive = torch.floor(scaled_positive.abs() + 0.5) * 4.0
+            rounded_negative = torch.floor(scaled_negative.abs() + 0.5)
+            fixed = torch.where(negative, -rounded_negative, rounded_positive)
+        else:
+            fixed = torch.floor(scaled)
+
+        int32_info = torch.iinfo(torch.int32)
+        invalid = (
+            ~torch.isfinite(fixed)
+            | (fixed < int32_info.min)
+            | (fixed > int32_info.max)
+        )
+        if bool(invalid.any()):
+            raise OverflowError(
+                "bits_to_take produces contributions outside int32 for at least "
+                f"one of {positive_bits!r}"
+            )
+        fixed = fixed.to(torch.int32)
+        chunk_sums = fixed.sum(dim=2, dtype=torch.int64)
+        choose_exp2 = chunk_sums <= 0 if tie_break == "exp2" else chunk_sums < 0
+        for index, bits_to_take in enumerate(positive_bits):
+            analyses[bits_to_take] = FixedChunkAnalysis(
+                contributions=fixed[index],
+                chunk_sum=chunk_sums[index],
+                choose_exp2=choose_exp2[index],
+            )
+
+    return analyses
+
+
 @dataclass(frozen=True)
 class StatsKey:
     scope: str
@@ -190,27 +285,11 @@ class StatsKey:
 @dataclass
 class StatsBucket:
     total_chunks: int = 0
-    runtime_mse_e1: int = 0
-    runtime_mse_e2: int = 0
-    reference_mse_e1: int = 0
-    reference_mse_e2: int = 0
-    pseudo_e1: int = 0
-    pseudo_e2: int = 0
-    runtime_vs_reference_mismatches: int = 0
-    exact_pairwise_vs_reference_mismatches: int = 0
-    decision_mismatches: int = 0
-    e1_to_e2_mismatches: int = 0
-    e2_to_e1_mismatches: int = 0
-    mse_ties: int = 0
-    exact_pairwise_ties: int = 0
-    fixed_ties: int = 0
-    sum_abs_exact_margin: float = 0.0
-    min_abs_exact_margin: float = math.inf
-    max_abs_exact_margin: float = 0.0
-    sum_excess_mse: float = 0.0
-    max_excess_mse: float = 0.0
+    _count_values: torch.Tensor | None = None
+    _aggregate_values: torch.Tensor | None = None
 
-    def update(self, base, fixed, runtime_choose_exp2):
+    @staticmethod
+    def compute_delta(base, fixed, runtime_choose_exp2):
         count = int(runtime_choose_exp2.numel())
         reference = base.reference_choose_exp2
         exact = base.exact_choose_exp2
@@ -219,46 +298,137 @@ class StatsBucket:
         margin = (base.err2_sum - base.err1_sum).abs()
         selected_error = torch.where(pseudo, base.err2_sum, base.err1_sum)
         excess_mse = selected_error - torch.minimum(base.err1_sum, base.err2_sum)
+        count_values = torch.stack(
+            (
+                runtime_choose_exp2.sum(),
+                reference.sum(),
+                pseudo.sum(),
+                (runtime_choose_exp2 != reference).sum(),
+                (exact != reference).sum(),
+                mismatch.sum(),
+                ((~runtime_choose_exp2) & pseudo).sum(),
+                (runtime_choose_exp2 & (~pseudo)).sum(),
+                (base.err1_sum == base.err2_sum).sum(),
+                (base.exact_sum == 0).sum(),
+                (fixed.chunk_sum == 0).sum(),
+            )
+        ).to(dtype=torch.int64)
+        aggregate_values = torch.stack(
+            (
+                margin.sum(),
+                margin.min(),
+                margin.max(),
+                excess_mse.sum(),
+                excess_mse.max(),
+            )
+        ).to(dtype=torch.float64)
+        return count, count_values, aggregate_values
 
+    @staticmethod
+    def compute_deltas(base, fixed_analyses, runtime_choose_exp2, bits_values):
+        count = int(runtime_choose_exp2.numel())
+        bits_values = tuple(int(value) for value in bits_values)
+        pseudo = torch.stack(
+            [fixed_analyses[value].choose_exp2 for value in bits_values]
+        )
+        fixed_sums = torch.stack(
+            [fixed_analyses[value].chunk_sum for value in bits_values]
+        )
+        reference = base.reference_choose_exp2
+        exact = base.exact_choose_exp2
+        mismatch = pseudo != runtime_choose_exp2.unsqueeze(0)
+        margin = (base.err2_sum - base.err1_sum).abs()
+        selected_error = torch.where(
+            pseudo,
+            base.err2_sum.unsqueeze(0),
+            base.err1_sum.unsqueeze(0),
+        )
+        excess_mse = selected_error - torch.minimum(
+            base.err1_sum,
+            base.err2_sum,
+        ).unsqueeze(0)
+        batch_count = len(bits_values)
+
+        def repeated(value):
+            return value.expand(batch_count)
+
+        count_values = torch.stack(
+            (
+                repeated(runtime_choose_exp2.sum()),
+                repeated(reference.sum()),
+                pseudo.sum(dim=1),
+                repeated((runtime_choose_exp2 != reference).sum()),
+                repeated((exact != reference).sum()),
+                mismatch.sum(dim=1),
+                ((~runtime_choose_exp2).unsqueeze(0) & pseudo).sum(dim=1),
+                (runtime_choose_exp2.unsqueeze(0) & (~pseudo)).sum(dim=1),
+                repeated((base.err1_sum == base.err2_sum).sum()),
+                repeated((base.exact_sum == 0).sum()),
+                (fixed_sums == 0).sum(dim=1),
+            ),
+            dim=1,
+        ).to(dtype=torch.int64)
+        aggregate_values = torch.stack(
+            (
+                repeated(margin.sum()),
+                repeated(margin.min()),
+                repeated(margin.max()),
+                excess_mse.sum(dim=1),
+                excess_mse.max(dim=1).values,
+            ),
+            dim=1,
+        ).to(dtype=torch.float64)
+        return count, count_values, aggregate_values
+
+    def update(self, base, fixed, runtime_choose_exp2, *, delta=None):
+        if delta is None:
+            delta = self.compute_delta(base, fixed, runtime_choose_exp2)
+        count, count_values, aggregate_values = delta
         self.total_chunks += count
-        self.runtime_mse_e2 += int(runtime_choose_exp2.sum().item())
-        self.runtime_mse_e1 += count - int(runtime_choose_exp2.sum().item())
-        self.reference_mse_e2 += int(reference.sum().item())
-        self.reference_mse_e1 += count - int(reference.sum().item())
-        self.pseudo_e2 += int(pseudo.sum().item())
-        self.pseudo_e1 += count - int(pseudo.sum().item())
-        self.runtime_vs_reference_mismatches += int(
-            (runtime_choose_exp2 != reference).sum().item()
-        )
-        self.exact_pairwise_vs_reference_mismatches += int((exact != reference).sum().item())
-        self.decision_mismatches += int(mismatch.sum().item())
-        self.e1_to_e2_mismatches += int(
-            ((~runtime_choose_exp2) & pseudo).sum().item()
-        )
-        self.e2_to_e1_mismatches += int(
-            (runtime_choose_exp2 & (~pseudo)).sum().item()
-        )
-        self.mse_ties += int((base.err1_sum == base.err2_sum).sum().item())
-        self.exact_pairwise_ties += int((base.exact_sum == 0).sum().item())
-        self.fixed_ties += int((fixed.chunk_sum == 0).sum().item())
-        self.sum_abs_exact_margin += float(margin.sum().item())
-        if count:
-            self.min_abs_exact_margin = min(
-                self.min_abs_exact_margin,
-                float(margin.min().item()),
-            )
-            self.max_abs_exact_margin = max(
-                self.max_abs_exact_margin,
-                float(margin.max().item()),
-            )
-            self.sum_excess_mse += float(excess_mse.sum().item())
-            self.max_excess_mse = max(
-                self.max_excess_mse,
-                float(excess_mse.max().item()),
-            )
+        if self._count_values is None:
+            self._count_values = count_values.clone()
+            self._aggregate_values = aggregate_values.clone()
+            return delta
 
-    def as_row(self, key):
+        self._count_values.add_(count_values)
+        previous = self._aggregate_values
+        self._aggregate_values = torch.stack(
+            (
+                previous[0] + aggregate_values[0],
+                torch.minimum(previous[1], aggregate_values[1]),
+                torch.maximum(previous[2], aggregate_values[2]),
+                previous[3] + aggregate_values[3],
+                torch.maximum(previous[4], aggregate_values[4]),
+            )
+        )
+        return delta
+
+    def as_row(self, key, count_values=None, aggregate_values=None):
         total = self.total_chunks
+        if count_values is None:
+            count_values = self._count_values.cpu().tolist()
+        if aggregate_values is None:
+            aggregate_values = self._aggregate_values.cpu().tolist()
+        (
+            runtime_mse_e2,
+            reference_mse_e2,
+            pseudo_e2,
+            runtime_vs_reference_mismatches,
+            exact_pairwise_vs_reference_mismatches,
+            decision_mismatches,
+            e1_to_e2_mismatches,
+            e2_to_e1_mismatches,
+            mse_ties,
+            exact_pairwise_ties,
+            fixed_ties,
+        ) = (int(value) for value in count_values)
+        (
+            sum_abs_exact_margin,
+            min_abs_exact_margin,
+            max_abs_exact_margin,
+            sum_excess_mse,
+            max_excess_mse,
+        ) = (float(value) for value in aggregate_values)
         return {
             "scope": key.scope,
             "layer_name": key.layer_name,
@@ -270,30 +440,30 @@ class StatsBucket:
             "fixed_rounding": key.fixed_rounding,
             "tie_break": key.tie_break,
             "total_chunks": total,
-            "runtime_mse_e1": self.runtime_mse_e1,
-            "runtime_mse_e2": self.runtime_mse_e2,
-            "reference_mse_e1": self.reference_mse_e1,
-            "reference_mse_e2": self.reference_mse_e2,
-            "pseudo_e1": self.pseudo_e1,
-            "pseudo_e2": self.pseudo_e2,
-            "runtime_vs_reference_mismatches": self.runtime_vs_reference_mismatches,
+            "runtime_mse_e1": total - runtime_mse_e2,
+            "runtime_mse_e2": runtime_mse_e2,
+            "reference_mse_e1": total - reference_mse_e2,
+            "reference_mse_e2": reference_mse_e2,
+            "pseudo_e1": total - pseudo_e2,
+            "pseudo_e2": pseudo_e2,
+            "runtime_vs_reference_mismatches": runtime_vs_reference_mismatches,
             "exact_pairwise_vs_reference_mismatches": (
-                self.exact_pairwise_vs_reference_mismatches
+                exact_pairwise_vs_reference_mismatches
             ),
-            "decision_mismatches": self.decision_mismatches,
-            "mismatch_rate": self.decision_mismatches / total if total else 0.0,
-            "e1_to_e2_mismatches": self.e1_to_e2_mismatches,
-            "e2_to_e1_mismatches": self.e2_to_e1_mismatches,
-            "mse_ties": self.mse_ties,
-            "exact_pairwise_ties": self.exact_pairwise_ties,
-            "fixed_ties": self.fixed_ties,
-            "mean_abs_exact_margin": self.sum_abs_exact_margin / total if total else 0.0,
+            "decision_mismatches": decision_mismatches,
+            "mismatch_rate": decision_mismatches / total if total else 0.0,
+            "e1_to_e2_mismatches": e1_to_e2_mismatches,
+            "e2_to_e1_mismatches": e2_to_e1_mismatches,
+            "mse_ties": mse_ties,
+            "exact_pairwise_ties": exact_pairwise_ties,
+            "fixed_ties": fixed_ties,
+            "mean_abs_exact_margin": sum_abs_exact_margin / total if total else 0.0,
             "min_abs_exact_margin": (
-                self.min_abs_exact_margin if total else 0.0
+                min_abs_exact_margin if total else 0.0
             ),
-            "max_abs_exact_margin": self.max_abs_exact_margin,
-            "mean_excess_mse": self.sum_excess_mse / total if total else 0.0,
-            "max_excess_mse": self.max_excess_mse,
+            "max_abs_exact_margin": max_abs_exact_margin,
+            "mean_excess_mse": sum_excess_mse / total if total else 0.0,
+            "max_excess_mse": max_excess_mse,
         }
 
 
@@ -315,6 +485,19 @@ class VectorSample:
     capture_reference_mse_choice: str
     capture_exact_pairwise_choice: str
     capture_pseudo_choice: str
+
+
+@dataclass
+class _PendingSampleBatch:
+    priorities: torch.Tensor
+    raw_chunks: torch.Tensor
+    local_indices: torch.Tensor
+    global_indices: torch.Tensor
+    choices: torch.Tensor
+    candidates: tuple
+    layer_name: str
+    layer_call_index: int
+    bits_to_take: int
 
 
 class PriorityReservoir:
@@ -363,6 +546,7 @@ class RealActivationCollector:
 
         self._stats = {}
         self._reservoirs = {}
+        self._pending_samples = {}
         self._next_chunk_ordinal = {}
         self._layer_call_counts = {}
         self.observer_calls = 0
@@ -373,14 +557,17 @@ class RealActivationCollector:
             self._stats[key] = StatsBucket()
         return self._stats[key]
 
-    def _reservoir(self, bit_width, bits_to_take, category):
-        key = (
+    def _reservoir_key(self, bit_width, bits_to_take, category):
+        return (
             int(bit_width),
             int(bits_to_take),
             self.fixed_rounding,
             self.tie_break,
             str(category),
         )
+
+    def _reservoir(self, bit_width, bits_to_take, category):
+        key = self._reservoir_key(bit_width, bits_to_take, category)
         if key not in self._reservoirs:
             capacity = (
                 self.max_mismatch_vectors
@@ -420,11 +607,11 @@ class RealActivationCollector:
         reservoir = self._reservoir(base.pair.bit_width, bits_to_take, category)
         if reservoir.capacity <= 0:
             return
-        eligible_count = int(mask.sum().item())
-        if eligible_count == 0:
+        chunk_count = int(mask.numel())
+        take = min(reservoir.capacity, chunk_count)
+        if take == 0:
             return
 
-        chunk_count = int(mask.numel())
         ordinals = torch.arange(
             global_offset,
             global_offset + chunk_count,
@@ -437,7 +624,6 @@ class RealActivationCollector:
             priorities,
             torch.full_like(priorities, _PRIORITY_MODULUS),
         )
-        take = min(reservoir.capacity, eligible_count)
         selected_priorities, selected_indices = torch.topk(
             masked_priorities,
             k=take,
@@ -445,34 +631,29 @@ class RealActivationCollector:
             sorted=False,
         )
 
-        indices = selected_indices.detach().cpu().tolist()
-        priority_values = selected_priorities.detach().cpu().tolist()
-        raw_selected = raw_chunks[selected_indices].detach().cpu()
-        runtime_selected = runtime_choose_exp2[selected_indices].detach().cpu().tolist()
-        reference_selected = base.reference_choose_exp2[selected_indices].detach().cpu().tolist()
-        exact_selected = base.exact_choose_exp2[selected_indices].detach().cpu().tolist()
-        pseudo_selected = fixed.choose_exp2[selected_indices].detach().cpu().tolist()
-
-        for position, local_index in enumerate(indices):
-            sample = VectorSample(
-                priority=int(priority_values[position]),
-                category=category,
-                bit_width=int(base.pair.bit_width),
-                bits_to_take=int(bits_to_take),
-                fixed_rounding=self.fixed_rounding,
-                tie_break=self.tie_break,
+        key = self._reservoir_key(base.pair.bit_width, bits_to_take, category)
+        choices = torch.stack(
+            (
+                runtime_choose_exp2[selected_indices],
+                base.reference_choose_exp2[selected_indices],
+                base.exact_choose_exp2[selected_indices],
+                fixed.choose_exp2[selected_indices],
+            ),
+            dim=1,
+        )
+        self._pending_samples.setdefault(key, []).append(
+            _PendingSampleBatch(
+                priorities=selected_priorities.detach(),
+                raw_chunks=raw_chunks[selected_indices].detach(),
+                local_indices=(selected_indices + int(local_offset)).detach(),
+                global_indices=(selected_indices + int(global_offset)).detach(),
+                choices=choices.detach(),
+                candidates=tuple(candidates),
                 layer_name=str(layer_name),
                 layer_call_index=int(layer_call_index),
-                local_chunk_index=int(local_offset + local_index),
-                global_chunk_index=int(global_offset + local_index),
-                candidates=tuple(candidates),
-                raw_chunk=raw_selected[position].contiguous().clone(),
-                runtime_mse_choice=_choice_label(runtime_selected[position]),
-                capture_reference_mse_choice=_choice_label(reference_selected[position]),
-                capture_exact_pairwise_choice=_choice_label(exact_selected[position]),
-                capture_pseudo_choice=_choice_label(pseudo_selected[position]),
+                bits_to_take=int(bits_to_take),
             )
-            reservoir.consider(sample)
+        )
 
     def observe(self, *, layer_name, candidates, ref_chunks, best_indices):
         """Consume one synchronous DynamicInputQuantizer chunk observation."""
@@ -505,14 +686,21 @@ class RealActivationCollector:
             index_batch = best_indices[start:end]
             base = analyze_chunks(raw_batch, candidates)
             runtime_choose_exp2 = index_batch == pair.e2_index
+            fixed_analyses = fixed_analyses_from_diff(
+                base.pseudo_diff,
+                self.bits_to_take,
+                fixed_rounding=self.fixed_rounding,
+                tie_break=self.tie_break,
+            )
+            count, count_deltas, aggregate_deltas = StatsBucket.compute_deltas(
+                base,
+                fixed_analyses,
+                runtime_choose_exp2,
+                self.bits_to_take,
+            )
 
-            for bits_to_take in self.bits_to_take:
-                fixed = fixed_analysis_from_diff(
-                    base.exact_diff,
-                    bits_to_take,
-                    fixed_rounding=self.fixed_rounding,
-                    tie_break=self.tie_break,
-                )
+            for bit_index, bits_to_take in enumerate(self.bits_to_take):
+                fixed = fixed_analyses[bits_to_take]
                 global_key = StatsKey(
                     scope="global",
                     bit_width=bit_width,
@@ -535,8 +723,23 @@ class RealActivationCollector:
                     candidate_e2=pair.e2_format,
                     signedness=signedness,
                 )
-                self._stats_bucket(global_key).update(base, fixed, runtime_choose_exp2)
-                self._stats_bucket(layer_key).update(base, fixed, runtime_choose_exp2)
+                delta = (
+                    count,
+                    count_deltas[bit_index],
+                    aggregate_deltas[bit_index],
+                )
+                self._stats_bucket(global_key).update(
+                    base,
+                    fixed,
+                    runtime_choose_exp2,
+                    delta=delta,
+                )
+                self._stats_bucket(layer_key).update(
+                    base,
+                    fixed,
+                    runtime_choose_exp2,
+                    delta=delta,
+                )
 
                 mismatch = fixed.choose_exp2 != runtime_choose_exp2
                 common = {
@@ -575,9 +778,109 @@ class RealActivationCollector:
                 key.layer_name,
             )
 
-        return [bucket.as_row(key) for key, bucket in sorted(self._stats.items(), key=sort_key)]
+        items = sorted(self._stats.items(), key=sort_key)
+        if not items:
+            return []
+        count_values = torch.stack(
+            [bucket._count_values for _key, bucket in items]
+        ).cpu().tolist()
+        aggregate_values = torch.stack(
+            [bucket._aggregate_values for _key, bucket in items]
+        ).cpu().tolist()
+        return [
+            bucket.as_row(key, counts, aggregates)
+            for (key, bucket), counts, aggregates in zip(
+                items,
+                count_values,
+                aggregate_values,
+            )
+        ]
+
+    def _materialize_pending_samples(self):
+        for key, pending_batches in list(self._pending_samples.items()):
+            if not pending_batches:
+                continue
+            reservoir = self._reservoirs[key]
+            capacity = reservoir.capacity
+            priorities = torch.cat(
+                [batch.priorities for batch in pending_batches]
+            )
+            take = min(capacity, int(priorities.numel()))
+            if take == 0:
+                continue
+            selected_priorities, selected_positions = torch.topk(
+                priorities,
+                k=take,
+                largest=False,
+                sorted=False,
+            )
+            group_ids = torch.cat(
+                [
+                    torch.full_like(batch.priorities, group_index)
+                    for group_index, batch in enumerate(pending_batches)
+                ]
+            )
+            local_indices = torch.cat(
+                [batch.local_indices for batch in pending_batches]
+            )
+            global_indices = torch.cat(
+                [batch.global_indices for batch in pending_batches]
+            )
+            choices = torch.cat(
+                [batch.choices for batch in pending_batches]
+            ).to(dtype=torch.int64)
+            metadata = torch.cat(
+                (
+                    selected_priorities.unsqueeze(1),
+                    group_ids[selected_positions].unsqueeze(1),
+                    local_indices[selected_positions].unsqueeze(1),
+                    global_indices[selected_positions].unsqueeze(1),
+                    choices[selected_positions],
+                ),
+                dim=1,
+            ).cpu().tolist()
+            raw_selected = torch.cat(
+                [batch.raw_chunks for batch in pending_batches]
+            )[selected_positions].cpu()
+
+            for position, values in enumerate(metadata):
+                (
+                    priority,
+                    group_index,
+                    local_index,
+                    global_index,
+                    runtime_choice,
+                    reference_choice,
+                    exact_choice,
+                    pseudo_choice,
+                ) = (int(value) for value in values)
+                if priority >= _PRIORITY_MODULUS:
+                    continue
+                pending = pending_batches[group_index]
+                reservoir.consider(
+                    VectorSample(
+                        priority=priority,
+                        category=key[4],
+                        bit_width=key[0],
+                        bits_to_take=pending.bits_to_take,
+                        fixed_rounding=key[2],
+                        tie_break=key[3],
+                        layer_name=pending.layer_name,
+                        layer_call_index=pending.layer_call_index,
+                        local_chunk_index=local_index,
+                        global_chunk_index=global_index,
+                        candidates=pending.candidates,
+                        raw_chunk=raw_selected[position].contiguous().clone(),
+                        runtime_mse_choice=_choice_label(runtime_choice),
+                        capture_reference_mse_choice=_choice_label(reference_choice),
+                        capture_exact_pairwise_choice=_choice_label(exact_choice),
+                        capture_pseudo_choice=_choice_label(pseudo_choice),
+                    )
+                )
+        self._pending_samples.clear()
 
     def samples(self):
+        self._materialize_pending_samples()
         category_order = {"mismatch": 0, "control": 1}
         samples = []
         for key in sorted(
@@ -649,7 +952,7 @@ def _vector_rows(sample, sample_id, model_name):
     raw = sample.raw_chunk.to(torch.float32).reshape(1, -1)
     base = analyze_chunks(raw, sample.candidates)
     fixed = fixed_analysis_from_diff(
-        base.exact_diff,
+        base.pseudo_diff,
         sample.bits_to_take,
         fixed_rounding=sample.fixed_rounding,
         tie_break=sample.tie_break,
@@ -932,7 +1235,7 @@ def _validate_vector_group(rows):
     tie_break = first.get("tie_break", "exp1")
     base = analyze_chunks(raw, candidates)
     fixed = fixed_analysis_from_diff(
-        base.exact_diff,
+        base.pseudo_diff,
         bits_to_take,
         fixed_rounding=fixed_rounding,
         tie_break=tie_break,
@@ -1117,7 +1420,7 @@ def verify_samples_cuda(samples):
         )
         cpu_base = analyze_chunks(raw.cpu(), candidates)
         cpu_fixed = fixed_analysis_from_diff(
-            cpu_base.exact_diff,
+            cpu_base.pseudo_diff,
             bits_to_take,
             fixed_rounding=fixed_rounding,
             tie_break=tie_break,

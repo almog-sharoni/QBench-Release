@@ -54,6 +54,14 @@ class BaseAdapter(ABC):
         configured = self._enabled_module_activation_boundaries(model)
 
         def require_stage_transport(guarded_model, _inputs):
+            if bool(
+                getattr(
+                    guarded_model,
+                    "_qbench_activation_transport_active",
+                    False,
+                )
+            ):
+                return
             active = self._enabled_module_activation_boundaries(guarded_model)
             if not active:
                 return

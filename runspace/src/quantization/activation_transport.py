@@ -13,6 +13,7 @@ that hardware and the codec do not share.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 import re
 from typing import Sequence
 
@@ -82,9 +83,15 @@ class ActivationPacket:
     layout: ActivationLayout
     producer_id: str = ""
     version: int = ACTIVATION_PACKET_VERSION
+    _decoded_cache: torch.Tensor | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    _trusted_contents: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        _validate_packet(self)
+        _validate_packet(self, check_contents=not self._trusted_contents)
 
     @property
     def device(self) -> torch.device:
@@ -130,6 +137,10 @@ class ActivationPacket:
     def decode(self) -> torch.Tensor:
         return decode_activation_packet(self)
 
+    def validate(self) -> None:
+        """Synchronously validate packet IDs, offsets, and payload bounds."""
+        _validate_packet(self, check_contents=True)
+
 
 def _parse_activation_format(name: str, format_id: int) -> ActivationFormat:
     match = _FORMAT_RE.fullmatch(str(name))
@@ -170,13 +181,17 @@ def _parse_activation_format(name: str, format_id: int) -> ActivationFormat:
     )
 
 
-def _format_table(candidate_formats: Sequence[str]) -> tuple[ActivationFormat, ...]:
-    names = tuple(str(fmt) for fmt in candidate_formats)
+@lru_cache(maxsize=128)
+def _cached_format_table(names: tuple[str, ...]) -> tuple[ActivationFormat, ...]:
     if not names:
         raise ValueError("At least one activation candidate format is required.")
     if len(set(names)) != len(names):
         raise ValueError(f"Activation candidate formats must be unique; got {names!r}.")
     return tuple(_parse_activation_format(name, idx) for idx, name in enumerate(names))
+
+
+def _format_table(candidate_formats: Sequence[str]) -> tuple[ActivationFormat, ...]:
+    return _cached_format_table(tuple(str(fmt) for fmt in candidate_formats))
 
 
 def _layout_kind(shape: tuple[int, ...], chunk_size: int) -> str:
@@ -240,9 +255,19 @@ def _require_hardware_tensor(tensor: torch.Tensor, chunk_size: int) -> torch.Ten
 
 def _cuda_codec():
     # Import lazily so CPU reference transport does not compile/load the CUDA extension.
-    from .cuda import decode_chunk, encode_chunk
+    from .cuda import (
+        decode_chunk,
+        encode_chunk,
+        encode_decode_chunk_rows,
+        encode_selected_chunk_rows,
+    )
 
-    return encode_chunk, decode_chunk
+    return (
+        encode_chunk,
+        decode_chunk,
+        encode_decode_chunk_rows,
+        encode_selected_chunk_rows,
+    )
 
 
 def _normalize_format_ids(
@@ -251,6 +276,7 @@ def _normalize_format_ids(
     device: torch.device,
     num_chunks: int,
     num_formats: int,
+    check_bounds: bool = True,
 ) -> torch.Tensor:
     ids = torch.as_tensor(format_ids, device=device)
     if ids.dtype == torch.bool or ids.dtype.is_floating_point or ids.dtype.is_complex:
@@ -261,7 +287,7 @@ def _normalize_format_ids(
             f"best_format_ids has {ids.numel()} entries, but the activation layout "
             f"contains {num_chunks} chunks."
         )
-    if ids.numel() > 0:
+    if check_bounds and ids.numel() > 0:
         minimum = int(ids.min().item())
         maximum = int(ids.max().item())
         if minimum < 0 or maximum >= num_formats:
@@ -301,12 +327,12 @@ def encode_uniform_packet(
     tensor = _require_hardware_tensor(tensor, chunk_size)
     formats = _format_table((q_type,))
     fmt = formats[0]
-    encode_chunk, _ = _cuda_codec()
+    _, _, encode_decode_chunk_rows, _ = _cuda_codec()
     chunks, original_shape, chunked_shape, padding = _activation_chunks(
         tensor,
         chunk_size,
     )
-    payload, scales = encode_chunk(
+    payload, scales, decoded_chunks = encode_decode_chunk_rows(
         chunks,
         fmt.exponent_bits,
         fmt.mantissa_bits,
@@ -333,6 +359,12 @@ def encode_uniform_packet(
             chunk_size,
         ),
         producer_id=str(producer_id),
+        _decoded_cache=unchunk_tensor_by_context(
+            decoded_chunks.reshape(chunked_shape),
+            original_shape,
+            padding,
+        ),
+        _trusted_contents=True,
     )
 
 
@@ -343,6 +375,8 @@ def encode_dynamic_packet(
     *,
     producer_id: str = "",
     chunk_size: int = HARDWARE_CHUNK_SIZE,
+    _candidate_params: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
+    _trusted_format_ids: bool = False,
 ) -> ActivationPacket:
     """Encode chunks using format IDs produced by the dynamic selector.
 
@@ -352,62 +386,76 @@ def encode_dynamic_packet(
     """
     tensor = _require_hardware_tensor(tensor, chunk_size)
     formats = _format_table(candidate_formats)
-    encode_chunk, _ = _cuda_codec()
+    _, _, _, encode_selected_chunk_rows = _cuda_codec()
 
-    # One codec pass establishes the chunk count and scale layout. It is reused
-    # as candidate 0's encoded source if that format is selected.
-    first = formats[0]
     chunks, original_shape, chunked_shape, padding = _activation_chunks(
         tensor,
         chunk_size,
     )
-    first_data, scales = encode_chunk(
-        chunks,
-        first.exponent_bits,
-        first.mantissa_bits,
-        first.is_signed,
-    )
-    num_chunks = int(scales.numel())
+    num_chunks = int(chunks.shape[0])
     format_ids = _normalize_format_ids(
         best_format_ids,
         device=tensor.device,
         num_chunks=num_chunks,
         num_formats=len(formats),
+        check_bounds=not _trusted_format_ids,
     )
-    offsets = _word_offsets(format_ids, formats)
-    total_words = int(offsets[-1].item())
-    payload = torch.empty(total_words, dtype=torch.int32, device=tensor.device)
-
-    selected_format_ids = (
-        [int(value) for value in torch.unique(format_ids, sorted=True).tolist()]
-        if num_chunks
-        else []
-    )
-    for format_id in selected_format_ids:
-        fmt = formats[format_id]
-        if format_id == 0:
-            encoded = first_data
-        else:
-            encoded, candidate_scales = encode_chunk(
-                chunks,
-                fmt.exponent_bits,
-                fmt.mantissa_bits,
-                fmt.is_signed,
-            )
-            if candidate_scales.numel() != num_chunks:
-                raise RuntimeError(
-                    "CUDA activation codecs produced inconsistent chunk layouts "
-                    f"for formats {first.name!r} and {fmt.name!r}."
-                )
-
-        chunk_indices = torch.nonzero(format_ids == format_id, as_tuple=False).flatten()
-        source = encoded.reshape(num_chunks, fmt.words_per_chunk)[chunk_indices]
-        destinations = offsets[chunk_indices, None] + torch.arange(
-            fmt.words_per_chunk,
-            dtype=torch.int64,
+    common_width = formats[0].bit_width
+    same_width = all(fmt.bit_width == common_width for fmt in formats)
+    if _candidate_params is None:
+        cands_e = torch.tensor(
+            [fmt.exponent_bits for fmt in formats],
+            dtype=torch.int32,
             device=tensor.device,
         )
-        payload[destinations.reshape(-1)] = source.reshape(-1)
+        cands_m = torch.tensor(
+            [fmt.mantissa_bits for fmt in formats],
+            dtype=torch.int32,
+            device=tensor.device,
+        )
+        cands_sgn = torch.tensor(
+            [int(fmt.is_signed) for fmt in formats],
+            dtype=torch.int32,
+            device=tensor.device,
+        )
+    else:
+        cands_e, cands_m, cands_sgn = _candidate_params
+
+    if same_width:
+        offsets = torch.arange(
+            num_chunks + 1,
+            dtype=torch.int64,
+            device=tensor.device,
+        ) * formats[0].words_per_chunk
+        payload, scales, decoded_chunks = encode_selected_chunk_rows(
+            chunks,
+            format_ids,
+            cands_e,
+            cands_m,
+            cands_sgn,
+            offsets,
+            num_chunks * formats[0].words_per_chunk,
+        )
+    else:
+        # A dense mixed-width packet needs its terminal offset on the host to
+        # allocate the exact payload size. Packing itself remains one CUDA pass.
+        offsets = _word_offsets(format_ids, formats)
+        payload_words = int(offsets[-1].item())
+        payload, scales, decoded_chunks = encode_selected_chunk_rows(
+            chunks,
+            format_ids,
+            cands_e,
+            cands_m,
+            cands_sgn,
+            offsets,
+            payload_words,
+        )
+
+    decoded_cache = unchunk_tensor_by_context(
+        decoded_chunks.reshape(chunked_shape),
+        original_shape,
+        padding,
+    )
 
     return ActivationPacket(
         payload=payload.contiguous(),
@@ -423,10 +471,16 @@ def encode_dynamic_packet(
             chunk_size,
         ),
         producer_id=str(producer_id),
+        _decoded_cache=decoded_cache,
+        _trusted_contents=True,
     )
 
 
-def _validate_packet(packet: ActivationPacket) -> None:
+def _validate_packet(
+    packet: ActivationPacket,
+    *,
+    check_contents: bool,
+) -> None:
     if packet.version != ACTIVATION_PACKET_VERSION:
         raise ValueError(
             f"Unsupported activation packet version {packet.version}; "
@@ -457,6 +511,18 @@ def _validate_packet(packet: ActivationPacket) -> None:
         raise TypeError(f"Activation word_offsets must be int64; got {packet.word_offsets.dtype}.")
     if any(not tensor.is_contiguous() for tensor in tensors):
         raise ValueError("Encoded activation packet tensors must be contiguous.")
+    if packet._decoded_cache is not None:
+        decoded = packet._decoded_cache
+        if not decoded.is_cuda or decoded.device != packet.device:
+            raise ValueError("Cached decoded activation must share the packet CUDA device.")
+        if decoded.dtype != torch.float32:
+            raise TypeError(
+                f"Cached decoded activation must be float32; got {decoded.dtype}."
+            )
+        if tuple(decoded.shape) != packet.layout.original_shape:
+            raise ValueError(
+                "Cached decoded activation shape must match layout.original_shape."
+            )
 
     num_chunks = packet.layout.num_chunks
     chunked_shape = packet.layout.chunked_shape
@@ -482,29 +548,32 @@ def _validate_packet(packet: ActivationPacket) -> None:
             "the terminal payload offset."
         )
 
-    if num_chunks:
+    if check_contents and num_chunks:
         minimum = int(packet.format_ids.min().item())
         maximum = int(packet.format_ids.max().item())
         if minimum < 0 or maximum >= len(packet.formats):
             raise ValueError(
                 f"Activation packet format IDs are outside [0, {len(packet.formats) - 1}]."
             )
-    if int(packet.word_offsets[0].item()) != 0:
-        raise ValueError("Activation packet word_offsets must start at zero.")
-    if int(packet.word_offsets[-1].item()) != packet.payload.numel():
-        raise ValueError("Activation packet terminal word offset must equal payload length.")
+    if check_contents:
+        if int(packet.word_offsets[0].item()) != 0:
+            raise ValueError("Activation packet word_offsets must start at zero.")
+        if int(packet.word_offsets[-1].item()) != packet.payload.numel():
+            raise ValueError("Activation packet terminal word offset must equal payload length.")
 
-    expected_offsets = _word_offsets(packet.format_ids, packet.formats)
-    if not torch.equal(packet.word_offsets, expected_offsets):
-        raise ValueError(
-            "Activation packet word offsets do not match the selected format widths."
-        )
+        expected_offsets = _word_offsets(packet.format_ids, packet.formats)
+        if not torch.equal(packet.word_offsets, expected_offsets):
+            raise ValueError(
+                "Activation packet word offsets do not match the selected format widths."
+            )
 
 
 def decode_activation_packet(packet: ActivationPacket) -> torch.Tensor:
     """Decode a uniform or mixed-format activation packet to FP32."""
-    _validate_packet(packet)
-    _, decode_chunk = _cuda_codec()
+    _validate_packet(packet, check_contents=not packet._trusted_contents)
+    if packet._decoded_cache is not None:
+        return packet._decoded_cache
+    _, decode_chunk, _, _ = _cuda_codec()
     shape = packet.layout.original_shape
     num_chunks = packet.layout.num_chunks
     if num_chunks == 0:
@@ -666,6 +735,8 @@ class ActivationTransport:
         candidate_formats: Sequence[str],
         *,
         producer_id: str = "",
+        candidate_params: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
+        trusted_format_ids: bool = False,
     ) -> ActivationPacket | torch.Tensor:
         if self.mode == REFERENCE_TRANSPORT:
             return _reference_dynamic(
@@ -681,6 +752,8 @@ class ActivationTransport:
             candidate_formats,
             producer_id=producer_id,
             chunk_size=self.chunk_size,
+            _candidate_params=candidate_params,
+            _trusted_format_ids=trusted_format_ids,
         )
         return packet
 

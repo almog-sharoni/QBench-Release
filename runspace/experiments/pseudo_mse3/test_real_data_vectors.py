@@ -8,9 +8,13 @@ import torch.nn as nn
 
 from runspace.core.runner import Runner
 from runspace.experiments.pseudo_mse3.generate_real_data_vectors import (
+    BaseChunkAnalysis,
     RealActivationCollector,
+    StatsBucket,
+    _analyze_chunks_reference,
     analyze_chunks,
     fixed_analysis_from_diff,
+    fixed_analyses_from_diff,
     get_args,
     rebuild_mismatch_summary,
     run_real_data_vectors,
@@ -55,8 +59,8 @@ def test_fixed_analysis_exposes_per_element_floor_bias():
     assert fixed.contributions.tolist() == [[0, -1]]
     assert fixed.chunk_sum.item() == -1
     assert fixed.choose_exp2.item()
-    assert nearest.contributions.tolist() == [[1, 0]]
-    assert nearest.chunk_sum.item() == 1
+    assert nearest.contributions.tolist() == [[4, -2]]
+    assert nearest.chunk_sum.item() == 2
     assert not nearest.choose_exp2.item()
     fixed_zero_exp1 = fixed_analysis_from_diff(
         torch.tensor([[0.3, 0.2]], dtype=torch.float32),
@@ -76,6 +80,81 @@ def test_fixed_analysis_exposes_per_element_floor_bias():
     assert fixed_zero_exp2.choose_exp2.item()
     with pytest.raises(OverflowError):
         fixed_analysis_from_diff(torch.ones((1, 1)), bits_to_take=40)
+
+
+@pytest.mark.parametrize("fixed_rounding", ["floor", "nearest"])
+@pytest.mark.parametrize("tie_break", ["exp1", "exp2"])
+def test_batched_fixed_analysis_and_stats_are_exactly_scalar_equivalent(
+    fixed_rounding,
+    tie_break,
+):
+    generator = torch.Generator().manual_seed(2026)
+    raw_chunks = torch.randn((17, 128), generator=generator, dtype=torch.float32)
+    base = analyze_chunks(raw_chunks, CANDIDATES)
+    bits_values = (0, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 24)
+    batched = fixed_analyses_from_diff(
+        base.pseudo_diff,
+        bits_values,
+        fixed_rounding=fixed_rounding,
+        tie_break=tie_break,
+    )
+    runtime_choice = base.reference_choose_exp2.clone()
+    runtime_choice[::3] = ~runtime_choice[::3]
+    count, batched_counts, batched_aggregates = StatsBucket.compute_deltas(
+        base,
+        batched,
+        runtime_choice,
+        bits_values,
+    )
+
+    assert count == raw_chunks.shape[0]
+    for index, bits_to_take in enumerate(bits_values):
+        scalar = fixed_analysis_from_diff(
+            base.pseudo_diff,
+            bits_to_take,
+            fixed_rounding=fixed_rounding,
+            tie_break=tie_break,
+        )
+        assert torch.equal(batched[bits_to_take].contributions, scalar.contributions)
+        assert torch.equal(batched[bits_to_take].chunk_sum, scalar.chunk_sum)
+        assert torch.equal(batched[bits_to_take].choose_exp2, scalar.choose_exp2)
+        scalar_count, scalar_counts, scalar_aggregates = StatsBucket.compute_delta(
+            base,
+            scalar,
+            runtime_choice,
+        )
+        assert scalar_count == count
+        assert torch.equal(batched_counts[index], scalar_counts)
+        assert torch.equal(batched_aggregates[index], scalar_aggregates)
+
+
+@pytest.mark.parametrize(
+    "candidates",
+    [
+        ("fp8_e1m6", "fp8_e2m5"),
+        ("ufp8_e1m7", "ufp8_e2m6"),
+    ],
+)
+def test_cuda_analysis_is_bitwise_identical_to_python_reference(candidates):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is required")
+    torch.manual_seed(2027)
+    raw_chunks = torch.randn(31, 128, device="cuda", dtype=torch.float32)
+    raw_chunks[0, :8] = torch.tensor(
+        [0.0, -0.0, 2.0**-126, -(2.0**-126), 0.5, -0.5, 1.0, -1.0],
+        device="cuda",
+    )
+
+    fast = analyze_chunks(raw_chunks, candidates)
+    reference = _analyze_chunks_reference(raw_chunks, candidates)
+
+    for field_name in BaseChunkAnalysis.__dataclass_fields__:
+        fast_value = getattr(fast, field_name)
+        reference_value = getattr(reference, field_name)
+        if isinstance(fast_value, torch.Tensor):
+            assert torch.equal(fast_value, reference_value), field_name
+        else:
+            assert fast_value == reference_value
 
 
 def test_runner_preserves_chunk_observer_identity():
@@ -136,7 +215,7 @@ def test_real_activation_collector_counts_and_exports_round_trip(tmp_path):
     generator = torch.Generator().manual_seed(42)
     raw_chunks = torch.randn((12, 128), generator=generator, dtype=torch.float32)
     base = analyze_chunks(raw_chunks, CANDIDATES)
-    fixed = fixed_analysis_from_diff(base.exact_diff, bits_to_take=1)
+    fixed = fixed_analysis_from_diff(base.pseudo_diff, bits_to_take=1)
     runtime_choice = fixed.choose_exp2.clone()
     runtime_choice[:6] = ~runtime_choice[:6]
     runtime_indices = _indices_from_choice(runtime_choice)
@@ -166,6 +245,32 @@ def test_real_activation_collector_counts_and_exports_round_trip(tmp_path):
     samples = collector.samples()
     assert sum(sample.category == "mismatch" for sample in samples) == 2
     assert sum(sample.category == "control" for sample in samples) == 1
+    full_mismatch = fixed.choose_exp2 != runtime_choice
+    ordinals = torch.arange(raw_chunks.shape[0], dtype=torch.int64)
+    for category, mask, capacity in (
+        ("mismatch", full_mismatch, 2),
+        ("control", ~full_mismatch, 1),
+    ):
+        priorities = collector._priorities(ordinals, 1, category)
+        expected = sorted(
+            (
+                (int(priorities[index]), int(index))
+                for index in torch.nonzero(mask, as_tuple=False).flatten()
+            ),
+            key=lambda item: item[0],
+        )[:capacity]
+        actual = sorted(
+            (
+                (sample.priority, sample.global_chunk_index)
+                for sample in samples
+                if sample.category == category
+            ),
+            key=lambda item: item[0],
+        )
+        assert actual == expected
+        for sample in samples:
+            if sample.category == category:
+                assert torch.equal(sample.raw_chunk, raw_chunks[sample.global_chunk_index])
 
     paths = write_outputs(
         str(tmp_path),
@@ -322,17 +427,19 @@ def test_cuda_activation_style_nearest_matches_python_reference():
     from runspace.src.quantization.cuda import search_best_chunk_format
 
     generator = torch.Generator().manual_seed(123)
-    raw_cpu = torch.randn((32, 128), generator=generator, dtype=torch.float32)
+    raw_cpu = torch.randn((512, 128), generator=generator, dtype=torch.float32)
     base = analyze_chunks(raw_cpu, CANDIDATES)
     raw_cuda = raw_cpu.cuda()
     pair = validate_pseudo_mse_candidate_pairs(CANDIDATES)[0]
+    bits_values = (12, 16, 20)
+    fixed_analyses = fixed_analyses_from_diff(
+        base.pseudo_diff,
+        bits_values,
+        fixed_rounding="nearest",
+    )
 
-    for bits_to_take in (1, 5, 9):
-        fixed = fixed_analysis_from_diff(
-            base.exact_diff,
-            bits_to_take=bits_to_take,
-            fixed_rounding="nearest",
-        )
+    for bits_to_take in bits_values:
+        fixed = fixed_analyses[bits_to_take]
         expected_indices = _indices_from_choice(fixed.choose_exp2)
         best_indices, _scales, _quantized, _unscaled = search_best_chunk_format(
             raw_cuda.reshape(-1).contiguous(),

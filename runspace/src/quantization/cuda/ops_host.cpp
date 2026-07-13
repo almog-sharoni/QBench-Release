@@ -275,6 +275,97 @@ encode_chunk(torch::Tensor x, int e, int m, bool is_signed)
     return {data, scales};
 }
 
+static std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+encode_decode_chunk_rows(torch::Tensor x, int e, int m, bool is_signed)
+{
+    TORCH_CHECK(x.is_cuda() && x.scalar_type() == torch::kFloat32 && x.is_contiguous(),
+                "encode_decode_chunk_rows: x must be contiguous CUDA float32");
+    TORCH_CHECK(x.dim() == 2 && x.size(1) == 128,
+                "encode_decode_chunk_rows: x must have shape [num_chunks, 128]");
+    const int sgn = is_signed ? 1 : 0;
+    check_em(e, m, sgn, "encode_decode_chunk_rows");
+
+    constexpr int CHUNK = 128;
+    const int n_chunks = (int)x.size(0);
+    const int npw = n_per_word_em(e, m, sgn);
+    const int wpc = (CHUNK + npw - 1) / npw;
+    auto opts = x.options();
+    auto data = torch::empty({(int64_t)n_chunks * wpc}, opts.dtype(torch::kInt32));
+    auto scales = torch::empty({n_chunks}, opts.dtype(torch::kFloat32));
+    auto decoded = torch::empty_like(x);
+    if (n_chunks == 0) return {data, scales, decoded};
+
+    qbench_lp::launch_encode_decode_chunk(
+        x.data_ptr<float>(),
+        reinterpret_cast<std::uint32_t*>(data.data_ptr<int32_t>()),
+        scales.data_ptr<float>(),
+        decoded.data_ptr<float>(),
+        n_chunks * CHUNK, e, m, sgn, current_stream_ptr());
+    return {data, scales, decoded};
+}
+
+static std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+encode_selected_chunk_rows(torch::Tensor x,
+                           torch::Tensor format_ids,
+                           torch::Tensor cands_e,
+                           torch::Tensor cands_m,
+                           torch::Tensor cands_sgn,
+                           torch::Tensor word_offsets,
+                           int64_t payload_words)
+{
+    TORCH_CHECK(x.is_cuda() && x.scalar_type() == torch::kFloat32 && x.is_contiguous(),
+                "encode_selected_chunk_rows: x must be contiguous CUDA float32");
+    TORCH_CHECK(x.dim() == 2 && x.size(1) == 128,
+                "encode_selected_chunk_rows: x must have shape [num_chunks, 128]");
+    TORCH_CHECK(format_ids.is_cuda() && format_ids.scalar_type() == torch::kInt32 &&
+                format_ids.is_contiguous(),
+                "encode_selected_chunk_rows: format_ids must be contiguous CUDA int32");
+    TORCH_CHECK(cands_e.is_cuda() && cands_e.scalar_type() == torch::kInt32 && cands_e.is_contiguous(),
+                "encode_selected_chunk_rows: cands_e must be contiguous CUDA int32");
+    TORCH_CHECK(cands_m.is_cuda() && cands_m.scalar_type() == torch::kInt32 && cands_m.is_contiguous(),
+                "encode_selected_chunk_rows: cands_m must be contiguous CUDA int32");
+    TORCH_CHECK(cands_sgn.is_cuda() && cands_sgn.scalar_type() == torch::kInt32 && cands_sgn.is_contiguous(),
+                "encode_selected_chunk_rows: cands_sgn must be contiguous CUDA int32");
+    TORCH_CHECK(word_offsets.is_cuda() && word_offsets.scalar_type() == torch::kInt64 &&
+                word_offsets.is_contiguous(),
+                "encode_selected_chunk_rows: word_offsets must be contiguous CUDA int64");
+    TORCH_CHECK(x.device() == format_ids.device() && x.device() == cands_e.device() &&
+                x.device() == cands_m.device() && x.device() == cands_sgn.device() &&
+                x.device() == word_offsets.device(),
+                "encode_selected_chunk_rows: all tensors must share one CUDA device");
+
+    const int n_chunks = (int)x.size(0);
+    const int num_candidates = (int)cands_e.numel();
+    TORCH_CHECK(format_ids.numel() == n_chunks,
+                "encode_selected_chunk_rows: one format ID is required per chunk");
+    TORCH_CHECK(word_offsets.numel() == n_chunks + 1,
+                "encode_selected_chunk_rows: word_offsets must have num_chunks + 1 entries");
+    TORCH_CHECK(num_candidates > 0 && cands_m.numel() == num_candidates &&
+                cands_sgn.numel() == num_candidates,
+                "encode_selected_chunk_rows: candidate tensors must have the same non-zero length");
+    TORCH_CHECK(payload_words >= 0,
+                "encode_selected_chunk_rows: payload_words must be non-negative");
+
+    auto opts = x.options();
+    auto data = torch::empty({payload_words}, opts.dtype(torch::kInt32));
+    auto scales = torch::empty({n_chunks}, opts.dtype(torch::kFloat32));
+    auto decoded = torch::empty_like(x);
+    if (n_chunks == 0) return {data, scales, decoded};
+
+    qbench_lp::launch_encode_selected_chunk(
+        x.data_ptr<float>(),
+        format_ids.data_ptr<int>(),
+        cands_e.data_ptr<int>(),
+        cands_m.data_ptr<int>(),
+        cands_sgn.data_ptr<int>(),
+        num_candidates,
+        word_offsets.data_ptr<int64_t>(),
+        reinterpret_cast<std::uint32_t*>(data.data_ptr<int32_t>()),
+        scales.data_ptr<float>(),
+        decoded.data_ptr<float>(), n_chunks, current_stream_ptr());
+    return {data, scales, decoded};
+}
+
 static torch::Tensor
 decode_chunk(torch::Tensor data, torch::Tensor scales,
              std::vector<int64_t> original_shape,
@@ -706,6 +797,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, mod) {
             py::arg("x"), py::arg("e"), py::arg("m"),
             py::arg("is_signed") = true,
             "Chunk-mode encode (chunk_size = 128).");
+    mod.def("encode_decode_chunk_rows", &encode_decode_chunk_rows,
+            py::arg("x"), py::arg("e"), py::arg("m"),
+            py::arg("is_signed") = true,
+            "Encode packed [num_chunks,128] rows and emit their exact decoded FP32 values in one kernel.");
+    mod.def("encode_selected_chunk_rows", &encode_selected_chunk_rows,
+            py::arg("x"), py::arg("format_ids"),
+            py::arg("cands_e"), py::arg("cands_m"), py::arg("cands_sgn"),
+            py::arg("word_offsets"), py::arg("payload_words"),
+            "Encode selected formats per [num_chunks,128] row and emit decoded FP32 values.");
     mod.def("decode_chunk",   &decode_chunk,
             py::arg("data"), py::arg("scales"),
             py::arg("original_shape"),

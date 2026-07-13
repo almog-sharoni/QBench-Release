@@ -46,10 +46,10 @@ class InputOnlyActivationQuantizer:
         self.decode_reads = 0
         self.encoded_bytes = 0
         self.total_chunks = 0
-        self.sum_l1_err = 0.0
-        self.sum_mse_err = 0.0
-        self.sum_l1_norm = 0.0
-        self.sum_l2_norm = 0.0
+        self.sum_l1_err = None
+        self.sum_mse_err = None
+        self.sum_l1_norm = None
+        self.sum_l2_norm = None
         self.last_quantized_input = None
         self._original_forward = None
         self._original_quant_flags = {}
@@ -104,7 +104,11 @@ class InputOnlyActivationQuantizer:
             producer_id=producer_id,
         )
         quantized = self.activation_transport.decode(transmitted)
-        chunks = count_context_chunks(tensor, self.chunk_size)
+        chunks = (
+            transmitted.num_chunks
+            if isinstance(transmitted, ActivationPacket)
+            else count_context_chunks(tensor, self.chunk_size)
+        )
 
         self.transmission_count += 1
         self.decode_reads += 1
@@ -116,10 +120,19 @@ class InputOnlyActivationQuantizer:
         if self.collect_error_stats:
             with torch.no_grad():
                 diff = tensor - quantized
-                self.sum_l1_err += diff.abs().sum().item()
-                self.sum_mse_err += diff.square().sum().item()
-                self.sum_l1_norm += tensor.abs().sum().item()
-                self.sum_l2_norm += tensor.square().sum().item()
+                updates = {
+                    "sum_l1_err": diff.abs().sum(),
+                    "sum_mse_err": diff.square().sum(),
+                    "sum_l1_norm": tensor.abs().sum(),
+                    "sum_l2_norm": tensor.square().sum(),
+                }
+                for attr, value in updates.items():
+                    value = value.detach().to(dtype=torch.float64)
+                    current = getattr(self, attr)
+                    if current is None:
+                        setattr(self, attr, value)
+                    else:
+                        current.add_(value)
         return quantized
 
     def _quantize_value(self, value, producer_id: str):
@@ -148,8 +161,12 @@ class InputOnlyActivationQuantizer:
         return quantized
 
     def get_final_stats(self):
-        norm_l1 = self.sum_l1_err / self.sum_l1_norm if self.sum_l1_norm else 0.0
-        norm_mse = self.sum_mse_err / self.sum_l2_norm if self.sum_l2_norm else 0.0
+        sum_l1_err = float(self.sum_l1_err.item()) if self.sum_l1_err is not None else 0.0
+        sum_mse_err = float(self.sum_mse_err.item()) if self.sum_mse_err is not None else 0.0
+        sum_l1_norm = float(self.sum_l1_norm.item()) if self.sum_l1_norm is not None else 0.0
+        sum_l2_norm = float(self.sum_l2_norm.item()) if self.sum_l2_norm is not None else 0.0
+        norm_l1 = sum_l1_err / sum_l1_norm if sum_l1_norm else 0.0
+        norm_mse = sum_mse_err / sum_l2_norm if sum_l2_norm else 0.0
         stage = {
             "kind": "input",
             "producer_nodes": ["model_input"],
@@ -173,8 +190,8 @@ class InputOnlyActivationQuantizer:
             "activation_plan": {"model_input": stage},
             "norm_l1": norm_l1,
             "norm_mse": norm_mse,
-            "total_l1": self.sum_l1_err,
-            "total_mse": self.sum_mse_err,
+            "total_l1": sum_l1_err,
+            "total_mse": sum_mse_err,
             "collect_error_stats": self.collect_error_stats,
             "layer_stats": {
                 "model_input": {

@@ -712,9 +712,17 @@ def pseudo_mse3_fixed_point_from_diff(diff, bits_to_take, fixed_rounding="floor"
         return diff
 
     scaled = diff * float(2.0**bits_to_take)
+    scaled_pos = torch.where(scaled>0,scaled,0)
+    scaled_neg = torch.where(scaled<0,scaled,0)
+    scaled_neg = scaled_neg * 4.0
+
     if fixed_rounding == PSEUDO_MSE3_FIXED_ROUNDING_NEAREST:
-        rounded_magnitude = torch.floor(scaled.abs() + 0.5)
-        fixed = torch.where(scaled < 0, -rounded_magnitude, rounded_magnitude)
+        rounded_magnitude_pos = torch.floor(scaled_pos.abs() + 0.5)
+        rounded_magnitude_neg = torch.floor(scaled_neg.abs() + 0.5)
+
+        rounded_magnitude_pos = rounded_magnitude_pos * 4.0
+
+        fixed = torch.where(scaled < 0, -rounded_magnitude_neg, rounded_magnitude_pos)
     else:
         fixed = torch.floor(scaled)
 
@@ -739,14 +747,13 @@ def pseudo_mse3_err2_minus_err1_from_scaled(
     bits_to_take=0,
     fixed_rounding="floor",
 ):
-    """Return exact per-value squared-error diff err2^2 - err1^2.
+    """Return normalized per-value squared-error diff err2^2 - err1^2.
 
-    Values are already chunk-scaled into [-2, 2).  The returned diff is the
-    exact floating-point squared-error difference between the exp=2 and exp=1
-    reconstructed values.  The assertion checks the normalized diff before the
-    per-chunk sum: diff * 2^(2*M) must be in the rounded-path range [-1/4, 3).
-    When bits_to_take is positive, the per-value diff is converted to int32
-    fixed point using ``fixed_rounding`` before accumulation.
+    Values are already chunk-scaled into [-2, 2). The squared-error difference
+    is normalized by 2^(2*M) before it is returned or converted to fixed point.
+    The normalized value must be in the rounded-path range [-1/4, 3). When
+    bits_to_take is positive, it is converted to int32 fixed point using
+    ``fixed_rounding`` before accumulation.
     """
     m1 = int(exp1_mantissa_width)
     m2 = int(exp2_mantissa_width)
@@ -769,7 +776,8 @@ def pseudo_mse3_err2_minus_err1_from_scaled(
     err1_sq = (values - q1_scaled).pow(2)
     err2_sq = (values - q2_scaled).pow(2)
     diff = err2_sq - err1_sq
-    _assert_pseudo_mse3_scaled_diff_ranges(diff * float(2.0 ** (2 * m1)))
+    diff = diff * float(2.0 ** (2 * m1))
+    _assert_pseudo_mse3_scaled_diff_ranges(diff)
     return pseudo_mse3_fixed_point_from_diff(
         diff,
         bits_to_take,
@@ -777,8 +785,10 @@ def pseudo_mse3_err2_minus_err1_from_scaled(
     )
 
 
-def pseudo_mse3_choose_exp2_from_diff(diff, tie_break="exp1"):
+def pseudo_mse3_choose_exp2_from_diff(diff, tie_break="exp1", fixed_rounding="floor"):
     """Choose exp=2 from the chunk sum under the requested exact-tie policy."""
+    # if fixed_rounding == PSEUDO_MSE3_FIXED_ROUNDING_NEAREST:
+    #     diff = torch.where(diff<0,diff/4,diff)
     chunk_sum = diff.sum(dim=1)
     if normalize_pseudo_mse3_tie_break(tie_break) == PSEUDO_MSE3_TIE_BREAK_EXP2:
         return chunk_sum <= 0

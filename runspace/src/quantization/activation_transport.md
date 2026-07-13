@@ -21,6 +21,16 @@ default for dynamic, uniform, and model-input-only activation quantization. Use
 `transport: reference` explicitly for CPU development or the mathematical
 reference path.
 
+On CUDA, packet construction packs and reconstructs each chunk in one kernel.
+The reconstructed value is cached on the internally generated packet, but it
+is derived from the same encoded exponent, mantissa, and sign fields as a
+separate decode. Payload bytes, scales, format IDs, and mixed-width offsets
+therefore retain the packet v2 representation. Internal packets use structural
+validation to avoid synchronizing the CUDA stream at every boundary; call
+`packet.validate()` when a synchronous device-content validation is required.
+Fan-out decodes are cloned per consumer so in-place consumers retain distinct
+storage.
+
 Runner also translates the legacy `adapter.input_quantization: true` or
 `adapter.output_quantization: true` settings into uniform transport. If the
 adapter flag is omitted, the adapter factory's historical input-quantization

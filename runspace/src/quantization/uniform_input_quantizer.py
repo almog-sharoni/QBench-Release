@@ -7,13 +7,18 @@ try:
     from ..registry.op_registry import OpRegistry
     from ..ops.quant_base import quantize_tensor
     from .chunking import count_context_chunks, chunk_tensor_by_context, unchunk_tensor_by_context
-    from .activation_transport import ActivationTransport, normalize_activation_transport
+    from .activation_transport import (
+        ActivationPacket,
+        ActivationTransport,
+        normalize_activation_transport,
+    )
     from .activation_transport_runtime import ActivationBypass, ActivationTransportRuntime
 except ImportError:
     from src.registry.op_registry import OpRegistry
     from src.ops.quant_base import quantize_tensor
     from src.quantization.chunking import count_context_chunks, chunk_tensor_by_context, unchunk_tensor_by_context
     from src.quantization.activation_transport import (
+        ActivationPacket,
         ActivationTransport,
         normalize_activation_transport,
     )
@@ -88,10 +93,10 @@ class UniformInputQuantizer:
         self.layer_unsigned_input_indices = {}
         self.post_unsigned_layers = self._find_post_unsigned_layers()
         self.stats = {
-            'sum_l1_err': 0.0,
-            'sum_mse_err': 0.0,
-            'sum_l1_norm': 0.0,
-            'sum_l2_norm': 0.0,
+            'sum_l1_err': None,
+            'sum_mse_err': None,
+            'sum_l1_norm': None,
+            'sum_l2_norm': None,
         }
 
     @staticmethod
@@ -524,10 +529,18 @@ class UniformInputQuantizer:
             if self.collect_error_stats:
                 with torch.no_grad():
                     diff = x - x_q
-                    self.stats['sum_l1_err'] += diff.abs().sum().item()
-                    self.stats['sum_mse_err'] += diff.pow(2).sum().item()
-                    self.stats['sum_l1_norm'] += x.abs().sum().item()
-                    self.stats['sum_l2_norm'] += x.pow(2).sum().item()
+                    updates = {
+                        'sum_l1_err': diff.abs().sum(),
+                        'sum_mse_err': diff.pow(2).sum(),
+                        'sum_l1_norm': x.abs().sum(),
+                        'sum_l2_norm': x.pow(2).sum(),
+                    }
+                    for key, value in updates.items():
+                        value = value.detach().to(dtype=torch.float64)
+                        if self.stats[key] is None:
+                            self.stats[key] = value
+                        else:
+                            self.stats[key].add_(value)
 
             stats = self.layer_stats.setdefault(
                 layer_name,
@@ -574,7 +587,9 @@ class UniformInputQuantizer:
                     deque(),
                 ).append(tensor.detach())
 
-            if self.quant_mode == 'chunk':
+            if isinstance(transmitted, ActivationPacket):
+                total_chunks = transmitted.num_chunks
+            elif self.quant_mode == 'chunk':
                 total_chunks = count_context_chunks(tensor, self.chunk_size)
             else:
                 total_chunks = tensor.shape[0] if tensor.dim() > 0 else 1
@@ -602,10 +617,18 @@ class UniformInputQuantizer:
             tensor = pending.popleft()
             with torch.no_grad():
                 diff = tensor - quantized
-                self.stats['sum_l1_err'] += diff.abs().sum().item()
-                self.stats['sum_mse_err'] += diff.pow(2).sum().item()
-                self.stats['sum_l1_norm'] += tensor.abs().sum().item()
-                self.stats['sum_l2_norm'] += tensor.pow(2).sum().item()
+                updates = {
+                    'sum_l1_err': diff.abs().sum(),
+                    'sum_mse_err': diff.pow(2).sum(),
+                    'sum_l1_norm': tensor.abs().sum(),
+                    'sum_l2_norm': tensor.pow(2).sum(),
+                }
+                for key, value in updates.items():
+                    value = value.detach().to(dtype=torch.float64)
+                    if self.stats[key] is None:
+                        self.stats[key] = value
+                    else:
+                        self.stats[key].add_(value)
 
         self._transport_runtime = ActivationTransportRuntime(
             self.model,
@@ -646,13 +669,23 @@ class UniformInputQuantizer:
         self.hooks = []
 
     def get_final_stats(self):
-        norm_l1 = self.stats['sum_l1_err'] / self.stats['sum_l1_norm'] if self.stats['sum_l1_norm'] > 0 else 0.0
-        norm_mse = self.stats['sum_mse_err'] / self.stats['sum_l2_norm'] if self.stats['sum_l2_norm'] > 0 else 0.0
+        scalar_stats = {
+            key: (float(value.item()) if isinstance(value, torch.Tensor) else 0.0)
+            for key, value in self.stats.items()
+        }
+        norm_l1 = (
+            scalar_stats['sum_l1_err'] / scalar_stats['sum_l1_norm']
+            if scalar_stats['sum_l1_norm'] > 0 else 0.0
+        )
+        norm_mse = (
+            scalar_stats['sum_mse_err'] / scalar_stats['sum_l2_norm']
+            if scalar_stats['sum_l2_norm'] > 0 else 0.0
+        )
         result = {
             'norm_l1': norm_l1,
             'norm_mse': norm_mse,
-            'total_l1': self.stats['sum_l1_err'],
-            'total_mse': self.stats['sum_mse_err'],
+            'total_l1': scalar_stats['sum_l1_err'],
+            'total_mse': scalar_stats['sum_mse_err'],
             'layer_stats': self.layer_stats,
             'collect_error_stats': self.collect_error_stats,
         }

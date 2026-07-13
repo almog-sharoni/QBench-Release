@@ -29,6 +29,7 @@ class _TransportValue:
     value: ActivationPacket | torch.Tensor
     transmission_id: int
     observed: bool = False
+    decoded: torch.Tensor | None = None
 
 
 class _StageEncoder(nn.Module):
@@ -68,7 +69,7 @@ class _StageDecoder(nn.Module):
                 f"got {type(value).__name__}"
             )
         runtime.decode_reads += 1
-        decoded = runtime.transport.decode(value.value)
+        decoded = runtime.decode_stage(value, self.stage_id)
         runtime.observe_decode(
             value,
             self.stage_id,
@@ -120,11 +121,30 @@ class ActivationTransportRuntime:
         self._original_quant_flags = {}
         self._next_transmission_id = 0
         self._metadata_bypass_stages = {}
+        self._stages_by_id = {}
 
     def _stage_map(self):
-        if self.plan is None:
-            return {}
-        return {stage.stage_id: stage for stage in self.plan.stages}
+        return self._stages_by_id
+
+    def decode_stage(
+        self,
+        transmitted: _TransportValue,
+        stage_id: str,
+    ) -> torch.Tensor:
+        value = transmitted.value
+        if not isinstance(value, ActivationPacket):
+            return self.transport.decode(value)
+
+        stage = self._stages_by_id.get(stage_id)
+        if stage is None or not stage.has_fanout:
+            return self.transport.decode(value)
+
+        # Encoded fan-out previously decoded each consumer into distinct
+        # storage. Decode once, then clone the cached value so in-place users
+        # retain the same aliasing behavior without repeating the codec work.
+        if transmitted.decoded is None:
+            transmitted.decoded = self.transport.decode(value)
+        return transmitted.decoded.clone()
 
     def encode_stage(self, stage_id: str, tensor: torch.Tensor):
         stage = self._stage_map().get(stage_id)
@@ -277,6 +297,9 @@ class ActivationTransportRuntime:
                 copy.deepcopy(self.model.graph),
             )
         self.plan = plan_activation_stages(planning_model, **planner_kwargs)
+        self._stages_by_id = {
+            stage.stage_id: stage for stage in self.plan.stages
+        }
         planned_nodes = {
             node.name: node for node in self.plan.graph_module.graph.nodes
         }
@@ -318,6 +341,7 @@ class ActivationTransportRuntime:
         self.graph_module = None
         self.plan = None
         self._metadata_bypass_stages.clear()
+        self._stages_by_id.clear()
         self._installed = False
 
     def transport_stats(self):

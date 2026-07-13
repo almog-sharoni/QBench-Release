@@ -221,7 +221,9 @@ __device__ __forceinline__ float pseudo_mse3_err2_minus_err1(
     // fixed-point conversion can otherwise amplify that mathematical tie.
     const float err1_sq = __fmul_rn(err1, err1);
     const float err2_sq = __fmul_rn(err2, err2);
-    return __fsub_rn(err2_sq, err1_sq);
+    const float diff = __fsub_rn(err2_sq, err1_sq);
+    const float normalization = ldexpf(1.0f, 2 * m1);
+    return __fmul_rn(diff, normalization);
 }
 
 __device__ __forceinline__ float pseudo_mse3_apply_bits_to_take(
@@ -236,9 +238,19 @@ __device__ __forceinline__ float pseudo_mse3_apply_bits_to_take(
     const float scaled = __fmul_rn(diff, scale);
     int fixed;
     if (fixed_rounding_mode == PSEUDO_MSE3_FIXED_NEAREST) {
-        const float rounded_magnitude = floorf(__fadd_rn(fabsf(scaled), 0.5f));
-        const int fixed_magnitude = __float2int_rz(rounded_magnitude);
-        fixed = (scaled < 0.0f) ? -fixed_magnitude : fixed_magnitude;
+        // Match pseudo_mse3_fixed_point_from_diff: weight negative scaled
+        // values before applying half-away-from-zero rounding.
+        const float weighted_scaled =
+            (scaled < 0.0f) ? __fmul_rn(scaled, 4.0f) : scaled;
+        const float rounded_magnitude =
+            floorf(__fadd_rn(fabsf(weighted_scaled), 0.5f));
+        // Match the Python path's post-rounding weight for positive values.
+        const float post_round_magnitude =
+            (weighted_scaled > 0.0f)
+                ? __fmul_rn(rounded_magnitude, 4.0f)
+                : rounded_magnitude;
+        const int fixed_magnitude = __float2int_rz(post_round_magnitude);
+        fixed = (weighted_scaled < 0.0f) ? -fixed_magnitude : fixed_magnitude;
     } else {
         fixed = __float2int_rd(scaled);
     }

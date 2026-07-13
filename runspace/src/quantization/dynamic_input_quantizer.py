@@ -188,6 +188,9 @@ class DynamicInputQuantizer:
         self.activation_transport = None
         self._transport_runtime = None
         self._candidate_param_cache = {}
+        self._producer_candidate_cache = {}
+        self._transport_nodes = {}
+        self._transport_modules = {}
         self.unsigned_input_sources = {
             str(source).lower()
             for source in (unsigned_input_sources or [])
@@ -610,7 +613,7 @@ class DynamicInputQuantizer:
         )
 
         def encode_stage(stage, tensor):
-            candidates = self._producer_candidates(stage)
+            candidates = self._producer_candidate_cache[stage.stage_id]
             if candidates is None:
                 return ActivationBypass(tensor)
             quantized, best_indices = self._quantize_input_tensor(
@@ -627,6 +630,11 @@ class DynamicInputQuantizer:
                     best_indices,
                     candidates,
                     producer_id=stage.stage_id,
+                    candidate_params=self._candidate_params(
+                        candidates,
+                        device=tensor.device,
+                    ),
+                    trusted_format_ids=True,
                 )
             stats = self.layer_stats.get(stage.stage_id)
             if stats is not None:
@@ -649,11 +657,20 @@ class DynamicInputQuantizer:
         ).install()
         self._transport_runtime = runtime
         try:
-            for stage in runtime.plan.stages:
-                self._producer_candidates(stage)
+            self._transport_nodes = {
+                node.name: node for node in runtime.plan.graph_module.graph.nodes
+            }
+            self._transport_modules = dict(runtime.plan.graph_module.named_modules())
+            self._producer_candidate_cache = {
+                stage.stage_id: self._producer_candidates(stage)
+                for stage in runtime.plan.stages
+            }
         except Exception:
             runtime.cleanup()
             self._transport_runtime = None
+            self._producer_candidate_cache = {}
+            self._transport_nodes = {}
+            self._transport_modules = {}
             raise
         signed_stages = sum(
             not stage.is_unsigned for stage in self._transport_runtime.plan.stages
@@ -719,9 +736,8 @@ class DynamicInputQuantizer:
         if self._transport_runtime is None or self._transport_runtime.plan is None:
             raise RuntimeError("Activation transport plan is not installed")
 
-        plan = self._transport_runtime.plan
-        nodes = {node.name: node for node in plan.graph_module.graph.nodes}
-        modules = dict(plan.graph_module.named_modules())
+        nodes = self._transport_nodes
+        modules = self._transport_modules
         policies = []
         for consumer_name in stage.consumer_nodes:
             consumer_node = nodes[consumer_name]
@@ -1151,6 +1167,7 @@ class DynamicInputQuantizer:
             choose_exp2 = pseudo_mse3_choose_exp2_from_diff(
                 diff,
                 tie_break=getattr(self, "pseudo_mse3_tie_break", "exp1"),
+                fixed_rounding=getattr(self, "pseudo_mse3_fixed_rounding", "floor"),
             )
         else:
             e2_win_divisor = pseudo_mse_e2_win_divisor_from_param(
@@ -1397,6 +1414,9 @@ class DynamicInputQuantizer:
         if self._transport_runtime is not None:
             self._transport_runtime.cleanup()
             self._transport_runtime = None
+        self._producer_candidate_cache = {}
+        self._transport_nodes = {}
+        self._transport_modules = {}
         for hook in self.hooks:
             hook.remove()
         self.hooks = []

@@ -53,6 +53,8 @@ encode_tensor  = _ext.encode_tensor
 decode_tensor  = _ext.decode_tensor
 encode_chunk   = _ext.encode_chunk
 decode_chunk   = _ext.decode_chunk
+encode_decode_chunk_rows = _ext.encode_decode_chunk_rows
+encode_selected_chunk_rows = _ext.encode_selected_chunk_rows
 encode_channel = _ext.encode_channel
 decode_channel = _ext.decode_channel
 
@@ -110,6 +112,7 @@ def resolve_format(q_type: str) -> tuple[int, int, bool]:
 __all__ = [
     "encode_tensor", "decode_tensor",
     "encode_chunk",  "decode_chunk",
+    "encode_decode_chunk_rows", "encode_selected_chunk_rows",
     "encode_channel", "decode_channel",
     "roundtrip_tensor", "roundtrip_chunk", "roundtrip_channel",
     "search_best_chunk_format",

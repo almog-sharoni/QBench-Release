@@ -252,3 +252,175 @@ def test_unsigned_dynamic_packet_preserves_softmax_zeros_cuda():
     assert packet.signedness == "unsigned"
     assert torch.equal(decoded == 0, probabilities == 0)
     assert torch.all(decoded >= 0)
+
+
+def _legacy_selected_packet_parts(tensor, format_ids, candidates):
+    from runspace.src.quantization.cuda import decode_chunk, encode_chunk, resolve_format
+
+    chunks, original_shape, padding = chunk_tensor_by_context(tensor, 128)
+    flat_chunks = chunks.reshape(-1, 128).contiguous()
+    num_chunks = flat_chunks.shape[0]
+    ids_cpu = [int(value) for value in format_ids.cpu().tolist()]
+    encoded_by_format = []
+    decoded_by_format = []
+    scales_by_format = []
+    words_per_chunk = []
+
+    for candidate in candidates:
+        exponent_bits, mantissa_bits, is_signed = resolve_format(candidate)
+        payload, scales = encode_chunk(
+            flat_chunks,
+            exponent_bits,
+            mantissa_bits,
+            is_signed,
+        )
+        words = payload.numel() // max(num_chunks, 1)
+        encoded_by_format.append(payload.reshape(num_chunks, words))
+        decoded_by_format.append(
+            decode_chunk(
+                payload,
+                scales,
+                [num_chunks, 128],
+                exponent_bits,
+                mantissa_bits,
+                is_signed,
+            ).reshape(num_chunks, 128)
+        )
+        scales_by_format.append(scales)
+        words_per_chunk.append(words)
+
+    offsets = [0]
+    payload_rows = []
+    decoded = torch.empty_like(flat_chunks)
+    for chunk_index, format_id in enumerate(ids_cpu):
+        payload_rows.append(encoded_by_format[format_id][chunk_index])
+        decoded[chunk_index] = decoded_by_format[format_id][chunk_index]
+        offsets.append(offsets[-1] + words_per_chunk[format_id])
+
+    payload = torch.cat(payload_rows) if payload_rows else torch.empty(
+        0,
+        dtype=torch.int32,
+        device=tensor.device,
+    )
+    decoded = unchunk_tensor_by_context(
+        decoded.reshape(chunks.shape),
+        original_shape,
+        padding,
+    )
+    return payload, scales_by_format, offsets, decoded
+
+
+def test_fused_uniform_packet_is_bitwise_identical_to_legacy_codec_cuda():
+    _require_cuda()
+    from runspace.src.quantization.cuda import decode_chunk, encode_chunk
+
+    torch.manual_seed(101)
+    tensor = torch.randn(2, 3, 14, 14, device="cuda", dtype=torch.float32)
+    chunks, original_shape, padding = chunk_tensor_by_context(tensor, 128)
+    flat_chunks = chunks.reshape(-1, 128).contiguous()
+    legacy_payload, legacy_scales = encode_chunk(flat_chunks, 4, 3, True)
+    legacy_decoded = decode_chunk(
+        legacy_payload,
+        legacy_scales,
+        [flat_chunks.shape[0], 128],
+        4,
+        3,
+        True,
+    )
+    legacy_decoded = unchunk_tensor_by_context(
+        legacy_decoded.reshape(chunks.shape),
+        original_shape,
+        padding,
+    )
+
+    packet = encode_uniform_packet(tensor, "fp8_e4m3")
+
+    assert torch.equal(packet.payload, legacy_payload)
+    assert torch.equal(packet.scales, legacy_scales)
+    assert torch.equal(packet.decode(), legacy_decoded)
+    packet.validate()
+
+
+@pytest.mark.parametrize(
+    "candidates",
+    [
+        ("fp8_e1m6", "fp8_e2m5"),
+        ("ufp8_e1m7", "ufp8_e2m6"),
+        ("fp8_e4m3", "ufp8_e4m4"),
+        ("fp4_e2m1", "fp8_e4m3"),
+    ],
+)
+def test_selected_format_packer_is_byte_exact_to_legacy_cuda(candidates):
+    _require_cuda()
+    torch.manual_seed(103)
+    tensor = torch.randn(7, 128, device="cuda", dtype=torch.float32)
+    tensor[0, :8] = torch.tensor(
+        [0.0, -0.0, 2.0**-126, -(2.0**-126), 0.5, -0.5, 1.0, -1.0],
+        device="cuda",
+    )
+    format_ids = torch.tensor([0, 1, 1, 0, 1, 0, 1], device="cuda", dtype=torch.int64)
+    expected_payload, expected_scales, expected_offsets, expected_decoded = (
+        _legacy_selected_packet_parts(tensor, format_ids, candidates)
+    )
+
+    packet = encode_dynamic_packet(tensor, format_ids, candidates)
+
+    assert torch.equal(packet.payload, expected_payload)
+    assert all(torch.equal(packet.scales, scales) for scales in expected_scales)
+    assert packet.word_offsets.cpu().tolist() == expected_offsets
+    assert torch.equal(packet.decode(), expected_decoded)
+    packet.validate()
+
+
+def test_selected_format_packer_uses_current_cuda_stream_cuda():
+    _require_cuda()
+    tensor = torch.randn(9, 128, device="cuda", dtype=torch.float32)
+    format_ids = torch.arange(9, device="cuda", dtype=torch.int64) % 2
+    stream = torch.cuda.Stream()
+    with torch.cuda.stream(stream):
+        packet = encode_dynamic_packet(
+            tensor,
+            format_ids,
+            ("fp8_e1m6", "fp8_e2m5"),
+        )
+        decoded = packet.decode()
+    stream.synchronize()
+
+    expected_payload, expected_scales, expected_offsets, expected_decoded = (
+        _legacy_selected_packet_parts(
+            tensor,
+            format_ids,
+            ("fp8_e1m6", "fp8_e2m5"),
+        )
+    )
+    assert torch.equal(packet.payload, expected_payload)
+    assert all(torch.equal(packet.scales, scales) for scales in expected_scales)
+    assert packet.word_offsets.cpu().tolist() == expected_offsets
+    assert torch.equal(decoded, expected_decoded)
+
+
+def test_selected_format_packer_is_byte_exact_for_every_supported_width_cuda():
+    _require_cuda()
+    torch.manual_seed(107)
+    tensor = torch.randn(5, 128, device="cuda", dtype=torch.float32)
+    format_ids = torch.tensor([0, 1, 0, 1, 1], device="cuda", dtype=torch.int64)
+
+    for bit_width in range(2, 17):
+        if bit_width == 2:
+            candidates = ("fp2_e1m0", "ufp2_e1m1")
+        else:
+            candidates = (
+                f"fp{bit_width}_e1m{bit_width - 2}",
+                f"fp{bit_width}_e2m{bit_width - 3}",
+            )
+        expected_payload, expected_scales, expected_offsets, expected_decoded = (
+            _legacy_selected_packet_parts(tensor, format_ids, candidates)
+        )
+        packet = encode_dynamic_packet(tensor, format_ids, candidates)
+
+        assert torch.equal(packet.payload, expected_payload), candidates
+        assert all(
+            torch.equal(packet.scales, scales) for scales in expected_scales
+        ), candidates
+        assert packet.word_offsets.cpu().tolist() == expected_offsets
+        assert torch.equal(packet.decode(), expected_decoded), candidates
