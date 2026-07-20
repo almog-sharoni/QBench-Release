@@ -186,8 +186,8 @@ def get_args():
     parser.add_argument(
         "--excluded_ops",
         type=str,
-        default="LayerNorm",
-        help="Comma-separated op names to exclude from quantization (default: LayerNorm)"
+        default="",
+        help="Comma-separated op names to exclude from quantization (default: none)"
     )
     parser.add_argument("--only_dynamic", action="store_true", help="Skip baseline runs and only run dynamic optimization")
     parser.add_argument("--only_baselines", action="store_true", help="Skip dynamic runs and only run baseline runs")

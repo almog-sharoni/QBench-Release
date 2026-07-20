@@ -75,7 +75,7 @@ class QuantSoftmax(nn.Softmax, QuantizedLayerMixin):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         capture = getattr(self, 'capture_activations', False)
-        if not getattr(self, 'input_quantization', True):
+        if not self.hardware_arithmetic_enabled():
             prob = super().forward(input)
             if capture:
                 self.last_quant_input = input.detach()

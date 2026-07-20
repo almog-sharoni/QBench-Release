@@ -103,7 +103,7 @@ class QuantSiLU(nn.SiLU, QuantizedLayerMixin):
         self.register_buffer('piecewise_lut', lut_values, persistent=False)
 
     def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
-        if not getattr(self, 'input_quantization', True):
+        if not self.hardware_arithmetic_enabled():
             return nn.functional.silu(input, inplace=self.inplace)
 
         # Input x (FP32)
@@ -163,7 +163,7 @@ class QuantHardswish(nn.Hardswish, QuantizedLayerMixin):
         self.register_buffer('piecewise_lut', lut_values, persistent=False)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        if not getattr(self, 'input_quantization', True):
+        if not self.hardware_arithmetic_enabled():
             return nn.functional.hardswish(input, inplace=self.inplace)
         x = input
         A = self.A
@@ -207,7 +207,7 @@ class QuantHardsigmoid(nn.Hardsigmoid, QuantizedLayerMixin):
         self.register_buffer('piecewise_lut', lut_values, persistent=False)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        if not getattr(self, 'input_quantization', True):
+        if not self.hardware_arithmetic_enabled():
             return nn.functional.hardsigmoid(input, inplace=self.inplace)
         x = input
         A = self.A
@@ -275,7 +275,7 @@ class QuantGELU(nn.GELU, QuantizedLayerMixin):
         self.register_buffer('piecewise_lut', lut_values, persistent=False)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        if not getattr(self, 'input_quantization', True):
+        if not self.hardware_arithmetic_enabled():
             return nn.functional.gelu(input, approximate=self.approximate)
 
         # Input x (FP32)

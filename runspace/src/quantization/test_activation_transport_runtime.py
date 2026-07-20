@@ -138,9 +138,15 @@ def test_runtime_bypasses_integer_model_inputs_before_encoding():
     runtime.cleanup()
 
 
-def test_runtime_blocks_legacy_internal_activation_fake_quantization():
-    norm = QuantLayerNorm(4, q_type="fp4_e1m2", quant_mode="chunk", chunk_size=4)
-    model = nn.Sequential(nn.Linear(4, 4), norm).eval()
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA quantization codec required")
+def test_runtime_preserves_layernorm_internal_hardware_quantization():
+    norm = QuantLayerNorm(
+        128,
+        q_type="fp4_e1m2",
+        quant_mode="chunk",
+        chunk_size=128,
+    )
+    model = nn.Sequential(nn.Linear(128, 128), norm).cuda().eval()
     internal_values = []
     original_quantize_input = norm.quantize_input
 
@@ -163,16 +169,20 @@ def test_runtime_blocks_legacy_internal_activation_fake_quantization():
     quantizer = UniformInputQuantizer(
         model,
         fmt="fp4_e1m2",
-        chunk_size=4,
+        chunk_size=128,
         transport="reference",
     )
     quantizer.register_hooks()
 
     assert norm._qbench_activation_transport_active is True
-    output = model(torch.randn(2, 4))
+    output = model(torch.randn(2, 128, device="cuda"))
 
-    assert output.shape == (2, 4)
-    assert not internal_values
+    assert output.shape == (2, 128)
+    assert internal_values
+    assert any(
+        not torch.equal(value, quantized)
+        for value, quantized in internal_values
+    )
 
     quantizer.cleanup()
     assert not hasattr(norm, "_qbench_activation_transport_active")

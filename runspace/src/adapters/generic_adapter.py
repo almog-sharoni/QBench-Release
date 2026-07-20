@@ -1228,9 +1228,6 @@ class GenericAdapter(BaseAdapter):
         quantized_ops_lc = {o.lower() for o in self.quantized_ops}
         excluded_ops_lc = {o.lower() for o in self.excluded_ops}
         target_funcs = {}
-        # Get activation types to check against input_quantization flag
-        activation_ops = {"QuantReLU", "QuantReLU6", "QuantGELU", "QuantSiLU", "QuantHardswish", "QuantHardsigmoid"}
-        
         try:
             for func, op_name in func_map.items():
                 op_name_lc = op_name.lower()
@@ -1243,18 +1240,13 @@ class GenericAdapter(BaseAdapter):
                     continue
                 if op_name_lc in excluded_ops_lc or bare_lc in excluded_ops_lc:
                     continue
-                    
-                # Honor quantization flags
-                if op_name in activation_ops:
-                    if not self.input_quantization:
-                        continue
-                else:
-                    # For compute ops (Add, MatMul, etc.), we usually want them if either 
-                    # input or weight quantization is enabled, as they are part of the 
-                    # quantized dataflow.
-                    if not (self.input_quantization or self.weight_quantization):
-                        continue
-                        
+
+                # Requested functional ops are structural hardware wrappers.
+                # Runner-owned activation transport intentionally disables the
+                # wrappers' boundary flags during adapter construction, but the
+                # wrappers are still required so their custom arithmetic can run
+                # once transport is installed. Runtime config propagated below
+                # keeps them behaviorally pass-through when transport is absent.
                 target_funcs[func] = op_name
         except Exception as e:
             print(f"1.Error in FX quantization: {e}")

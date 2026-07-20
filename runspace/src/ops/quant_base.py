@@ -488,6 +488,19 @@ class QuantizedLayerMixin:
             self.last_quant_weight = (self.weight_fp8.float() * self.weight_scale).detach()
             self.last_quant_weight_scale = self.weight_scale.detach()
 
+    def hardware_arithmetic_enabled(self) -> bool:
+        """Whether operator-owned hardware arithmetic should execute.
+
+        Producer-stage transport owns quantization at module boundaries and
+        therefore disables ``input_quantization`` on wrappers.  Custom
+        operators must still execute their internal LUT/fixed-point pipeline
+        while that transport is active.
+        """
+        return bool(
+            getattr(self, 'input_quantization', True)
+            or getattr(self, '_qbench_activation_transport_active', False)
+        )
+
     def quantize_input(self, input: torch.Tensor, override_q_type: str = None, internal: bool = False):
         """
         Quantizes input tensor to FP8.
@@ -499,7 +512,12 @@ class QuantizedLayerMixin:
             # Capture the raw input format on every call (regardless of input_quantization),
             # so the comparator can runtime-detect what format actually arrived at this layer.
             self.last_pre_quant_input = input.detach()
-        if getattr(self, '_qbench_activation_transport_active', False):
+        transport_active = getattr(
+            self, '_qbench_activation_transport_active', False
+        )
+        # Transport has already quantized and decoded module operands.  Only
+        # operator-owned intermediate values may be quantized again here.
+        if transport_active and not internal:
             return input
             
         # Use input_q_type if available, otherwise fallback to q_type
@@ -512,9 +530,13 @@ class QuantizedLayerMixin:
         rounding = getattr(self, 'rounding', 'nearest') # Default to nearest for inputs
         chunk_formats = getattr(self, 'input_chunk_formats', None) # Per-chunk input formats
         
-        # Disabled means activation-off for both module inputs and internal
-        # arithmetic. Transport returns above as an additional fail-closed belt.
-        if not getattr(self, 'input_quantization', True):
+        # Explicit activation-off still disables internal arithmetic outside
+        # transport.  Under transport, internal=True means a real hardware
+        # pipeline boundary inside the custom operator, not a module boundary.
+        if (
+            not getattr(self, 'input_quantization', True)
+            and not (transport_active and internal)
+        ):
             # If disabled, return input as-is (cast to float if needed) and scale=1.0
             # But we still need to return max_val for stats?
             # The signature is (input_fp8, max_val) or (input_fp8, scale) depending on return_scale
@@ -533,7 +555,7 @@ class QuantizedLayerMixin:
             # So it returns just the quantized input.
             
             return input
-            
+
         # Hot path: when capture_activations is off, only `input_fp8` is
         # actually consumed — the unscaled / scale_b / scale_p / max_val
         # outputs would be thrown away.  In chunk mode this matters: scale_b
