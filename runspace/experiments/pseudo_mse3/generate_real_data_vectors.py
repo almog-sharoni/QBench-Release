@@ -30,6 +30,7 @@ from runspace.src.quantization.dynamic_input_metrics import (  # noqa: E402
     pseudo_mse3_fixed_rounding_code,
     pseudo_mse3_tie_break_code,
     pseudo_mse_reconstruct_scaled_python,
+    pseudo_mse_reconstruct_scaled_trunc_python,
     validate_pseudo_mse_candidate_pairs,
 )
 from runspace.src.quantization.dynamic_input_quantizer import (  # noqa: E402
@@ -84,6 +85,8 @@ class BaseChunkAnalysis:
     scaled_chunks: torch.Tensor
     q1_scaled: torch.Tensor
     q2_scaled: torch.Tensor
+    selection_q1_scaled: torch.Tensor
+    selection_q2_scaled: torch.Tensor
     err1_pre_square: torch.Tensor
     err2_pre_square: torch.Tensor
     err1_sq: torch.Tensor
@@ -143,8 +146,20 @@ def _analyze_chunks_impl(ref_chunks, candidates, *, use_cuda_codec):
             mantissa_bits=pair.exp1_mantissa_width - 1,
             is_signed=pair.is_signed,
         )
-    err1_pre_square = scaled_chunks - q1_scaled
-    err2_pre_square = scaled_chunks - q2_scaled
+    selection_q1_scaled = pseudo_mse_reconstruct_scaled_trunc_python(
+        scaled_chunks,
+        exp_bits=1,
+        mantissa_bits=pair.exp1_mantissa_width,
+        is_signed=pair.is_signed,
+    )
+    selection_q2_scaled = pseudo_mse_reconstruct_scaled_trunc_python(
+        scaled_chunks,
+        exp_bits=2,
+        mantissa_bits=pair.exp1_mantissa_width - 1,
+        is_signed=pair.is_signed,
+    )
+    err1_pre_square = scaled_chunks - selection_q1_scaled
+    err2_pre_square = scaled_chunks - selection_q2_scaled
     err1_sq = err1_pre_square.pow(2)
     err2_sq = err2_pre_square.pow(2)
     err1_sum = err1_sq.sum(dim=1)
@@ -158,6 +173,8 @@ def _analyze_chunks_impl(ref_chunks, candidates, *, use_cuda_codec):
         scaled_chunks=scaled_chunks,
         q1_scaled=q1_scaled,
         q2_scaled=q2_scaled,
+        selection_q1_scaled=selection_q1_scaled,
+        selection_q2_scaled=selection_q2_scaled,
         err1_pre_square=err1_pre_square,
         err2_pre_square=err2_pre_square,
         err1_sq=err1_sq,
@@ -187,16 +204,13 @@ def fixed_analysis_from_diff(
     fixed_rounding="floor",
     tie_break="exp1",
 ):
-    """Apply pseudo_MSE3's exact or per-element fixed-point accumulation."""
+    """Apply pseudo_MSE3's per-element fixed-point accumulation."""
     contributions = pseudo_mse3_fixed_point_from_diff(
         exact_diff,
         bits_to_take,
         fixed_rounding=fixed_rounding,
     )
-    if int(bits_to_take) == 0:
-        chunk_sum = contributions.sum(dim=1)
-    else:
-        chunk_sum = contributions.sum(dim=1, dtype=torch.int64)
+    chunk_sum = contributions.sum(dim=1, dtype=torch.int64)
     tie_break = normalize_pseudo_mse3_tie_break(tie_break)
     choose_exp2 = chunk_sum <= 0 if tie_break == "exp2" else chunk_sum < 0
     return FixedChunkAnalysis(
@@ -218,19 +232,10 @@ def fixed_analyses_from_diff(
     tie_break = normalize_pseudo_mse3_tie_break(tie_break)
     analyses = {}
 
-    if 0 in bits_values:
-        chunk_sum = exact_diff.sum(dim=1)
-        choose_exp2 = chunk_sum <= 0 if tie_break == "exp2" else chunk_sum < 0
-        analyses[0] = FixedChunkAnalysis(
-            contributions=exact_diff,
-            chunk_sum=chunk_sum,
-            choose_exp2=choose_exp2,
-        )
-
-    positive_bits = tuple(value for value in bits_values if value > 0)
-    if positive_bits:
+    fixed_bits = tuple(value for value in bits_values if value >= 0)
+    if fixed_bits:
         scales = torch.tensor(
-            [float(2.0**value) for value in positive_bits],
+            [float(2.0**value) for value in fixed_bits],
             dtype=exact_diff.dtype,
             device=exact_diff.device,
         ).view(-1, 1, 1)
@@ -254,12 +259,12 @@ def fixed_analyses_from_diff(
         if bool(invalid.any()):
             raise OverflowError(
                 "bits_to_take produces contributions outside int32 for at least "
-                f"one of {positive_bits!r}"
+                f"one of {fixed_bits!r}"
             )
         fixed = fixed.to(torch.int32)
         chunk_sums = fixed.sum(dim=2, dtype=torch.int64)
         choose_exp2 = chunk_sums <= 0 if tie_break == "exp2" else chunk_sums < 0
-        for index, bits_to_take in enumerate(positive_bits):
+        for index, bits_to_take in enumerate(fixed_bits):
             analyses[bits_to_take] = FixedChunkAnalysis(
                 contributions=fixed[index],
                 chunk_sum=chunk_sums[index],

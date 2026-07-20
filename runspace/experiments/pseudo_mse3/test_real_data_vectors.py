@@ -46,7 +46,7 @@ def _indices_from_choice(choice, candidates=CANDIDATES):
 def test_fixed_analysis_exposes_per_element_floor_bias():
     exact_diff = torch.tensor([[0.3, -0.2]], dtype=torch.float32)
 
-    exact = fixed_analysis_from_diff(exact_diff, bits_to_take=0)
+    zero_bits = fixed_analysis_from_diff(exact_diff, bits_to_take=0)
     fixed = fixed_analysis_from_diff(exact_diff, bits_to_take=1)
     nearest = fixed_analysis_from_diff(
         exact_diff,
@@ -54,8 +54,9 @@ def test_fixed_analysis_exposes_per_element_floor_bias():
         fixed_rounding="nearest",
     )
 
-    assert exact.chunk_sum.item() > 0
-    assert not exact.choose_exp2.item()
+    assert zero_bits.contributions.tolist() == [[0, -1]]
+    assert zero_bits.chunk_sum.item() == -1
+    assert zero_bits.choose_exp2.item()
     assert fixed.contributions.tolist() == [[0, -1]]
     assert fixed.chunk_sum.item() == -1
     assert fixed.choose_exp2.item()
@@ -387,7 +388,9 @@ def test_cuda_fixed_point_preserves_equal_reconstruction_ties():
     candidates = CANDIDATES
     values = torch.linspace(-1.99, 1.99, 8192, dtype=torch.float32).reshape(64, 128)
     base = analyze_chunks(values, candidates)
-    common = (base.q1_scaled == base.q2_scaled) & (base.err1_pre_square != 0)
+    common = (
+        base.selection_q1_scaled == base.selection_q2_scaled
+    ) & (base.err1_pre_square != 0)
     common_values = base.scaled_chunks[common][:128]
     assert common_values.numel() == 128
     raw_chunk = common_values.reshape(1, 128).cuda()
@@ -423,7 +426,14 @@ def test_cuda_fixed_point_preserves_equal_reconstruction_ties():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
-def test_cuda_activation_style_nearest_matches_python_reference():
+@pytest.mark.parametrize(
+    ("fixed_rounding", "fixed_rounding_code"),
+    [("floor", 0), ("nearest", 1)],
+)
+def test_cuda_activation_style_matches_python_reference(
+    fixed_rounding,
+    fixed_rounding_code,
+):
     from runspace.src.quantization.cuda import search_best_chunk_format
 
     generator = torch.Generator().manual_seed(123)
@@ -431,11 +441,11 @@ def test_cuda_activation_style_nearest_matches_python_reference():
     base = analyze_chunks(raw_cpu, CANDIDATES)
     raw_cuda = raw_cpu.cuda()
     pair = validate_pseudo_mse_candidate_pairs(CANDIDATES)[0]
-    bits_values = (12, 16, 20)
+    bits_values = (0, 12, 16, 20)
     fixed_analyses = fixed_analyses_from_diff(
         base.pseudo_diff,
         bits_values,
-        fixed_rounding="nearest",
+        fixed_rounding=fixed_rounding,
     )
 
     for bits_to_take in bits_values:
@@ -450,7 +460,7 @@ def test_cuda_activation_style_nearest_matches_python_reference():
             9,
             float(bits_to_take),
             0,
-            1,
+            fixed_rounding_code,
         )
         assert pair.e1_index == 0
         assert pair.e2_index == 1

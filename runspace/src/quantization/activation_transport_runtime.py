@@ -126,6 +126,47 @@ class ActivationTransportRuntime:
     def _stage_map(self):
         return self._stages_by_id
 
+    def stage_display_name(self, stage_or_id) -> str:
+        """Return a stable model/FX name for a hardware activation stage."""
+        if isinstance(stage_or_id, str):
+            stage = self._stages_by_id.get(stage_or_id)
+            if stage is None:
+                return stage_or_id
+        else:
+            stage = stage_or_id
+
+        graph_nodes = (
+            self.plan.graph_module.graph.nodes if self.plan is not None else ()
+        )
+        output_node = next(
+            (node for node in graph_nodes if node.name == stage.output_node),
+            None,
+        )
+        if output_node is None:
+            return str(stage.output_node)
+        if output_node.op == "placeholder":
+            return "model_input"
+        if output_node.op == "call_module":
+            return str(output_node.target)
+        return str(output_node.name)
+
+    def stage_module_names(self, stage_or_id) -> tuple[str, ...]:
+        """Return model module paths fused into a hardware stage."""
+        if isinstance(stage_or_id, str):
+            stage = self._stages_by_id.get(stage_or_id)
+            if stage is None:
+                return ()
+        else:
+            stage = stage_or_id
+        owned = set(stage.node_names)
+        if self.plan is None:
+            return ()
+        return tuple(
+            str(node.target)
+            for node in self.plan.graph_module.graph.nodes
+            if node.name in owned and node.op == "call_module"
+        )
+
     def decode_stage(
         self,
         transmitted: _TransportValue,
@@ -357,6 +398,8 @@ class ActivationTransportRuntime:
             "unsigned_stage_count": sum(stage.is_unsigned for stage in stages),
             "activation_plan": {
                 stage.stage_id: {
+                    "layer_name": self.stage_display_name(stage),
+                    "module_names": list(self.stage_module_names(stage)),
                     "kind": stage.kind.value,
                     "producer_nodes": list(stage.node_names),
                     "consumer_nodes": list(stage.consumer_nodes),

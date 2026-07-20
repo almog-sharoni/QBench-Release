@@ -23,13 +23,19 @@ import torch
 import torch.nn as nn
 
 from runspace.src.adapters.adapter_factory import create_adapter
-from runspace.src.ops.quant_base import QuantizedLayerMixin
+from runspace.src.ops.quant_base import QuantizedLayerMixin, quantize_tensor
 from runspace.src.quantization.quantizer import quantize_fp_generic
 from runspace.src.quantization.constants import get_format_params
 from runspace.src.quantization.dynamic_input_quantizer import (
     DynamicInputQuantizer,
     DEFAULT_DYNAMIC_INPUT_CANDIDATES,
 )
+from runspace.src.quantization.activation_transport import ActivationPacket
+from runspace.src.quantization.chunking import (
+    chunk_tensor_by_context,
+    unchunk_tensor_by_context,
+)
+from runspace.src.quantization.uniform_input_quantizer import UniformInputQuantizer
 
 
 MODELS = [
@@ -169,24 +175,91 @@ def test_one_config(model_spec, q_format, mode_info, device):
     if device.type == "cuda":
         model = model.to(device)
 
-    for _name, module in model.named_modules():
-        if isinstance(module, QuantizedLayerMixin):
-            module.capture_activations = True
-
     inputs = torch.randn(model_spec["input_shape"], device=device, dtype=torch.float32)
-
-    with torch.inference_mode():
-        model(inputs)
-
     results = {"weight": [], "input": []}
+
+    quant_mode = mode_info["cfg"]["mode"]
+    transport = (
+        "encoded"
+        if device.type == "cuda" and quant_mode == "chunk"
+        else "reference"
+    )
+    input_quantizer = UniformInputQuantizer(
+        model=model,
+        fmt=q_format,
+        chunk_size=int(mode_info["cfg"].get("chunk_size", 128)),
+        quant_mode=quant_mode,
+        transport=transport,
+        collect_error_stats=False,
+    )
+    input_quantizer.register_hooks()
+
+    runtime = input_quantizer._transport_runtime
+    original_encode = runtime.encode_callback
+
+    def validate_encoded_stage(stage, tensor):
+        transmitted = original_encode(stage, tensor)
+        fmt = input_quantizer._stage_formats[stage.stage_id]
+        if fmt is None:
+            return transmitted
+
+        decoded = (
+            input_quantizer.activation_transport.decode(transmitted)
+            if isinstance(transmitted, ActivationPacket)
+            else transmitted
+        )
+        if quant_mode == "chunk":
+            chunked, original_shape, padding = chunk_tensor_by_context(
+                tensor,
+                input_quantizer.chunk_size,
+            )
+            chunks = chunked.reshape(-1, input_quantizer.chunk_size)
+            expected_chunks, expected_unscaled, _max_val = quantize_tensor(
+                chunks,
+                q_type=fmt,
+                return_unscaled=True,
+                mode="chunk",
+                chunk_size=input_quantizer.chunk_size,
+            )
+            expected = unchunk_tensor_by_context(
+                expected_chunks.reshape(chunked.shape),
+                original_shape,
+                padding,
+            )
+        else:
+            expected, expected_unscaled, _max_val = quantize_tensor(
+                tensor,
+                q_type=fmt,
+                return_unscaled=True,
+                mode=quant_mode,
+            )
+        ok, cnt, examples, failures = check_bit_structure(expected_unscaled, fmt)
+        mismatch = decoded != expected
+        mismatch_count = int(mismatch.sum().item())
+        if mismatch_count:
+            failures = dict(failures)
+            failures["transport_roundtrip"] = mismatch_count
+            cnt += mismatch_count
+            examples = decoded[mismatch][:5].tolist()
+            ok = False
+        results["input"].append(
+            (stage.stage_id, ok, cnt, examples, failures, fmt)
+        )
+        return transmitted
+
+    runtime.encode_callback = validate_encoded_stage
+
+    try:
+        with torch.inference_mode():
+            model(inputs)
+    finally:
+        input_quantizer.cleanup()
 
     for name, module in model.named_modules():
         if not isinstance(module, QuantizedLayerMixin):
             continue
 
         layer_q_type = getattr(module, "q_type", q_format)
-        input_q_type = getattr(module, "input_q_type", layer_q_type)
-
         w = getattr(module, "weight_fp8", None)
         if w is None:
             w = getattr(module, "weight", None)
@@ -194,11 +267,6 @@ def test_one_config(model_spec, q_format, mode_info, device):
         if w is not None and w.numel() > 0:
             ok, cnt, ex, failures = check_bit_structure(w, layer_q_type)
             results["weight"].append((name, ok, cnt, ex, failures, layer_q_type))
-
-        inp = getattr(module, "last_quant_input_unscaled", None)
-        if inp is not None and isinstance(inp, torch.Tensor) and inp.numel() > 0:
-            ok, cnt, ex, failures = check_bit_structure(inp, input_q_type)
-            results["input"].append((name, ok, cnt, ex, failures, input_q_type))
 
     return label, results
 
@@ -250,52 +318,41 @@ def test_dynamic_config(model_spec, device):
     with torch.inference_mode():
         model(inputs)
 
-    # Snapshot per-module data before cleanup (cleanup resets indices/candidates)
-    def _is_multi_input(module):
-        return bool(
-            getattr(module, "last_quant_inputs_unscaled", None)
-            or getattr(module, "input1_q_type", None)
-        ) or module.__class__.__name__ in (
-            "QuantAdd", "QuantSub", "QuantMul", "QuantDiv", "QuantMatMul",
-            "QuantBMM", "QuantCat", "ObservedAdd", "ObservedSub", "ObservedMul",
-            "ObservedDiv", "ObservedMatMul", "ObservedBMM", "ObservedCat",
-        )
-
+    runtime = dq._transport_runtime
     snapshots = []
     for name, module in model.named_modules():
         if not isinstance(module, QuantizedLayerMixin):
             continue
-        pre_quant = getattr(module, "last_pre_quant_input", None)
-        if pre_quant is not None and isinstance(pre_quant, torch.Tensor):
-            pre_quant = pre_quant.detach().clone()
-        indices = getattr(module, "input_chunk_format_indices", None)
         w = getattr(module, "weight_fp8", None)
         if w is None:
             w = getattr(module, "weight", None)
         if w is not None and isinstance(w, torch.Tensor):
             w = w.detach().clone()
         q_type = getattr(module, "q_type", "fp8_e4m3")
-        multi = _is_multi_input(module)
-        snapshots.append((name, q_type, w, indices, pre_quant, multi))
+        snapshots.append((name, q_type, w))
+
+    stage_count = len(runtime.plan.stages)
+    transmission_count = int(runtime.transmission_count)
+    decode_reads = int(runtime.decode_reads)
 
     dq.cleanup()
 
     results = {"weight": [], "input": []}
-    hooked_count = 0
-    input_count = 0
 
-    for name, layer_q_type, w, indices, pre_quant, multi in snapshots:
+    for name, layer_q_type, w in snapshots:
         if w is not None and w.numel() > 0:
             ok, cnt, ex, failures = check_bit_structure(w, layer_q_type)
             results["weight"].append((name, ok, cnt, ex, failures, layer_q_type))
 
-        if indices is not None:
-            hooked_count += 1
-            if pre_quant is not None and not multi:
-                input_count += 1
-
-    results["input"].append(("(dynamic layers hooked)", hooked_count > 0, 0, [], {}, "dynamic"))
-    results["input"].append(("(dynamic layers with capturable input)", input_count > 0, 0, [], {}, "dynamic"))
+    results["input"].append(
+        ("(producer stages installed)", stage_count > 0, 0, [], {}, "dynamic")
+    )
+    results["input"].append(
+        ("(activation transmissions)", transmission_count > 0, 0, [], {}, "dynamic")
+    )
+    results["input"].append(
+        ("(activation decode reads)", decode_reads > 0, 0, [], {}, "dynamic")
+    )
 
     return label, results
 
@@ -380,7 +437,11 @@ def main():
                 except Exception:
                     exc_text = traceback.format_exc()
                     if has_cuda:
-                        print(f"  {label_prefix}: CUDA failed, trying CPU fallback...", flush=True)
+                        print(
+                            f"  {label_prefix}: CUDA failed: {exc_text.splitlines()[-1]}",
+                            flush=True,
+                        )
+                        print("    Trying CPU fallback...", flush=True)
                         label, results = test_one_config_cpu(model_spec, q_format, mode_info)
                         if results is not None:
                             ok, line = format_result(label, results)

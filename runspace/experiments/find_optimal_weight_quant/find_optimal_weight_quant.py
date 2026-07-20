@@ -16,6 +16,7 @@ import warnings
 import json
 import gc
 import subprocess
+import re
 from tqdm import tqdm
 
 # Add project root to sys.path
@@ -44,7 +45,7 @@ from runspace.experiments.utils.common import (
 )
 
 baseline_formats = [
-    'fp32',
+    # 'fp32',
     'fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
     'fp7_e1m5','fp7_e2m4','fp7_e3m3','fp7_e4m2','fp7_e5m1','fp7_e6m0',
     'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
@@ -53,6 +54,115 @@ baseline_formats = [
     'fp3_e1m1','fp3_e2m0',
     'fp2_e1m0'
 ]
+
+_WEIGHT_FORMAT_BIT_WIDTH_RE = re.compile(
+    r"^(?:fp|ufp|efp|uefp)(?P<bit_width>\d+)(?:_|$)",
+    re.IGNORECASE,
+)
+
+DEFAULT_ABLATION_BIT_WIDTHS = tuple(range(3, 9))
+_SKIPPED_EMPTY_ABLATION_TYPE = "skipped_empty_ablation_type"
+
+
+def _candidate_formats_by_bit_width(formats):
+    """Group optimization candidates by the width encoded in each format name."""
+    grouped = {}
+    for candidate in formats:
+        candidate = str(candidate).strip()
+        if not candidate or candidate.lower() == 'fp32':
+            continue
+        match = _WEIGHT_FORMAT_BIT_WIDTH_RE.match(candidate)
+        if match is None:
+            raise ValueError(
+                "Weight candidate format must include a bit width in its name "
+                f"(for example, fp8_e4m3); got {candidate!r}."
+            )
+        bit_width = int(match.group('bit_width'))
+        grouped.setdefault(bit_width, []).append(candidate)
+    if not grouped:
+        raise ValueError("At least one non-FP32 weight candidate format is required.")
+    return grouped
+
+
+def _optimized_experiment_type_for_bit_width(base_experiment_type, bit_width):
+    return f"{base_experiment_type}_{int(bit_width)}"
+
+
+def _parse_ablation_layer_types(value):
+    """Parse a comma-separated concrete weighted-layer type list."""
+    if value is None:
+        return []
+    layer_types = []
+    seen = set()
+    for raw_type in str(value).split(','):
+        layer_type = raw_type.strip()
+        if not layer_type:
+            continue
+        key = layer_type.casefold()
+        if key not in seen:
+            seen.add(key)
+            layer_types.append(layer_type)
+    if not layer_types:
+        raise ValueError(
+            "--ablation_layer_types must contain at least one layer type."
+        )
+    return layer_types
+
+
+def _parse_bit_widths(value):
+    """Parse a comma-separated positive integer bit-width list."""
+    if value is None:
+        return None
+    widths = []
+    for raw_width in str(value).split(','):
+        raw_width = raw_width.strip()
+        if not raw_width:
+            continue
+        try:
+            width = int(raw_width)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid bit width {raw_width!r}; expected comma-separated integers."
+            ) from exc
+        if width <= 0:
+            raise ValueError(f"Bit widths must be positive; got {width}.")
+        if width not in widths:
+            widths.append(width)
+    if not widths:
+        raise ValueError("--bit_widths must contain at least one positive integer.")
+    return widths
+
+
+def _candidate_groups_for_widths(candidate_groups, bit_widths):
+    """Return candidate groups in requested width order, rejecting missing widths."""
+    missing = [width for width in bit_widths if width not in candidate_groups]
+    if missing:
+        raise ValueError(
+            "No candidate formats were provided for requested bit width(s): "
+            + ", ".join(str(width) for width in missing)
+        )
+    return [(width, candidate_groups[width]) for width in bit_widths]
+
+
+def _layer_type_slug(layer_type):
+    slug = re.sub(r"[^a-z0-9]+", "_", str(layer_type).strip().lower()).strip('_')
+    if not slug:
+        raise ValueError(f"Invalid ablation layer type {layer_type!r}.")
+    return slug
+
+
+def _ablation_experiment_type(base_experiment_type, layer_type, bit_width):
+    return (
+        f"{base_experiment_type}_ablation_"
+        f"{_layer_type_slug(layer_type)}_{int(bit_width)}"
+    )
+
+
+def _ablation_baseline_experiment_type(layer_type, bit_width):
+    return (
+        f"weight_quant_ablation_"
+        f"{_layer_type_slug(layer_type)}_{int(bit_width)}"
+    )
 
 
 def get_args():
@@ -81,11 +191,41 @@ def get_args():
         "--optimized_experiment_type",
         type=str,
         default="weight_quant_optimized",
-        help="Experiment type used when logging optimized weight runs.",
+        help=(
+            "Base experiment type used for optimized weight runs; each bit width "
+            "is stored as <name>_<bits>."
+        ),
     )
     parser.add_argument("--plot_layers", action="store_true", help="Generate error bar plots for every single layer (warning: slow)")
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of batches to process (default: -1 for all)")
     parser.add_argument("--baseline_formats", type=str, default=','.join(baseline_formats), help="Comma-separated list of formats to run as baselines (full eval)")
+    parser.add_argument(
+        "--ablation_layer_types",
+        type=str,
+        default=None,
+        help=(
+            "Optional comma-separated concrete weighted module types, such as "
+            "Conv2d,Linear,LayerNorm. When omitted, the existing all-layer "
+            "experiment is used."
+        ),
+    )
+    parser.add_argument(
+        "--list_ablation_layer_types",
+        action="store_true",
+        help=(
+            "Load each requested model, print every concrete ablatable layer type "
+            "with its logical weight names, then exit without running a sweep."
+        ),
+    )
+    parser.add_argument(
+        "--bit_widths",
+        type=str,
+        default=None,
+        help=(
+            "Optional comma-separated candidate bit widths. Ablation mode defaults "
+            "to 3,4,5,6,7,8; normal mode keeps every width in --baseline_formats."
+        ),
+    )
     parser.add_argument("--skip_baselines", action="store_true", help="Skip baseline evaluations (run ref + optimized only)")
     parser.add_argument("--skip_layer_wise", action="store_true", help="Skip the layer-wise optimization experiment (only run chunk/baselines)")
     parser.add_argument("--force_recalc", action="store_true", help="Force recalculation of layer errors even if results exist")
@@ -111,6 +251,148 @@ def get_args():
                         help="Disable input normalization folding and first layer quantization")
 
     return parser.parse_args()
+
+
+def _canonical_weight_layer_type(module):
+    """Collapse implementation subclasses into their concrete operator family."""
+    canonical_families = (
+        (nn.ConvTranspose1d, "ConvTranspose1d"),
+        (nn.ConvTranspose2d, "ConvTranspose2d"),
+        (nn.ConvTranspose3d, "ConvTranspose3d"),
+        (nn.Conv1d, "Conv1d"),
+        (nn.Conv2d, "Conv2d"),
+        (nn.Conv3d, "Conv3d"),
+        (nn.Linear, "Linear"),
+    )
+    for module_type, type_name in canonical_families:
+        if isinstance(module, module_type):
+            return type_name
+    return type(module).__name__
+
+
+def discover_weight_layer_types(model):
+    """
+    Return concrete module-type -> ordered logical weight names.
+
+    Every named module with a direct ``.weight`` state tensor is classified by
+    its actual class name, regardless of its parent container. Native
+    MultiheadAttention's packed Q/K/V projections are exposed as logical Linear
+    weights because deployment decomposes those projections into Linear modules.
+    Stateless MatMul/BMM operators are intentionally absent; if a custom MatMul
+    module owns a direct ``.weight`` tensor, its concrete class appears normally.
+    """
+    state_dict = model.state_dict()
+    layer_types = {}
+    seen = {}
+    claimed_names = set()
+
+    def _add(type_name, layer_name, *, claim=False):
+        if not layer_name:
+            return
+        if claim:
+            claimed_names.add(layer_name)
+        seen_for_type = seen.setdefault(type_name, set())
+        if layer_name not in seen_for_type:
+            seen_for_type.add(layer_name)
+            layer_types.setdefault(type_name, []).append(layer_name)
+
+    for name, module in model.named_modules():
+        if isinstance(module, nn.MultiheadAttention):
+            if module.in_proj_weight is not None:
+                for projection in ("q_proj", "k_proj", "v_proj"):
+                    virtual_name = f"{name}.{projection}" if name else projection
+                    _add("Linear", virtual_name, claim=True)
+            out_proj = getattr(module, "out_proj", None)
+            if out_proj is not None and out_proj.weight is not None:
+                out_name = f"{name}.out_proj" if name else "out_proj"
+                _add("Linear", out_name, claim=True)
+
+        if name in claimed_names:
+            continue
+        weight = getattr(module, "weight", None)
+        weight_key = f"{name}.weight" if name else "weight"
+        if weight is None or weight_key not in state_dict:
+            continue
+        if not torch.is_tensor(weight):
+            continue
+        _add(_canonical_weight_layer_type(module), name)
+
+    return {
+        type_name: layer_types[type_name]
+        for type_name in sorted(layer_types, key=str.casefold)
+    }
+
+
+def _resolve_ablation_layer_type(requested_type, discovered_types):
+    """Resolve a user-supplied type case-insensitively against model discovery."""
+    requested_key = str(requested_type).strip().casefold()
+    for type_name in discovered_types:
+        if type_name.casefold() == requested_key:
+            return type_name
+    available = ', '.join(discovered_types) if discovered_types else '<none>'
+    raise ValueError(
+        f"Model has no ablatable weighted layer type {requested_type!r}. "
+        f"Available types: {available}. Use --list_ablation_layer_types to inspect them."
+    )
+
+
+def _write_ablation_type_manifest(base_root, args, discovered_types):
+    """Persist concrete weighted-layer type membership for auditability."""
+    manifest_dir = os.path.join(base_root, args.model_name, "ablations")
+    os.makedirs(manifest_dir, exist_ok=True)
+    manifest_path = os.path.join(manifest_dir, "weighted_layer_types.json")
+    payload = {
+        "model_name": args.model_name,
+        "policy": "target_only",
+        "non_target_format": "fp32",
+        "layer_types": {
+            type_name: {
+                "count": len(layer_names),
+                "layers": list(layer_names),
+            }
+            for type_name, layer_names in discovered_types.items()
+        },
+    }
+    with open(manifest_path, 'w') as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    return manifest_path
+
+
+def print_ablation_layer_types(args, device, base_root):
+    """Load one model, print its weighted concrete layer types, and return them."""
+    runner = Runner(device)
+    config = build_fp32_runtime_config(args)
+    inspection_dir = os.path.join(
+        base_root,
+        args.model_name,
+        "ablations",
+        "type_listing_model",
+    )
+    model, _, _ = runner.prepare_model_with_materialized_weights(
+        config=config,
+        output_dir=inspection_dir,
+    )
+    discovered_types = discover_weight_layer_types(model)
+    manifest_path = _write_ablation_type_manifest(
+        base_root,
+        args,
+        discovered_types,
+    )
+
+    print(f"Ablatable weighted layer types for {args.model_name}:")
+    if not discovered_types:
+        print("  <none>")
+    for type_name, layer_names in discovered_types.items():
+        print(f"  {type_name} ({len(layer_names)})")
+        for layer_name in layer_names:
+            print(f"    - {layer_name}")
+    print(
+        "Note: stateless MatMul/BMM operations have no stored weight tensor and "
+        "therefore are not part of a weight ablation."
+    )
+    print(f"Weighted-layer manifest: {manifest_path}")
+    return discovered_types
 
 
 def _load_existing_runs(db):
@@ -184,6 +466,12 @@ def _log_weight_quant_run(
         'type': experiment_type,
         'weight_dt': weight_dt,
         'activation_dt': 'fp32',
+        'bit_width': getattr(args, 'optimization_bit_width', None),
+        'candidate_formats': [
+            fmt.strip()
+            for fmt in str(getattr(args, 'baseline_formats', '')).split(',')
+            if fmt.strip()
+        ],
         'ref_acc1': ref_acc1,
         'ref_acc5': ref_acc5,
         'ref_certainty': ref_certainty,
@@ -195,6 +483,14 @@ def _log_weight_quant_run(
         'quant_map_json': quant_map_json,
         'config_json': config_json,
     }
+    ablation_layer_type = getattr(args, 'ablation_layer_type', None)
+    if ablation_layer_type and experiment_type != 'fp32_ref':
+        cfg['experiment'].update({
+            'ablation_layer_type': ablation_layer_type,
+            'ablation_policy': 'target_only',
+            'target_layer_count': int(getattr(args, 'target_layer_count', 0)),
+            'non_target_format': 'fp32',
+        })
     result = {
         'model_name': model_name,
         'status': status,
@@ -595,6 +891,51 @@ def create_uniform_quantized_state_dict(model, layer_results_map, args, fmt):
     return state_dict, quant_map
 
 
+def _target_state_dict_keys(layer_names):
+    """Resolve logical layer names to state-dict weight keys."""
+    keys = set()
+    for layer_name in layer_names:
+        if layer_name.endswith(('.q_proj', '.k_proj', '.v_proj')):
+            parent = layer_name.rsplit('.', 1)[0]
+            keys.add(f"{parent}.in_proj_weight")
+        elif layer_name in {'q_proj', 'k_proj', 'v_proj'}:
+            keys.add('in_proj_weight')
+        else:
+            keys.add(f"{layer_name}.weight" if layer_name else 'weight')
+    return keys
+
+
+def assert_non_target_state_dict_unchanged(
+    reference_state_dict,
+    candidate_state_dict,
+    target_layer_names,
+):
+    """Fail if target-only materialization alters any non-target state tensor."""
+    target_keys = _target_state_dict_keys(target_layer_names)
+    mismatches = []
+    for key, reference in reference_state_dict.items():
+        if key in target_keys:
+            continue
+        candidate = candidate_state_dict.get(key)
+        if candidate is None:
+            mismatches.append(f"{key}:missing")
+            continue
+        if torch.is_tensor(reference) and torch.is_tensor(candidate):
+            if reference.shape != candidate.shape or not torch.equal(reference, candidate):
+                mismatches.append(key)
+        elif reference != candidate:
+            mismatches.append(key)
+
+    if mismatches:
+        preview = ', '.join(mismatches[:10])
+        suffix = '' if len(mismatches) <= 10 else f" (+{len(mismatches) - 10} more)"
+        raise AssertionError(
+            "Target-only weight ablation changed non-target state entries: "
+            f"{preview}{suffix}"
+        )
+    return len(reference_state_dict) - len(target_keys)
+
+
 def _resolve_weight_tensor_for_map_entry(state_dict, layer_name):
     """
     Resolve a quant-map layer key to the corresponding weight tensor in state_dict.
@@ -815,6 +1156,12 @@ def materialize_baseline_eval_configs(
                     args,
                     fmt,
                 )
+                if getattr(args, 'ablation_layer_type', None):
+                    assert_non_target_state_dict_unchanged(
+                        model.state_dict(),
+                        q_state_dict,
+                        q_map.keys(),
+                    )
                 delta = summarize_state_dict_delta(model.state_dict(), q_state_dict)
                 print(
                     f"[Baseline {fmt} Delta] "
@@ -862,17 +1209,137 @@ def materialize_baseline_eval_configs(
             'weight_mode': 'chunk',
             'weight_chunk_size': args.weight_chunk_size,
             'weight_source': 'prequantized_state_dict',
+            'target_layer_type': getattr(args, 'ablation_layer_type', None),
+            'non_target_weight_format': (
+                'fp32' if getattr(args, 'ablation_layer_type', None) else None
+            ),
         })
         rewritten.append(prebuilt_cfg)
 
     return rewritten, baseline_quant_maps
 
 def process_single_model(args, device, metrics, base_root):
+    """Run isolated workflows by concrete weighted layer type and bit width."""
+    if bool(getattr(args, 'list_ablation_layer_types', False)):
+        print_ablation_layer_types(args, device, base_root)
+        return
+
+    requested_formats = [
+        fmt.strip() for fmt in str(args.baseline_formats).split(',') if fmt.strip()
+    ]
+    candidate_groups = _candidate_formats_by_bit_width(requested_formats)
+    raw_ablation_types = getattr(args, 'ablation_layer_types', None)
+    ablation_types = (
+        _parse_ablation_layer_types(raw_ablation_types)
+        if raw_ablation_types is not None
+        else []
+    )
+    requested_widths = _parse_bit_widths(getattr(args, 'bit_widths', None))
+
+    if ablation_types:
+        if int(getattr(args, 'weight_chunk_size', 0) or 0) <= 0:
+            raise ValueError(
+                "Target-layer ablation requires a positive --weight_chunk_size "
+                "for its chunk-optimal runs."
+            )
+        selected_widths = sorted(
+            requested_widths or DEFAULT_ABLATION_BIT_WIDTHS
+        )
+        width_candidates = _candidate_groups_for_widths(
+            candidate_groups,
+            selected_widths,
+        )
+        run_types = ablation_types
+    else:
+        if requested_widths is None:
+            width_candidates = list(candidate_groups.items())
+        else:
+            width_candidates = _candidate_groups_for_widths(
+                candidate_groups,
+                sorted(requested_widths),
+            )
+        run_types = [None]
+
+    first_ablation_reference = True
+    for ablation_layer_type in run_types:
+        for bit_width, bit_width_candidates in width_candidates:
+            width_args = argparse.Namespace(**vars(args))
+            width_args.baseline_formats = ','.join(bit_width_candidates)
+            width_args.optimization_bit_width = int(bit_width)
+            width_args.ablation_layer_type = ablation_layer_type
+
+            if ablation_layer_type:
+                # The requested ablation experiment always includes per-layer and
+                # per-context-chunk optimal candidates by default.
+                width_args.per_chunk_format = True
+                width_args.run_reference = first_ablation_reference
+                width_args.baseline_experiment_type = (
+                    _ablation_baseline_experiment_type(
+                        ablation_layer_type,
+                        bit_width,
+                    )
+                )
+                width_args.optimized_experiment_type = (
+                    _ablation_experiment_type(
+                        args.optimized_experiment_type,
+                        ablation_layer_type,
+                        bit_width,
+                    )
+                )
+                label = f"{ablation_layer_type}-ONLY WEIGHT ABLATION"
+            else:
+                width_args.run_reference = True
+                width_args.baseline_experiment_type = getattr(
+                    args,
+                    'baseline_experiment_type',
+                    'weight_quant_baseline',
+                )
+                width_args.optimized_experiment_type = (
+                    _optimized_experiment_type_for_bit_width(
+                        args.optimized_experiment_type,
+                        bit_width,
+                    )
+                )
+                label = "WEIGHT OPTIMIZATION"
+
+            print("\n###########################################################")
+            print(
+                f" {label}: {bit_width}-bit "
+                f"({width_args.optimized_experiment_type})"
+            )
+            print(f" Candidates: {bit_width_candidates}")
+            print("###########################################################")
+            processed = _process_single_model_for_bit_width(
+                width_args,
+                device,
+                metrics,
+                base_root,
+            )
+            if processed == _SKIPPED_EMPTY_ABLATION_TYPE:
+                break
+            if ablation_layer_type and processed is not False:
+                first_ablation_reference = False
+
+
+def _process_single_model_for_bit_width(args, device, metrics, base_root):
     runner = Runner(device)
     db = runner._get_db()
     
     # Valid model path: base_root / model_name
-    model_dir = os.path.join(base_root, args.model_name)
+    if getattr(args, 'ablation_layer_type', None):
+        model_dir = os.path.join(
+            base_root,
+            args.model_name,
+            "ablations",
+            _layer_type_slug(args.ablation_layer_type),
+            f"{int(args.optimization_bit_width)}bit",
+        )
+    else:
+        model_dir = os.path.join(
+            base_root,
+            args.model_name,
+            f"{int(args.optimization_bit_width)}bit",
+        )
 
     
     os.makedirs(model_dir, exist_ok=True)
@@ -892,8 +1359,36 @@ def process_single_model(args, device, metrics, base_root):
         )
     except Exception as e:
         print(f"Failed to load model: {e}")
-        return
+        return False
     layer_types = _layer_types_from_model(model)
+    supported_ops = tuple(OpRegistry.get_supported_ops().keys())
+    target_layer_names = None
+    if getattr(args, 'ablation_layer_type', None):
+        discovered_types = discover_weight_layer_types(model)
+        for type_name, logical_names in discovered_types.items():
+            for logical_name in logical_names:
+                layer_types.setdefault(logical_name, type_name)
+        manifest_path = _write_ablation_type_manifest(
+            base_root,
+            args,
+            discovered_types,
+        )
+        try:
+            resolved_type = _resolve_ablation_layer_type(
+                args.ablation_layer_type,
+                discovered_types,
+            )
+        except ValueError as exc:
+            print(f"Skipping model {args.model_name!r}: {exc}")
+            return _SKIPPED_EMPTY_ABLATION_TYPE
+        args.ablation_layer_type = resolved_type
+        target_layer_names = set(discovered_types[resolved_type])
+        args.target_layer_count = len(target_layer_names)
+        print(
+            f"Ablation layer type {resolved_type!r}: "
+            f"{len(target_layer_names)} logical weight layers"
+        )
+        print(f"Weighted-layer manifest: {manifest_path}")
     baseline_formats = args.baseline_formats.split(',')
     qt_options = _optimization_formats(baseline_formats)
     if args.include_fp32:
@@ -947,11 +1442,17 @@ def process_single_model(args, device, metrics, base_root):
     else:
         print(f"Analyzing layers for metrics: {metrics_to_calc}...")
         
-        supported_ops = tuple(OpRegistry.get_supported_ops().keys())
-
         # --- WEIGHT QUANTIZATION MODE ---
 
-        run_weight_quantization_analysis(args, model, metrics_to_calc, qt_options, layer_results_map, supported_ops)
+        run_weight_quantization_analysis(
+            args,
+            model,
+            metrics_to_calc,
+            qt_options,
+            layer_results_map,
+            supported_ops,
+            target_layer_names=target_layer_names,
+        )
 
     # ... Shared Post-Processing ...
     
@@ -983,14 +1484,18 @@ def process_single_model(args, device, metrics, base_root):
     dataset_base = _build_eval_dataset_cfg(args, config['dataset'])
 
 
-    # Fetch DB state once — used for all skip checks below
-    existing_runs = None if args.force_rerun else _load_existing_runs(db)
+    # Fetch DB state once — forced candidate reruns still reuse the one FP32
+    # reference produced for this model during the current ablation sweep.
+    runs_snapshot = _load_existing_runs(db)
+    existing_runs = None if args.force_rerun else runs_snapshot
+    cached_ref = None
 
     # Always add Ref and Baselines if we are evaling (and not cached)
     if args.run_eval:
-        # Ref — skip if already in DB (cached_ref_acc carries the stored values)
-        cached_ref = None if args.force_rerun else _get_ref_from_db(existing_runs, args.model_name)
-        if cached_ref is not None:
+        cached_ref = _get_ref_from_db(runs_snapshot, args.model_name)
+        run_reference = bool(getattr(args, 'run_reference', True))
+        force_this_reference = bool(args.force_rerun and run_reference)
+        if cached_ref is not None and not force_this_reference:
             print(f"[DB] Skipping ref_fp32 — already in DB (acc1={cached_ref[0]:.2f}%)")
         else:
             ref_config = build_fp32_runtime_config(args)
@@ -1005,7 +1510,17 @@ def process_single_model(args, device, metrics, base_root):
             requested_baselines = [fmt.strip() for fmt in args.baseline_formats.split(',') if fmt.strip()]
 
             for fmt in requested_baselines:
-                if _weight_quant_run_exists(existing_runs, args.model_name, 'weight_quant_baseline', fmt):
+                baseline_experiment_type = getattr(
+                    args,
+                    'baseline_experiment_type',
+                    'weight_quant_baseline',
+                )
+                if _weight_quant_run_exists(
+                    existing_runs,
+                    args.model_name,
+                    baseline_experiment_type,
+                    fmt,
+                ):
                     print(f"[DB] Skipping baseline_{fmt} — already in DB")
                     continue
 
@@ -1219,6 +1734,12 @@ def process_single_model(args, device, metrics, base_root):
         if not args.skip_layer_wise:
             # Create Quantized Weights
             q_state_dict, q_map = create_quantized_state_dict(model, layer_results_map, args, m, use_chunking=False)
+            if getattr(args, 'ablation_layer_type', None):
+                assert_non_target_state_dict_unchanged(
+                    model.state_dict(),
+                    q_state_dict,
+                    q_map.keys(),
+                )
             layer_delta = summarize_state_dict_delta(model.state_dict(), q_state_dict)
             print(
                 "[Layer-Opt Delta] "
@@ -1252,6 +1773,10 @@ def process_single_model(args, device, metrics, base_root):
             layer_opt_config['quantization'].update({
                 'format': 'fp8_e4m3', # Default dummy
                 'layers': {}, # Empty layers config
+                'target_layer_type': getattr(args, 'ablation_layer_type', None),
+                'non_target_weight_format': (
+                    'fp32' if getattr(args, 'ablation_layer_type', None) else None
+                ),
             })
             layer_opt_config['evaluation'] = eval_config
             layer_opt_config['dataset'] = dataset_cfg
@@ -1278,6 +1803,12 @@ def process_single_model(args, device, metrics, base_root):
         if args.weight_chunk_size and args.per_chunk_format and layer_config_per_chunk:
             # Create Quantized Weights (Chunked)
             q_state_dict_chunk, q_map_chunk = create_quantized_state_dict(model, layer_results_map, args, m, use_chunking=True)
+            if getattr(args, 'ablation_layer_type', None):
+                assert_non_target_state_dict_unchanged(
+                    model.state_dict(),
+                    q_state_dict_chunk,
+                    q_map_chunk.keys(),
+                )
             chunk_delta = summarize_state_dict_delta(model.state_dict(), q_state_dict_chunk)
             print(
                 "[Chunk-Opt Delta] "
@@ -1310,6 +1841,10 @@ def process_single_model(args, device, metrics, base_root):
             chunk_opt_config['quantization'].update({
                 'format': 'fp8_e4m3',
                 'layers': {},
+                'target_layer_type': getattr(args, 'ablation_layer_type', None),
+                'non_target_weight_format': (
+                    'fp32' if getattr(args, 'ablation_layer_type', None) else None
+                ),
             })
             chunk_opt_config['evaluation'] = eval_config
             chunk_opt_config['dataset'] = dataset_cfg
@@ -1437,7 +1972,10 @@ def process_single_model(args, device, metrics, base_root):
                             'num_workers': args.num_workers,
                         },
                         'quantization': {'weight_source': 'fp32'},
-                        'evaluation': {'output_name': 'ref_fp32'},
+                        'evaluation': {
+                            'output_name': 'ref_fp32',
+                            'max_batches': args.limit_batches,
+                        },
                     },
                 )
                 return
@@ -1459,7 +1997,11 @@ def process_single_model(args, device, metrics, base_root):
                 model_name=res.get('model_name', args.model_name),
                 model_weights=res.get('materialized_weight_path'),
                 experiment_type=(
-                    "weight_quant_baseline"
+                    getattr(
+                        args,
+                        'baseline_experiment_type',
+                        'weight_quant_baseline',
+                    )
                     if out_name.startswith('baseline_')
                     else args.optimized_experiment_type
                 ),
@@ -1488,8 +2030,22 @@ def process_single_model(args, device, metrics, base_root):
                         'weight_mode': 'chunk',
                         'weight_chunk_size': args.weight_chunk_size,
                         'weight_source': 'prequantized_state_dict',
+                        'optimization_bit_width': args.optimization_bit_width,
+                        'target_layer_type': getattr(args, 'ablation_layer_type', None),
+                        'target_layer_count': int(getattr(args, 'target_layer_count', 0)),
+                        'non_target_weight_format': (
+                            'fp32' if getattr(args, 'ablation_layer_type', None) else None
+                        ),
+                        'candidate_formats': [
+                            fmt.strip()
+                            for fmt in args.baseline_formats.split(',')
+                            if fmt.strip()
+                        ],
                     },
-                    'evaluation': {'output_name': out_name},
+                    'evaluation': {
+                        'output_name': out_name,
+                        'max_batches': args.limit_batches,
+                    },
                 },
             )
 
@@ -1528,6 +2084,8 @@ def process_single_model(args, device, metrics, base_root):
                     
         plot_accuracy_comparison(results, model_dir)
         print(f"Evaluation completed. Summary: {summary_path}")
+
+    return True
 
 def _analyze_weight_tensor(w, layer_name, args, metrics_to_calc, qt_options, layer_results_map):
     """
@@ -1631,9 +2189,18 @@ def _analyze_weight_tensor(w, layer_name, args, metrics_to_calc, qt_options, lay
     record['max_val'] = max_val_global
 
 
-def run_weight_quantization_analysis(args, model, metrics_to_calc, qt_options, layer_results_map, supported_ops):
+def run_weight_quantization_analysis(
+    args,
+    model,
+    metrics_to_calc,
+    qt_options,
+    layer_results_map,
+    supported_ops,
+    target_layer_names=None,
+):
     """
-    Iterate over all supported layers and analyse weight tensors against every format in qt_options.
+    Iterate over all supported layers, or an explicit concrete-type selection,
+    and analyse their weight tensors against every format in qt_options.
 
     Fix #5 — nn.MultiheadAttention handling:
     Native MHA has no .weight attribute; instead it packs Q/K/V projections into
@@ -1645,6 +2212,9 @@ def run_weight_quantization_analysis(args, model, metrics_to_calc, qt_options, l
     deployment layer names, and NO attention weights are silently skipped.
     """
     import torch.nn as nn
+    target_layer_names = (
+        None if target_layer_names is None else set(target_layer_names)
+    )
 
     for name, module in tqdm(model.named_modules(), desc="Analyzing Layers (Weights)"):
 
@@ -1659,6 +2229,11 @@ def run_weight_quantization_analysis(args, model, metrics_to_calc, qt_options, l
                 q_w, k_w, v_w = module.in_proj_weight.data.chunk(3, dim=0)
                 for proj_name, proj_w in [('q_proj', q_w), ('k_proj', k_w), ('v_proj', v_w)]:
                     virtual_name = f"{name}.{proj_name}" if name else proj_name
+                    if (
+                        target_layer_names is not None
+                        and virtual_name not in target_layer_names
+                    ):
+                        continue
                     _analyze_weight_tensor(
                         proj_w, virtual_name, args, metrics_to_calc, qt_options, layer_results_map
                     )
@@ -1667,13 +2242,17 @@ def run_weight_quantization_analysis(args, model, metrics_to_calc, qt_options, l
             # guarantee the name matches '<mha>.out_proj':
             if hasattr(module, 'out_proj') and module.out_proj.weight is not None:
                 out_name = f"{name}.out_proj" if name else "out_proj"
-                _analyze_weight_tensor(
-                    module.out_proj.weight.data, out_name, args, metrics_to_calc, qt_options, layer_results_map
-                )
+                if target_layer_names is None or out_name in target_layer_names:
+                    _analyze_weight_tensor(
+                        module.out_proj.weight.data, out_name, args, metrics_to_calc, qt_options, layer_results_map
+                    )
             continue  # skip the generic .weight path for MHA
 
         # --- Generic path: any other supported layer with a .weight ---
-        if not isinstance(module, supported_ops):
+        if target_layer_names is None:
+            if not isinstance(module, supported_ops):
+                continue
+        elif name not in target_layer_names:
             continue
         if not hasattr(module, 'weight') or module.weight is None:
             continue

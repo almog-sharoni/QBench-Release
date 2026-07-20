@@ -29,8 +29,14 @@ from runspace.experiments.pseudo_mse2.generate_hw_vectors import (  # noqa: E402
 from runspace.src.quantization.dynamic_input_metrics import (  # noqa: E402
     is_pseudo_mse_family_metric,
     normalize_dynamic_input_metric,
+    normalize_pseudo_mse3_fixed_rounding,
+    normalize_pseudo_mse3_tie_break,
+    pseudo_mse_encode_emb_trunc_python,
     pseudo_mse3_choose_exp2_from_diff,
     pseudo_mse3_err2_minus_err1_from_scaled,
+    pseudo_mse3_fixed_rounding_code,
+    pseudo_mse3_tie_break_code,
+    pseudo_mse_reconstruct_scaled_trunc_python,
     reduce_dynamic_input_metric_python,
 )
 
@@ -41,38 +47,56 @@ def _candidate_formats(bit_width):
     return f"fp{int(bit_width)}_e1m{m1}", f"fp{int(bit_width)}_e2m{m2}"
 
 
-def decision_for_bit_width(scaled_chunks, bit_width):
+def _normalize_bits_to_take(bits_to_take):
+    value = int(bits_to_take)
+    if float(bits_to_take) != float(value) or value < 0:
+        raise ValueError(
+            f"bits_to_take must be a non-negative integer; got {bits_to_take!r}"
+        )
+    return value
+
+
+def decision_for_bit_width(
+    scaled_chunks,
+    bit_width,
+    bits_to_take=0,
+    fixed_rounding="floor",
+    tie_break="exp1",
+):
+    bits_to_take = _normalize_bits_to_take(bits_to_take)
+    fixed_rounding = normalize_pseudo_mse3_fixed_rounding(fixed_rounding)
+    tie_break = normalize_pseudo_mse3_tie_break(tie_break)
     m1 = int(bit_width) - 2
     m2 = int(bit_width) - 3
     if m2 != m1 - 1 or m2 < 1:
         raise ValueError(f"Unsupported bit width for pseudo_MSE3 e1/e2 pair: {bit_width}")
 
-    q1_bits = pseudo_mse_encode_emb_export(
+    q1_bits = pseudo_mse_encode_emb_trunc_python(
         scaled_chunks,
         exp_bits=1,
         mantissa_bits=m1,
         is_signed=True,
     )
-    q2_bits = pseudo_mse_encode_emb_export(
+    q2_bits = pseudo_mse_encode_emb_trunc_python(
         scaled_chunks,
         exp_bits=2,
         mantissa_bits=m2,
         is_signed=True,
     )
-    q1 = pseudo_mse_reconstruct_scaled_export(
+    q1_for_decision = pseudo_mse_reconstruct_scaled_trunc_python(
         scaled_chunks,
         exp_bits=1,
         mantissa_bits=m1,
         is_signed=True,
     )
-    q2 = pseudo_mse_reconstruct_scaled_export(
+    q2_for_decision = pseudo_mse_reconstruct_scaled_trunc_python(
         scaled_chunks,
         exp_bits=2,
         mantissa_bits=m2,
         is_signed=True,
     )
-    err_exp1_pre_square = scaled_chunks - q1
-    err_exp2_pre_square = scaled_chunks - q2
+    err_exp1_pre_square = scaled_chunks - q1_for_decision
+    err_exp2_pre_square = scaled_chunks - q2_for_decision
     err1 = err_exp1_pre_square.pow(2).sum(dim=1)
     err2 = err_exp2_pre_square.pow(2).sum(dim=1)
     pseudo_diff = pseudo_mse3_err2_minus_err1_from_scaled(
@@ -80,9 +104,15 @@ def decision_for_bit_width(scaled_chunks, bit_width):
         exp1_mantissa_width=m1,
         exp2_mantissa_width=m2,
         is_signed=True,
+        bits_to_take=bits_to_take,
+        fixed_rounding=fixed_rounding,
     )
-    chunk_diff = pseudo_diff.sum(dim=1)
-    choose_exp2 = pseudo_mse3_choose_exp2_from_diff(pseudo_diff)
+    chunk_diff = pseudo_diff.sum(dim=1, dtype=torch.int64)
+    choose_exp2 = pseudo_mse3_choose_exp2_from_diff(
+        pseudo_diff,
+        tie_break=tie_break,
+        fixed_rounding=fixed_rounding,
+    )
     expected_error = torch.where(choose_exp2, err2, err1)
     return (
         err1,
@@ -209,9 +239,20 @@ def write_value_rows(
     f.write("VALUES_END\n")
 
 
-def write_vectors(path, value_mode="scaled", num_chunks=NUM_CHUNKS, seed=SEED):
+def write_vectors(
+    path,
+    value_mode="scaled",
+    num_chunks=NUM_CHUNKS,
+    seed=SEED,
+    bits_to_take=0,
+    fixed_rounding="floor",
+    tie_break="exp1",
+):
     num_chunks = int(num_chunks)
     seed = int(seed)
+    bits_to_take = _normalize_bits_to_take(bits_to_take)
+    fixed_rounding = normalize_pseudo_mse3_fixed_rounding(fixed_rounding)
+    tie_break = normalize_pseudo_mse3_tie_break(tie_break)
     raw_chunks = make_raw_chunks(num_chunks=num_chunks, seed=seed)
     scales, scaled_chunks = scale_raw_chunks(raw_chunks)
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -232,13 +273,26 @@ def write_vectors(path, value_mode="scaled", num_chunks=NUM_CHUNKS, seed=SEED):
             f.write("# feed scaled_fp32 values to the pseudo_MSE3 block, or compute scaled_fp32 = raw_fp32 / chunk_scale\n")
         else:
             f.write("# do not apply a chunk scale before feeding these values to the pseudo_MSE3 block\n")
-        f.write("# decision rule: choose_exp2 if sum(err2^2 - err1^2) < 0 else choose_exp1\n")
+        comparison = "<=" if tie_break == "exp2" else "<"
+        f.write(
+            "# decision rule: choose_exp2 if sum(err2^2 - err1^2) < 0 "
+            "else choose_exp1 (floating-point baseline)\n"
+        )
+        f.write(
+            "# configured decision rule: choose_exp2 if summed fixed-point contribution "
+            f"{comparison} 0 else choose_exp1\n"
+        )
         f.write("# expected_error rows: selected chunk squared error, as fp32_hex fp32_dec\n")
-        f.write("# mantissa mode: round-to-nearest\n")
-        f.write("# q_exp*_bits are packed sign/exponent/mantissa fields after pseudo_MSE3 quantization\n")
-        f.write("# err_exp*_pre_square = scaled-q_exp* for each value, before squaring\n")
+        f.write("# output mantissa mode: round-to-nearest\n")
+        f.write("# format-selection candidate mode: truncate\n")
+        f.write("# selected dynamic-quantizer output mode: round-to-nearest\n")
+        f.write(f"# fixed-point bits_to_take: {bits_to_take}\n")
+        f.write(f"# fixed-point rounding: {fixed_rounding}\n")
+        f.write(f"# exact-tie decision: {tie_break}\n")
+        f.write("# q_exp*_bits are truncated candidate fields used by format selection\n")
+        f.write("# err_exp*_pre_square = scaled-q_exp* for each truncated candidate\n")
         f.write("# pseudo_diff_exp2_minus_exp1 = err_exp2_pre_square^2 - err_exp1_pre_square^2\n")
-        f.write("# pseudo_diff_times_2_2m must be in the rounded-path range [-1/4,3)\n")
+        f.write("# pseudo_diff_times_2_2m must be in the truncating-selection range [-3/4,3)\n")
         write_value_header(f, value_mode)
 
         for bit_width in BIT_WIDTHS:
@@ -256,7 +310,13 @@ def write_vectors(path, value_mode="scaled", num_chunks=NUM_CHUNKS, seed=SEED):
                 err_exp1_pre_square,
                 err_exp2_pre_square,
                 pseudo_diff,
-            ) = decision_for_bit_width(scaled_chunks, bit_width)
+            ) = decision_for_bit_width(
+                scaled_chunks,
+                bit_width,
+                bits_to_take=bits_to_take,
+                fixed_rounding=fixed_rounding,
+                tie_break=tie_break,
+            )
 
             f.write(f"BEGIN_BIT_WIDTH {bit_width}\n")
             f.write("sgn 1\n")
@@ -297,6 +357,9 @@ def write_vectors(path, value_mode="scaled", num_chunks=NUM_CHUNKS, seed=SEED):
 def _csv_fieldnames(value_mode):
     fields = [
         "value_mode",
+        "bits_to_take",
+        "fixed_rounding",
+        "tie_break",
         "bit_width",
         "sgn",
         "exp1_format",
@@ -391,9 +454,20 @@ def _value_metadata_row(
     return row
 
 
-def write_csv_vectors(path, value_mode="scaled", num_chunks=NUM_CHUNKS, seed=SEED):
+def write_csv_vectors(
+    path,
+    value_mode="scaled",
+    num_chunks=NUM_CHUNKS,
+    seed=SEED,
+    bits_to_take=0,
+    fixed_rounding="floor",
+    tie_break="exp1",
+):
     num_chunks = int(num_chunks)
     seed = int(seed)
+    bits_to_take = _normalize_bits_to_take(bits_to_take)
+    fixed_rounding = normalize_pseudo_mse3_fixed_rounding(fixed_rounding)
+    tie_break = normalize_pseudo_mse3_tie_break(tie_break)
     raw_chunks = make_raw_chunks(num_chunks=num_chunks, seed=seed)
     scales, scaled_chunks = scale_raw_chunks(raw_chunks)
     fieldnames = _csv_fieldnames(value_mode)
@@ -417,12 +491,21 @@ def write_csv_vectors(path, value_mode="scaled", num_chunks=NUM_CHUNKS, seed=SEE
                 err_exp1_pre_square,
                 err_exp2_pre_square,
                 pseudo_diff,
-            ) = decision_for_bit_width(scaled_chunks, bit_width)
+            ) = decision_for_bit_width(
+                scaled_chunks,
+                bit_width,
+                bits_to_take=bits_to_take,
+                fixed_rounding=fixed_rounding,
+                tie_break=tie_break,
+            )
             for chunk_idx in range(num_chunks):
                 decision = "exp2" if bool(choose_exp2[chunk_idx]) else "exp1"
                 for value_idx in range(CHUNK_SIZE):
                     row = {
                         "value_mode": value_mode,
+                        "bits_to_take": bits_to_take,
+                        "fixed_rounding": fixed_rounding,
+                        "tie_break": tie_break,
                         "bit_width": bit_width,
                         "sgn": 1,
                         "exp1_format": exp1_format,
@@ -466,23 +549,40 @@ def _first_abs_mismatch(actual, expected):
     return idx, float(diff[idx].item())
 
 
-def verify_python_vectors(num_chunks=NUM_CHUNKS, seed=SEED, max_mismatches=20):
+def verify_python_vectors(
+    num_chunks=NUM_CHUNKS,
+    seed=SEED,
+    max_mismatches=20,
+    bits_to_take=0,
+    fixed_rounding="floor",
+    tie_break="exp1",
+):
     from runspace.src.quantization.dynamic_input_quantizer import DynamicInputQuantizer
 
     num_chunks = int(num_chunks)
     seed = int(seed)
     max_mismatches = int(max_mismatches)
+    bits_to_take = _normalize_bits_to_take(bits_to_take)
+    fixed_rounding = normalize_pseudo_mse3_fixed_rounding(fixed_rounding)
+    tie_break = normalize_pseudo_mse3_tie_break(tie_break)
     raw_chunks = make_raw_chunks(num_chunks=num_chunks, seed=seed)
     scales, scaled_chunks = scale_raw_chunks(raw_chunks)
     quantizer = object.__new__(DynamicInputQuantizer)
     quantizer.metric = "pseudo_mse3"
     quantizer.metric_param = 0.0
     quantizer.pseudo_mse2_mantissa_window_bits = 0
+    quantizer.pseudo_mse3_bits_to_take = bits_to_take
+    quantizer.pseudo_mse3_fixed_rounding = fixed_rounding
+    quantizer.pseudo_mse3_tie_break = tie_break
     total_mismatches = 0
 
     print("Python pseudo_MSE3 verification")
     print(f"seed={seed} num_chunks={num_chunks} chunk_size={CHUNK_SIZE}")
     print("mantissa_mode=round-to-nearest")
+    print(
+        f"bits_to_take={bits_to_take} "
+        f"fixed_rounding={fixed_rounding} tie_break={tie_break}"
+    )
 
     for bit_width in BIT_WIDTHS:
         m1 = bit_width - 2
@@ -499,7 +599,13 @@ def verify_python_vectors(num_chunks=NUM_CHUNKS, seed=SEED, max_mismatches=20):
             _err_exp1_pre_square,
             _err_exp2_pre_square,
             _pseudo_diff,
-        ) = decision_for_bit_width(scaled_chunks, bit_width)
+        ) = decision_for_bit_width(
+            scaled_chunks,
+            bit_width,
+            bits_to_take=bits_to_take,
+            fixed_rounding=fixed_rounding,
+            tie_break=tie_break,
+        )
 
         q1_scaled = pseudo_mse_reconstruct_scaled_export(
             scaled_chunks,
@@ -597,7 +703,14 @@ def verify_python_vectors(num_chunks=NUM_CHUNKS, seed=SEED, max_mismatches=20):
     return total_mismatches
 
 
-def verify_cuda_vectors(num_chunks=NUM_CHUNKS, seed=SEED, max_mismatches=20):
+def verify_cuda_vectors(
+    num_chunks=NUM_CHUNKS,
+    seed=SEED,
+    max_mismatches=20,
+    bits_to_take=0,
+    fixed_rounding="floor",
+    tie_break="exp1",
+):
     from runspace.src.quantization.cuda import search_best_chunk_format
     from runspace.src.quantization.dynamic_input_metrics import dynamic_input_metric_code
 
@@ -607,6 +720,9 @@ def verify_cuda_vectors(num_chunks=NUM_CHUNKS, seed=SEED, max_mismatches=20):
     num_chunks = int(num_chunks)
     seed = int(seed)
     max_mismatches = int(max_mismatches)
+    bits_to_take = _normalize_bits_to_take(bits_to_take)
+    fixed_rounding = normalize_pseudo_mse3_fixed_rounding(fixed_rounding)
+    tie_break = normalize_pseudo_mse3_tie_break(tie_break)
     raw_chunks = make_raw_chunks(num_chunks=num_chunks, seed=seed)
     scales, scaled_chunks = scale_raw_chunks(raw_chunks)
     raw_cuda = raw_chunks.cuda().contiguous()
@@ -617,6 +733,10 @@ def verify_cuda_vectors(num_chunks=NUM_CHUNKS, seed=SEED, max_mismatches=20):
     print(f"seed={seed} num_chunks={num_chunks} chunk_size={CHUNK_SIZE}")
     print(f"metric_code={metric_code}")
     print("mantissa_mode=round-to-nearest")
+    print(
+        f"bits_to_take={bits_to_take} "
+        f"fixed_rounding={fixed_rounding} tie_break={tie_break}"
+    )
 
     for bit_width in BIT_WIDTHS:
         m1 = bit_width - 2
@@ -632,7 +752,13 @@ def verify_cuda_vectors(num_chunks=NUM_CHUNKS, seed=SEED, max_mismatches=20):
             _err_exp1_pre_square,
             _err_exp2_pre_square,
             _pseudo_diff,
-        ) = decision_for_bit_width(scaled_chunks, bit_width)
+        ) = decision_for_bit_width(
+            scaled_chunks,
+            bit_width,
+            bits_to_take=bits_to_take,
+            fixed_rounding=fixed_rounding,
+            tie_break=tie_break,
+        )
 
         q1_scaled = pseudo_mse_reconstruct_scaled_export(
             scaled_chunks,
@@ -664,8 +790,10 @@ def verify_cuda_vectors(num_chunks=NUM_CHUNKS, seed=SEED, max_mismatches=20):
             cands_sgn,
             True,
             metric_code,
-            0.0,
+            float(bits_to_take),
             0,
+            pseudo_mse3_fixed_rounding_code(fixed_rounding),
+            pseudo_mse3_tie_break_code(tie_break),
         )
         cuda_indices = cuda_indices.cpu()
         cuda_scales = cuda_scales.cpu()
@@ -750,6 +878,9 @@ def compare_pseudo_mse3_with_metric(
     num_chunks=NUM_CHUNKS,
     seed=SEED,
     max_mismatches=20,
+    bits_to_take=0,
+    fixed_rounding="floor",
+    tie_break="exp1",
 ):
     normalized_metric = normalize_dynamic_input_metric(compare_metric)
     if is_pseudo_mse_family_metric(normalized_metric):
@@ -757,6 +888,9 @@ def compare_pseudo_mse3_with_metric(
 
     num_chunks = int(num_chunks)
     seed = int(seed)
+    bits_to_take = _normalize_bits_to_take(bits_to_take)
+    fixed_rounding = normalize_pseudo_mse3_fixed_rounding(fixed_rounding)
+    tie_break = normalize_pseudo_mse3_tie_break(tie_break)
     raw_chunks = make_raw_chunks(num_chunks=num_chunks, seed=seed)
     _scales, scaled_chunks = scale_raw_chunks(raw_chunks)
     os.makedirs(os.path.dirname(os.path.abspath(mismatch_csv)), exist_ok=True)
@@ -775,8 +909,15 @@ def compare_pseudo_mse3_with_metric(
     print(f"compare_atol={compare_atol}")
     print(f"compare_tie_policy={compare_tie_policy}")
     print(f"mismatch_csv={mismatch_csv}")
+    print(
+        f"bits_to_take={bits_to_take} "
+        f"fixed_rounding={fixed_rounding} tie_break={tie_break}"
+    )
 
     fields = [
+        "bits_to_take",
+        "fixed_rounding",
+        "tie_break",
         "bit_width",
         "chunk_idx",
         "mismatch_kind",
@@ -803,7 +944,13 @@ def compare_pseudo_mse3_with_metric(
                 err_exp1_pre_square,
                 err_exp2_pre_square,
                 _pseudo_diff,
-            ) = decision_for_bit_width(scaled_chunks, bit_width)
+            ) = decision_for_bit_width(
+                scaled_chunks,
+                bit_width,
+                bits_to_take=bits_to_take,
+                fixed_rounding=fixed_rounding,
+                tie_break=tie_break,
+            )
 
             metric_exp1 = reduce_dynamic_input_metric_python(
                 normalized_metric,
@@ -865,6 +1012,9 @@ def compare_pseudo_mse3_with_metric(
                 else:
                     mismatch_kind = "decision"
                 row = {
+                    "bits_to_take": bits_to_take,
+                    "fixed_rounding": fixed_rounding,
+                    "tie_break": tie_break,
                     "bit_width": bit_width,
                     "chunk_idx": chunk_idx,
                     "mismatch_kind": mismatch_kind,
@@ -917,6 +1067,32 @@ def main():
         type=int,
         default=SEED,
         help="Seed for deterministic random extra chunks.",
+    )
+    parser.add_argument(
+        "--bits-to-take",
+        "--bits_to_take",
+        type=int,
+        default=0,
+        help="Number of fractional bits used for pseudo_MSE3 fixed-point contributions.",
+    )
+    parser.add_argument(
+        "--fixed-rounding",
+        "--fixed_rounding",
+        type=normalize_pseudo_mse3_fixed_rounding,
+        choices=("floor", "nearest"),
+        default="floor",
+        help=(
+            "Fixed-point contribution rounding. nearest uses round-to-nearest "
+            "with exact half cases away from zero."
+        ),
+    )
+    parser.add_argument(
+        "--tie-break",
+        "--tie_break",
+        type=normalize_pseudo_mse3_tie_break,
+        choices=("exp1", "exp2"),
+        default="exp1",
+        help="Exact chunk-sum tie policy: exp1 uses < 0; exp2 uses <= 0.",
     )
     parser.add_argument(
         "--compare-metric",
@@ -983,6 +1159,8 @@ def main():
     args = parser.parse_args()
     if args.num_chunks < 1:
         raise ValueError("--num-chunks must be at least 1")
+    if args.bits_to_take < 0:
+        raise ValueError("--bits-to-take must be non-negative")
     if args.cuda_build_dir:
         os.environ["QBENCH_CUDA_BUILD_DIR"] = args.cuda_build_dir
     if args.verify_only and not (args.verify_cuda or args.verify_python or args.compare_metric):
@@ -994,6 +1172,9 @@ def main():
             value_mode=args.value_mode,
             num_chunks=args.num_chunks,
             seed=args.seed,
+            bits_to_take=args.bits_to_take,
+            fixed_rounding=args.fixed_rounding,
+            tie_break=args.tie_break,
         )
         print(args.output)
         if args.csv_output is not None:
@@ -1002,6 +1183,9 @@ def main():
                 value_mode=args.value_mode,
                 num_chunks=args.num_chunks,
                 seed=args.seed,
+                bits_to_take=args.bits_to_take,
+                fixed_rounding=args.fixed_rounding,
+                tie_break=args.tie_break,
             )
             print(args.csv_output)
 
@@ -1023,18 +1207,27 @@ def main():
             num_chunks=args.num_chunks,
             seed=args.seed,
             max_mismatches=args.max_mismatches,
+            bits_to_take=args.bits_to_take,
+            fixed_rounding=args.fixed_rounding,
+            tie_break=args.tie_break,
         )
     if args.verify_python:
         verify_mismatches += verify_python_vectors(
             num_chunks=args.num_chunks,
             seed=args.seed,
             max_mismatches=args.max_mismatches,
+            bits_to_take=args.bits_to_take,
+            fixed_rounding=args.fixed_rounding,
+            tie_break=args.tie_break,
         )
     if args.verify_cuda:
         verify_mismatches += verify_cuda_vectors(
             num_chunks=args.num_chunks,
             seed=args.seed,
             max_mismatches=args.max_mismatches,
+            bits_to_take=args.bits_to_take,
+            fixed_rounding=args.fixed_rounding,
+            tie_break=args.tie_break,
         )
     if verify_mismatches:
         raise SystemExit(1)

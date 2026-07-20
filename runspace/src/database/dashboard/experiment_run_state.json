@@ -29,7 +29,7 @@
     "dataset_name": "imagenet",
     "dataset_path": "/data/imagenet/val",
     "dynamic_unsigned_input_candidates": false,
-    "excluded_ops": "LayerNorm",
+    "excluded_ops": "",
     "experiment_type": "input_quant_baseline",
     "force_rebuild_weights": false,
     "force_rerun": false,

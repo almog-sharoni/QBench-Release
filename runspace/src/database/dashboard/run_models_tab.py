@@ -1050,7 +1050,7 @@ with tab_runner:
                 "runner_exp_input_candidate_fmt",
             )
             i7, i8 = st.columns(2)
-            input_values["excluded_ops"] = i7.text_input("Excluded ops", value=str(_dashboard_runner_experiment_default("input", "excluded_ops", "LayerNorm")), key="runner_exp_input_excluded")
+            input_values["excluded_ops"] = i7.text_input("Excluded ops", value=str(_dashboard_runner_experiment_default("input", "excluded_ops", "")), key="runner_exp_input_excluded")
             input_values["unsigned_input_sources"] = i8.text_input("Unsigned input sources", value=str(_dashboard_runner_experiment_default("input", "unsigned_input_sources", "") or ""), key="runner_exp_input_unsigned")
             input_values["dynamic_unsigned_input_candidates"] = st.checkbox(
                 "Use UFP after unsigned sources",

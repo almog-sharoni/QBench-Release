@@ -27,6 +27,8 @@ This experiment evaluates model accuracy under a bandwidth-aware mixed-precision
 4. **FP32 Reference Baseline**
    - A full-precision (FP32, unquantized) evaluation is run once per model.
    - Reference cycles are computed at 32 bits (4 bytes/element) with min=max=32 (no optimization).
+   - Reference and quantized runtimes use the same residual spill/reload accounting.
+   - A 0M cache simulation is always computed for normalization, even when the requested sweep pins other cache sizes.
    - Plotted as a black-edged diamond on the accuracy-vs-normalized-speedup chart for each cache size.
 
 5. **Unsigned Input Activation Hooking**
@@ -36,7 +38,7 @@ This experiment evaluates model accuracy under a bandwidth-aware mixed-precision
 6. **Advanced Plotting & Annotation**
    - X-axis uses normalized speedup vs FP32 0MB: `time_ref / time`, where FP32 with 0MB cache is the `1.0x` baseline and higher values are faster.
    - A broken x-axis is added automatically when the FP32 0MB baseline is separated from the main result cluster by a large empty range.
-   - Jitters Cache 2MB (0.98x) and 4MB (1.02x) curves to distinguish overlapping points.
+   - Uses exact normalized-speedup coordinates; overlapping cache curves are distinguished by color, marker, and line style.
    - Deduplicates flat region annotations (grouped as range `3-8`) to prevent text blobs.
    - Uses large cache-specific markers with bit-width labels centered inside them; sweep cycle ranges are shown in the legend while FP32 reference cycles remain beside the reference diamonds.
 

@@ -35,7 +35,9 @@ from runspace.src.quantization.dynamic_input_metrics import (  # noqa: E402
     pseudo_mse3_choose_exp2_from_diff,
     pseudo_mse3_err2_minus_err1_from_scaled,
     pseudo_mse3_fixed_point_from_diff,
+    pseudo_mse_decode_emb_python,
     pseudo_mse_reconstruct_scaled_python,
+    pseudo_mse_reconstruct_scaled_trunc_python,
 )
 
 
@@ -49,7 +51,7 @@ def test_pseudo_mse3_metric_is_pairwise_cuda_metric():
     assert dynamic_input_metric_code("pseudo_mse3") == 9
 
 
-def test_pseudo_mse3_exact_diff_matches_expected_scaled_ranges():
+def test_pseudo_mse3_zero_bits_uses_fixed_point_scale_one():
     m1 = 6
     values = torch.tensor(
         [
@@ -69,15 +71,14 @@ def test_pseudo_mse3_exact_diff_matches_expected_scaled_ranges():
         is_signed=True,
     )
 
-    q1_scaled = pseudo_mse_reconstruct_scaled_python(values, 1, m1, True)
-    q2_scaled = pseudo_mse_reconstruct_scaled_python(values, 2, m1 - 1, True)
+    q1_scaled = pseudo_mse_reconstruct_scaled_trunc_python(values, 1, m1, True)
+    q2_scaled = pseudo_mse_reconstruct_scaled_trunc_python(values, 2, m1 - 1, True)
     expected = ((values - q2_scaled).pow(2) - (values - q1_scaled).pow(2)) * float(
         2.0 ** (2 * m1)
     )
-    torch.testing.assert_close(diff, expected)
-    assert bool((diff < 0).any())
-    assert bool((diff == 0).any())
-    assert bool((diff > 0).any())
+    _assert_pseudo_mse3_scaled_diff_ranges(expected)
+    assert torch.equal(diff, torch.floor(expected).to(torch.int32))
+    assert diff.dtype == torch.int32
 
 
 def test_pseudo_mse3_bits_to_take_returns_fixed_point_diff():
@@ -91,12 +92,11 @@ def test_pseudo_mse3_bits_to_take_returns_fixed_point_diff():
         dtype=torch.float32,
     ).unsqueeze(0)
 
-    exact = pseudo_mse3_err2_minus_err1_from_scaled(
-        values,
-        exp1_mantissa_width=m1,
-        exp2_mantissa_width=m1 - 1,
-        is_signed=True,
-    )
+    q1_scaled = pseudo_mse_reconstruct_scaled_trunc_python(values, 1, m1, True)
+    q2_scaled = pseudo_mse_reconstruct_scaled_trunc_python(values, 2, m1 - 1, True)
+    normalized_diff = (
+        (values - q2_scaled).pow(2) - (values - q1_scaled).pow(2)
+    ) * float(2.0 ** (2 * m1))
     fixed = pseudo_mse3_err2_minus_err1_from_scaled(
         values,
         exp1_mantissa_width=m1,
@@ -108,10 +108,8 @@ def test_pseudo_mse3_bits_to_take_returns_fixed_point_diff():
     assert fixed.dtype == torch.int32
     torch.testing.assert_close(
         fixed.to(torch.float32),
-        torch.floor(exact * float(2.0**20)),
+        torch.floor(normalized_diff * float(2.0**20)),
     )
-    assert bool((fixed < 0).any())
-    assert bool((fixed > 0).any())
 
     fixed_from_float = pseudo_mse3_err2_minus_err1_from_scaled(
         values,
@@ -141,14 +139,13 @@ def test_pseudo_mse3_bits_to_take_returns_fixed_point_diff():
         fixed_rounding="nearest",
     )
     assert nearest.tolist() == [[0, 4, 4, -2, -2, -2]]
-    assert torch.equal(
-        pseudo_mse3_fixed_point_from_diff(
-            direct_diff,
-            bits_to_take=0,
-            fixed_rounding="nearest",
-        ),
+    zero_bits = pseudo_mse3_fixed_point_from_diff(
         direct_diff,
+        bits_to_take=0,
+        fixed_rounding="nearest",
     )
+    assert zero_bits.tolist() == [[0, 0, 0, -1, -1, -1]]
+    assert zero_bits.dtype == torch.int32
 
 
 def test_pseudo_mse3_assertion_accepts_random_scaled_chunks_for_supported_widths():
@@ -166,12 +163,32 @@ def test_pseudo_mse3_assertion_accepts_random_scaled_chunks_for_supported_widths
         assert diff.shape == values.shape
 
 
-def test_pseudo_mse3_scaled_diff_assertion_rejects_invalid_values():
-    _assert_pseudo_mse3_scaled_diff_ranges(
-        torch.tensor([[0.0, 0.5, 2.999, -0.25, -0.125]], dtype=torch.float32)
+def test_pseudo_mse3_selection_truncates_but_output_codec_remains_rtn():
+    midpoint = torch.tensor([[1.0 + 2.0**-7]], dtype=torch.float32)
+
+    selection_value = pseudo_mse_reconstruct_scaled_trunc_python(
+        midpoint,
+        exp_bits=1,
+        mantissa_bits=6,
+        is_signed=True,
+    )
+    output_value = pseudo_mse_reconstruct_scaled_python(
+        midpoint,
+        exp_bits=1,
+        mantissa_bits=6,
+        is_signed=True,
     )
 
-    for invalid_value in (3.0, 3.25, -0.2501, -0.75):
+    assert selection_value.item() == 1.0
+    assert output_value.item() == 1.0 + 2.0**-6
+
+
+def test_pseudo_mse3_scaled_diff_assertion_rejects_invalid_values():
+    _assert_pseudo_mse3_scaled_diff_ranges(
+        torch.tensor([[0.0, 0.5, 2.999, -0.75, -0.125]], dtype=torch.float32)
+    )
+
+    for invalid_value in (3.0, 3.25, -0.7501, -1.0):
         with pytest.raises(AssertionError):
             _assert_pseudo_mse3_scaled_diff_ranges(
                 torch.tensor([[invalid_value]], dtype=torch.float32)
@@ -205,7 +222,7 @@ def test_pseudo_mse3_decision_uses_exact_summed_diff():
     ).tolist() == [False, True, True, True]
 
 
-def test_pseudo_mse3_hw_vector_decision_matches_exact_mse():
+def test_pseudo_mse3_hw_vector_zero_bits_uses_fixed_point_decision():
     raw_chunks = make_raw_chunks(num_chunks=20, seed=42)
     _scales, scaled_chunks = scale_raw_chunks(raw_chunks)
 
@@ -216,18 +233,40 @@ def test_pseudo_mse3_hw_vector_decision_matches_exact_mse():
             chunk_diff,
             choose_exp2,
             expected_error,
-            _q1_bits,
-            _q2_bits,
-            _err_exp1_pre_square,
-            _err_exp2_pre_square,
+            q1_bits,
+            q2_bits,
+            err_exp1_pre_square,
+            err_exp2_pre_square,
             pseudo_diff,
         ) = decision_for_bit_width(scaled_chunks, bit_width)
 
         normalization = float(2.0 ** (2 * (bit_width - 2)))
-        torch.testing.assert_close(chunk_diff, (err2 - err1) * normalization)
-        assert torch.equal(choose_exp2, err2 < err1)
-        torch.testing.assert_close(expected_error, torch.minimum(err1, err2))
-        _assert_pseudo_mse3_scaled_diff_ranges(pseudo_diff)
+        normalized_diff = (
+            err_exp2_pre_square.pow(2) - err_exp1_pre_square.pow(2)
+        ) * normalization
+        _assert_pseudo_mse3_scaled_diff_ranges(normalized_diff)
+        expected_contributions = torch.floor(normalized_diff).to(torch.int32)
+        q1_from_fields = pseudo_mse_decode_emb_python(
+            q1_bits,
+            exp_bits=1,
+            mantissa_bits=bit_width - 2,
+            is_signed=True,
+        )
+        q2_from_fields = pseudo_mse_decode_emb_python(
+            q2_bits,
+            exp_bits=2,
+            mantissa_bits=bit_width - 3,
+            is_signed=True,
+        )
+        torch.testing.assert_close(q1_from_fields, scaled_chunks - err_exp1_pre_square)
+        torch.testing.assert_close(q2_from_fields, scaled_chunks - err_exp2_pre_square)
+        assert torch.equal(pseudo_diff, expected_contributions)
+        assert torch.equal(
+            chunk_diff,
+            expected_contributions.sum(dim=1, dtype=torch.int64),
+        )
+        assert torch.equal(choose_exp2, chunk_diff < 0)
+        torch.testing.assert_close(expected_error, torch.where(choose_exp2, err2, err1))
 
 
 def test_pseudo_mse3_generate_hw_vectors_outputs_pytorch_reference(tmp_path):
@@ -243,11 +282,14 @@ def test_pseudo_mse3_generate_hw_vectors_outputs_pytorch_reference(tmp_path):
     )
     assert "decision rule: choose_exp2 if sum(err2^2 - err1^2) < 0 else choose_exp1" in text
     assert "mantissa mode: round-to-nearest" in text
+    assert "format-selection candidate mode: truncate" in text
+    assert "selected dynamic-quantizer output mode: round-to-nearest" in text
+    assert "q_exp*_bits are truncated candidate fields used by format selection" in text
     assert "BEGIN_BIT_WIDTH 8" in text
     assert "pseudo_diff_times_2_2m" in text
 
 
-def test_pseudo_mse3_compare_to_l2_has_no_metric_min_mismatches(tmp_path):
+def test_pseudo_mse3_zero_bits_reports_fixed_point_l2_mismatches(tmp_path):
     csv_path = tmp_path / "pseudo_mse3_l2_mismatches.csv"
 
     totals = compare_pseudo_mse3_with_metric(
@@ -258,7 +300,12 @@ def test_pseudo_mse3_compare_to_l2_has_no_metric_min_mismatches(tmp_path):
         max_mismatches=5,
     )
 
-    assert totals["metric_min_mismatched_chunks"] == 0
+    assert totals["metric_min_mismatched_chunks"] > 0
+    assert (
+        totals["reported_mismatched_chunks"]
+        == totals["metric_min_mismatched_chunks"]
+        == totals["decision_disagreements"]
+    )
     assert csv_path.exists()
 
 

@@ -263,8 +263,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--excluded_ops",
         type=str,
-        default="LayerNorm",
-        help="Comma-separated op names to exclude from quantization",
+        default="",
+        help="Comma-separated op names to exclude from quantization (default: none)",
     )
     parser.add_argument(
         "--candidate_formats",

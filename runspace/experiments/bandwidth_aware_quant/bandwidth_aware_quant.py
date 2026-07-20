@@ -39,7 +39,10 @@ from runspace.experiments.asic_cache_simulation.simulate_cache import (
     get_footprint_elements,
     round_to_banks,
     fmt_elems,
-    optimize_layer_bits
+)
+from runspace.experiments.bandwidth_aware_quant.runtime_model import (
+    cache_sizes_with_fp32_reference,
+    compute_model_runtime,
 )
 
 try:
@@ -84,10 +87,56 @@ ACTIVATION_EXPONENTS_BY_POLICY = {
 DEFAULT_ACTIVATION_METRIC = 'mse'
 PSEUDO_MSE_METRIC = 'pseudo_MSE'
 PSEUDO_MSE_MIN_BIT_WIDTH = 4
+PROGRESS_FILENAME = 'bandwidth_aware_quant_progress.json'
 
-def patched_candidates_for_layer(self, layer_name, module=None, input_index=0):
+
+def _format_bit_width(fmt):
+    """Return the packet width encoded in an fp/ufp format name."""
+    if not isinstance(fmt, str):
+        return None
+    prefix = fmt.split('_', 1)[0]
+    digits = prefix[3:] if prefix.startswith('ufp') else prefix[2:] if prefix.startswith('fp') else ''
+    return int(digits) if digits.isdigit() else None
+
+
+def resolve_shared_producer_policy(policies):
+    """Resolve fan-out policies to the narrowest requested shared packet.
+
+    Returns ``None`` when the policies cannot be safely reconciled. Policies at
+    the selected width must be identical; this only resolves width differences,
+    not genuinely different format sets at the same width.
+    """
+    if not policies or any(policy is None or not policy for policy in policies):
+        return None
+    widths = []
+    for policy in policies:
+        policy_widths = {_format_bit_width(fmt) for fmt in policy}
+        if None in policy_widths or len(policy_widths) != 1:
+            return None
+        widths.append(policy_widths.pop())
+    narrowest = min(widths)
+    narrowest_policies = {
+        tuple(policy) for policy, width in zip(policies, widths) if width == narrowest
+    }
+    return next(iter(narrowest_policies)) if len(narrowest_policies) == 1 else None
+
+def patched_candidates_for_layer(
+    self,
+    layer_name,
+    module=None,
+    input_index=0,
+    producer_is_unsigned=None,
+):
     """Silent custom candidates picker that uses per-layer input bit-width for off-chip layers."""
-    is_unsigned = self._layer_uses_unsigned_input(layer_name, input_index=input_index)
+    if producer_is_unsigned is None:
+        is_unsigned = self._layer_uses_unsigned_input(
+            layer_name,
+            input_index=input_index,
+        )
+    else:
+        is_unsigned = bool(
+            producer_is_unsigned and self.use_unsigned_input_candidates
+        )
     input_format_policy = getattr(self, 'layer_input_format_policy', 'all')
     activation_exponents = getattr(self, 'activation_exponents', 'all')
     uses_pseudo_mse = is_pseudo_mse_activation_metric(self.metric)
@@ -141,7 +190,7 @@ def patched_candidates_for_layer(self, layer_name, module=None, input_index=0):
     if self.restrict_post_relu_ufp:
         ufp_for_bits = [f for f in candidates if f.startswith('ufp')]
         non_ufp_for_bits = [f for f in candidates if not f.startswith('ufp')]
-        if layer_name in self.post_relu_layers:
+        if producer_is_unsigned is None and layer_name in self.post_relu_layers:
             return ufp_for_bits or self._make_unsigned_candidates(non_ufp_for_bits)
         return non_ufp_for_bits or ufp_for_bits
 
@@ -151,6 +200,36 @@ for DIQ in (DIQ1, DIQ2):
     if DIQ is not None:
         # Override candidates method
         DIQ._candidates_for_layer = patched_candidates_for_layer
+
+        # A producer packet is encoded once even when it fans out. The cache
+        # model can assign 8 bits to an on-chip consumer and b bits to a streamed
+        # residual consumer, so use the narrowest requested packet for both.
+        _orig_producer_candidates = DIQ._producer_candidates
+        def make_new_producer_candidates(orig_producer_candidates):
+            def new_producer_candidates(self, stage):
+                plan = getattr(self._transport_runtime, 'plan', None)
+                if plan is not None:
+                    policies = []
+                    for consumer_name in stage.consumer_nodes:
+                        consumer_node = self._transport_nodes[consumer_name]
+                        policies.append(
+                            self._consumer_policy(stage, consumer_node, self._transport_modules)[2]
+                        )
+                    if len(set(policies)) > 1:
+                        selected = resolve_shared_producer_policy(policies)
+                        if selected is not None:
+                            reported = getattr(self, '_bandwidth_shared_policy_stages', set())
+                            if stage.stage_id not in reported:
+                                print(
+                                    f"[bandwidth] Producer {stage.stage_id!r} fans out at "
+                                    f"multiple widths; using one shared {_format_bit_width(selected[0])}-bit packet."
+                                )
+                                reported.add(stage.stage_id)
+                                self._bandwidth_shared_policy_stages = reported
+                            return list(selected)
+                return orig_producer_candidates(self, stage)
+            return new_producer_candidates
+        DIQ._producer_candidates = make_new_producer_candidates(_orig_producer_candidates)
         
         # Override init to load global maps
         _orig_init = DIQ.__init__
@@ -566,96 +645,6 @@ def run_cache_simulation(model_name, cache_size_M, batch_size=1, num_banks=16, m
         cache_sim_map[layer['name']] = stay_on_chip
         
     return results, cache_sim_map
-
-
-def compute_model_runtime(layers_with_stay_status, b_bits, bandwidth=1.0):
-    """
-    Compute model total runtime (execution cycles) under bandwidth-constrained
-    conditions using layer-wide transfer bit-width optimization.
-
-    For each layer, total transfer cycles are checked against compute cycles.
-    If the layer is BW-limited, every transferred component for that layer is
-    reduced by 1 bit together (floor = b_bits) until the layer is compute-
-    limited or all transferred components hit the floor. On-chip layers still
-    optimize weights because weights are always streamed in.
-
-    Returns
-    -------
-    total_runtime : float
-    layer_input_bits : dict  layer_name -> input bit-width
-    layer_weight_bits : dict layer_name -> weight bit-width
-    layer_output_bits : dict layer_name -> output bit-width
-    layer_residual_input_bits : dict layer_name -> residual operand bit-width
-    layer_need_input_transfer : dict layer_name -> whether layer input is externally transferred
-    """
-    total_runtime = 0.0
-    prev_stay_on_chip = False
-    layer_input_bits = {}
-    layer_weight_bits = {}
-    layer_output_bits = {}
-    layer_residual_input_bits = {}
-    layer_need_input_transfer = {}
-    
-    for idx, layer in enumerate(layers_with_stay_status):
-        stay_on_chip = layer.get('stay_on_chip', False)
-        lname = layer['name']
-        xin_from_cache = layer.get('xin_from_cache', True)
-        
-        need_input_transfer = (idx == 0 or not prev_stay_on_chip or not xin_from_cache)
-        layer_need_input_transfer[lname] = need_input_transfer
-        need_weight_transfer = True
-        need_output_transfer = not stay_on_chip
-        residual_bits = b_bits
-        residual_input_stream_elems = layer.get('residual_input_stream_elems', 0)
-        residual_output_elems = layer.get('residual_output_elems', 0)
-        fixed_transfers = []
-        forced_bits = {}
-        residual_output_uses_main_stream = (
-            residual_output_elems > 0
-            and need_output_transfer
-            and residual_output_elems == layer.get('output_elems', 0)
-        )
-
-        if residual_output_elems > 0:
-            if residual_output_uses_main_stream:
-                forced_bits['output'] = residual_bits
-            else:
-                fixed_transfers.append({
-                    'name': 'residual_output',
-                    'elems': residual_output_elems,
-                    'bits': residual_bits,
-                })
-        if residual_input_stream_elems > 0:
-            fixed_transfers.append({
-                'name': 'residual_input',
-                'elems': residual_input_stream_elems,
-                'bits': residual_bits,
-            })
-            layer_residual_input_bits[lname] = residual_bits
-        
-        in_b, w_b, out_b, cycles = optimize_layer_bits(
-            layer, bandwidth,
-            need_input_transfer, need_weight_transfer, need_output_transfer,
-            min_bits=b_bits,
-            fixed_transfers=fixed_transfers,
-            forced_bits=forced_bits,
-        )
-        
-        layer_input_bits[lname] = in_b
-        layer_weight_bits[lname] = w_b
-        layer_output_bits[lname] = out_b
-        total_runtime += cycles
-        
-        prev_stay_on_chip = stay_on_chip
-        
-    return (
-        total_runtime,
-        layer_input_bits,
-        layer_weight_bits,
-        layer_output_bits,
-        layer_residual_input_bits,
-        layer_need_input_transfer,
-    )
 
 
 def create_bandwidth_aware_state_dict(model, cache_sim_map, per_layer_weight_bits, chunk_size=128, best_weight_map_by_bits=None):
@@ -1136,8 +1125,139 @@ def build_eval_config(model_name, args, weights_path, b, layer_need_input_transf
     return config
 
 
+def build_run_signature(model_name, model_weights, args):
+    """Identify evaluation settings that make cached accuracy reusable."""
+    return {
+        'model_name': model_name,
+        'weights': str(model_weights),
+        'adapter_type': args.adapter_type,
+        'model_source': resolved_model_source(args),
+        'dataset_name': args.dataset_name,
+        'dataset_path': args.dataset_path,
+        'batch_size': args.batch_size,
+        'seq_len': args.seq_len,
+        'max_blocks': args.max_blocks,
+        'mode': args.mode,
+        'limit_batches': args.limit_batches,
+        'compare_batches': args.compare_batches,
+        'compare_mode': args.compare_mode,
+        'bandwidth': args.bandwidth,
+        'input_format_policy': args.input_format_policy,
+        'activation_exponents': args.activation_exponents,
+        'activation_metric': normalize_dynamic_input_metric(args.activation_metric),
+        'descent': bool(args.descent),
+        'use_best_weights': bool(args.use_best_weights),
+    }
+
+
+def _atomic_json_dump(path, data):
+    temp_path = f"{path}.tmp"
+    with open(temp_path, 'w') as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+    os.replace(temp_path, path)
+
+
+def _point_key(cache_size, b):
+    return f"{float(cache_size):g}|{int(b)}"
+
+
+def load_progress(path, run_signature):
+    """Load only a checkpoint created by the exact same run configuration."""
+    try:
+        with open(path) as f:
+            progress = json.load(f)
+    except (OSError, ValueError, TypeError):
+        return {'run_signature': run_signature, 'points': {}, 'descent': {}}
+    if progress.get('run_signature') != run_signature:
+        print(f"[resume] Ignoring incompatible checkpoint: {path}")
+        return {'run_signature': run_signature, 'points': {}, 'descent': {}}
+    progress.setdefault('points', {})
+    progress.setdefault('descent', {})
+    return progress
+
+
+def import_completed_results(progress, results_path, run_signature):
+    """Seed a checkpoint from a completed results file with a matching signature."""
+    try:
+        with open(results_path) as f:
+            saved = json.load(f)
+    except (OSError, ValueError, TypeError):
+        return progress
+    saved_signature = saved.get('run_signature')
+    if saved_signature != run_signature:
+        # Results written before resumability was added do not have a complete
+        # signature. Reuse them only when every setting they did record agrees.
+        config = saved.get('experiment_config', {})
+        legacy_checks = {
+            'model_name': saved.get('model_name') == run_signature['model_name'],
+            'adapter_type': config.get('adapter_type') == run_signature['adapter_type'],
+            'model_source': config.get('model_source') == run_signature['model_source'],
+            'dataset_name': config.get('dataset_name') == run_signature['dataset_name'],
+            'input_format_policy': config.get('input_format_policy') == run_signature['input_format_policy'],
+            'activation_exponents': config.get('activation_exponents') == run_signature['activation_exponents'],
+            'activation_metric': normalize_dynamic_input_metric(
+                config.get('activation_metric', DEFAULT_ACTIVATION_METRIC)
+            ) == run_signature['activation_metric'],
+            'descent': bool(config.get('descent')) == run_signature['descent'],
+            'use_best_weights': bool(config.get('use_best_weights')) == run_signature['use_best_weights'],
+        }
+        if saved_signature is not None or not all(legacy_checks.values()):
+            return progress
+        print(f"[resume] Importing compatible legacy results from {results_path}")
+
+    for cache_data in saved.get('min_bits_sweeps', {}).values():
+        for cache_size, records in cache_data.items():
+            for record in records:
+                if record.get('status', 'success') != 'success':
+                    continue
+                if (
+                    'status' not in record
+                    and float(record.get('accuracy', 0.0)) == 0.0
+                    and float(record.get('ppl', 0.0)) == 0.0
+                ):
+                    # Older code stored exceptions as fake zero-accuracy runs.
+                    continue
+                key = _point_key(cache_size, record['b'])
+                progress['points'].setdefault(key, {
+                    'acc1': record['accuracy'],
+                    'acc5': record.get('acc5', 0.0),
+                    'ppl': record.get('ppl', 0.0),
+                    'cycles': record['cycles'],
+                })
+
+    for cache_size, data in saved.get('descent', {}).items():
+        cache_progress = progress['descent'].setdefault(str(cache_size), {
+            'candidates': {}, 'levels': {},
+        })
+        point_by_bits = {
+            int(record['b']): record
+            for records in saved.get('min_bits_sweeps', {}).values()
+            for saved_cache, records in records.items()
+            if float(saved_cache) == float(cache_size)
+            for record in records
+        }
+        for bits, policy in data.get('policy_by_bits', {}).items():
+            level = data.get('per_level', {}).get(str(bits), {})
+            point = point_by_bits.get(int(bits))
+            if point is None or (
+                'status' not in point
+                and float(point.get('accuracy', 0.0)) == 0.0
+                and float(point.get('ppl', 0.0)) == 0.0
+            ):
+                continue
+            cache_progress['levels'].setdefault(str(bits), {
+                'policy': policy,
+                'acc1': point['accuracy'],
+                'cycles': point['cycles'],
+                'layer_weight_bits': level.get('layer_weight_bits', {}),
+                'layer_formats': level.get('layer_formats', {}),
+            })
+    return progress
+
+
 def run_descent_for_cache(model, model_name, args, runner, sim_layers, cache_sim_map,
-                          model_output_dir, temp_weights_dir):
+                          model_output_dir, temp_weights_dir, resume_data=None,
+                          save_progress=None):
     """Greedy weight-format descent for one cache size.
 
     Descends b = 8 down to the lowest activation bit-width supported by the
@@ -1155,9 +1275,25 @@ def run_descent_for_cache(model, model_name, args, runner, sim_layers, cache_sim
     points = {}
     policy_by_bits = {}
     per_level = {}
+    resume_data = resume_data if resume_data is not None else {}
+    cached_candidates = resume_data.setdefault('candidates', {})
+    cached_levels = resume_data.setdefault('levels', {})
 
     min_b = lowest_activation_bit_width(args)
     for b in range(8, min_b - 1, -1):
+        cached_level = cached_levels.get(str(b))
+        if cached_level is not None:
+            policy_by_bits[b] = cached_level['policy']
+            points[b] = (cached_level['acc1'], cached_level['cycles'])
+            per_level[b] = {
+                'layer_weight_bits': cached_level.get('layer_weight_bits', {}),
+                'layer_formats': cached_level.get('layer_formats', {}),
+            }
+            print(
+                f"[resume] Cache level b={b} already complete; "
+                f"winner={policy_by_bits[b]!r}, Top-1={points[b][0]:.3f}%"
+            )
+            continue
         print(f"\n------------------------------------------------------------")
         print(f"[descent] Cache stage | Bit-width level b={b}")
         print(f"------------------------------------------------------------")
@@ -1181,8 +1317,23 @@ def run_descent_for_cache(model, model_name, args, runner, sim_layers, cache_sim
         best_policy = None
         best_acc1 = -1.0
         best_quant_map = None
+        failed_candidates = []
 
         for cand in candidates:
+            cached_candidate = cached_candidates.setdefault(str(b), {}).get(cand)
+            if cached_candidate is not None:
+                acc1 = cached_candidate['acc1']
+                quant_map = cached_candidate.get('quant_map', {})
+                print(
+                    f"[resume]   b={b} candidate {cand!r}: "
+                    f"Top-1 = {acc1:.3f}%"
+                )
+                if acc1 > best_acc1:
+                    best_acc1 = acc1
+                    best_policy = cand
+                    best_quant_map = quant_map
+                continue
+
             trial_policy = dict(policy_by_bits)
             trial_policy[b] = cand
             q_state_dict, quant_map = create_descent_state_dict(
@@ -1194,31 +1345,60 @@ def run_descent_for_cache(model, model_name, args, runner, sim_layers, cache_sim
             eval_config = build_eval_config(model_name, args, temp_weights_path, b, layer_need_input_transfer)
             try:
                 eval_results = runner.run_single(eval_config, output_root=model_output_dir)
-                acc1 = eval_results.get('acc1', 0.0)
+                if 'acc1' not in eval_results:
+                    raise RuntimeError("evaluation completed without an acc1 result")
+                acc1 = float(eval_results['acc1'])
             except Exception as e:
                 print(f"[descent]   candidate {cand}: eval error: {e}")
-                acc1 = 0.0
                 import traceback
                 traceback.print_exc()
+                failed_candidates.append(cand)
+                continue
+            finally:
+                if os.path.exists(temp_weights_path):
+                    try:
+                        os.remove(temp_weights_path)
+                    except OSError:
+                        pass
             print(f"[descent]   b={b} candidate {cand!r}: Top-1 = {acc1:.3f}%")
-
-            if os.path.exists(temp_weights_path):
-                try:
-                    os.remove(temp_weights_path)
-                except OSError:
-                    pass
+            cached_candidates[str(b)][cand] = {
+                'acc1': acc1,
+                'quant_map': quant_map,
+            }
+            if save_progress is not None:
+                save_progress()
 
             if acc1 > best_acc1:
                 best_acc1 = acc1
                 best_policy = cand
                 best_quant_map = quant_map
 
+        if failed_candidates:
+            raise RuntimeError(
+                f"Bandwidth-aware descent at b={b} has failed candidates "
+                f"{failed_candidates}. Successful candidates were checkpointed; "
+                "rerun to retry only the failures before selecting a winner."
+            )
+        if best_policy is None:
+            raise RuntimeError(
+                f"All candidates failed for bandwidth-aware descent at b={b}; "
+                "no result was recorded. Fix the evaluation error and rerun to resume."
+            )
         policy_by_bits[b] = best_policy
         points[b] = (best_acc1, cycles)
         per_level[b] = {
             'layer_weight_bits': dict(layer_weight_bits),
             'layer_formats': best_quant_map or {},
         }
+        cached_levels[str(b)] = {
+            'policy': best_policy,
+            'acc1': best_acc1,
+            'cycles': cycles,
+            'layer_weight_bits': dict(layer_weight_bits),
+            'layer_formats': best_quant_map or {},
+        }
+        if save_progress is not None:
+            save_progress()
         print(f"[descent]   => b={b} WINNER: {best_policy!r} (Top-1 = {best_acc1:.3f}%)")
 
     return points, policy_by_bits, per_level
@@ -1257,9 +1437,9 @@ def main():
                              "'isolated' = teacher-forced per-layer output error (no inherited drift)")
     parser.add_argument("--cache_size", type=float, default=None,
                         help="Pin a single cache size (e.g. 4.0) instead of sweeping [0, 2, 4]")
-    parser.add_argument("--cache_sizes", type=float, nargs="+", default=None,
+    parser.add_argument("--cache_sizes", type=float, nargs="+", default=[0,2],
                         help="Explicit list of cache sizes to run (e.g. --cache_sizes 0 2). "
-                             "Overrides --cache_size and the default [0, 2, 4] sweep.")
+                             "Overrides --cache_size and the default [0, 2, 1] sweep.")
     parser.add_argument("--b_bits", type=int, default=None,
                         help="Pin a single min bit-width (e.g. 8) instead of sweeping 2-8")
     parser.add_argument("--input_format_policy", choices=["all", "typed", "canonical"], default="all",
@@ -1333,6 +1513,14 @@ def main():
         os.makedirs(model_output_dir, exist_ok=True)
 
         print(f"Results will be stored in: {model_output_dir}")
+        results_path = os.path.join(model_output_dir, "bandwidth_aware_quant_results.json")
+        progress_path = os.path.join(model_output_dir, PROGRESS_FILENAME)
+        run_signature = build_run_signature(model_name, model_weights, args)
+        progress = load_progress(progress_path, run_signature)
+        progress = import_completed_results(progress, results_path, run_signature)
+
+        def save_current_progress():
+            _atomic_json_dump(progress_path, progress)
 
         # 1. Load the reference FP32 model and obtain weight state dict
         ref_config = build_bandwidth_fp32_config(args, model_name, model_weights)
@@ -1366,9 +1554,11 @@ def main():
                 print(f"[WARNING] --use_best_weights requested but no per-bit-width best weight map found for {model_name}. "
                       "Falling back to SIGNED_FORMATS_BY_BITS.")
 
-        # Cache simulations for all cache sizes (run only once per cache size!)
+        # Cache simulations for all requested cache sizes, plus 0M when needed
+        # so normalized speedup always has a real FP32 0M reference.
         cache_sims = {}
-        for cs in cache_sizes:
+        simulation_cache_sizes = cache_sizes_with_fp32_reference(cache_sizes)
+        for cs in simulation_cache_sizes:
             print(f"\n--- Running cache simulation for Cache Size: {cs}MB ---")
             sim_layers, cache_sim_map = run_cache_simulation(
                 model_name,
@@ -1390,28 +1580,18 @@ def main():
         #    Compute cycles with 32-bit element transfers (no reduction — min=max=32).
         print(f"\n--- Evaluating reference FP32 model ---")
         ref_cycles_per_cs = {}
-        for cs in cache_sizes:
+        for cs in simulation_cache_sizes:
             sim_layers, _ = cache_sims[cs]
-            total_cyc = 0.0
-            prev_stay = False
-            for idx, layer in enumerate(sim_layers):
-                stay = layer.get('stay_on_chip', False)
-                xin_cache = layer.get('xin_from_cache', True)
-                need_in = (idx == 0 or not prev_stay or not xin_cache)
-                need_out = not stay
-                _, _, _, cyc = optimize_layer_bits(
-                    layer, args.bandwidth,
-                    need_in, True, need_out,
-                    min_bits=32, max_bits=32
-                )
-                total_cyc += cyc
-                prev_stay = stay
+            total_cyc = compute_model_runtime(
+                sim_layers,
+                32,
+                bandwidth=args.bandwidth,
+                max_bits=32,
+            )[0]
             ref_cycles_per_cs[cs] = total_cyc
             print(f"  Cache {cs}MB FP32 cycles (32b): {total_cyc:,}")
 
-        ref_baseline_cycles = ref_cycles_per_cs.get(0.0)
-        if ref_baseline_cycles is None:
-            ref_baseline_cycles = next(iter(ref_cycles_per_cs.values()), 1.0)
+        ref_baseline_cycles = ref_cycles_per_cs[0.0]
         print(f"  FP32 0MB reference baseline cycles: {ref_baseline_cycles:,}")
 
         ref_acc1 = get_cached_fp32_acc1(model_name)
@@ -1436,6 +1616,14 @@ def main():
         # 4. Sweep loops
         evaluated_points = {}  # (cache_size, b_bits) -> (accuracy, cycles)
         evaluated_metrics = {}  # (cache_size, b_bits) -> extra metric dict
+        for key, record in progress['points'].items():
+            cache_token, bits_token = key.split('|', 1)
+            point_key = (float(cache_token), int(bits_token))
+            evaluated_points[point_key] = (record['acc1'], record['cycles'])
+            evaluated_metrics[point_key] = {
+                'acc5': record.get('acc5', 0.0),
+                'ppl': record.get('ppl', 0.0),
+            }
         descent_data = {}      # cache_size -> {'policy_by_bits':..., 'per_level':...}
 
         temp_weights_dir = os.path.join(model_output_dir, "temp_weights")
@@ -1449,9 +1637,14 @@ def main():
                 print(f"[descent] Cache: {cs}MB")
                 print(f"============================================================")
                 sim_layers, cache_sim_map = cache_sims[cs]
+                cache_progress = progress['descent'].setdefault(
+                    str(float(cs)), {'candidates': {}, 'levels': {}}
+                )
                 points, policy_by_bits, per_level = run_descent_for_cache(
                     model, model_name, args, runner, sim_layers, cache_sim_map,
                     model_output_dir, temp_weights_dir,
+                    resume_data=cache_progress,
+                    save_progress=save_current_progress,
                 )
                 for b, (acc1, cyc) in points.items():
                     evaluated_points[(cs, b)] = (acc1, cyc)
@@ -1469,6 +1662,13 @@ def main():
             unique_runs = sorted(unique_runs, key=lambda x: (x[0], x[1]))
 
         for cs, b in unique_runs:
+            if (float(cs), int(b)) in evaluated_points:
+                acc1, _cycles = evaluated_points[(float(cs), int(b))]
+                print(
+                    f"[resume] Cache {cs}MB, b={b} already complete; "
+                    f"Top-1={acc1:.3f}%. Skipping evaluation."
+                )
+                continue
             print(f"\n============================================================")
             print(f"Evaluating Cache: {cs}MB | Bit-Width of Off-Chip Layers: {b}-bits")
             print(f"============================================================")
@@ -1521,17 +1721,20 @@ def main():
             try:
                 print("Running evaluation forward pass...")
                 eval_results = runner.run_single(eval_config, output_root=model_output_dir)
-                acc1 = eval_results.get('acc1', 0.0)
+                if 'acc1' not in eval_results:
+                    raise RuntimeError("evaluation completed without an acc1 result")
+                acc1 = float(eval_results['acc1'])
                 acc5 = eval_results.get('acc5', 0.0)
                 ppl = eval_results.get('ppl', 0.0)
                 print(f"Accuracy results: Top-1 Acc = {acc1:.3f}%, Top-5 Acc = {acc5:.3f}%, PPL = {ppl:.3f}")
             except Exception as e:
                 print(f"Error during evaluation: {e}")
-                acc1 = 0.0
-                acc5 = 0.0
-                ppl = 0.0
                 import traceback
                 traceback.print_exc()
+                raise RuntimeError(
+                    f"Bandwidth-aware evaluation failed for cache={cs}MB, b={b}; "
+                    "the failed point was not recorded and will be retried on resume."
+                ) from e
 
             # Save evaluated point
             evaluated_points[(cs, b)] = (acc1, cycles)
@@ -1539,6 +1742,13 @@ def main():
                 'acc5': acc5,
                 'ppl': ppl,
             }
+            progress['points'][_point_key(cs, b)] = {
+                'acc1': acc1,
+                'acc5': acc5,
+                'ppl': ppl,
+                'cycles': cycles,
+            }
+            save_current_progress()
 
             # Save weight-choice verification for this (cache_size, b) run
             verification_path = os.path.join(model_output_dir, f"weight_choice_verification_cs{cs}_b{b}.json")
@@ -1568,14 +1778,19 @@ def main():
                     results_data[min_bits][cs].append((b, acc1, cycles))
 
         def result_record(cache_size, point):
-            rec = {'b': point[0], 'accuracy': point[1], 'cycles': point[2]}
+            rec = {
+                'b': point[0],
+                'accuracy': point[1],
+                'cycles': point[2],
+                'status': 'success',
+            }
             rec.update(evaluated_metrics.get((cache_size, point[0]), {}))
             return rec
 
         # 5. Save results to JSON file
-        results_path = os.path.join(model_output_dir, "bandwidth_aware_quant_results.json")
         serializable_results = {
             'model_name': model_name,
+            'run_signature': run_signature,
             'ref_fp32': {
                 'accuracy': ref_acc1,
                 'acc5': ref_acc5,
@@ -1626,8 +1841,7 @@ def main():
                 }
                 for cs, data in descent_data.items()
             }
-        with open(results_path, 'w') as f:
-            json.dump(serializable_results, f, indent=4)
+        _atomic_json_dump(results_path, serializable_results)
         print(f"\nAll results saved to {results_path}")
 
         # 6. Generate plots for each starting min_bits threshold
@@ -1635,7 +1849,7 @@ def main():
         colors = {0.0: 'red', 2.0: 'blue', 4.0: 'green'}
 
         # Normalization factor: FP32 0MB cache is the 1.0x speedup baseline.
-        norm = ref_cycles_per_cs.get(0.0, 1.0)
+        norm = ref_baseline_cycles
         if norm <= 0:
             norm = 1.0
 
@@ -1717,7 +1931,6 @@ def main():
 
         linestyles = {0.0: '-', 2.0: '-', 4.0: '--'}
         markers = {0.0: 'o', 2.0: 's', 4.0: '^'}
-        jitter = {0.0: 1.0, 2.0: 0.98, 4.0: 1.02}
 
         for min_bits, cache_data in results_data.items():
             x_values = []
@@ -1726,8 +1939,7 @@ def main():
                 if ref_cyc is not None and ref_cyc > 0 and ref_acc1 > 0:
                     x_values.append(normalized_speedup(ref_cyc))
             for cs, points in cache_data.items():
-                j_factor = jitter.get(cs, 1.0)
-                x_values.extend(normalized_speedup(cyc) * j_factor for _, _, cyc in points)
+                x_values.extend(normalized_speedup(cyc) for _, _, cyc in points)
 
             axis_break = find_axis_break(x_values, xlim_min, xlim_max)
             if axis_break:
@@ -1793,8 +2005,7 @@ def main():
                 accs = [p[1] for p in points]
                 cycles = [p[2] for p in points]
 
-                j_factor = jitter.get(cs, 1.0)
-                plot_x = [normalized_speedup(cyc) * j_factor for cyc in cycles]
+                plot_x = [normalized_speedup(cyc) for cyc in cycles]
 
                 label = f"Cache {cs}MB ({cyc_range} cyc)"
                 color = colors.get(cs, 'black')

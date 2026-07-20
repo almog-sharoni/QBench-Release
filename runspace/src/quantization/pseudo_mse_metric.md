@@ -142,9 +142,12 @@ accumulating per-chunk sums.
 ## pseudo_MSE3
 
 `pseudo_MSE3` is a pairwise metric using CUDA metric code `9` and canonical
-metric name `pseudo_mse3`. It uses the same e1/e2 candidate constraints and
-rounded quantized output, but its per-element signal is the exact squared
-error difference:
+metric name `pseudo_mse3`. It uses the same e1/e2 candidate constraints. For
+format selection only, each candidate is encoded by truncating its discarded
+mantissa bits. After the format is chosen, the dynamic quantizer encodes the
+selected activation with the normal round-to-nearest path. Its per-element
+selection signal is the squared-error difference between the two truncated
+candidate reconstructions:
 
 ```text
 diff_i = err2_i^2 - err1_i^2
@@ -160,13 +163,13 @@ else:
 ```
 
 The reference implementation asserts that `diff_i * 2^(2M)` is in the
-rounded-path range `[-1/4, 3)`. The CUDA search computes the same exact
-squared-error diff directly from the rounded e1/e2 reconstructions.
+truncating-selection range `[-3/4, 3)`. The CUDA search computes the same
+squared-error diff directly from the truncated e1/e2 reconstructions.
 
 The `runspace/experiments/pseudo_mse3/pseudo_mse.py` experiment also accepts
-`--bits-to-take N`. The default `N=0` keeps the exact floating-point
-`err2^2 - err1^2` sum. Positive `N` converts each per-value signal to fixed
-point before the chunk sum. `--fixed-rounding floor` preserves the original
+`--bits-to-take N`. Every non-negative `N`, including the default `N=0`,
+converts each per-value signal to fixed point before the chunk sum.
+`--fixed-rounding floor` preserves the original
 `floor(diff_i * 2^N)` behavior. `--fixed-rounding nearest` matches activation
 `encode_emb` rounding by rounding magnitude to nearest with exact half cases
 away from zero. The fused CUDA selector receives `N` as `metric_param` and a

@@ -137,7 +137,7 @@ class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
         q_type = getattr(self, 'q_type', 'fp8_e4m3')
         capture = getattr(self, 'capture_activations', False)
 
-        if not getattr(self, 'input_quantization', True):
+        if not self.hardware_arithmetic_enabled():
             affine_weight = self.weight
             if (
                 getattr(self, 'weight_quantization', True)
@@ -210,7 +210,6 @@ class QuantLayerNorm(nn.LayerNorm, QuantizedLayerMixin):
         else:
             quantized_gamma = self.quantize_input(self.weight, internal=True)
         quantized_betta = self.quantize_input(self.bias, internal=True)
-
 
 
         # (x - mean) / sqrt(var) * gamma + beta

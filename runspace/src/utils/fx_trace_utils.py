@@ -54,13 +54,15 @@ class QuantAwareTracer(torch.fx.Tracer):
         ):
             return False
 
-        quantized_ops = tuple(
+        registered_ops = list(
             dict.fromkeys(
                 list(OpRegistry.get_supported_ops().values())
                 + list(getattr(OpRegistry, "_registry", {}).values())
             )
         )
-        if isinstance(m, quantized_ops):
+        quantized_ops = tuple(registered_ops)
+        registered_names = {op.__name__ for op in registered_ops}
+        if isinstance(m, quantized_ops) or cls_name in registered_names:
             return True
 
         return super().is_leaf_module(m, module_qualified_name)

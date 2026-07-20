@@ -219,7 +219,7 @@ def test_runner_synthesizes_uniform_input_quant_config():
         "transport": "encoded",
         "format": "fp8_e4m3",
         "stage_format_policy": {
-            "producer_default": None,
+            "producer_default": "fp8_e4m3",
             "consumer_default": "fp8_e4m3",
             "producer_overrides": {},
             "consumer_overrides": {},
@@ -230,6 +230,33 @@ def test_runner_synthesizes_uniform_input_quant_config():
         "uniform_unsigned_input_candidates": True,
         "collect_error_stats": True,
     }
+
+
+def test_default_uniform_transport_quantizes_terminal_logits_once():
+    config = {
+        "adapter": {"input_quantization": True},
+        "quantization": {"format": "fp8_e4m3", "chunk_size": 4},
+    }
+    input_quant_cfg = Runner._implicit_uniform_input_quant_cfg(config)
+    model = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 2)).eval()
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt=input_quant_cfg["format"],
+        chunk_size=input_quant_cfg["chunk_size"],
+        quant_mode="chunk",
+        transport="reference",
+        collect_error_stats=False,
+        stage_format_policy=input_quant_cfg["stage_format_policy"],
+    )
+    quantizer.register_hooks()
+    model(torch.randn(1, 4))
+
+    runtime = quantizer._transport_runtime
+    terminal_stage_id = runtime.plan.model_output_sources[0]
+    assert quantizer._stage_formats[terminal_stage_id] == "fp8_e4m3"
+    assert runtime.stage_transmissions[terminal_stage_id] == 1
+    assert runtime.transmission_count == len(runtime.plan.stages)
+    quantizer.cleanup()
 
 
 def test_runner_preserves_factory_default_activation_quant_via_transport():
@@ -245,10 +272,24 @@ def test_runner_preserves_factory_default_activation_quant_via_transport():
     assert input_quant_cfg["transport"] == "encoded"
     assert input_quant_cfg["format"] == "fp8_e4m3"
     assert input_quant_cfg["stage_format_policy"]["consumer_default"] == "fp8_e4m3"
-    assert input_quant_cfg["stage_format_policy"]["producer_default"] is None
+    assert input_quant_cfg["stage_format_policy"]["producer_default"] == "fp8_e4m3"
     assert build_config["adapter"]["input_quantization"] is False
     assert build_config["adapter"]["output_quantization"] is False
     assert build_config["adapter"]["quantized_ops"] == ["all"]
+
+
+def test_default_logit_format_inherits_explicit_input_format():
+    config = {
+        "adapter": {"input_quantization": True},
+        "quantization": {"input_format": "fp8_e1m6"},
+    }
+
+    policy = Runner._implicit_uniform_input_quant_cfg(config)[
+        "stage_format_policy"
+    ]
+
+    assert policy["consumer_default"] == "fp8_e1m6"
+    assert policy["producer_default"] == "fp8_e1m6"
 
 
 def test_explicit_disabled_input_quant_turns_all_activation_quantization_off():
@@ -692,6 +733,8 @@ def test_runner_logs_dynamic_input_map_from_processed_layer_stats():
                 "unsigned_stage_count": 1,
                 "activation_plan": {
                     "stage_0000": {
+                        "layer_name": "0",
+                        "module_names": ["0"],
                         "producer_nodes": ["conv", "relu"],
                         "consumer_nodes": ["next_conv"],
                         "is_unsigned": True,
@@ -699,7 +742,9 @@ def test_runner_logs_dynamic_input_map_from_processed_layer_stats():
                     }
                 },
                 "layer_stats": {
-                    "0": {
+                    "stage_0000": {
+                        "stage_id": "stage_0000",
+                        "layer_name": "0",
                         "format_counts": {"fp8_e4m3": 3, "fp4_e1m2": 1},
                         "total_chunks": 4,
                         "producer_nodes": ["conv", "relu"],
@@ -720,6 +765,7 @@ def test_runner_logs_dynamic_input_map_from_processed_layer_stats():
     activation_map = json.loads(Runner._build_activation_map_json(stats))
 
     assert stats["layer_stats"]["0"]["type"] == "Conv2d"
+    assert stats["layer_stats"]["0"]["stage_id"] == "stage_0000"
     assert stats["transport"] == "encoded"
     assert stats["packet_count"] == 7
     assert stats["decode_reads"] == 9
@@ -729,6 +775,11 @@ def test_runner_logs_dynamic_input_map_from_processed_layer_stats():
     assert activation_map["transport"] == "encoded"
     assert activation_map["stage_count"] == 1
     assert activation_map["stages"]["stage_0000"]["unsigned_source"] == "relu"
+    assert activation_map["stages"]["stage_0000"]["format_counts"] == {
+        "fp8_e4m3": 3,
+        "fp4_e1m2": 1,
+    }
+    assert input_map["0"]["stage_id"] == "stage_0000"
     assert input_map["0"]["format_counts"] == {"fp8_e4m3": 3, "fp4_e1m2": 1}
     assert input_map["0"]["total_chunks"] == 4
     assert input_map["0"]["dominant_format"] == "fp8_e4m3"

@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 from runspace.experiments.asic_cache_simulation import simulate_cache
 
 
@@ -116,4 +118,34 @@ def test_quant_add_compute_scales_with_number_of_inputs():
     }
 
     assert simulate_cache._quant_add_connection_count(layer) == 3
-    assert simulate_cache._compute_layer_cycles(layer) == 3 * math.ceil(257 / 128)
+    assert simulate_cache._quant_add_operation_count(layer) == 2
+    assert simulate_cache._compute_layer_cycles(layer) == 2 * math.ceil(257 / 128)
+
+
+def test_binary_quant_add_is_one_elementwise_pass():
+    layer = {
+        "type": "QuantAdd",
+        "output_elems": 257,
+        "input_shapes": [(1, 257), (1, 257)],
+    }
+
+    assert simulate_cache._quant_add_connection_count(layer) == 2
+    assert simulate_cache._quant_add_operation_count(layer) == 1
+    assert simulate_cache._compute_layer_cycles(layer) == math.ceil(257 / 128)
+
+
+def test_optimize_layer_bits_rejects_invalid_runtime_parameters():
+    layer = _one_chunk_layer()
+
+    with pytest.raises(ValueError, match="bandwidth"):
+        simulate_cache.optimize_layer_bits(layer, 0, True, True, True)
+    with pytest.raises(ValueError, match="min_bits"):
+        simulate_cache.optimize_layer_bits(
+            layer,
+            1.0,
+            True,
+            True,
+            True,
+            min_bits=9,
+            max_bits=8,
+        )
