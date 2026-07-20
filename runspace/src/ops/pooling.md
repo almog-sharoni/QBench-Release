@@ -4,10 +4,10 @@ This document describes the quantized pooling layers available in `quant_pooling
 
 ## Overview
 
-The pooling layers are implemented as `nn.Module` wrappers that replace standard PyTorch pooling operations. They support:
-- **FP8/INT8 Input Quantization**: Ensuring inputs are quantized before pooling.
+The pooling layers are implemented as `nn.Module` wrappers that replace standard PyTorch pooling operations. In hardware activation-transport mode, each pooling layer remains a named FX compute stage: its producer supplies the quantized input packet and the pooling result is encoded exactly once for downstream consumers. They support:
+- **Producer-Stage Input Transport**: Inputs arrive through the configured reference or encoded hardware transport.
 - **Standard Pooling Logic**: Leveraging PyTorch's optimized pooling kernels on quantized data.
-- **Activation Capturing**: Optional capturing of input/output tensors for debugging or calibration.
+- **Accurate Activation Capturing**: Natural pooling outputs are captured separately from transmitted quantized outputs.
 
 ---
 
@@ -27,9 +27,9 @@ y = \max_{x \in W} (x)
 $$
 
 #### Method
-- **Input Quantization**: The input tensor is quantized to the configured format (e.g., FP8) before pooling.
+- **Input Quantization**: The input tensor is decoded from the producer-stage packet before pooling.
 - **Operation**: The standard `nn.MaxPool2d` operation is applied to the quantized input.
-- **Output**: Since the max of a set of quantized values is always one of those values, the output preserves the quantization grid (assuming no padding with different values affects the max).
+- **Output**: The pooling result is encoded once as this stage's output packet. `return_indices=True` is rejected in hardware transport mode because the packet ABI currently transports activation tensors, not activation/index tuples.
 
 ---
 
@@ -47,11 +47,9 @@ y = \frac{1}{N} \sum_{i=1}^{N} x_i
 $$
 
 #### Method
-- **Input Quantization**: The input tensor is quantized to the configured format.
+- **Input Quantization**: The input tensor is decoded from the producer-stage packet.
 - **Operation**: The standard `nn.AdaptiveAvgPool2d` is applied.
-- **Output**: The output is the average of quantized values.
-    - *Note*: The average of FP8/INT8 values is not necessarily representable in the same quantized format (it becomes a higher-precision float).
-    - Currently, the layer returns this higher-precision result. If the next layer is quantized, it will re-quantize this input.
+- **Output**: The natural average is encoded once as this stage's output packet. The average need not already lie on the input format's grid.
 
 ---
 
@@ -69,6 +67,6 @@ y = \frac{1}{N} \sum_{i=1}^{N} x_i
 $$
 
 #### Method
-- **Input Quantization**: The input tensor is quantized to the configured format.
+- **Input Quantization**: The input tensor is decoded from the producer-stage packet.
 - **Operation**: The standard `nn.AvgPool2d` is applied.
-- **Output**: Similar to Adaptive AvgPool, the output is a floating-point average of the quantized inputs. It is not explicitly re-quantized at the output of this layer, leaving that to the subsequent layer if needed.
+- **Output**: As with adaptive average pooling, the natural average is encoded exactly once at the producer-stage boundary.

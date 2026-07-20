@@ -14,6 +14,12 @@ from runspace.src.quantization.dynamic_input_quantizer import (
 )
 from runspace.src.quantization.uniform_input_quantizer import UniformInputQuantizer
 from runspace.src.ops.quant_ln import QuantLayerNorm
+from runspace.src.ops.quant_pooling import (
+    QuantAdaptiveAvgPool2d,
+    QuantAvgPool2d,
+    QuantMaxPool2d,
+)
+from src.eval.comparator import LayerComparator
 
 
 class _FanoutModel(nn.Module):
@@ -27,6 +33,111 @@ class _FanoutModel(nn.Module):
     def forward(self, value):
         shared = self.relu(self.producer(value))
         return self.left(shared) + self.right(shared)
+
+
+class _ShapeBookkeepingModel(nn.Module):
+    def forward(self, value):
+        torch._assert(value.dim() == 2, "expected a matrix")
+        half_width = value.shape[1] // 2
+        full_width = half_width * 2
+        expanded = value.expand(value.shape[0], full_width)
+        return expanded * 2.0
+
+
+class _TimmStylePoolHead(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Conv2d(3, 4, kernel_size=1)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.flatten = nn.Flatten(1)
+        self.head = nn.Linear(4, 2)
+
+    def forward(self, value):
+        value = self.conv(value)
+        value = self.pool(value)
+        value = self.flatten(value)
+        return self.head(value)
+
+
+@pytest.mark.parametrize(
+    ("pool", "expected_shape"),
+    [
+        (QuantMaxPool2d(kernel_size=2), (1, 2, 2)),
+        (QuantAvgPool2d(kernel_size=2), (1, 2, 2)),
+        (QuantAdaptiveAvgPool2d(output_size=(1, 1)), (1, 1, 1)),
+    ],
+)
+def test_quant_pooling_uses_producer_stage_transport(pool, expected_shape):
+    pool.capture_activations = True
+    model = nn.Sequential(pool).eval()
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt="fp4_e1m2",
+        chunk_size=4,
+        transport="reference",
+        collect_error_stats=False,
+    )
+    quantizer.register_hooks()
+    output = model(torch.randn(1, 1, 4, 4))
+
+    runtime = quantizer._transport_runtime
+    pool_stage = runtime.plan.stage_for_node("_0")
+    assert output.shape[1:] == expected_shape
+    assert pool_stage.kind.value == "compute"
+    assert runtime.stage_transmissions[pool_stage.stage_id] == 1
+    assert runtime.transmission_count == len(runtime.plan.stages)
+    assert pool.last_natural_output is not None
+    assert getattr(pool, "last_quant_output", None) is None
+    assert not pool.input_quantization
+    assert not pool.output_quantization
+    quantizer.cleanup()
+
+
+def test_quant_max_pool_indices_fail_before_structured_transport():
+    pool = QuantMaxPool2d(kernel_size=2, return_indices=True)
+    model = nn.Sequential(pool).eval()
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt="fp4_e1m2",
+        chunk_size=4,
+        transport="reference",
+        collect_error_stats=False,
+    )
+    quantizer.register_hooks()
+
+    with pytest.raises(RuntimeError, match="return_indices=True"):
+        model(torch.randn(1, 1, 4, 4))
+    quantizer.cleanup()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA activation codec required")
+@pytest.mark.parametrize(
+    "pool",
+    [
+        QuantMaxPool2d(kernel_size=2),
+        QuantAvgPool2d(kernel_size=2),
+        QuantAdaptiveAvgPool2d(output_size=(8, 8)),
+    ],
+)
+def test_quant_pooling_uses_encoded_hardware_packets(pool):
+    model = nn.Sequential(pool).cuda().eval()
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt="fp8_e4m3",
+        chunk_size=128,
+        transport="encoded",
+        collect_error_stats=False,
+    )
+    quantizer.register_hooks()
+    output = model(torch.randn(1, 1, 16, 16, device="cuda"))
+
+    runtime = quantizer._transport_runtime
+    pool_stage = runtime.plan.stage_for_node("_0")
+    assert output.is_cuda
+    assert runtime.stage_transmissions[pool_stage.stage_id] == 1
+    assert runtime.packet_count == runtime.transmission_count
+    assert runtime.transmission_count == len(runtime.plan.stages)
+    quantizer.cleanup()
 
 
 def test_runtime_encodes_one_shared_producer_for_fanout():
@@ -52,12 +163,105 @@ def test_runtime_encodes_one_shared_producer_for_fanout():
 
     assert output.shape == (2, 4)
     assert relu_stage.node_names == ("producer", "relu")
+    assert runtime.stage_display_name(relu_stage) == "relu"
+    assert runtime.stage_module_names(relu_stage) == ("producer", "relu")
     assert relu_stage.is_unsigned
     assert relu_stage.has_fanout
     assert encoded_stage_ids.count(relu_stage.stage_id) == 1
     assert observed_stage_ids.count(relu_stage.stage_id) == 1
     assert runtime.decode_reads > len(set(encoded_stage_ids))
+    relu_plan = runtime.transport_stats()["activation_plan"][relu_stage.stage_id]
+    assert relu_plan["layer_name"] == "relu"
+    assert relu_plan["module_names"] == ["producer", "relu"]
     runtime.cleanup()
+
+
+def test_comparator_reports_complete_hardware_transport_coverage():
+    model = _FanoutModel().eval()
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt="fp4_e1m2",
+        chunk_size=4,
+        transport="reference",
+    )
+    quantizer.register_hooks()
+    model(torch.randn(2, 4))
+
+    comparator = object.__new__(LayerComparator)
+    comparator.activation_quantizer = quantizer
+    layers, summary = comparator._hardware_transport_coverage()
+
+    assert summary["covered_stages"] == summary["total_stages"]
+    assert summary["uncovered_stages"] == []
+    assert summary["covered_module_inputs"] == summary["total_module_inputs"]
+    assert summary["covered_module_outputs"] == summary["total_module_outputs"]
+    assert layers["producer"]["input_covered"]
+    assert layers["relu"]["output_covered"]
+    assert layers["left"]["input_covered"]
+    assert layers["right"]["input_covered"]
+    quantizer.cleanup()
+
+
+def test_comparator_excludes_shape_control_and_transparent_nodes_from_hw_coverage():
+    model = _ShapeBookkeepingModel().eval()
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt="fp4_e1m2",
+        chunk_size=4,
+        transport="reference",
+    )
+    quantizer.register_hooks()
+    model(torch.randn(2, 4))
+
+    comparator = object.__new__(LayerComparator)
+    comparator.activation_quantizer = quantizer
+    plan = quantizer._transport_runtime.plan
+    mul_roles = sorted(
+        getattr(plan.node_roles[node.name], "value", plan.node_roles[node.name])
+        for node in plan.graph_module.graph.nodes
+        if getattr(node.target, "__name__", None) == "mul"
+    )
+    lines, uncovered_count = comparator._verify_coverage_fx()
+    report = "\n".join(lines)
+
+    assert mul_roles == ["compute", "non_tensor"]
+    assert "Method: Hardware Activation Stage Plan + Runtime Packets" in report
+    assert "100.0%" in report
+    assert "Excluded shape/control nodes:" in report
+    assert ".dim" in report
+    assert "eq" in report
+    assert "_assert" in report
+    assert "floordiv" in report
+    assert "mul" in report
+    assert "Transport-preserving nodes:" in report
+    assert ".expand" in report
+    assert "Unquantized Unsupported Ops" not in report
+    assert "All activation stages are runtime-quantized!" in report
+    assert uncovered_count == 0
+    quantizer.cleanup()
+
+
+def test_comparator_covers_timm_style_transparent_flatten_route():
+    model = _TimmStylePoolHead().eval()
+    quantizer = UniformInputQuantizer(
+        model,
+        fmt="fp4_e1m2",
+        chunk_size=4,
+        transport="reference",
+    )
+    quantizer.register_hooks()
+    model(torch.randn(2, 3, 8, 8))
+
+    comparator = object.__new__(LayerComparator)
+    comparator.activation_quantizer = quantizer
+    layers, summary = comparator._hardware_transport_coverage()
+
+    assert layers["flatten"]["input_covered"]
+    assert layers["flatten"]["output_covered"]
+    assert layers["flatten"]["input_stage_ids"] == layers["flatten"]["output_stage_ids"]
+    assert summary["covered_module_inputs"] == summary["total_module_inputs"]
+    assert summary["covered_module_outputs"] == summary["total_module_outputs"]
+    quantizer.cleanup()
 
 
 def test_runtime_handles_graph_module_without_forward_recursion():
@@ -371,6 +575,34 @@ def test_dynamic_softmax_stage_uses_unsigned_candidate_pair():
     quantizer.cleanup()
 
 
+def test_dynamic_signed_stage_overrides_unsigned_consumer_metadata():
+    model = nn.Sequential(
+        nn.Linear(4, 4, bias=False),
+        nn.Linear(4, 2, bias=False),
+    ).eval()
+    # Reproduce the ViT failure mode: adapter metadata says this consumer uses
+    # unsigned inputs even though its actual producer is a signed compute stage.
+    model[1].input_q_type = "ufp2_e1m1"
+    quantizer = DynamicInputQuantizer(
+        model,
+        metric="mse",
+        chunk_size=4,
+        candidate_formats=["fp2_e1m0"],
+        unsigned_input_sources=["relu"],
+        transport="reference",
+    )
+
+    assert "1" in quantizer.post_unsigned_layers
+    quantizer.register_hooks()
+    producer_stage = quantizer._transport_runtime.plan.stage_for_node("_0")
+
+    assert not producer_stage.is_unsigned
+    assert quantizer._producer_candidate_cache[producer_stage.stage_id] == [
+        "fp2_e1m0"
+    ]
+    quantizer.cleanup()
+
+
 def test_dynamic_fanout_rejects_conflicting_consumer_policies():
     model = _FanoutModel().eval()
     original_forward = model.forward
@@ -382,8 +614,13 @@ def test_dynamic_fanout_rejects_conflicting_consumer_policies():
         transport="reference",
     )
 
-    def consumer_candidates(layer_name, _module=None, input_index=0):
-        del input_index
+    def consumer_candidates(
+        layer_name,
+        _module=None,
+        input_index=0,
+        producer_is_unsigned=None,
+    ):
+        del input_index, producer_is_unsigned
         if layer_name == "left":
             return ["fp4_e1m2"]
         if layer_name == "right":

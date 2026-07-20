@@ -210,8 +210,11 @@ __device__ __forceinline__ float pseudo_mse3_err2_minus_err1(
         return 0.0f;
     }
 
-    const std::uint32_t packed_e1 = encode_emb(scaled_v, 1, m1, sgn);
-    const std::uint32_t packed_e2 = encode_emb(scaled_v, 2, m2, sgn);
+    // pseudo_MSE3 selects the format from truncating candidate encodings.
+    // The selected activation is encoded with round-to-nearest below when the
+    // kernel writes best_qv, so truncation affects only the choosing mechanism.
+    const std::uint32_t packed_e1 = encode_emb_trunc(scaled_v, 1, m1, sgn);
+    const std::uint32_t packed_e2 = encode_emb_trunc(scaled_v, 2, m2, sgn);
     const float q_e1 = decode_emb(packed_e1, 1, m1, sgn);
     const float q_e2 = decode_emb(packed_e2, 2, m2, sgn);
     const float err1 = scaled_v - q_e1;
@@ -231,9 +234,6 @@ __device__ __forceinline__ float pseudo_mse3_apply_bits_to_take(
     int bits_to_take,
     int fixed_rounding_mode)
 {
-    if (bits_to_take <= 0) {
-        return diff;
-    }
     const float scale = ldexpf(1.0f, bits_to_take);
     const float scaled = __fmul_rn(diff, scale);
     int fixed;

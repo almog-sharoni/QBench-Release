@@ -154,11 +154,14 @@ def _render_bandwidth_aware_quant_summary():
         )
 
 
+from runspace.src.database.bwaware_results import normalize_cache_cycles
+
+
 def _bandwidth_aware_quant_rows(data, series="Baseline"):
     ref = data.get("ref_fp32", {}) or {}
     ref_acc = ref.get("accuracy")
-    ref_cycles = {str(k): v for k, v in (ref.get("cycles_per_cache_size", {}) or {}).items()}
-    ref_cycle_baseline = ref.get("baseline_cycles") or ref_cycles.get("0.0") or ref_cycles.get("0") or 1.0
+    ref_cycles = normalize_cache_cycles(ref.get("cycles_per_cache_size"))
+    ref_cycle_baseline = ref.get("baseline_cycles") or ref_cycles.get(0.0) or 1.0
     if ref_cycle_baseline <= 0:
         ref_cycle_baseline = 1.0
     rows = []
@@ -277,8 +280,8 @@ def _render_bandwidth_aware_quant_chart(data, points_df, overlay=None):
 
     ref = data.get("ref_fp32", {}) or {}
     ref_acc = ref.get("accuracy")
-    ref_cycles = {str(k): v for k, v in (ref.get("cycles_per_cache_size", {}) or {}).items()}
-    ref_cycle_baseline = ref.get("baseline_cycles") or ref_cycles.get("0.0") or ref_cycles.get("0") or 1.0
+    ref_cycles = normalize_cache_cycles(ref.get("cycles_per_cache_size"))
+    ref_cycle_baseline = ref.get("baseline_cycles") or ref_cycles.get(0.0) or 1.0
     if ref_cycle_baseline <= 0:
         ref_cycle_baseline = 1.0
 
@@ -286,8 +289,7 @@ def _render_bandwidth_aware_quant_chart(data, points_df, overlay=None):
     if ref_acc is not None:
         cache_sizes = sorted(plot_df["cache_size_M"].dropna().unique().tolist())
         for cache_size in cache_sizes:
-            cache_key = str(float(cache_size))
-            fp32_cache_cycles = ref_cycles.get(cache_key) or ref_cycles.get(str(cache_size)) or ref_cycle_baseline
+            fp32_cache_cycles = ref_cycles.get(float(cache_size)) or ref_cycle_baseline
             fp32_cache_speedup = ref_cycle_baseline / fp32_cache_cycles if fp32_cache_cycles else None
             ref_rows.append({
                 "min_bits": selected_min_bits,

@@ -71,7 +71,7 @@ class BaseAdapter(ABC):
             )
             if len(active) > 5:
                 preview += f", ... (+{len(active) - 5} more)"
-            raise RuntimeError(
+            raise AssertionError(
                 "Legacy module-level activation fake quantization cannot execute. "
                 "Activation quantization must use producer-stage hardware transport "
                 "via DynamicInputQuantizer, UniformInputQuantizer, or "

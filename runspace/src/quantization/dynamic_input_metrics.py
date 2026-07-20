@@ -422,6 +422,73 @@ def pseudo_mse_encode_emb_python(values, exp_bits, mantissa_bits, is_signed):
     return result
 
 
+def pseudo_mse_encode_emb_trunc_python(values, exp_bits, mantissa_bits, is_signed):
+    """Vectorized Python equivalent of CUDA ``encode_emb_trunc``."""
+    e = int(exp_bits)
+    m = int(mantissa_bits)
+    sgn = bool(is_signed)
+    values = values.to(torch.float32).contiguous()
+
+    u = _as_uint32_i64(values.view(torch.int32))
+    sign = torch.bitwise_and(torch.bitwise_right_shift(u, 31), 1)
+    mag = torch.bitwise_and(u, 0x7FFFFFFF)
+
+    b = (1 << e) - 1
+    max_exp = b
+    max_mant = 0 if m == 0 else ((1 << m) - 1)
+    zero_field = sign << (e + m) if sgn else torch.zeros_like(sign)
+    result = torch.zeros_like(u)
+
+    active = mag != 0
+    if not sgn:
+        active = active & (sign == 0)
+
+    if active.any():
+        exp_f = (
+            torch.bitwise_and(torch.bitwise_right_shift(mag, 23), 0xFF)
+            .to(torch.int64)
+            - 127
+        )
+        mant_full = torch.bitwise_or(
+            torch.bitwise_and(mag, 0x7FFFFF),
+            1 << 23,
+        )
+        m_mask = torch.clamp((1 - b) - exp_f, min=0)
+        shift = (23 - m) + m_mask
+        safe_shift = torch.clamp(shift, min=0, max=63)
+        mant_trunc = torch.bitwise_left_shift(
+            torch.bitwise_right_shift(mant_full, safe_shift),
+            safe_shift,
+        )
+        mant_trunc = torch.where(
+            shift >= 24,
+            torch.zeros_like(mant_trunc),
+            mant_trunc,
+        )
+
+        bits_23_24 = torch.bitwise_and(
+            torch.bitwise_right_shift(mant_trunc, 23),
+            3,
+        )
+        sign_field = sign << (e + m) if sgn else torch.zeros_like(sign)
+        saturated = sign_field | (max_exp << m) | max_mant
+        exp_t = torch.where(exp_f >= 1 - b, exp_f + b, torch.zeros_like(exp_f))
+        mant_t = (
+            torch.zeros_like(mant_trunc)
+            if m == 0
+            else torch.bitwise_and(
+                torch.bitwise_right_shift(mant_trunc, safe_shift),
+                max_mant,
+            )
+        )
+        encoded = sign_field | torch.bitwise_left_shift(exp_t, m) | mant_t
+        encoded = torch.where(exp_f > 0, saturated, encoded)
+        encoded = torch.where(bits_23_24 == 0, zero_field, encoded)
+        result = torch.where(active, encoded, result)
+
+    return torch.where((mag == 0) & sgn, zero_field, result)
+
+
 def pseudo_mse_decode_emb_python(fields, exp_bits, mantissa_bits, is_signed):
     """Vectorized Python equivalent of CUDA decode_emb for pseudo_MSE."""
     e = int(exp_bits)
@@ -461,6 +528,27 @@ def pseudo_mse_reconstruct_scaled_python(
     is_signed,
 ):
     packed = pseudo_mse_encode_emb_python(
+        scaled_values,
+        exp_bits,
+        mantissa_bits,
+        is_signed,
+    )
+    return pseudo_mse_decode_emb_python(
+        packed,
+        exp_bits,
+        mantissa_bits,
+        is_signed,
+    )
+
+
+def pseudo_mse_reconstruct_scaled_trunc_python(
+    scaled_values,
+    exp_bits,
+    mantissa_bits,
+    is_signed,
+):
+    """Reconstruct values through truncation for metric selection only."""
+    packed = pseudo_mse_encode_emb_trunc_python(
         scaled_values,
         exp_bits,
         mantissa_bits,
@@ -685,7 +773,7 @@ def pseudo_mse2_err2_minus_err1_from_scaled(
 
 
 def _assert_pseudo_mse3_scaled_diff_ranges(scaled_diff):
-    ok = (scaled_diff >= -0.25) & (scaled_diff < 3.0)
+    ok = (scaled_diff >= -0.75) & (scaled_diff < 3.0)
     bad = ~ok
     if bool(bad.any()):
         raise AssertionError(
@@ -708,9 +796,6 @@ def pseudo_mse3_fixed_point_from_diff(diff, bits_to_take, fixed_rounding="floor"
     if bits_to_take < 0:
         raise ValueError(f"bits_to_take must be non-negative; got {bits_to_take}")
     fixed_rounding = normalize_pseudo_mse3_fixed_rounding(fixed_rounding)
-    if bits_to_take == 0:
-        return diff
-
     scaled = diff * float(2.0**bits_to_take)
     scaled_pos = torch.where(scaled>0,scaled,0)
     scaled_neg = torch.where(scaled<0,scaled,0)
@@ -751,22 +836,25 @@ def pseudo_mse3_err2_minus_err1_from_scaled(
 
     Values are already chunk-scaled into [-2, 2). The squared-error difference
     is normalized by 2^(2*M) before it is returned or converted to fixed point.
-    The normalized value must be in the rounded-path range [-1/4, 3). When
-    bits_to_take is positive, it is converted to int32 fixed point using
-    ``fixed_rounding`` before accumulation.
+    The normalized value must be in the truncating-selection range [-3/4, 3). When
+    bits_to_take is non-negative, it is converted to int32 fixed point using
+    ``fixed_rounding`` before accumulation; zero uses the normal 2^0 scale.
     """
     m1 = int(exp1_mantissa_width)
     m2 = int(exp2_mantissa_width)
     if m2 != m1 - 1:
         raise ValueError(f"pseudo_MSE3 requires m2 == m1 - 1; got m1={m1}, m2={m2}")
     values = scaled_values.to(torch.float32).contiguous()
-    q1_scaled = pseudo_mse_reconstruct_scaled_python(
+    # Format selection intentionally evaluates truncating candidate encodings.
+    # The dynamic quantizer reconstructs the selected output separately through
+    # pseudo_mse_reconstruct_scaled_python, which remains round-to-nearest.
+    q1_scaled = pseudo_mse_reconstruct_scaled_trunc_python(
         values,
         exp_bits=1,
         mantissa_bits=m1,
         is_signed=is_signed,
     )
-    q2_scaled = pseudo_mse_reconstruct_scaled_python(
+    q2_scaled = pseudo_mse_reconstruct_scaled_trunc_python(
         values,
         exp_bits=2,
         mantissa_bits=m2,

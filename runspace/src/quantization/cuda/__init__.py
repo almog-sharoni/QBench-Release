@@ -44,7 +44,13 @@ _ext = load(
     ],
     extra_include_paths=[_THIS],
     extra_cflags=["-O3"],
-    extra_cuda_cflags=["-O3", "--use_fast_math"],
+        extra_cuda_cflags=[
+        "-O3", 
+        "--use_fast_math",
+        "-gencode=arch=compute_89,code=sm_89",
+        "-gencode=arch=compute_90,code=sm_90"
+    ],
+
     build_directory=_BUILD_DIR,
     verbose=os.environ.get("QBENCH_CUDA_VERBOSE", "0") == "1",
 )

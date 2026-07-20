@@ -9,6 +9,7 @@ import gc
 import copy
 import matplotlib.pyplot as plt
 import json
+import re
 
 # Add project root to sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
@@ -20,6 +21,13 @@ from runspace.core.runner import Runner
 from runspace.experiments.utils.common import (
     build_uniform_input_quant_cfg as _build_uniform_input_quant_cfg,
     row_uses_encoded_activation_transport,
+)
+from runspace.src.quantization.dynamic_input_metrics import (
+    assert_dynamic_input_metric_implemented,
+    normalize_dynamic_input_metric,
+    normalize_pseudo_mse3_fixed_rounding,
+    normalize_pseudo_mse3_tie_break,
+    validate_pseudo_mse_candidate_pairs,
 )
 # from runspace.src.quantization.constants import get_quantization_bias
 
@@ -43,7 +51,6 @@ baseline_formats = [
 ]
 
 candidate_formats = [
-    'fp32',
     'fp8_e1m6','fp8_e2m5','fp8_e3m4','fp8_e4m3','fp8_e5m2','fp8_e6m1','fp8_e7m0',
     'fp7_e1m5','fp7_e2m4','fp7_e3m3','fp7_e4m2','fp7_e5m1','fp7_e6m0',
     'fp6_e1m4','fp6_e2m3','fp6_e3m2','fp6_e4m1','fp6_e5m0',
@@ -62,6 +69,180 @@ def _parse_csv_arg(value, fallback):
         return list(fallback)
     parsed = [item.strip() for item in str(value).split(',') if item.strip()]
     return parsed if parsed else list(fallback)
+
+
+_CANDIDATE_FORMAT_BIT_WIDTH_RE = re.compile(
+    r"^(?:fp|ufp|efp|uefp)(?P<bit_width>\d+)(?:_|$)",
+    re.IGNORECASE,
+)
+_CANDIDATE_FORMAT_EXPONENT_RE = re.compile(
+    r"_e(?P<exponent>\d+)m\d+$",
+    re.IGNORECASE,
+)
+_SUPPORTED_DYNAMIC_METRICS = {
+    'l2': 'mse',
+    'l1': 'l1',
+    'pseudo_mse3': 'pseudo_mse3',
+}
+_ACTIVATION_EXPONENT_POLICIES = ('all', 'e1e2')
+
+
+def _candidate_formats_by_bit_width(formats):
+    """Group dynamic candidates by the total bit width in their format name."""
+    grouped = {}
+    for candidate in formats:
+        candidate = str(candidate).strip()
+        match = _CANDIDATE_FORMAT_BIT_WIDTH_RE.match(candidate)
+        if match is None:
+            raise ValueError(
+                "Dynamic candidate format must include a bit width in its name "
+                f"(for example, fp8_e4m3); got {candidate!r}."
+            )
+        bit_width = int(match.group('bit_width'))
+        grouped.setdefault(bit_width, []).append(candidate)
+    return grouped
+
+
+def _candidate_format_exponent(candidate):
+    match = _CANDIDATE_FORMAT_EXPONENT_RE.search(str(candidate).strip())
+    if match is None:
+        raise ValueError(
+            "Dynamic candidate format must include exponent and mantissa widths "
+            f"(for example, fp8_e2m5); got {candidate!r}."
+        )
+    return int(match.group('exponent'))
+
+
+def _filter_candidate_formats_by_activation_exponents(formats, policy='all'):
+    """Apply the activation exponent policy before splitting candidates by width."""
+    policy = str(policy or 'all').strip().lower()
+    if policy not in _ACTIVATION_EXPONENT_POLICIES:
+        raise ValueError(
+            f"Unsupported activation exponent policy: {policy!r}. "
+            f"Expected one of {_ACTIVATION_EXPONENT_POLICIES}."
+        )
+    formats = list(formats)
+    if policy == 'all':
+        return formats
+    return [
+        candidate
+        for candidate in formats
+        if _candidate_format_exponent(candidate) in (1, 2)
+    ]
+
+
+def _normalize_requested_metrics(value):
+    """Normalize the metrics supported by this accuracy experiment."""
+    requested = [item.strip() for item in str(value or 'mse').split(',') if item.strip()]
+    normalized_metrics = []
+    for metric in requested:
+        canonical = normalize_dynamic_input_metric(metric)
+        normalized = _SUPPORTED_DYNAMIC_METRICS.get(canonical)
+        if normalized is None:
+            raise ValueError(
+                "find_optimal_input_quant supports only mse, l1, and pseudo_mse3; "
+                f"got {metric!r}."
+            )
+        assert_dynamic_input_metric_implemented(canonical)
+        if normalized not in normalized_metrics:
+            normalized_metrics.append(normalized)
+    return normalized_metrics
+
+
+def _prepare_dynamic_candidate_groups(formats, activation_exponents, metrics):
+    """Filter candidates and validate pseudo-MSE3's one-pair-per-width contract."""
+    filtered = _filter_candidate_formats_by_activation_exponents(
+        formats,
+        activation_exponents,
+    )
+    grouped = _candidate_formats_by_bit_width(filtered)
+    skipped_widths = []
+    if 'pseudo_mse3' not in metrics:
+        return grouped, skipped_widths
+
+    compatible = {}
+    for bit_width, candidates in grouped.items():
+        exponents = {_candidate_format_exponent(candidate) for candidate in candidates}
+        if exponents != {1, 2}:
+            skipped_widths.append(bit_width)
+            continue
+        validate_pseudo_mse_candidate_pairs(candidates)
+        compatible[bit_width] = candidates
+
+    if not compatible:
+        raise ValueError(
+            "pseudo_mse3 requires at least one same-width signed e1/e2 candidate pair."
+        )
+    return compatible, skipped_widths
+
+
+def _dynamic_experiment_type_for_bit_width(base_experiment_type, bit_width):
+    return f"{base_experiment_type}_{int(bit_width)}"
+
+
+def _dynamic_activation_dt(metric, args):
+    """Return a collision-safe database label for one selector configuration."""
+    metric = str(metric).strip().lower()
+    exponent_policy = str(getattr(args, 'activation_exponents', 'all') or 'all').lower()
+    if metric == 'mse':
+        if exponent_policy == 'all':
+            return 'dyn_input_mse'
+        return f"dyn_input_mse_{exponent_policy}"
+    if metric == 'l1':
+        if exponent_policy == 'all':
+            return 'dyn_input_l1'
+        return f"dyn_input_l1_{exponent_policy}"
+    if metric == 'pseudo_mse3':
+        bits_to_take = int(getattr(args, 'bits_to_take', 0) or 0)
+        fixed_rounding = normalize_pseudo_mse3_fixed_rounding(
+            getattr(args, 'pseudo_mse3_fixed_rounding', 'floor')
+        )
+        tie_break = normalize_pseudo_mse3_tie_break(
+            getattr(args, 'pseudo_mse3_tie_break', 'exp1')
+        )
+        chunk_size = int(getattr(args, 'chunk_size', 128) or 128)
+        return (
+            f"dyn_input_pseudo_mse3_{exponent_policy}_btt{bits_to_take}_"
+            f"{fixed_rounding}_{tie_break}_c{chunk_size}"
+        )
+    raise ValueError(f"Unsupported dynamic metric label: {metric!r}")
+
+
+def _build_dynamic_input_quant_cfg(args, metric, candidates, model_name):
+    """Build the runtime selector config, including pseudo-MSE3 hardware controls."""
+    cfg = {
+        'enabled': True,
+        'mode': 'dynamic',
+        'transport': 'encoded',
+        'metric': metric,
+        'chunk_size': args.chunk_size,
+        'candidate_formats': list(candidates),
+        'restrict_post_relu_ufp': args.post_relu_ufp_only,
+        'unsigned_input_sources': args.unsigned_input_sources,
+        'dynamic_unsigned_input_candidates': args.dynamic_unsigned_input_candidates,
+        'use_cache_sim_db': args.use_cache_sim_db,
+        'model_name': model_name,
+        'activation_exponents': args.activation_exponents,
+    }
+    if metric == 'pseudo_mse3':
+        cfg.update({
+            'metric_param': int(args.bits_to_take),
+            'pseudo_mse3_fixed_rounding': args.pseudo_mse3_fixed_rounding,
+            'pseudo_mse3_tie_break': args.pseudo_mse3_tie_break,
+        })
+    return cfg
+
+
+def _validate_cache_sim_candidate_groups(candidate_groups, use_cache_sim_db):
+    incompatible_widths = [
+        bit_width for bit_width in candidate_groups if int(bit_width) != 8
+    ]
+    if use_cache_sim_db and incompatible_widths:
+        raise ValueError(
+            "--use_cache_sim_db assigns FP8 candidates to on-chip activations and "
+            "cannot produce isolated non-8-bit dynamic runs. Remove that option or "
+            "provide only 8-bit --candidate_formats."
+        )
 
 # Keep experiments on the library replacement path (no manual tensor injection).
 # `weight_quantization` will be disabled in config for input-only studies.
@@ -148,7 +329,7 @@ def _serialize_runtime_config(config, model=None, *, experiment_type=None, activ
     }
     return json.dumps(cfg)
 
-def get_args():
+def get_args(argv=None):
     parser = argparse.ArgumentParser(description="Find optimal input quantization (Dynamic)")
     parser.add_argument("--model_name", type=str, default="resnet18", help="Model name")
     parser.add_argument("--weights", type=str, default="DEFAULT", help="Model weights")
@@ -159,8 +340,54 @@ def get_args():
     parser.add_argument("--num_workers", type=int, default=32, help="Number of workers")
     parser.add_argument("--limit_batches", type=int, default=-1, help="Limit number of batches to process (default: -1 for all)")
     parser.add_argument("--output_dir", type=str, default=os.path.join(os.path.dirname(__file__), "results"), help="Output directory")
-    parser.add_argument("--metric", type=str, default="mse", help="Dynamic selection metric. Only 'mse' is supported.")
+    parser.add_argument(
+        "--metric",
+        type=str,
+        default="mse",
+        help="Comma-separated dynamic selection metrics: mse, l1, or pseudo_mse3.",
+    )
     parser.add_argument("--chunk_size", type=int, default=128, help="Chunk size for input quantization (blocks)")
+    parser.add_argument(
+        "--activation-exponents",
+        "--activation_exponents",
+        choices=_ACTIVATION_EXPONENT_POLICIES,
+        default="all",
+        help=(
+            "Activation candidate exponent policy. pseudo_mse3 automatically uses "
+            "e1e2; all preserves the complete candidate set for MSE and L1."
+        ),
+    )
+    parser.add_argument(
+        "--bits-to-take",
+        "--bits_to_take",
+        dest="bits_to_take",
+        type=int,
+        default=0,
+        help=(
+            "pseudo_mse3 fixed-point difference bits. 0 keeps the exact "
+            "floating-point squared-error difference."
+        ),
+    )
+    parser.add_argument(
+        "--pseudo-mse3-fixed-rounding",
+        "--pseudo_mse3_fixed_rounding",
+        "--fixed-rounding",
+        dest="pseudo_mse3_fixed_rounding",
+        type=normalize_pseudo_mse3_fixed_rounding,
+        choices=("floor", "nearest"),
+        default="floor",
+        help="pseudo_mse3 fixed-point conversion policy.",
+    )
+    parser.add_argument(
+        "--pseudo-mse3-tie-break",
+        "--pseudo_mse3_tie_break",
+        "--tie-break",
+        dest="pseudo_mse3_tie_break",
+        type=normalize_pseudo_mse3_tie_break,
+        choices=("exp1", "exp2"),
+        default="exp1",
+        help="pseudo_mse3 exact chunk-sum tie policy.",
+    )
     parser.add_argument("--input_size", type=int, default=224, help="Input image size (resolution)")
     parser.add_argument(
         "--baseline_formats",
@@ -216,7 +443,8 @@ def get_args():
         type=str,
         default=None,
         help=(
-            "Experiment type name for dynamic runs. Defaults to input_quant_dynamic, "
+            "Base experiment type name for dynamic runs; each bit width is stored as "
+            "<name>_<bits>. Defaults to input_quant_dynamic, "
             "or to --experiment_type when --only_dynamic is set and --experiment_type "
             "was explicitly changed."
         ),
@@ -253,17 +481,29 @@ def get_args():
     parser.add_argument(
         "--use_cache_sim_db",
         action="store_true",
-        help="Fetch cache simulation results from the database instead of a file.",
+        help=(
+            "Fetch cache simulation results from the database instead of a file. "
+            "This is compatible only with an 8-bit dynamic candidate pool."
+        ),
     )
     parser.add_argument("--fold_input_norm", action="store_true", default=True,
                         help="Fold input normalization into first layer weights and quantize first layer")
     parser.add_argument("--no_fold_input_norm", action="store_false", dest="fold_input_norm",
                         help="Disable input normalization folding and first layer quantization")
     # Add other args as needed
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     args.excluded_ops = [op.strip() for op in args.excluded_ops.split(',') if op.strip()]
     args.baseline_formats = _parse_csv_arg(args.baseline_formats, baseline_formats)
     args.candidate_formats = _parse_csv_arg(args.candidate_formats, candidate_formats)
+    try:
+        args.metrics = _normalize_requested_metrics(args.metric)
+    except (ValueError, NotImplementedError) as exc:
+        parser.error(str(exc))
+    if args.bits_to_take < 0:
+        parser.error("--bits-to-take must be non-negative")
+    if 'pseudo_mse3' in args.metrics and args.activation_exponents != 'e1e2':
+        print("[pseudo_mse3] forcing --activation-exponents e1e2")
+        args.activation_exponents = 'e1e2'
     if args.dynamic_experiment_type is None:
         if args.only_dynamic and args.experiment_type != DEFAULT_BASELINE_EXPERIMENT_TYPE:
             args.dynamic_experiment_type = args.experiment_type
@@ -637,6 +877,23 @@ def process_single_model(args, model_config, device, metrics):
     
     # --- 2. Run Dynamic Optimization Loop ---
     
+    candidate_groups = {}
+    if not args.only_baselines:
+        candidate_groups, skipped_widths = _prepare_dynamic_candidate_groups(
+            args.candidate_formats,
+            args.activation_exponents,
+            metrics,
+        )
+        if skipped_widths:
+            print(
+                "[pseudo_mse3] Skipping bit width(s) without a complete signed "
+                f"e1/e2 pair: {skipped_widths}"
+            )
+        _validate_cache_sim_candidate_groups(
+            candidate_groups,
+            args.use_cache_sim_db,
+        )
+
     # Pre-load Model and Data ONCE
     print(f"\n[Optimization] Loading model and dataset once for all metrics...")
     
@@ -660,114 +917,133 @@ def process_single_model(args, model_config, device, metrics):
                 output_dir=model_out_dir
             )
             
-            for metric in metrics:
-                activation_dt = f"dyn_input_{metric}"
-                if not args.force_rerun and _input_quant_run_exists(db, model_name, args.dynamic_experiment_type, activation_dt):
+            for bit_width, bit_width_candidates in candidate_groups.items():
+                dynamic_experiment_type = _dynamic_experiment_type_for_bit_width(
+                    args.dynamic_experiment_type,
+                    bit_width,
+                )
+                for metric in metrics:
+                    activation_dt = _dynamic_activation_dt(metric, args)
+                    if not args.force_rerun and _input_quant_run_exists(
+                        db,
+                        model_name,
+                        dynamic_experiment_type,
+                        activation_dt,
+                    ):
+                        print(
+                            f"[Dynamic {bit_width}-bit] Skipping {metric} — already in DB "
+                            f"for {model_name} (experiment_type={dynamic_experiment_type})"
+                        )
+                        continue
+
+                    print(f"\n===========================================")
                     print(
-                        f"[Dynamic] Skipping {metric} — already in DB for {model_name} "
-                        f"(experiment_type={args.dynamic_experiment_type})"
+                        f"Processing {bit_width}-bit Metric: {metric.upper()} "
+                        f"for {model_name}"
                     )
-                    continue
+                    print(f"Candidates: {bit_width_candidates}")
+                    print(f"=============================================")
 
-                print(f"\n===========================================")
-                print(f"Processing Metric: {metric.upper()} for {model_name}")
-                print(f"=============================================")
-                
-                metric_out_dir = os.path.join(model_out_dir, metric)
-                os.makedirs(metric_out_dir, exist_ok=True)
+                    metric_out_dir = os.path.join(
+                        model_out_dir,
+                        dynamic_experiment_type,
+                        activation_dt.removeprefix('dyn_input_'),
+                    )
+                    os.makedirs(metric_out_dir, exist_ok=True)
 
-                try:
-                    config.setdefault('evaluation', {})
-                    config['evaluation']['dynamic_input_quant'] = {
-                        'enabled': True,
-                        'mode': 'dynamic',
-                        'transport': 'encoded',
-                        'metric': metric,
-                        'chunk_size': args.chunk_size,
-                        'candidate_formats': args.candidate_formats,
-                        'restrict_post_relu_ufp': args.post_relu_ufp_only,
-                        'unsigned_input_sources': args.unsigned_input_sources,
-                        'dynamic_unsigned_input_candidates': args.dynamic_unsigned_input_candidates,
-                        'use_cache_sim_db': args.use_cache_sim_db,
-                        'model_name': model_name,
-                    }
-                    eval_results = runner.evaluate_model(
-                        model=model,
-                        data_loader=loader,
-                        adapter=adapter,
-                        max_batches=args.limit_batches,
-                        desc=f"Dynamic ({model_name}/{metric})",
-                        dynamic_input_quant_cfg=config['evaluation']['dynamic_input_quant']
-                    )
-                    acc1 = eval_results.get('acc1', 0.0)
-                    acc5 = eval_results.get('acc5', 0.0)
-                    certainty = eval_results.get('certainty', 0.0)
+                    try:
+                        config.setdefault('evaluation', {})
+                        config['evaluation']['dynamic_input_quant'] = (
+                            _build_dynamic_input_quant_cfg(
+                                args,
+                                metric,
+                                bit_width_candidates,
+                                model_name,
+                            )
+                        )
+                        eval_results = runner.evaluate_model(
+                            model=model,
+                            data_loader=loader,
+                            adapter=adapter,
+                            max_batches=args.limit_batches,
+                            desc=f"Dynamic ({model_name}/{bit_width}-bit/{metric})",
+                            dynamic_input_quant_cfg=config['evaluation']['dynamic_input_quant']
+                        )
+                        acc1 = eval_results.get('acc1', 0.0)
+                        acc5 = eval_results.get('acc5', 0.0)
+                        certainty = eval_results.get('certainty', 0.0)
 
-                    dyn_stats = eval_results.get('dynamic_input_quant', {})
-                    layer_stats = dyn_stats.get('layer_stats', {})
-                    final_stats = {
-                        'norm_mse': dyn_stats.get('norm_mse', 0.0),
-                    }
-                    
-                    print(f"\nDynamic Run ({metric.upper()}): Top1={acc1:.2f}%, Top5={acc5:.2f}%, Certainty={certainty:.4f}")
-                    print(f"Norm MSE: {final_stats['norm_mse']:.4e}")
-                    
-                    # Log Dynamic Result to Database using the actual runtime config.
-                    _cfg_dyn = _serialize_runtime_config(
-                        config,
-                        model=model,
-                        experiment_type=args.dynamic_experiment_type,
-                        activation_dt=f"dyn_input_{metric}",
-                        metric=metric,
-                        limit_batches=args.limit_batches,
-                    )
-                    log_cfg = copy.deepcopy(config)
-                    log_cfg['experiment'] = {
-                        'name': 'find_optimal_input_quant',
-                        'type': args.dynamic_experiment_type,
-                        'weight_dt': 'fp32',
-                        'activation_dt': f"dyn_input_{metric}",
-                        'ref_acc1': ref_acc1,
-                        'ref_acc5': ref_acc5,
-                        'ref_certainty': ref_certainty,
-                        'metrics': {
-                            'mse': final_stats['norm_mse'],
-                            'certainty': certainty,
-                        },
-                        'config_json': _cfg_dyn,
-                    }
-                    runner.log_experiment_result(
-                        config=log_cfg,
-                        result={
-                            'model_name': model_name,
-                            'status': 'SUCCESS',
-                            'acc1': acc1,
-                            'acc5': acc5,
-                            'certainty': certainty,
-                            'input_quant': dyn_stats,
-                        },
-                    )
-                    
-                    plot_format_histogram(layer_stats, metric_out_dir)
-                    plot_layer_format_distribution(layer_stats, metric_out_dir, metric)
-                    
-                    stats_path = os.path.join(metric_out_dir, "layer_stats.json")
-                    with open(stats_path, 'w') as f:
-                        # Save stats + accuracy
-                        save_data = copy.deepcopy(layer_stats)
-                        save_data['accuracy'] = {
-                            'top1': acc1, 'top5': acc5,
-                            'norm_mse': final_stats['norm_mse']
+                        dyn_stats = eval_results.get('dynamic_input_quant', {})
+                        layer_stats = dyn_stats.get('layer_stats', {})
+                        final_stats = {
+                            'norm_mse': dyn_stats.get('norm_mse', 0.0),
                         }
-                        json.dump(save_data, f, indent=4)
-                
-                except KeyboardInterrupt:
-                    print("\nInterrupted.")
-                    return 
-                except Exception as e:
-                    print(f"Error processing {model_name} / {metric}: {e}")
-                    import traceback
-                    traceback.print_exc()
+
+                        print(
+                            f"\nDynamic {bit_width}-bit Run ({metric.upper()}): "
+                            f"Top1={acc1:.2f}%, Top5={acc5:.2f}%, "
+                            f"Certainty={certainty:.4f}"
+                        )
+                        print(f"Norm MSE: {final_stats['norm_mse']:.4e}")
+
+                        # Log Dynamic Result to Database using the actual runtime config.
+                        _cfg_dyn = _serialize_runtime_config(
+                            config,
+                            model=model,
+                            experiment_type=dynamic_experiment_type,
+                            activation_dt=activation_dt,
+                            metric=metric,
+                            limit_batches=args.limit_batches,
+                        )
+                        log_cfg = copy.deepcopy(config)
+                        log_cfg['experiment'] = {
+                            'name': 'find_optimal_input_quant',
+                            'type': dynamic_experiment_type,
+                            'weight_dt': 'fp32',
+                            'activation_dt': activation_dt,
+                            'ref_acc1': ref_acc1,
+                            'ref_acc5': ref_acc5,
+                            'ref_certainty': ref_certainty,
+                            'metrics': {
+                                'mse': final_stats['norm_mse'],
+                                'certainty': certainty,
+                            },
+                            'config_json': _cfg_dyn,
+                        }
+                        runner.log_experiment_result(
+                            config=log_cfg,
+                            result={
+                                'model_name': model_name,
+                                'status': 'SUCCESS',
+                                'acc1': acc1,
+                                'acc5': acc5,
+                                'certainty': certainty,
+                                'input_quant': dyn_stats,
+                            },
+                        )
+
+                        plot_format_histogram(layer_stats, metric_out_dir)
+                        plot_layer_format_distribution(layer_stats, metric_out_dir, metric)
+
+                        stats_path = os.path.join(metric_out_dir, "layer_stats.json")
+                        with open(stats_path, 'w') as f:
+                            # Save stats + accuracy
+                            save_data = copy.deepcopy(layer_stats)
+                            save_data['accuracy'] = {
+                                'top1': acc1, 'top5': acc5,
+                                'norm_mse': final_stats['norm_mse']
+                            }
+                            json.dump(save_data, f, indent=4)
+
+                    except KeyboardInterrupt:
+                        print("\nInterrupted.")
+                        return
+                    except Exception as e:
+                        print(
+                            f"Error processing {model_name} / {bit_width}-bit / {metric}: {e}"
+                        )
+                        import traceback
+                        traceback.print_exc()
                     
         finally:
             # Clean up memory after ALL metrics are done for this model
@@ -802,13 +1078,16 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    # Parse metrics
-    metrics = [m.strip().lower() for m in args.metric.split(',') if m.strip()]
-    unsupported_metrics = [m for m in metrics if m != 'mse']
-    if unsupported_metrics:
-        print(f"Ignoring unsupported dynamic metric(s): {unsupported_metrics}. Only MSE is supported.")
-    metrics = ['mse']
+    metrics = list(args.metrics)
     print(f"Metrics to process: {metrics}")
+    print(f"Activation exponent policy: {args.activation_exponents}")
+    if 'pseudo_mse3' in metrics:
+        print(
+            "pseudo_mse3 controls: "
+            f"bits_to_take={args.bits_to_take}, "
+            f"fixed_rounding={args.pseudo_mse3_fixed_rounding}, "
+            f"tie_break={args.pseudo_mse3_tie_break}"
+        )
     print(f"Baseline formats: {args.baseline_formats}")
     print(f"Dynamic candidate formats: {args.candidate_formats}")
     

@@ -257,7 +257,7 @@ def _compute_layer_cycles(layer: dict) -> float:
         reduction_dim = input_shapes[0][-1] if input_shapes and input_shapes[0] else 0
         compute_cycles = _cycles_for_reduction_outputs(output_elems, reduction_dim)
     elif l_type == 'QuantAdd':
-        add_passes = _quant_add_connection_count(layer)
+        add_passes = _quant_add_operation_count(layer)
         compute_cycles = add_passes * _cycles_for_ops(layer.get('output_elems', 0))
     elif l_type in ('QuantSub', 'QuantMul', 'QuantDiv', 'Residual'):
         compute_cycles = _cycles_for_ops(layer.get('output_elems', 0))
@@ -282,6 +282,11 @@ def _quant_add_connection_count(layer: dict) -> int:
         return 0
     num_inputs = len(layer.get('input_shapes', []))
     return max(1, num_inputs)
+
+
+def _quant_add_operation_count(layer: dict) -> int:
+    """Return the number of binary additions required for the captured inputs."""
+    return max(1, _quant_add_connection_count(layer) - 1)
 
 
 def optimize_layer_bits(layer: dict, bandwidth: float,
@@ -309,6 +314,11 @@ def optimize_layer_bits(layer: dict, bandwidth: float,
     output_bits : int
     total_cycles : float   – max(compute_cycles, total_transfer_cycles)
     """
+    if bandwidth <= 0:
+        raise ValueError("bandwidth must be greater than zero")
+    if min_bits > max_bits:
+        raise ValueError("min_bits cannot exceed max_bits")
+
     compute = _compute_layer_cycles(layer)
     fixed_transfers = fixed_transfers or []
     forced_bits = forced_bits or {}
@@ -489,12 +499,12 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
 
     def _mark_residual_stream(info: dict, residual_input: torch.Tensor):
         residual_elems = residual_input.numel()
-        residual_connections = _quant_add_connection_count(info)
-        residual_stream_elems = residual_elems * residual_connections
         info['residual_input_elems'] = residual_elems
         info['residual_input_shape'] = tuple(residual_input.shape)
         info['residual_input_tensor_id'] = id(residual_input)
-        info['residual_input_stream_elems'] = residual_stream_elems
+        # input_elems already accounts for the first QuantAdd operand.  The
+        # residual stream is the second operand, so count it exactly once.
+        info['residual_input_stream_elems'] = residual_elems
 
         producer = tensor_producers.get(id(residual_input))
         if producer is None:

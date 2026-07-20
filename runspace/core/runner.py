@@ -322,6 +322,7 @@ class Runner:
 
             fmt_spec = stats.get('format', dominant_format)
             result[str(layer_name)] = {
+                'stage_id': stats.get('stage_id'),
                 'format': fmt_spec,
                 'type': str(stats.get('type', 'unknown')),
                 'format_counts': counts,
@@ -346,8 +347,13 @@ class Runner:
             return None
         stages = copy.deepcopy(input_quant.get('activation_plan', {}))
         layer_stats = input_quant.get('layer_stats', {}) or {}
+        stats_by_stage = {
+            str(stats.get('stage_id', layer_name)): stats
+            for layer_name, stats in layer_stats.items()
+            if isinstance(stats, dict)
+        }
         for stage_id, stage in stages.items():
-            format_stats = layer_stats.get(stage_id)
+            format_stats = stats_by_stage.get(stage_id)
             if not isinstance(stage, dict) or not isinstance(format_stats, dict):
                 continue
             format_counts = dict(format_stats.get('format_counts', {}) or {})
@@ -1007,9 +1013,26 @@ class Runner:
         quant_cfg = config.get('quantization', {}) or {}
         global_format = quant_cfg.get('format', DEFAULT_QUANTIZATION_TYPE)
         input_enabled = adapter_cfg.get('input_quantization', True) is True
-        output_enabled = adapter_cfg.get('output_quantization') is True
+        output_setting = adapter_cfg.get('output_quantization')
+        # Producer-stage transport uses one shared packet for the producer and
+        # all of its consumers, so enabling the producer side does not add a
+        # second input/output quantization boundary. Default it on with input
+        # quantization so terminal model logits are transported too; an
+        # explicit false remains an opt-out.
+        output_enabled = (
+            input_enabled
+            if output_setting is None
+            else output_setting is True
+        )
         input_format = str(quant_cfg.get('input_format') or global_format)
-        output_format = str(quant_cfg.get('output_format') or global_format)
+        if output_setting is None and input_enabled:
+            output_format = str(
+                quant_cfg.get('output_format') or input_format
+            )
+        else:
+            output_format = str(
+                quant_cfg.get('output_format') or global_format
+            )
 
         active_global_formats = {
             fmt.strip().lower()
@@ -1818,6 +1841,7 @@ class Runner:
         mode = input_quant_cfg.get('mode')
         final_stats = quantizer.get_final_stats()
         processed_layer_stats = final_stats.get('layer_stats', {}) or {}
+        activation_plan = final_stats.get('activation_plan', {}) or {}
         layer_type_map = {}
         model = getattr(quantizer, 'model', None)
         if model is not None:
@@ -1831,12 +1855,32 @@ class Runner:
 
         layer_stats = {}
         if isinstance(processed_layer_stats, dict):
-            for layer_name, layer_entry in processed_layer_stats.items():
+            for stage_key, layer_entry in processed_layer_stats.items():
                 if not isinstance(layer_entry, dict):
                     continue
                 normalized = dict(layer_entry)
-                normalized.setdefault('type', layer_type_map.get(str(layer_name), 'unknown'))
-                layer_stats[str(layer_name)] = normalized
+                stage_id = str(normalized.get('stage_id', stage_key))
+                plan_entry = activation_plan.get(stage_id, {})
+                display_name = str(
+                    normalized.get('layer_name')
+                    or plan_entry.get('layer_name')
+                    or stage_id
+                )
+                module_names = list(plan_entry.get('module_names', []))
+                normalized['stage_id'] = stage_id
+                normalized['layer_name'] = display_name
+                normalized.setdefault('module_names', module_names)
+                normalized.setdefault(
+                    'type',
+                    layer_type_map.get(
+                        module_names[-1] if module_names else display_name,
+                        plan_entry.get('kind', 'unknown'),
+                    ),
+                )
+                result_key = display_name
+                if result_key in layer_stats:
+                    result_key = f"{display_name} [{stage_id}]"
+                layer_stats[result_key] = normalized
 
         stats = {
             'mode': mode,
@@ -2504,6 +2548,7 @@ class Runner:
                         model,
                         input_quant_cfg=compare_input_quant_cfg
                     )
+                    comparator.activation_quantizer = dynamic_quantizer
 
                     # Run Comparison (Single Pass)
                     comparator.compare(data_loader, num_batches=compare_batches, global_metrics=None)

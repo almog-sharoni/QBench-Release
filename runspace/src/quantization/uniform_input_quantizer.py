@@ -596,6 +596,8 @@ class UniformInputQuantizer:
             stats = self.layer_stats.setdefault(
                 stage.stage_id,
                 {
+                    'layer_name': self._transport_runtime.stage_display_name(stage),
+                    'stage_id': stage.stage_id,
                     'format_counts': {},
                     'total_chunks': 0,
                     'type': stage.kind.value,

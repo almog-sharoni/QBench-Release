@@ -41,7 +41,7 @@ def _model_with_fake_quant_flag(q_type="fp8_e4m3"):
 def test_direct_forward_rejects_module_activation_fake_quantization():
     adapter = _TestAdapter(_model_with_fake_quant_flag())
 
-    with pytest.raises(RuntimeError, match="producer-stage hardware transport"):
+    with pytest.raises(AssertionError, match="producer-stage hardware transport"):
         adapter.forward(adapter.model, torch.randn(2, 4))
 
 
@@ -66,7 +66,7 @@ def test_stage_transport_disables_guarded_flags_during_forward():
     finally:
         runtime.cleanup()
 
-    with pytest.raises(RuntimeError, match="producer-stage hardware transport"):
+    with pytest.raises(AssertionError, match="producer-stage hardware transport"):
         adapter.model(torch.randn(2, 4))
 
 
@@ -76,7 +76,7 @@ def test_output_fake_quantization_is_guarded():
     model[0].output_q_type = "fp8_e4m3"
     adapter = _TestAdapter(model)
 
-    with pytest.raises(RuntimeError, match="output_quantization"):
+    with pytest.raises(AssertionError, match="output_quantization"):
         adapter.model(torch.randn(2, 4))
 
 
@@ -90,7 +90,7 @@ def test_generic_adapter_installs_guard_on_built_model(monkeypatch):
 
     adapter = GenericAdapter(model_name="guard_test", build_quantized=True)
 
-    with pytest.raises(RuntimeError, match="producer-stage hardware transport"):
+    with pytest.raises(AssertionError, match="producer-stage hardware transport"):
         adapter.model(torch.randn(2, 4))
 
 
@@ -102,7 +102,7 @@ def test_guard_rejects_boundary_enabled_after_model_construction():
     model[0].input_quantization = True
     model[0].input_q_type = "fp8_e4m3"
 
-    with pytest.raises(RuntimeError, match="input_quantization"):
+    with pytest.raises(AssertionError, match="input_quantization"):
         adapter.model(torch.randn(2, 4))
 
 
@@ -123,5 +123,5 @@ def test_every_public_generic_model_build_is_guarded(monkeypatch):
     rebuilt = adapter.build_model(quantized=False)
 
     assert rebuilt._qbench_activation_transport_guarded is True
-    with pytest.raises(RuntimeError, match="producer-stage hardware transport"):
+    with pytest.raises(AssertionError, match="producer-stage hardware transport"):
         rebuilt(torch.randn(2, 4))

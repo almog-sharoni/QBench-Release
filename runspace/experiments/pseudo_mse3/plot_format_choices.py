@@ -74,8 +74,7 @@ def _bits_to_take_values(grouped):
 
 
 def _series_label(bits_to_take):
-    suffix = " (exact)" if bits_to_take == 0 else ""
-    return f"Pseudo N={bits_to_take}{suffix}"
+    return f"Pseudo N={bits_to_take}"
 
 
 def _mode_label(grouped):

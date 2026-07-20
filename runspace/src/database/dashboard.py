@@ -12,6 +12,7 @@ _DASHBOARD_PARTS = [
     "setup.py",
     "styles.py",
     "data_helpers.py",
+    "layer_ablation_tab.py",
     "graph_helpers.py",
     "experiments_tab.py",
     "cache_helpers.py",

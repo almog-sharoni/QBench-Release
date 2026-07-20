@@ -186,7 +186,7 @@ st.sidebar.caption("Data updates on Streamlit reruns. Active run logs refresh in
 st.markdown("---")
 
 tab_exp, tab_cache, tab_runner, tab_graph, tab_chunk, tab_bwaware_best = st.tabs(
-    ["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph", "🧩 Chunk Layout", "🎯 Bandwidth-aware result-best-weights"]
+    ["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph", "🧩 Chunk Layout", "🎯 BW-Aware Greedy Descent"]
 )
 
 import streamlit.components.v1 as _dashboard_components
@@ -194,7 +194,7 @@ _dashboard_components.html(
     """
     <script>
     (() => {
-      const labels = ["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph", "🧩 Chunk Layout", "🎯 Bandwidth-aware result-best-weights"];
+      const labels = ["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph", "🧩 Chunk Layout", "🎯 BW-Aware Greedy Descent"];
       const storageKey = "qbench-dashboard-active-tab";
       const doc = window.parent.document;
 
@@ -1912,24 +1912,28 @@ else:
             unsafe_allow_html=True,
         )
 
-        plot_model_key = "baseline_accuracy_plot_models"
-        if plot_model_key in st.session_state:
-            st.session_state[plot_model_key] = [
-                model for model in st.session_state[plot_model_key]
-                if model in available_models
-            ] or available_models
+        plot_model_key = "baseline_accuracy_plot_model"
+        if st.session_state.get(plot_model_key) not in available_models:
+            st.session_state[plot_model_key] = available_models[0]
 
-        selected_plot_models = st.multiselect(
-            "Models for baseline plot",
+        model_col, threshold_col = st.columns([2, 1])
+        selected_plot_model = model_col.selectbox(
+            "Model",
             options=available_models,
-            default=available_models,
             key=plot_model_key,
+            help="Show one model at a time to keep datatype variants readable.",
         )
-        if not selected_plot_models:
-            st.info("Select at least one model to show the baseline plot.")
-            return
+        accuracy_threshold = threshold_col.number_input(
+            "Minimum accuracy (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(st.session_state.get("baseline_accuracy_min_threshold", 0.0)),
+            step=0.1,
+            format="%.1f",
+            key="baseline_accuracy_min_threshold",
+        )
 
-        filtered_plot_df = plot_df[plot_df["Model"].isin(selected_plot_models)].copy()
+        filtered_plot_df = plot_df[plot_df["Model"].eq(selected_plot_model)].copy()
         filtered_plot_df["Series"] = filtered_plot_df["Series"].astype(str)
         filtered_plot_df["Chart"] = filtered_plot_df["Chart"].astype(str)
         filtered_plot_df["Bits"] = pd.to_numeric(filtered_plot_df["Bits"], errors="coerce")
@@ -1939,15 +1943,6 @@ else:
             st.info("No plottable baseline rows remain after the model filter.")
             return
 
-        accuracy_threshold = st.number_input(
-            "Minimum accuracy (%)",
-            min_value=0.0,
-            max_value=100.0,
-            value=float(st.session_state.get("baseline_accuracy_min_threshold", 0.0)),
-            step=0.1,
-            format="%.1f",
-            key="baseline_accuracy_min_threshold",
-        )
         filtered_plot_df = filtered_plot_df[
             filtered_plot_df["Accuracy (%)"] >= float(accuracy_threshold)
         ].copy()
@@ -1961,141 +1956,228 @@ else:
                 st.info(f"No {chart_kind.lower()} runs with bit-widths are available for this slice.")
                 return
 
-            available_series = [name for name in series_order if name in set(chart_df["Series"])]
-            series_key = f"baseline_accuracy_{chart_kind.lower()}_series"
-            if series_key in st.session_state:
-                st.session_state[series_key] = [
-                    name for name in st.session_state[series_key]
-                    if name in available_series
-                ] or available_series
-            selected_series = st.multiselect(
-                f"{chart_kind} series",
-                options=available_series,
-                default=available_series,
-                key=series_key,
+            line_series_names = (
+                list(line_series)
+                if isinstance(line_series, (list, tuple, set))
+                else [line_series]
             )
-            if not selected_series:
-                st.info(f"Select at least one {chart_kind.lower()} series.")
-                return
 
-            chart_df = chart_df[chart_df["Series"].isin(selected_series)].copy()
+            available_series = [name for name in series_order if name in set(chart_df["Series"])]
+            view_mode = st.radio(
+                "View",
+                options=["Overview", "All variants"],
+                horizontal=True,
+                key=f"baseline_accuracy_{chart_kind.lower()}_view",
+                help=(
+                    "Overview keeps the highest-accuracy optimized/dynamic and baseline run "
+                    "at each bit width. All variants exposes every datatype."
+                ),
+            )
+            if view_mode == "All variants":
+                series_key = f"baseline_accuracy_{chart_kind.lower()}_series"
+                if series_key in st.session_state:
+                    st.session_state[series_key] = [
+                        name for name in st.session_state[series_key]
+                        if name in available_series
+                    ] or available_series
+                selected_series = st.multiselect(
+                    f"{chart_kind} series",
+                    options=available_series,
+                    default=available_series,
+                    key=series_key,
+                )
+                if not selected_series:
+                    st.info(f"Select at least one {chart_kind.lower()} series.")
+                    return
+                chart_df = chart_df[chart_df["Series"].isin(selected_series)].copy()
+                baseline_mask = chart_df["Series"].str.contains(
+                    "baseline", case=False, na=False
+                )
+                exponent_mask = chart_df["Exponent Family"].notna()
+                exponent_line_mask = baseline_mask & exponent_mask
+                chart_df["Connect Points"] = chart_df["Series"].isin(
+                    line_series_names
+                )
+                chart_df["Line Group"] = chart_df["Series"].astype(str)
+                chart_df["Line Label"] = chart_df["Format Label"]
+                chart_df["Point Label"] = chart_df["Format Label"]
+                chart_df.loc[exponent_line_mask, "Point Label"] = chart_df.loc[
+                    exponent_line_mask, "Exponent Family"
+                ]
+            else:
+                primary_mask = chart_df["Series"].isin(line_series_names)
+                primary_df = chart_df[primary_mask].copy()
+                if not primary_df.empty:
+                    best_primary_indices = primary_df.groupby(
+                        ["Series", "Bits"], observed=True
+                    )["Accuracy (%)"].idxmax()
+                    primary_df = primary_df.loc[best_primary_indices].copy()
+                    if chart_kind == "Weights":
+                        primary_df["Format Label"] = "Best optimized"
+                    else:
+                        primary_df["Format Label"] = primary_df["Series"]
+                    primary_df["Connect Points"] = True
+                baseline_df = chart_df[~primary_mask].copy()
+                if not baseline_df.empty:
+                    best_baseline_indices = baseline_df.groupby("Bits")["Accuracy (%)"].idxmax()
+                    baseline_df = baseline_df.loc[best_baseline_indices].copy()
+                    baseline_df["Format Label"] = "Best baseline"
+                    baseline_df["Connect Points"] = True
+                chart_df = pd.concat([primary_df, baseline_df], ignore_index=True)
+                chart_df["Line Group"] = chart_df["Series"].astype(str)
+                chart_df["Line Label"] = chart_df["Format Label"]
+                chart_df["Point Label"] = chart_df["Format Label"]
+                baseline_mask = ~chart_df["Series"].isin(line_series_names)
+                exponent_line_mask = (
+                    baseline_mask & chart_df["Exponent Family"].notna()
+                )
+                if chart_kind == "Inputs":
+                    chart_df.loc[exponent_line_mask, "Point Label"] = chart_df.loc[
+                        exponent_line_mask, "Exponent Family"
+                    ]
+                    chart_df.loc[baseline_mask, "Connect Points"] = False
+                st.caption(
+                    "Overview: each point is the highest-accuracy run in its family at that bit width. "
+                    "Hover it to see the winning datatype or optimization strategy."
+                )
+
             bit_values = sorted(chart_df["Bits"].dropna().unique().tolist())
             bit_domain = [
                 int(min(bit_values)) - 0.5,
                 int(max(bit_values)) + 0.5,
             ] if bit_values else [0, 1]
-            param_name = f"{chart_kind.lower()}_zoom"
-            format_labels = sorted(chart_df["Format Label"].dropna().astype(str).unique().tolist())
+            hover_name = f"baseline_{chart_kind.lower()}_hover"
+            point_labels = sorted(chart_df["Point Label"].dropna().astype(str).unique().tolist())
+            plotted_series = [
+                name for name in series_order if name in set(chart_df["Series"])
+            ]
+            plotted_shapes = [
+                series_shapes[series_order.index(name)] for name in plotted_series
+            ]
+            line_labels = sorted(
+                chart_df.loc[chart_df["Connect Points"], "Line Label"]
+                .dropna().astype(str).unique().tolist()
+            )
+            line_color_scale = {"scheme": "tableau20"}
+            point_color_scale = {"scheme": "tableau20"}
+            color_domain = sorted(set(point_labels) | set(line_labels))
+            line_color_scale["domain"] = color_domain
+            point_color_scale["domain"] = color_domain
+
+            shared_position_encoding = {
+                "x": {
+                    "field": "Bits",
+                    "type": "quantitative",
+                    "scale": {"domain": bit_domain},
+                    "axis": {"title": "Bit Width", "tickMinStep": 1},
+                },
+                "y": {
+                    "field": "Accuracy (%)",
+                    "type": "quantitative",
+                    "scale": {"zero": False, "nice": True, "padding": 8},
+                    "axis": {"title": "Top-1 Accuracy (%)"},
+                },
+            }
+            interactive_opacity = {
+                "condition": {
+                    "test": {"param": hover_name, "empty": True},
+                    "value": 0.95,
+                },
+                "value": 0.16,
+            }
 
             chart_spec = {
                 "config": {
                     "view": {"stroke": "transparent"},
                     "axis": {"labelFontSize": 11, "titleFontSize": 12},
-                    "legend": {"orient": "top", "title": None, "labelLimit": 0},
-                },
-                "facet": {
-                    "row": {
-                        "field": "Model",
-                        "type": "nominal",
+                    "legend": {
+                        "orient": "bottom",
                         "title": None,
-                        "header": {
-                            "labelFontSize": 14,
-                            "labelFontWeight": "bold",
-                            "labelAlign": "left",
-                            "labelAnchor": "start",
-                        },
-                    }
-                },
-                "spec": {
-                    "selection": {
-                        param_name: {
-                            "type": "interval",
-                            "encodings": ["x", "y"],
-                            "bind": "scales",
-                        }
+                        "labelLimit": 240,
+                        "columns": 4,
+                        "symbolLimit": 200,
                     },
-                    "layer": [
-                        {
-                            "transform": [{"filter": f"datum.Series == '{line_series}'"}],
-                            "mark": {"type": "line", "strokeWidth": 2, "opacity": 0.7},
-                            "encoding": {
-                                "x": {
-                                    "field": "Bits",
-                                    "type": "quantitative",
-                                    "scale": {"domain": bit_domain},
-                                    "axis": {"title": "Bits", "tickMinStep": 1},
-                                },
-                                "y": {
-                                    "field": "Accuracy (%)",
-                                    "type": "quantitative",
-                                    "scale": {"zero": False, "nice": True, "padding": 5},
-                                    "axis": {"title": "Acc1 (%)"},
-                                },
-                                "color": {
-                                    "field": "Format Label",
-                                    "type": "nominal",
-                                    "sort": format_labels,
-                                    "scale": {"scheme": "tableau20"},
-                                    "legend": {"title": "Format"},
-                                },
-                                "detail": {"field": "Model", "type": "nominal"},
-                                "order": {"field": "Bits", "type": "quantitative"},
-                            },
-                        },
-                        {
-                            "mark": {
-                                "type": "point",
-                                "filled": True,
-                                "size": 135,
-                                "stroke": "#ffffff",
-                                "strokeWidth": 1,
-                                "opacity": 0.92,
-                            },
-                            "encoding": {
-                                "x": {
-                                    "field": "Bits",
-                                    "type": "quantitative",
-                                    "scale": {"domain": bit_domain},
-                                    "axis": {"title": "Bits", "tickMinStep": 1},
-                                },
-                                "y": {
-                                    "field": "Accuracy (%)",
-                                    "type": "quantitative",
-                                    "scale": {"zero": False, "nice": True, "padding": 5},
-                                    "axis": {"title": "Acc1 (%)"},
-                                },
-                                "color": {
-                                    "field": "Format Label",
-                                    "type": "nominal",
-                                    "sort": format_labels,
-                                    "scale": {"scheme": "tableau20"},
-                                    "legend": {"title": "Format"},
-                                },
-                                "shape": {
-                                    "field": "Series",
-                                    "type": "nominal",
-                                    "sort": series_order,
-                                    "scale": {"domain": series_order, "range": series_shapes},
-                                },
-                                "tooltip": [
-                                    {"field": "Model", "type": "nominal"},
-                                    {"field": "Series", "type": "nominal"},
-                                    {"field": "Variant", "type": "nominal"},
-                                    {"field": "Bits", "type": "quantitative", "format": "d"},
-                                    {"field": "Accuracy (%)", "type": "quantitative", "format": ".3f"},
-                                    {"field": "Weight DT", "type": "nominal"},
-                                    {"field": "Activation DT", "type": "nominal"},
-                                    {"field": "Experiment Type", "type": "nominal"},
-                                    {"field": "Run Date", "type": "nominal"},
-                                ],
-                            },
-                        },
-                    ],
-                    "height": 230,
-                    "width": 820,
                 },
-                "resolve": {"scale": {"y": "independent"}},
+                "layer": [
+                    {
+                        "transform": [{"filter": "datum['Connect Points'] === true"}],
+                        "mark": {"type": "line", "strokeWidth": 2.5},
+                        "encoding": {
+                            **shared_position_encoding,
+                            "color": {
+                                "field": "Line Label",
+                                "type": "nominal",
+                                "sort": line_labels,
+                                "scale": line_color_scale,
+                                "legend": {"title": "Line family"},
+                            },
+                            "detail": {"field": "Line Group", "type": "nominal"},
+                            "order": {"field": "Bits", "type": "quantitative"},
+                            "opacity": interactive_opacity,
+                        },
+                    },
+                    {
+                        # Keep the selection on one unit layer. Defining it at the
+                        # layered-chart level makes Vega-Lite emit duplicate
+                        # signals (one per layer) in Streamlit's bundled compiler.
+                        "params": [
+                            {
+                                "name": hover_name,
+                                "select": {
+                                    "type": "point",
+                                    "fields": ["Format Label"],
+                                    "on": "pointerover",
+                                    "clear": "pointerout",
+                                },
+                            },
+                        ],
+                        "mark": {
+                            "type": "point",
+                            "filled": True,
+                            "size": 165,
+                            "stroke": "#ffffff",
+                            "strokeWidth": 1.25,
+                        },
+                        "encoding": {
+                            **shared_position_encoding,
+                            "color": {
+                                "field": "Point Label",
+                                "type": "nominal",
+                                "sort": point_labels,
+                                "scale": point_color_scale,
+                                "legend": None,
+                            },
+                            "shape": {
+                                "field": "Series",
+                                "type": "nominal",
+                                "sort": plotted_series,
+                                "scale": {
+                                    "domain": plotted_series,
+                                    "range": plotted_shapes,
+                                },
+                                "legend": {"title": "Run type"},
+                            },
+                            "opacity": interactive_opacity,
+                            "tooltip": [
+                                {"field": "Model", "type": "nominal"},
+                                {"field": "Series", "type": "nominal", "title": "Run type"},
+                                {"field": "Variant", "type": "nominal", "title": "Format"},
+                                {"field": "Bits", "type": "quantitative", "format": "d", "title": "Bit Width"},
+                                {"field": "Accuracy (%)", "type": "quantitative", "format": ".3f"},
+                                {"field": "Weight DT", "type": "nominal"},
+                                {"field": "Activation DT", "type": "nominal"},
+                                {"field": "Experiment Type", "type": "nominal"},
+                                {"field": "Run Date", "type": "nominal"},
+                            ],
+                        },
+                    },
+                ],
+                "resolve": {"scale": {"color": "independent"}},
+                "height": 420,
             }
+            st.caption(
+                "Hover a point to emphasize its format and see the datatype in the tooltip."
+            )
             st.vega_lite_chart(chart_df, chart_spec, width='stretch')
 
         weight_tab, input_tab = st.tabs(["Weights", "Inputs"])
@@ -2113,11 +2195,683 @@ else:
         _render_family_chart(
             filtered_plot_df,
             "Inputs",
-            "Input dynamic",
-            ["Input dynamic", "Input baseline"],
-            ["diamond", "triangle-up"],
+            ["Input dynamic MSE", "Input dynamic L1", "Input dynamic"],
+            [
+                "Input dynamic MSE",
+                "Input dynamic L1",
+                "Input dynamic",
+                "Input baseline",
+            ],
+            ["diamond", "triangle-down", "circle", "triangle-up"],
         )
         input_tab.__exit__(None, None, None)
+
+    def _render_hybrid_directional_sweeps(source_df):
+        directional_df = build_hybrid_directional_plot_df(source_df)
+        if directional_df is None or directional_df.empty:
+            st.info(
+                "No bidirectional hybrid sweep metadata is available for the "
+                "directional plots. The detailed hybrid view remains available below."
+            )
+            return
+
+        st.markdown(
+            """
+            <div class="dashboard-section-title">
+                <div>
+                    <h3>Bidirectional Best-Fixed Sweeps</h3>
+                    <p>All candidates are shown as faint points; the highest-accuracy candidate at each width is emphasized and connected.</p>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        metric_col, candidates_col, tolerance_col = st.columns([1, 1, 1])
+        metric_view = metric_col.radio(
+            "Metric",
+            ["Accuracy", "Accuracy drop"],
+            horizontal=True,
+            key="hybrid_directional_metric",
+        )
+        candidate_view = candidates_col.radio(
+            "Points",
+            ["All candidates", "Winners only"],
+            horizontal=True,
+            key="hybrid_directional_points",
+        )
+        acceptable_drop = tolerance_col.number_input(
+            "Acceptable FP32 drop (pp)",
+            min_value=0.0,
+            max_value=100.0,
+            value=1.0,
+            step=0.1,
+            key="hybrid_directional_acceptable_drop",
+            help="Used to report the lowest bit width whose winning point stays within this accuracy drop.",
+        )
+        dynamic_line_col, best_line_col = st.columns(2)
+        connect_dynamic_inputs = dynamic_line_col.checkbox(
+            "Connect dynamic inputs",
+            value=False,
+            key="hybrid_directional_connect_dynamic",
+            help=(
+                "Draw a purple line through the highest-accuracy dynamic-input "
+                "point at each bit width on both plots."
+            ),
+        )
+        connect_best_points = best_line_col.checkbox(
+            "Connect best points",
+            value=True,
+            key="hybrid_directional_connect_best",
+            help="Show or hide the line joining the best overall point at each width.",
+        )
+        directional_df["Accuracy Drop (pp)"] = (
+            pd.to_numeric(
+                directional_df["Reference Accuracy (%)"], errors="coerce"
+            )
+            - pd.to_numeric(directional_df["Accuracy (%)"], errors="coerce")
+        )
+        if metric_view == "Accuracy drop":
+            metric_field = "Accuracy Drop (pp)"
+            metric_title = "Accuracy Drop from FP32 (pp)"
+            dynamic_aggregate_op = "min"
+            directional_df["Reference Line"] = 0.0
+        else:
+            metric_field = "Accuracy (%)"
+            metric_title = "Top-1 Accuracy (%)"
+            dynamic_aggregate_op = "max"
+            directional_df["Reference Line"] = directional_df[
+                "Reference Accuracy (%)"
+            ]
+
+        panels = [
+            (
+                "weight_fixed",
+                "Best weight → all inputs",
+                "Input Bit Width",
+                "Best weight",
+                "#2563eb",
+            ),
+            (
+                "input_fixed",
+                "Best input → all weights",
+                "Weight Bit Width",
+                "Best input",
+                "#ea580c",
+            ),
+        ]
+        panel_columns = st.columns(2)
+        for panel_column, (direction, title, x_title, fixed_title, color) in zip(
+            panel_columns, panels
+        ):
+            panel_df = directional_df[
+                directional_df["Sweep Direction"].eq(direction)
+            ].copy()
+            with panel_column:
+                st.markdown(f"#### {title}")
+                if panel_df.empty:
+                    st.info("No matching sweep runs are available.")
+                    continue
+
+                winning_rows = panel_df[panel_df["Winner"].eq(True)]
+                best_row = winning_rows.loc[winning_rows["Accuracy (%)"].idxmax()]
+                acceptable_rows = winning_rows[
+                    winning_rows["Accuracy Drop (pp)"].le(float(acceptable_drop))
+                ]
+                lowest_acceptable = (
+                    f"{int(acceptable_rows['Axis Bits'].min())}b"
+                    if not acceptable_rows.empty else "none"
+                )
+                st.markdown(
+                    f"**Best:** {float(best_row['Accuracy (%)']):.3f}% with "
+                    f"`{best_row['Candidate Label']}` · "
+                    f"**Lowest within {acceptable_drop:.1f} pp:** {lowest_acceptable}"
+                )
+
+                fixed_by_width = (
+                    panel_df.groupby("Axis Bits")["Fixed Label"]
+                    .agg(lambda values: ", ".join(sorted(set(map(str, values)))))
+                    .to_dict()
+                )
+                fixed_summary = " · ".join(
+                    f"{int(bits)}b: {label}"
+                    for bits, label in sorted(fixed_by_width.items())
+                )
+                st.caption(f"{fixed_title} by width — {fixed_summary}")
+
+                axis_min = int(panel_df["Axis Bits"].min())
+                axis_max = int(panel_df["Axis Bits"].max())
+                reference_values = panel_df[
+                    "Reference Accuracy (%)"
+                ].dropna()
+                reference_accuracy = (
+                    float(reference_values.max())
+                    if not reference_values.empty else None
+                )
+                if reference_accuracy is not None:
+                    reference_suffix = (
+                        " (0 pp drop)" if metric_view == "Accuracy drop" else ""
+                    )
+                    panel_df["Reference Label"] = (
+                        f"FP32 reference: {reference_accuracy:.3f}%"
+                        f"{reference_suffix}"
+                    )
+                else:
+                    panel_df["Reference Label"] = "FP32 reference"
+
+                candidate_point_transform = (
+                    [{"filter": "datum.Winner === true"}]
+                    if candidate_view == "Winners only" else []
+                )
+
+                shared_encoding = {
+                    "x": {
+                        "field": "Axis Bits",
+                        "type": "quantitative",
+                        "scale": {
+                            "domain": [axis_min, axis_max],
+                            "zero": False,
+                            "padding": 12,
+                        },
+                        "axis": {"title": x_title, "tickMinStep": 1},
+                    },
+                    "y": {
+                        "field": metric_field,
+                        "type": "quantitative",
+                        "scale": {"zero": False, "nice": True, "padding": 8},
+                        "axis": {"title": metric_title},
+                    },
+                }
+                tooltip = [
+                    {"field": "Axis Bits", "type": "quantitative", "format": "d", "title": "Bit width"},
+                    {"field": "Accuracy (%)", "type": "quantitative", "format": ".3f"},
+                    {"field": "Accuracy Drop (pp)", "type": "quantitative", "format": ".3f"},
+                    {"field": "Reference Accuracy (%)", "type": "quantitative", "format": ".3f", "title": "FP32 accuracy"},
+                    {"field": "Fixed Label", "type": "nominal", "title": fixed_title},
+                    {"field": "Candidate Label", "type": "nominal", "title": "Candidate"},
+                    {"field": "Series", "type": "nominal", "title": "Input mode"},
+                    {"field": "Weight DT", "type": "nominal"},
+                    {"field": "Activation DT", "type": "nominal"},
+                    {"field": "Candidates", "type": "nominal", "title": "Dynamic candidates"},
+                    {"field": "Evaluation Scope", "type": "nominal"},
+                    {"field": "Run ID", "type": "quantitative", "format": "d"},
+                ]
+                chart_layers = [
+                    {
+                        "mark": {
+                            "type": "rule",
+                            "color": "#475569",
+                            "strokeDash": [2, 3],
+                            "opacity": 0.7,
+                        },
+                        "encoding": {
+                            "y": {
+                                "field": "Reference Line",
+                                "type": "quantitative",
+                                "aggregate": "max",
+                            },
+                        },
+                    },
+                    {
+                        "mark": {
+                            "type": "text",
+                            "align": "left",
+                            "baseline": "bottom",
+                            "dx": 6,
+                            "dy": -5,
+                            "fontSize": 11,
+                            "fontWeight": "bold",
+                            "color": "#475569",
+                        },
+                        "encoding": {
+                            "x": {
+                                "field": "Axis Bits",
+                                "type": "quantitative",
+                                "aggregate": "min",
+                            },
+                            "y": {
+                                "field": "Reference Line",
+                                "type": "quantitative",
+                                "aggregate": "max",
+                            },
+                            "text": {
+                                "field": "Reference Label",
+                                "type": "nominal",
+                                "aggregate": "max",
+                            },
+                        },
+                    },
+                    {
+                        "transform": candidate_point_transform,
+                        "mark": {
+                            "type": "point",
+                            "filled": True,
+                            "size": 75,
+                            "color": "#94a3b8",
+                            "opacity": 0.42,
+                        },
+                        "encoding": {**shared_encoding, "tooltip": tooltip},
+                    },
+                ]
+                if connect_dynamic_inputs:
+                    chart_layers.append({
+                        "transform": [
+                            {"filter": "datum['Series'] === 'Hybrid dynamic'"},
+                            {
+                                "aggregate": [
+                                    {
+                                        "op": dynamic_aggregate_op,
+                                        "field": metric_field,
+                                        "as": "Dynamic Metric",
+                                    },
+                                ],
+                                "groupby": ["Axis Bits"],
+                            },
+                        ],
+                        "mark": {
+                            "type": "line",
+                            "strokeWidth": 2.5,
+                            "strokeDash": [7, 3],
+                            "color": "#7c3aed",
+                            "point": {
+                                "filled": True,
+                                "size": 85,
+                            },
+                        },
+                        "encoding": {
+                            "x": shared_encoding["x"],
+                            "y": {
+                                **shared_encoding["y"],
+                                "field": "Dynamic Metric",
+                            },
+                            "order": {
+                                "field": "Axis Bits",
+                                "type": "quantitative",
+                            },
+                        },
+                    })
+                if connect_best_points:
+                    chart_layers.append({
+                        "transform": [{"filter": "datum.Winner === true"}],
+                        "mark": {
+                            "type": "line",
+                            "strokeWidth": 3,
+                            "color": color,
+                        },
+                        "encoding": {
+                            **shared_encoding,
+                            "order": {"field": "Axis Bits", "type": "quantitative"},
+                        },
+                    })
+                chart_layers.append({
+                    "transform": [{"filter": "datum.Winner === true"}],
+                    "mark": {
+                        "type": "point",
+                        "filled": True,
+                        "size": 190,
+                        "color": color,
+                        "stroke": "#ffffff",
+                        "strokeWidth": 1.5,
+                    },
+                    "encoding": {**shared_encoding, "tooltip": tooltip},
+                })
+                chart_spec = {
+                    "config": {
+                        "view": {"stroke": "transparent"},
+                        "axis": {"labelFontSize": 11, "titleFontSize": 12},
+                    },
+                    "layer": chart_layers,
+                    "height": 390,
+                }
+                st.vega_lite_chart(panel_df, chart_spec, width="stretch")
+
+        st.caption(
+            "Hover any point for the exact formats. The highlighted curve is the "
+            "best observed hybrid accuracy at each bit width, not a separate run."
+        )
+
+    def _render_hybrid_accuracy_dashboard(source_df):
+        plot_df = build_hybrid_accuracy_plot_df(source_df)
+        if plot_df is None or plot_df.empty:
+            st.info(
+                "No successful hybrid fixed or dynamic runs with input "
+                "bit-widths are available for this slice."
+            )
+            return
+
+        available_models = sorted(plot_df["Model"].dropna().unique().tolist())
+        if not available_models:
+            return
+
+        st.markdown(
+            """
+            <div class="dashboard-section-title">
+                <div>
+                    <h3>Hybrid Accuracy by Input Bit Width</h3>
+                    <p>Compare fixed best-baseline inputs with width-restricted dynamic inputs while weights are quantized.</p>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        model_key = "hybrid_accuracy_plot_model"
+        if st.session_state.get(model_key) not in available_models:
+            st.session_state[model_key] = available_models[0]
+
+        model_col, threshold_col, scope_col = st.columns([2, 1, 1])
+        selected_model = model_col.selectbox(
+            "Model",
+            options=available_models,
+            key=model_key,
+            help="Show one model at a time so fixed and dynamic curves stay readable.",
+        )
+        accuracy_threshold = threshold_col.number_input(
+            "Minimum accuracy (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(st.session_state.get("hybrid_accuracy_min_threshold", 0.0)),
+            step=0.1,
+            format="%.1f",
+            key="hybrid_accuracy_min_threshold",
+        )
+        include_limited = scope_col.checkbox(
+            "Include limited/unknown",
+            value=False,
+            key="hybrid_accuracy_include_limited",
+            help=(
+                "Include smoke tests, subset evaluations, and legacy rows whose "
+                "evaluation scope was not logged."
+            ),
+        )
+
+        chart_df = plot_df[plot_df["Model"].eq(selected_model)].copy()
+        chart_df["Series"] = chart_df["Series"].astype(str)
+        chart_df["Bits"] = pd.to_numeric(chart_df["Bits"], errors="coerce")
+        chart_df["Accuracy (%)"] = pd.to_numeric(
+            chart_df["Accuracy (%)"], errors="coerce"
+        )
+        chart_df = chart_df.dropna(subset=["Bits", "Accuracy (%)"])
+        if not include_limited:
+            chart_df = chart_df[chart_df["Full Evaluation"].eq(True)].copy()
+        chart_df = chart_df[
+            chart_df["Accuracy (%)"] >= float(accuracy_threshold)
+        ].copy()
+        if chart_df.empty:
+            scope_hint = " full-dataset" if not include_limited else ""
+            st.info(
+                f"No{scope_hint} hybrid points have Acc1 >= "
+                f"{accuracy_threshold:.1f}%."
+            )
+            return
+
+        _render_hybrid_directional_sweeps(chart_df)
+        st.markdown("---")
+        st.markdown("### Detailed Hybrid View")
+        st.caption(
+            "The Overview and All variants charts use a common bit width for "
+            "weights and inputs."
+        )
+
+        chart_df = filter_common_hybrid_width_rows(chart_df)
+        if chart_df.empty:
+            st.info(
+                "No hybrid runs with matching weight and input bit widths are "
+                "available for this slice."
+            )
+            return
+
+        available_series = [
+            series
+            for series in HYBRID_ACCURACY_SERIES_ORDER
+            if series in set(chart_df["Series"])
+        ]
+        view_mode = st.radio(
+            "View",
+            options=["Overview", "All variants"],
+            horizontal=True,
+            key="hybrid_accuracy_view",
+            help=(
+                "Overview keeps the highest-accuracy fixed and dynamic result at "
+                "each width. All variants exposes every quantized-weight setup."
+            ),
+        )
+
+        available_bit_values = sorted(
+            chart_df["Bits"].dropna().astype(int).unique().tolist()
+        )
+        min_available_bit = int(min(available_bit_values))
+        max_available_bit = int(max(available_bit_values))
+        if min_available_bit < max_available_bit:
+            bit_range_key = "hybrid_accuracy_bit_range"
+            default_bit_range = (min_available_bit, max_available_bit)
+            stored_bit_range = st.session_state.get(bit_range_key)
+            if (
+                not isinstance(stored_bit_range, (list, tuple))
+                or len(stored_bit_range) != 2
+                or int(stored_bit_range[0]) < min_available_bit
+                or int(stored_bit_range[1]) > max_available_bit
+                or int(stored_bit_range[0]) > int(stored_bit_range[1])
+            ):
+                st.session_state[bit_range_key] = default_bit_range
+            selected_bit_range = st.slider(
+                "Weight and input bit range",
+                min_value=min_available_bit,
+                max_value=max_available_bit,
+                value=default_bit_range,
+                step=1,
+                key=bit_range_key,
+                help="Adjust the common weight-and-input x-axis range.",
+            )
+        else:
+            selected_bit_range = (min_available_bit, max_available_bit)
+            st.caption(f"Weight and input bit range: {min_available_bit}")
+        chart_df = chart_df[
+            chart_df["Bits"].between(
+                int(selected_bit_range[0]), int(selected_bit_range[1])
+            )
+        ].copy()
+
+        if view_mode == "All variants":
+            best_dynamic_run_ids = hybrid_best_dynamic_run_ids(chart_df)
+            series_key = "hybrid_accuracy_series"
+            if series_key in st.session_state:
+                st.session_state[series_key] = [
+                    series
+                    for series in st.session_state[series_key]
+                    if series in available_series
+                ] or available_series
+            selected_series = st.multiselect(
+                "Hybrid series",
+                options=available_series,
+                default=available_series,
+                key=series_key,
+            )
+            if not selected_series:
+                st.info("Select at least one hybrid series.")
+                return
+            chart_df = chart_df[chart_df["Series"].isin(selected_series)].copy()
+            chart_df["Plot Label"] = chart_df["Setup Label"]
+            chart_df["Connect Points"] = chart_df["Run ID"].isin(
+                best_dynamic_run_ids
+            )
+            chart_df["Line Group"] = "Best dynamic input"
+        else:
+            best_indices = chart_df.groupby(
+                ["Bits", "Series"], observed=True
+            )["Accuracy (%)"].idxmax()
+            chart_df = chart_df.loc[best_indices].copy()
+            chart_df["Plot Label"] = chart_df["Series"].map({
+                "Hybrid fixed": "Best fixed",
+                "Hybrid dynamic": "Best dynamic",
+            }).fillna(chart_df["Series"])
+            chart_df["Line Group"] = chart_df["Series"]
+            chart_df["Connect Points"] = True
+            st.caption(
+                "Overview: each point is the highest-accuracy hybrid run in its "
+                "family at that input width. Hover to see the winning weight and input formats."
+            )
+
+        bit_values = sorted(chart_df["Bits"].dropna().unique().tolist())
+        bit_domain = (
+            [int(min(bit_values)) - 0.5, int(max(bit_values)) + 0.5]
+            if bit_values else [0, 1]
+        )
+        plot_labels = sorted(
+            chart_df["Plot Label"].dropna().astype(str).unique().tolist()
+        )
+        show_setup_legend = view_mode != "All variants"
+        hover_name = "hybrid_accuracy_hover"
+        label_pick_name = "hybrid_accuracy_label_pick"
+        shared_position_encoding = {
+            "x": {
+                "field": "Bits",
+                "type": "quantitative",
+                "scale": {"domain": bit_domain},
+                "axis": {
+                    "title": "Weight and Input Bit Width",
+                    "tickMinStep": 1,
+                },
+            },
+            "y": {
+                "field": "Accuracy (%)",
+                "type": "quantitative",
+                "scale": {"zero": False, "nice": True, "padding": 8},
+                "axis": {"title": "Top-1 Accuracy (%)"},
+            },
+        }
+        opacity_tests = [{"param": hover_name, "empty": True}]
+        if show_setup_legend:
+            opacity_tests.insert(0, {"param": label_pick_name, "empty": True})
+        interactive_opacity = {
+            "condition": {
+                "test": {"and": opacity_tests},
+                "value": 0.95,
+            },
+            "value": 0.16,
+        }
+        point_params = [
+            {
+                "name": hover_name,
+                "select": {
+                    "type": "point",
+                    "fields": ["Plot Label"],
+                    "on": "pointerover",
+                    "clear": "pointerout",
+                },
+            },
+        ]
+        if show_setup_legend:
+            point_params.append({
+                "name": label_pick_name,
+                "select": {
+                    "type": "point",
+                    "fields": ["Plot Label"],
+                },
+                "bind": "legend",
+            })
+        setup_legend = {"title": "Hybrid setup"} if show_setup_legend else None
+        line_color_encoding = (
+            {
+                "field": "Plot Label",
+                "type": "nominal",
+                "sort": plot_labels,
+                "scale": {"scheme": "tableau20"},
+                "legend": setup_legend,
+            }
+            if show_setup_legend
+            else {"value": "#111827"}
+        )
+        line_opacity_encoding = (
+            interactive_opacity if show_setup_legend else {"value": 0.95}
+        )
+        chart_spec = {
+            "config": {
+                "view": {"stroke": "transparent"},
+                "axis": {"labelFontSize": 11, "titleFontSize": 12},
+                "legend": {
+                    "orient": "bottom",
+                    "title": None,
+                    "labelLimit": 260,
+                    "columns": 3,
+                    "symbolLimit": 200,
+                },
+            },
+            "layer": [
+                {
+                    "transform": [
+                        {"filter": "datum['Connect Points'] === true"}
+                    ],
+                    "mark": {"type": "line", "strokeWidth": 2.5},
+                    "encoding": {
+                        **shared_position_encoding,
+                        "color": line_color_encoding,
+                        "detail": {"field": "Line Group", "type": "nominal"},
+                        "order": {"field": "Bits", "type": "quantitative"},
+                        "opacity": line_opacity_encoding,
+                    },
+                },
+                {
+                    "params": point_params,
+                    "mark": {
+                        "type": "point",
+                        "filled": True,
+                        "size": 175,
+                        "stroke": "#ffffff",
+                        "strokeWidth": 1.25,
+                    },
+                    "encoding": {
+                        **shared_position_encoding,
+                        "color": {
+                            "field": "Plot Label",
+                            "type": "nominal",
+                            "sort": plot_labels,
+                            "scale": {"scheme": "tableau20"},
+                            "legend": setup_legend,
+                        },
+                        "shape": {
+                            "field": "Series",
+                            "type": "nominal",
+                            "sort": HYBRID_ACCURACY_SERIES_ORDER,
+                            "scale": {
+                                "domain": HYBRID_ACCURACY_SERIES_ORDER,
+                                "range": ["square", "diamond"],
+                            },
+                            "legend": {"title": "Input mode"},
+                        },
+                        "opacity": interactive_opacity,
+                        "tooltip": [
+                            {"field": "Model", "type": "nominal"},
+                            {"field": "Series", "type": "nominal", "title": "Input mode"},
+                            {"field": "Bits", "type": "quantitative", "format": "d", "title": "Input bits"},
+                            {"field": "Accuracy (%)", "type": "quantitative", "format": ".3f"},
+                            {"field": "Weight DT", "type": "nominal"},
+                            {"field": "Activation DT", "type": "nominal"},
+                            {"field": "Candidates", "type": "nominal"},
+                            {"field": "MSE", "type": "quantitative", "format": ".3e"},
+                            {"field": "Certainty", "type": "quantitative", "format": ".4f"},
+                            {"field": "Evaluation Scope", "type": "nominal"},
+                            {"field": "Experiment Type", "type": "nominal"},
+                            {"field": "Run Date", "type": "nominal"},
+                        ],
+                    },
+                },
+            ],
+            "height": 460,
+        }
+        if show_setup_legend:
+            st.caption(
+                "Hover a point to emphasize its setup. Click legend entries to isolate one; "
+                "Shift-click to compare several, and click empty chart space to reset."
+            )
+        else:
+            st.caption(
+                "The dark line connects the highest-accuracy dynamic-input run "
+                "at each common bit width. "
+                "Format legends are hidden; hover a point to emphasize its setup "
+                "and inspect formats in the tooltip."
+            )
+        st.vega_lite_chart(chart_df, chart_spec, width='stretch')
 
     @st.fragment(run_every=30)
     def _render_experiment_result_tables():
@@ -2148,10 +2902,28 @@ else:
             rerun_current_fragment()
         st.markdown("---")
 
-        baseline_plots_tab, comparison_tables_tab = st.tabs(["Baseline Plots", "Comparison Tables"])
+        (
+            comparison_tables_tab,
+            baseline_plots_tab,
+            layer_ablation_plots_tab,
+            hybrid_plots_tab,
+        ) = st.tabs([
+            "Comparison Tables",
+            "Baseline Plots",
+            "Layer Ablations",
+            "Hybrid Plots",
+        ])
         baseline_plots_tab.__enter__()
         _render_baseline_accuracy_dashboard(df)
         baseline_plots_tab.__exit__(None, None, None)
+
+        layer_ablation_plots_tab.__enter__()
+        _render_layer_ablation_dashboard(df)
+        layer_ablation_plots_tab.__exit__(None, None, None)
+
+        hybrid_plots_tab.__enter__()
+        _render_hybrid_accuracy_dashboard(df)
+        hybrid_plots_tab.__exit__(None, None, None)
 
         comparison_tables_tab.__enter__()
 

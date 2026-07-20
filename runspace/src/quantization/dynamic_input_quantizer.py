@@ -213,7 +213,13 @@ class DynamicInputQuantizer:
 
         if candidate_formats is None:
             candidate_formats = DEFAULT_DYNAMIC_INPUT_CANDIDATES
-        self.candidate_formats = list(candidate_formats)
+        self.candidate_formats = [str(fmt) for fmt in candidate_formats]
+        if "fp32" in self.candidate_formats:
+            raise ValueError(
+                "fp32 cannot be a dynamic activation candidate. It has no encoded "
+                "hardware packet representation; evaluate fp32 as a separate "
+                "baseline instead."
+            )
 
         self.supported_ops = tuple(OpRegistry.get_supported_ops().values())
         functional_ops = []
@@ -640,6 +646,8 @@ class DynamicInputQuantizer:
             if stats is not None:
                 stats.update(
                     {
+                        'layer_name': self._transport_runtime.stage_display_name(stage),
+                        'stage_id': stage.stage_id,
                         'type': stage.kind.value,
                         'producer_nodes': list(stage.node_names),
                         'consumer_nodes': list(stage.consumer_nodes),
@@ -723,6 +731,7 @@ class DynamicInputQuantizer:
             layer_name,
             module,
             input_index=input_index,
+            producer_is_unsigned=stage.is_unsigned,
         )
         if stage.is_unsigned and self.use_unsigned_input_candidates:
             candidates = self._make_unsigned_candidates(candidates)
@@ -793,8 +802,26 @@ class DynamicInputQuantizer:
             formats = self._make_unsigned_candidates(formats)
         return formats
 
-    def _candidates_for_layer(self, layer_name, module=None, input_index=0):
-        is_unsigned = self._layer_uses_unsigned_input(layer_name, input_index=input_index)
+    def _candidates_for_layer(
+        self,
+        layer_name,
+        module=None,
+        input_index=0,
+        producer_is_unsigned=None,
+    ):
+        if producer_is_unsigned is None:
+            is_unsigned = self._layer_uses_unsigned_input(
+                layer_name,
+                input_index=input_index,
+            )
+        else:
+            # Producer-stage transport owns the packet representation.  Consumer
+            # module metadata can be stale or describe an internal unsigned path
+            # (for example, Softmax exponent values), so it must not override the
+            # FX planner's signedness for the tensor crossing this boundary.
+            is_unsigned = bool(
+                producer_is_unsigned and self.use_unsigned_input_candidates
+            )
 
         if input_index == 1 and layer_name in self.layer_residual_input_bits_map:
             residual_bits = self.layer_residual_input_bits_map[layer_name]
@@ -815,7 +842,7 @@ class DynamicInputQuantizer:
             return self.unsigned_candidate_formats
 
         if self.restrict_post_relu_ufp:
-            if layer_name in self.post_relu_layers:
+            if producer_is_unsigned is None and layer_name in self.post_relu_layers:
                 return self.ufp_candidates or self._make_unsigned_candidates(self.non_ufp_candidates)
             return self.non_ufp_candidates or self.ufp_candidates
 
@@ -1002,18 +1029,11 @@ class DynamicInputQuantizer:
         cands_m = []
         cands_sgn = []
         for fmt in candidates:
-            # The CUDA kernel does not natively bypass fp32. Map it to a
-            # high-precision FP format for compatibility with older configs.
-            if fmt == 'fp32':
-                cands_e.append(8)
-                cands_m.append(7)
-                cands_sgn.append(1)
-            else:
-                e, m = get_format_params(fmt)
-                is_signed = not fmt.startswith('ufp')
-                cands_e.append(e)
-                cands_m.append(m)
-                cands_sgn.append(1 if is_signed else 0)
+            e, m = get_format_params(fmt)
+            is_signed = not fmt.startswith('ufp')
+            cands_e.append(e)
+            cands_m.append(m)
+            cands_sgn.append(1 if is_signed else 0)
 
         cands_e_t = torch.tensor(cands_e, dtype=torch.int32, device=device)
         cands_m_t = torch.tensor(cands_m, dtype=torch.int32, device=device)

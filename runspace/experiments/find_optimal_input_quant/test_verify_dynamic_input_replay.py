@@ -6,6 +6,12 @@ import pytest
 import torch
 import torch.nn as nn
 
+from runspace.experiments.find_optimal_input_quant.find_optimal_input_quant import (
+    _candidate_formats_by_bit_width,
+    _dynamic_experiment_type_for_bit_width,
+    _validate_cache_sim_candidate_groups,
+    candidate_formats as DEFAULT_CANDIDATE_FORMATS,
+)
 from runspace.experiments.find_optimal_input_quant.verify_dynamic_input_replay import (
     BatchRecordingDynamicInputQuantizer,
     BatchReplayInputQuantizer,
@@ -26,6 +32,44 @@ class _TinyStageModel(nn.Module):
 
 def _pre_hook_count(model):
     return sum(len(module._forward_pre_hooks) for module in model.modules())
+
+
+def test_dynamic_defaults_exclude_fp32_hardware_candidate():
+    assert "fp32" not in DEFAULT_CANDIDATE_FORMATS
+
+
+def test_dynamic_candidates_are_split_into_independent_bit_width_pools():
+    grouped = _candidate_formats_by_bit_width(DEFAULT_CANDIDATE_FORMATS)
+
+    assert list(grouped) == [8, 7, 6, 5, 4, 3, 2]
+    assert grouped[4] == ["fp4_e1m2", "fp4_e2m1", "fp4_e3m0"]
+    assert all(
+        candidate.startswith(f"fp{bit_width}_")
+        for bit_width, candidates in grouped.items()
+        for candidate in candidates
+    )
+
+
+def test_dynamic_experiment_type_is_suffixed_with_bit_width():
+    assert (
+        _dynamic_experiment_type_for_bit_width("input_quant_dynamic", 4)
+        == "input_quant_dynamic_4"
+    )
+
+
+def test_cache_sim_rejects_non_8_bit_candidate_runs():
+    with pytest.raises(ValueError, match="cannot produce isolated non-8-bit"):
+        _validate_cache_sim_candidate_groups({8: ["fp8_e4m3"], 4: ["fp4_e2m1"]}, True)
+
+    _validate_cache_sim_candidate_groups({8: ["fp8_e4m3"]}, True)
+
+
+def test_dynamic_quantizer_rejects_fp32_candidate():
+    with pytest.raises(ValueError, match="fp32 cannot be a dynamic activation candidate"):
+        BatchRecordingDynamicInputQuantizer(
+            _TinyStageModel(),
+            candidate_formats=["fp32", "fp4_e1m2"],
+        )
 
 
 def test_reference_replay_uses_exact_producer_stage_format_ids():

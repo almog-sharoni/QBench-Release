@@ -86,6 +86,7 @@ class LayerComparator:
         self.quant_certainty_sum = 0.0
         self.total_batches = 0
         self.layer_metrics = {}
+        self.activation_quantizer = None
         # Opt-in: when True, the FP8 compliance table validates each tensor
         # against its own declared format (weight_fp8 vs. module.q_type,
         # last_quant_input_unscaled vs. module.input_q_type, activation output
@@ -299,10 +300,18 @@ class LayerComparator:
         self.ref_model.eval()
         self.quant_model.eval()
         
-        # Run FX Coverage Verification BEFORE comparison loop
-        # This ensures that if FX tracing leaves Proxies in the modules,
-        # they will be overwritten by real data during the comparison loop.
-        self.coverage_report_lines, self.unquantized_supported_count = self._verify_coverage_fx()
+        # Legacy registry coverage still runs before inference so any state left
+        # behind by FX tracing is overwritten by real tensors.  Hardware
+        # transport coverage is deferred until after inference because its
+        # source of truth is the packets actually transmitted at runtime.
+        transport_runtime = getattr(
+            getattr(self, 'activation_quantizer', None),
+            '_transport_runtime',
+            None,
+        )
+        defer_hardware_coverage = getattr(transport_runtime, 'plan', None) is not None
+        if not defer_hardware_coverage:
+            self.coverage_report_lines, self.unquantized_supported_count = self._verify_coverage_fx()
         
         loader_len = None
         try:
@@ -420,6 +429,9 @@ class LayerComparator:
 
             pbar.close()
 
+        if defer_hardware_coverage:
+            self.coverage_report_lines, self.unquantized_supported_count = self._verify_coverage_fx()
+
         self._generate_report()
 
     def _verify_coverage_fx(self):
@@ -434,6 +446,14 @@ class LayerComparator:
         
         report_lines = []
         report_lines.append("--- Quantization Coverage Verification ---")
+
+        hardware_report = self._hardware_transport_coverage_report()
+        if hardware_report is not None:
+            hardware_lines, uncovered_count = hardware_report
+            report_lines.extend(hardware_lines)
+            report_lines.append("-" * 40)
+            report_lines.append("\n")
+            return report_lines, uncovered_count
         
         is_custom_source = bool(
             self.adapter is not None
@@ -593,6 +613,205 @@ class LayerComparator:
             unquantized_supported_count = len(unquantized_supported)
             
         return report_lines, unquantized_supported_count
+
+    def _hardware_transport_coverage_report(self):
+        """Describe HW coverage using planner roles and observed transmissions.
+
+        Registry membership is not meaningful for FX shape/control operations.
+        The strict activation planner has already classified every graph node,
+        so use those semantic roles and count only runtime activation stages.
+        """
+        quantizer = getattr(self, 'activation_quantizer', None)
+        runtime = getattr(quantizer, '_transport_runtime', None)
+        plan = getattr(runtime, 'plan', None)
+        if runtime is None or plan is None:
+            return None
+
+        _, summary = self._hardware_transport_coverage()
+        if summary is None:
+            return None
+
+        modules = dict(plan.graph_module.named_modules())
+
+        def node_label(node):
+            if node.op == 'call_module':
+                module = modules.get(str(node.target))
+                return type(module).__name__ if module is not None else str(node.target)
+            if node.op == 'call_method':
+                return f".{node.target}"
+            if node.op == 'call_function':
+                return getattr(node.target, '__name__', str(node.target))
+            return node.op
+
+        def role_summary(role_name):
+            counts = {}
+            total = 0
+            for node in plan.graph_module.graph.nodes:
+                role = plan.node_roles.get(node.name)
+                if getattr(role, 'value', role) != role_name:
+                    continue
+                label = node_label(node)
+                counts[label] = counts.get(label, 0) + 1
+                total += 1
+            details = ", ".join(
+                f"{label} x{count}" if count > 1 else label
+                for label, count in sorted(counts.items())
+            )
+            return total, details
+
+        covered = summary['covered_stages']
+        total = summary['total_stages']
+        coverage_pct = (covered / total * 100.0) if total else 0.0
+        non_tensor_count, non_tensor_details = role_summary('non_tensor')
+        transparent_count, transparent_details = role_summary('transparent')
+
+        lines = [
+            "Method: Hardware Activation Stage Plan + Runtime Packets",
+            f"Coverage: {covered}/{total} runtime-quantized stages ({coverage_pct:.1f}%)",
+        ]
+        if non_tensor_count:
+            lines.append(
+                f"Excluded shape/control nodes: {non_tensor_count} "
+                f"({non_tensor_details})"
+            )
+        if transparent_count:
+            lines.append(
+                f"Transport-preserving nodes: {transparent_count} "
+                f"({transparent_details})"
+            )
+
+        if summary['uncovered_stages']:
+            lines.append("Unquantized Hardware Stages (No runtime packet):")
+            lines.extend(f"  - {name}" for name in summary['uncovered_stages'])
+        else:
+            lines.append("All activation stages are runtime-quantized! ✅")
+
+        return lines, len(summary['uncovered_stages'])
+
+    def _hardware_transport_coverage(self):
+        """Map model module paths to runtime hardware-stage coverage."""
+        quantizer = getattr(self, 'activation_quantizer', None)
+        runtime = getattr(quantizer, '_transport_runtime', None)
+        plan = getattr(runtime, 'plan', None)
+        if runtime is None or plan is None:
+            return {}, None
+
+        raw_stats = getattr(quantizer, 'layer_stats', {}) or {}
+        stage_info = {}
+        for stage in plan.stages:
+            stats = raw_stats.get(stage.stage_id, {}) or {}
+            selected_formats = []
+            counts_tensor = stats.get('format_counts_tensor')
+            candidates = list(
+                stats.get('candidates')
+                or stats.get('candidate_formats')
+                or []
+            )
+            if isinstance(counts_tensor, torch.Tensor):
+                counts = counts_tensor.detach().cpu().tolist()
+                selected_formats = [
+                    str(candidates[index])
+                    for index, count in enumerate(counts)
+                    if count > 0 and index < len(candidates)
+                ]
+            else:
+                format_counts = stats.get('format_counts', {}) or {}
+                selected_formats = [
+                    str(fmt) for fmt, count in format_counts.items() if int(count) > 0
+                ]
+            if not selected_formats:
+                selected_formats = [str(fmt) for fmt in candidates]
+
+            transmissions = int(runtime.stage_transmissions.get(stage.stage_id, 0))
+            bypass_reason = runtime._metadata_bypass_stages.get(stage.stage_id)
+            stage_info[stage.stage_id] = {
+                'name': runtime.stage_display_name(stage),
+                'formats': tuple(dict.fromkeys(selected_formats)),
+                'covered': transmissions > 0 and bypass_reason is None,
+                'eligible': bypass_reason is None,
+                'transmissions': transmissions,
+                'bypass_reason': bypass_reason,
+            }
+
+        module_info = {}
+        passthrough_stage_ids = {}
+        for stage in plan.stages:
+            for node_name in stage.passthrough_nodes:
+                passthrough_stage_ids.setdefault(node_name, set()).add(stage.stage_id)
+
+        for node in plan.graph_module.graph.nodes:
+            if node.op != 'call_module':
+                continue
+            module_name = str(node.target)
+            if module_name.startswith('_qbench_'):
+                continue
+            info = module_info.setdefault(
+                module_name,
+                {'input_stage_ids': set(), 'output_stage_ids': set(), 'fused': False},
+            )
+            owner_stage_id = plan.node_to_stage.get(node.name)
+            if owner_stage_id is not None:
+                stage = plan.stage(owner_stage_id)
+                info['input_stage_ids'].update(stage.input_stage_ids)
+                info['output_stage_ids'].add(owner_stage_id)
+                info['fused'] = info['fused'] or stage.output_node != node.name
+            else:
+                # Transparent modules do not own a new activation stage.  They
+                # carry their producer's packet route without requantization.
+                # The runtime instruments the graph in place, so inspecting
+                # node.args here would see synthetic decode nodes; the planner's
+                # immutable passthrough routes are the correct source of truth.
+                route_ids = passthrough_stage_ids.get(node.name, set())
+                info['input_stage_ids'].update(route_ids)
+                info['output_stage_ids'].update(route_ids)
+
+        def summarize_formats(stage_ids):
+            formats = []
+            for stage_id in stage_ids:
+                formats.extend(stage_info.get(stage_id, {}).get('formats', ()))
+            formats = list(dict.fromkeys(formats))
+            if not formats:
+                return 'HW'
+            if len(formats) == 1:
+                return formats[0]
+            return f"mixed({len(formats)})"
+
+        for module_name, info in module_info.items():
+            input_ids = tuple(sorted(info['input_stage_ids']))
+            output_ids = tuple(sorted(info['output_stage_ids']))
+            info.update(
+                {
+                    'input_covered': bool(input_ids) and all(
+                        stage_info.get(stage_id, {}).get('covered', False)
+                        for stage_id in input_ids
+                    ),
+                    'output_covered': bool(output_ids) and all(
+                        stage_info.get(stage_id, {}).get('covered', False)
+                        for stage_id in output_ids
+                    ),
+                    'input_format': summarize_formats(input_ids),
+                    'output_format': summarize_formats(output_ids),
+                }
+            )
+
+        eligible_stages = [info for info in stage_info.values() if info['eligible']]
+        covered_stages = sum(info['covered'] for info in eligible_stages)
+        summary = {
+            'covered_stages': covered_stages,
+            'total_stages': len(eligible_stages),
+            'uncovered_stages': [
+                info['name'] for info in eligible_stages if not info['covered']
+            ],
+            'covered_module_inputs': sum(
+                info['input_covered'] for info in module_info.values()
+            ),
+            'total_module_inputs': len(module_info),
+            'covered_module_outputs': sum(
+                info['output_covered'] for info in module_info.values()
+            ),
+            'total_module_outputs': len(module_info),
+        }
+        return module_info, summary
 
     def _pair_metric(self, ref_t, quant_t):
         """MSE + cosine for a (ref, quant) pair, handling device mismatch.
@@ -786,6 +1005,7 @@ class LayerComparator:
 
         
         report_lines = []
+        hardware_layers, hardware_summary = self._hardware_transport_coverage()
         
         # 1. Model-Level Comparison
         if hasattr(self, 'global_metrics') and self.global_metrics:
@@ -925,7 +1145,7 @@ class LayerComparator:
             'QuantDropout',             # eval-mode = identity
         }
 
-        def _fmt_strings(module, prev_output_fmt='FP32'):
+        def _fmt_strings(name, module, prev_output_fmt='FP32'):
             cls_name = module.__class__.__name__
             # Weight format (config-derived; weight is set at calibration, no per-batch capture)
             if hasattr(module, 'weight') and module.weight is not None:
@@ -935,6 +1155,31 @@ class LayerComparator:
                     w = 'FP32'
             else:
                 w = 'N/A'
+
+            hardware = hardware_layers.get(name)
+            if hardware is not None:
+                input_covered = bool(hardware['input_covered'])
+                output_covered = bool(hardware['output_covered'])
+                input_fmt = hardware['input_format'] if input_covered else 'BYPASS'
+                output_fmt = hardware['output_format'] if output_covered else 'BYPASS'
+                if cls_name in _VALUE_PRESERVING_OPS:
+                    output_pre = input_fmt
+                else:
+                    output_pre = 'FP32'
+                output_state = (
+                    'Fused'
+                    if output_covered and hardware.get('fused')
+                    else ('Yes' if output_covered else 'No')
+                )
+                return (
+                    w,
+                    'Yes' if input_covered else 'No',
+                    input_fmt,
+                    input_fmt,
+                    output_state,
+                    output_pre,
+                    output_fmt,
+                )
 
             # Runtime signal: did this layer actually call quantize_input this batch?
             input_actually_quantized = (
@@ -1291,7 +1536,7 @@ class LayerComparator:
                 # all layers now go through the regular branch and rely on
                 # runtime-captured tensors + runtime format detection.
 
-                weight_fmt, input_quantized, pre_quant_fmt, input_fmt, output_quantized, output_pre_quant_fmt, output_fmt = _fmt_strings(module, prev_output_fmt)
+                weight_fmt, input_quantized, pre_quant_fmt, input_fmt, output_quantized, output_pre_quant_fmt, output_fmt = _fmt_strings(name, module, prev_output_fmt)
                 weight_str = f"{'N/A':<{_CHECK_W}}"
                 if is_under_construction:
                     weight_str = f"{RED}{_wpad('🚧 UNDER CONSTRUCTION', _CHECK_W)}{RESET}"
@@ -1315,7 +1560,13 @@ class LayerComparator:
 
                 input_str = f"{'N/A':<{_CHECK_W}}"
                 custom_status = OpRegistry.get_compliance_status(layer_type)
-                if input_quantized == 'Yes':
+                hardware = hardware_layers.get(name)
+                if hardware is not None:
+                    if hardware['input_covered']:
+                        input_str = format_status(True, 0, _CHECK_W)
+                    else:
+                        input_str = f"{RED}{_wpad('❌ NOT QUANTIZED', _CHECK_W)}{RESET}"
+                elif input_quantized == 'Yes':
                     res = _input_compliance_status(module, input_fmt, output_fmt)
                     if res: input_str = format_status(res[0], res[1], _CHECK_W, res[2])
                     elif custom_status:
@@ -1324,7 +1575,12 @@ class LayerComparator:
                     input_str = f"{ORANGE}{_wpad(custom_status, _CHECK_W)}{RESET}"
 
                 output_str = f"{'N/A':<{_CHECK_W}}"
-                if getattr(module, 'output_quantization', False):
+                if hardware is not None:
+                    if hardware['output_covered']:
+                        output_str = format_status(True, 0, _CHECK_W)
+                    else:
+                        output_str = f"{RED}{_wpad('❌ NOT QUANTIZED', _CHECK_W)}{RESET}"
+                elif getattr(module, 'output_quantization', False):
                     res = _output_compliance_status(module, output_fmt)
                     if res:
                         output_str = format_status(res[0], res[1], _CHECK_W, res[2])
@@ -1341,6 +1597,34 @@ class LayerComparator:
                 )
                 prev_output_fmt = output_fmt
         report_lines.append("-" * _SEP_W + "\n")
+
+        if hardware_summary is not None:
+            stages_ok = (
+                hardware_summary['total_stages'] > 0
+                and hardware_summary['covered_stages']
+                == hardware_summary['total_stages']
+            )
+            stage_status = "✅ FULLY QUANTIZED" if stages_ok else "❌ INCOMPLETE"
+            report_lines.append("--- Hardware Activation Transport Coverage ---")
+            report_lines.append(
+                f"Activation stages: {hardware_summary['covered_stages']}/"
+                f"{hardware_summary['total_stages']} runtime-quantized "
+                f"({stage_status})"
+            )
+            report_lines.append(
+                f"Module inputs: {hardware_summary['covered_module_inputs']}/"
+                f"{hardware_summary['total_module_inputs']} stage-covered"
+            )
+            report_lines.append(
+                f"Module outputs/fused ops: {hardware_summary['covered_module_outputs']}/"
+                f"{hardware_summary['total_module_outputs']} stage-covered"
+            )
+            if hardware_summary['uncovered_stages']:
+                report_lines.append(
+                    "Uncovered stages: "
+                    + ", ".join(hardware_summary['uncovered_stages'][:20])
+                )
+            report_lines.append("-" * 40 + "\n")
         
         if detailed_failures:
             report_lines.append("--- Detailed Parameter Compliance Failures ---")

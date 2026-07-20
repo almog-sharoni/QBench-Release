@@ -3,96 +3,35 @@ with tab_bwaware_best:
     def _render_bwaware_best_tab():
         st.markdown("""
         <div class="dashboard-hero">
-            <div class="dashboard-hero__eyebrow">Bandwidth-Aware · Best Weights</div>
-            <h1>Bandwidth-Aware Result — Best Weights</h1>
-            <p>Bandwidth-aware quantization results that use the per-layer best weight formats from the latest <code>weight_quant_optimized</code> DB run instead of SIGNED_FORMATS_BY_BITS.</p>
+            <div class="dashboard-hero__eyebrow">Bandwidth-Aware · Greedy Descent</div>
+            <h1>Bandwidth-Aware Greedy-Descent Results</h1>
+            <p>Only bandwidth-aware quantization runs produced by the greedy weight-format descent are shown here.</p>
         </div>
         """, unsafe_allow_html=True)
 
-        # Load results from the best-weights output directory
         @st.cache_data(ttl=30, show_spinner=False)
-        def _load_bwaware_best_results(project_root):
-            results_roots = [
-                (
-                    "bandwidth_aware_quant_best_weights",
-                    os.path.join(project_root, "runspace/experiments/bandwidth_aware_quant/results_best_weights"),
-                ),
-                (
-                    "bandwidth_aware_quant",
-                    os.path.join(project_root, "runspace/experiments/bandwidth_aware_quant/results"),
-                ),
-                (
-                    "baselines_vs_dynamic_runs",
-                    os.path.join(project_root, "runspace/experiments/baselines_vs_dynamic_runs/results/bandwidth_aware"),
-                ),
-            ]
-            best_runs = []
-            all_runs = []
+        def _load_bwaware_greedy_results(project_root):
+            from runspace.src.database.bwaware_results import load_greedy_descent_results
 
-            for source_label, results_root in results_roots:
-                if not os.path.isdir(results_root):
-                    continue
+            return load_greedy_descent_results(project_root)
 
-                for dirpath, _, filenames in os.walk(results_root):
-                    if "bandwidth_aware_quant_results.json" not in filenames:
-                        continue
-                    json_path = os.path.join(dirpath, "bandwidth_aware_quant_results.json")
-                    rel_dir = os.path.relpath(dirpath, results_root)
-                    label = os.path.join(source_label, rel_dir)
-                    try:
-                        with open(json_path, "r") as f:
-                            data = json.load(f)
-                    except Exception as exc:
-                        all_runs.append({
-                            "label": label,
-                            "path": json_path,
-                            "error": str(exc),
-                        })
-                        continue
+        runs_to_display = _load_bwaware_greedy_results(PROJECT_ROOT)
 
-                    run_info = {
-                        "label": label,
-                        "path": json_path,
-                        "dir": dirpath,
-                        "data": data,
-                        "model_name": data.get("model_name", rel_dir),
-                        "is_best_weights": "best_weights" in source_label or "best_weights" in rel_dir,
-                    }
-                    all_runs.append(run_info)
-                    if run_info["is_best_weights"]:
-                        best_runs.append(run_info)
-
-            return sorted(best_runs, key=lambda r: r["label"]), sorted(all_runs, key=lambda r: r["label"])
-
-        best_runs, all_runs = _load_bwaware_best_results(PROJECT_ROOT)
-
-        if not best_runs:
+        if not runs_to_display:
             st.info(
-                "No best-weights bandwidth-aware quant results found yet. "
-                "Run the **BW-Aware Quant** experiment from the **Run Models** tab with **Use best weights from DB** enabled."
+                "No greedy-descent bandwidth-aware quant results found yet. "
+                "Run **BW-Aware Quant** from **Run Models** with a greedy-descent experiment variant."
             )
-            # Still show all runs if any exist, so the user can compare
-            show_all = st.checkbox("Show all bandwidth-aware results", value=True, key="bwaware_best_show_all_fallback")
-            if show_all and all_runs:
-                runs_to_display = all_runs
-            else:
-                return
-        else:
-            show_all = st.checkbox("Show all bandwidth-aware results", value=False, key="bwaware_best_show_all")
-            runs_to_display = all_runs if show_all else best_runs
+            return
 
         labels = [run["label"] for run in runs_to_display]
         selected_label = st.selectbox(
             "Bandwidth-aware result",
             labels,
             index=0,
-            key="bwaware_best_result_select",
+            key="bwaware_greedy_result_select",
         )
         run = runs_to_display[labels.index(selected_label)]
-
-        if run.get("error"):
-            st.error(f"Could not parse {run['path']}: {run['error']}")
-            return
 
         data = run["data"]
         ref = data.get("ref_fp32", {}) or {}
@@ -100,8 +39,7 @@ with tab_bwaware_best:
         points_df = pd.DataFrame(rows)
 
         st.caption(run["path"])
-        if run.get("is_best_weights"):
-            st.success("This result uses best weight formats from the DB.")
+        st.success("Greedy descent result")
         m1, m2, m3 = st.columns(3)
         m1.metric("Model", data.get("model_name", "N/A"))
         m2.metric("FP32 Acc1", f"{float(ref.get('accuracy', 0.0)):.3f}%")
