@@ -98,16 +98,43 @@ This is enforced by the 1-level lookahead in `evaluate_stay`.
 
 ## Output
 
-Results are saved to `simulation_results.json` with four sections:
+Results are saved to `simulation_results.json` with these sections:
 
 | Section | Contents |
 |---|---|
 | `metadata` | Cache params, model, bandwidth, timestamp |
 | `summary` | Layer counts, quantize/flagged totals |
 | `layers` | Per-layer element counts, bank usage, `stay_on_chip`, `xin_from_cache`, transfer bits, BW-limited flags, compute cycles, total cycles, `rule`, `reason` |
+| `cache_map` | Numeric matrix with one row per layer and fixed `x_in`, `x_out`, and `residual_N` columns |
 | `off_chip_layers` | Layer names whose outputs must be quantized for external memory |
 
 Console output columns: `Layer Name | Type | Input | Weights | Output | Banked | NextXin | OnChip | inB | wB | outB | Reason`
+
+The cache map is also printed after the layer report and saved to
+`cache_map.csv` plus a model-specific `cache_map_<model>.csv`. Every numeric
+data cell is in decimal KB (`1 KB = 1,000 bytes`, and one FP8 element is one
+byte). `total_cache_needed_kb` reports unique physical tensor storage for the
+row, deduplicating tensors that also appear as `x_in`, `x_out`, residual, or
+hold values. A residual column contains its tensor size from the producer layer
+through the consuming add layer, and contains `0` on all other rows. Residual
+adds are identified from activation-tensor provenance, so
+the bypass operand may appear on either side of the add; static parameters such
+as ViT positional embeddings are excluded. The cache map retains explicit
+LayerNorm, activation, and softmax rows even when the main cache simulation
+folds those operations into adjacent layers.
+
+The tracer also creates `hold_N_<producer>_to_<consumer>` columns automatically
+for non-adjacent or multi-consumer activation tensors. Detection uses runtime
+producer lineage and follows tensor views, so attention dependencies such as
+LayerNorm fan-out to Q/K/V, Q and K retention through scaled dot product, and V
+retention through attention-weighted values require no model-specific rules.
+
+Each physical tensor is shown in only one data column per row. It appears as
+`x_out` on its producer row, then moves to its named residual/hold column. If a
+later layer uses that held tensor as its first operand, `x_in` is `0` on that
+row because the same allocation is already represented by the named column.
+This convention makes the displayed cache-size columns additive and prevents
+visual double-counting; the connection name still identifies the input source.
 
 ---
 
@@ -138,6 +165,7 @@ Explicit entries under `quantization.layers` always take priority over simulatio
 | `--batch_size` | `1` | Batch size for activation shape calculation |
 | `--device` | `cuda` | Device for the dummy forward pass |
 | `--bandwidth` | `1.0` | Memory bandwidth in bytes/cycle for transfer-cycle and BW-limitation analysis |
+| `--cache_map_only` | disabled | Write only `cache_map_<model>.csv`; skip the cache simulation, JSON files, database upload, and full report |
 
 ## Running
 
@@ -145,3 +173,14 @@ Explicit entries under `quantization.layers` always take priority over simulatio
 python runspace/experiments/asic_cache_simulation/simulate_cache.py \
     --model_name resnet18 --cache_size 2.0 --metadata_bits 16 --bandwidth 1.0
 ```
+
+To produce only the cache-map CSV:
+
+```bash
+python runspace/experiments/asic_cache_simulation/simulate_cache.py \
+    --model_name resnet18 --device cpu --cache_map_only
+```
+
+This still performs the model forward trace required to discover tensor sizes
+and residual connections, but it does not run the cache rules or write any
+other result files.

@@ -5,6 +5,8 @@ __pycache__/
 outputs/
 .env
 tests/
+!dashboard1/tests/
+!dashboard1/tests/**
 .cache/
 runspace/.torch_extensions/
 runspace/inputs/scannet/
@@ -29,10 +31,10 @@ pyrightconfig.json
 qbench_sandbox
 /runspace/database/**
 
-# Dashboard 2
-dashboard2/node_modules/
-dashboard2/dist/
-dashboard2/*
+# Dashboard 1 generated files
+dashboard1/node_modules/
+dashboard1/dist/
+dashboard1/data/
 .agent/
 AGENTS.md
 CLAUDE.md

@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-./apptainer.sh runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name vit_b_16 --force_rerun
+# ./apptainer.sh runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name vit_b_16 --force_rerun
 ./apptainer.sh runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name mobilevit_s --force_rerun
 ./apptainer.sh runspace/experiments/find_optimal_input_quant/find_optimal_input_quant.py --model_name vit_b_16 --only_dynamic --metric l1 --force_rerun
 

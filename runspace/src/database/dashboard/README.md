@@ -1,4 +1,8 @@
-# Dashboard File Map
+# Legacy Streamlit Dashboard File Map
+
+The optimized default dashboard is documented in `dashboard2/README.md`. The
+files below remain supported through `./dashboard.sh legacy` and serve as the
+behavioral reference for feature parity.
 
 `runspace/src/database/dashboard.py` is now a small loader that executes these copied sections in order. The sections share one global namespace, matching the old single-file Streamlit behavior.
 

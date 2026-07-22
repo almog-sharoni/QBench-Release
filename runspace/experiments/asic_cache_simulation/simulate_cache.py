@@ -1,6 +1,9 @@
 import os
 import sys
+import csv
+import copy
 import json
+import weakref
 import torch
 import torch.nn as nn
 import argparse
@@ -214,6 +217,29 @@ def _collect_tensor_ids(value) -> list[int]:
     return ids
 
 
+def _tensor_storage_key(tensor: torch.Tensor):
+    """Return a key shared by views but not by recycled allocations."""
+    try:
+        storage = tensor.untyped_storage()
+        return (
+            tensor.device.type,
+            tensor.device.index,
+            storage._cdata,
+        )
+    except (AttributeError, RuntimeError):
+        return None
+
+
+def _collect_tensor_storage_keys(value) -> list:
+    keys = []
+    if isinstance(value, torch.Tensor):
+        keys.append(_tensor_storage_key(value))
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            keys.extend(_collect_tensor_storage_keys(item))
+    return keys
+
+
 def _collect_tensors(value) -> list[torch.Tensor]:
     tensors = []
     if isinstance(value, torch.Tensor):
@@ -222,6 +248,43 @@ def _collect_tensors(value) -> list[torch.Tensor]:
         for item in value:
             tensors.extend(_collect_tensors(item))
     return tensors
+
+
+def _residual_input_indices(input_tensors: list[torch.Tensor],
+                            tensor_producers: dict,
+                            is_static_tensor) -> list[int]:
+    """Identify bypass operands of an activation add from tensor provenance.
+
+    Model parameters/buffers (for example a ViT positional embedding) are not
+    residuals.  Of the remaining activation operands, the most recently
+    produced tensor is the computed branch and every older operand is a bypass
+    that must remain live until the add.  This deliberately does not depend on
+    whether a model writes ``branch + skip`` or ``skip + branch``.
+    """
+    activation_operands = []
+    for input_index, tensor in enumerate(input_tensors):
+        if is_static_tensor(tensor):
+            continue
+        producer = tensor_producers.get(id(tensor))
+        producer_index = (
+            producer.get('_execution_index') if producer is not None else None
+        )
+        activation_operands.append((input_index, producer_index))
+
+    if len(activation_operands) < 2:
+        return []
+
+    produced_operands = [
+        operand for operand in activation_operands if operand[1] is not None
+    ]
+    if not produced_operands:
+        return []
+
+    branch_input_index, _ = max(produced_operands, key=lambda operand: operand[1])
+    return [
+        input_index for input_index, _ in activation_operands
+        if input_index != branch_input_index
+    ]
 
 
 def _compute_layer_cycles(layer: dict) -> float:
@@ -398,7 +461,7 @@ def optimize_layer_bits(layer: dict, bandwidth: float,
 
 def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapter_cfg: dict = None,
                   cache_elements: int = 0, bank_size: int = 0, metadata_bits: int = 0,
-                  dummy_input=None):
+                  dummy_input=None, return_cache_map_layers: bool = False):
     """Trace model to get layer element counts in execution order.
 
     dummy_input: optional caller-supplied trace input (e.g. token ids for an
@@ -446,6 +509,27 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
     model.eval()
     model.to(device)
 
+    model_state_tensor_ids = {
+        id(tensor) for tensor in list(model.parameters()) + list(model.buffers())
+    }
+    model_state_storage_keys = set()
+    for tensor in list(model.parameters()) + list(model.buffers()):
+        try:
+            storage_key = _tensor_storage_key(tensor)
+            if storage_key is not None:
+                model_state_storage_keys.add(storage_key)
+        except (AttributeError, RuntimeError):
+            pass
+
+    def _is_model_state_tensor(tensor: torch.Tensor) -> bool:
+        if id(tensor) in model_state_tensor_ids:
+            return True
+        try:
+            storage_key = _tensor_storage_key(tensor)
+        except (AttributeError, RuntimeError):
+            return False
+        return storage_key is not None and storage_key in model_state_storage_keys
+
     execution_order = []
     hooks        = []
     _scope_stack = []   # tracks innermost active module name for functional-op naming
@@ -492,25 +576,69 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
     # --- module recording hooks ---
     tensor_producers = {}
 
+    def _tensor_and_bases(tensor: torch.Tensor) -> list[torch.Tensor]:
+        lineage = []
+        current = tensor
+        seen_ids = set()
+        while isinstance(current, torch.Tensor) and id(current) not in seen_ids:
+            seen_ids.add(id(current))
+            lineage.append(current)
+            current = getattr(current, '_base', None)
+        return lineage
+
+    def _find_tensor_producer(tensor: torch.Tensor):
+        """Resolve a tensor or any of its view bases to a captured producer."""
+        for current in _tensor_and_bases(tensor):
+            entry = tensor_producers.get(id(current))
+            if entry is None:
+                continue
+            tensor_ref, producer = entry
+            if tensor_ref() is current:
+                return producer
+        return None
+
+    def _input_producer_layer_indices(value) -> list:
+        return [
+            producer.get('_execution_index') if producer is not None else None
+            for producer in (
+                _find_tensor_producer(tensor) for tensor in _collect_tensors(value)
+            )
+        ]
+
     def _remember_output_producer(info: dict):
-        output_tensor_id = info.get('output_tensor_id')
-        if output_tensor_id is not None:
-            tensor_producers[output_tensor_id] = info
+        info['_execution_index'] = len(execution_order) - 1
+        output_tensor = info.pop('_output_tensor', None)
+        if output_tensor is not None:
+            for tensor in _tensor_and_bases(output_tensor):
+                tensor_producers[id(tensor)] = (weakref.ref(tensor), info)
 
     def _mark_residual_stream(info: dict, residual_input: torch.Tensor):
         residual_elems = residual_input.numel()
-        info['residual_input_elems'] = residual_elems
-        info['residual_input_shape'] = tuple(residual_input.shape)
-        info['residual_input_tensor_id'] = id(residual_input)
-        # input_elems already accounts for the first QuantAdd operand.  The
-        # residual stream is the second operand, so count it exactly once.
-        info['residual_input_stream_elems'] = residual_elems
+        residual = {
+            'elems': residual_elems,
+            'shape': tuple(residual_input.shape),
+            'tensor_id': id(residual_input),
+            'storage_key': _tensor_storage_key(residual_input),
+            'producer_name': None,
+        }
+        info.setdefault('residual_inputs', []).append(residual)
 
-        producer = tensor_producers.get(id(residual_input))
+        # Keep the original aggregate fields for the cache/bandwidth report.
+        # input_elems already accounts for the first QuantAdd operand; every
+        # additional operand is a separate residual stream.
+        info['residual_input_elems'] = sum(
+            item['elems'] for item in info['residual_inputs']
+        )
+        info['residual_input_stream_elems'] = info['residual_input_elems']
+        if len(info['residual_inputs']) == 1:
+            info['residual_input_shape'] = residual['shape']
+            info['residual_input_tensor_id'] = residual['tensor_id']
+
+        producer = _find_tensor_producer(residual_input)
         if producer is None:
-            info['residual_producer_name'] = None
             return
 
+        residual['producer_name'] = producer['name']
         producer['residual_output_elems'] = max(
             producer.get('residual_output_elems', 0),
             residual_elems,
@@ -530,10 +658,25 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'input_shapes': _collect_tensor_shapes(input),
                 'output_shape': tuple(output.shape) if isinstance(output, torch.Tensor) else None,
                 'input_tensor_ids': _collect_tensor_ids(input),
+                'input_tensor_storage_keys': _collect_tensor_storage_keys(input),
+                'input_producer_layer_indices': _input_producer_layer_indices(input),
                 'output_tensor_id': id(output) if isinstance(output, torch.Tensor) else None,
+                'output_tensor_storage_key': _tensor_storage_key(output) if isinstance(output, torch.Tensor) else None,
+                '_output_tensor': output if isinstance(output, torch.Tensor) else None,
             }
             if module.__class__.__name__ == 'QuantAdd' and len(input_tensors) >= 2:
-                _mark_residual_stream(info, input_tensors[1])
+                resolved_producers = {
+                    id(tensor): _find_tensor_producer(tensor)
+                    for tensor in input_tensors
+                }
+                residual_indices = _residual_input_indices(
+                    input_tensors, resolved_producers, _is_model_state_tensor
+                )
+                for residual_index in residual_indices:
+                    _mark_residual_stream(info, input_tensors[residual_index])
+                # Retain this legacy field for existing result consumers.
+                if info.get('residual_inputs'):
+                    info['residual_producer_name'] = info['residual_inputs'][0]['producer_name']
             if isinstance(module, nn.Conv2d):
                 ks = module.kernel_size
                 if isinstance(ks, tuple):
@@ -569,7 +712,11 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'input_shapes': _collect_tensor_shapes(input),
                 'output_shape': tuple(output.shape) if isinstance(output, torch.Tensor) else None,
                 'input_tensor_ids': _collect_tensor_ids(input),
+                'input_tensor_storage_keys': _collect_tensor_storage_keys(input),
+                'input_producer_layer_indices': _input_producer_layer_indices(input),
                 'output_tensor_id': id(output) if isinstance(output, torch.Tensor) else None,
+                'output_tensor_storage_key': _tensor_storage_key(output) if isinstance(output, torch.Tensor) else None,
+                '_output_tensor': output if isinstance(output, torch.Tensor) else None,
             }
             execution_order.append(info)
             _remember_output_producer(info)
@@ -586,7 +733,11 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'input_shapes': _collect_tensor_shapes(input),
                 'output_shape': tuple(output.shape) if isinstance(output, torch.Tensor) else None,
                 'input_tensor_ids': _collect_tensor_ids(input),
+                'input_tensor_storage_keys': _collect_tensor_storage_keys(input),
+                'input_producer_layer_indices': _input_producer_layer_indices(input),
                 'output_tensor_id': id(output) if isinstance(output, torch.Tensor) else None,
+                'output_tensor_storage_key': _tensor_storage_key(output) if isinstance(output, torch.Tensor) else None,
+                '_output_tensor': output if isinstance(output, torch.Tensor) else None,
             }
             execution_order.append(info)
             _remember_output_producer(info)
@@ -602,7 +753,11 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
             'input_shapes':    _collect_tensor_shapes(input),
             'output_shape':    tuple(output.shape) if isinstance(output, torch.Tensor) else None,
             'input_tensor_ids': _collect_tensor_ids(input),
+            'input_tensor_storage_keys': _collect_tensor_storage_keys(input),
+            'input_producer_layer_indices': _input_producer_layer_indices(input),
             'output_tensor_id': id(output) if isinstance(output, torch.Tensor) else None,
+            'output_tensor_storage_key': _tensor_storage_key(output) if isinstance(output, torch.Tensor) else None,
+            '_output_tensor': output if isinstance(output, torch.Tensor) else None,
             'has_downsample': module.downsample is not None,
         }
         execution_order.append(info)
@@ -660,8 +815,10 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
         for h in hooks:
             h.remove()
 
+    cache_map_order = copy.deepcopy(execution_order)
     collapsed_order = []
     residual_producer_aliases = {}
+    residual_producer_name_aliases = {}
     for layer in execution_order:
         if is_collapsible(layer['type']) and collapsed_order:
             prev_layer = collapsed_order[-1]
@@ -678,6 +835,7 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 )
                 for consumer_name in layer.get('residual_output_consumers', []):
                     residual_producer_aliases[consumer_name] = prev_layer['name']
+                residual_producer_name_aliases[layer['name']] = prev_layer['name']
             if 'collapsed_layers' not in prev_layer:
                 prev_layer['collapsed_layers'] = []
             prev_layer['collapsed_layers'].append({
@@ -693,8 +851,14 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
     for layer in collapsed_order:
         if layer['name'] in residual_producer_aliases:
             layer['residual_producer_name'] = residual_producer_aliases[layer['name']]
+        for residual in layer.get('residual_inputs', []):
+            producer_name = residual.get('producer_name')
+            if producer_name in residual_producer_name_aliases:
+                residual['producer_name'] = residual_producer_name_aliases[producer_name]
     execution_order = collapsed_order
 
+    if return_cache_map_layers:
+        return execution_order, cache_map_order
     return execution_order
 
 
@@ -734,6 +898,310 @@ def serialize_rules() -> list:
             'notes':           rule.get('notes', ''),
         })
     return result
+
+
+def build_cache_map(layers: list[dict]) -> dict:
+    """Build a layer-by-layer element-count matrix for activation streams.
+
+    ``x_in`` and ``x_out`` are the current layer's tensor sizes. Residual skips
+    receive ``residual_N`` columns. Any other produced tensor with multiple or
+    non-adjacent consumers receives an automatically named ``hold_N`` column.
+    Storage identity is used in addition to Python object identity so views
+    such as reshaped/transposed Q, K, and V tensors keep their producer.
+    """
+    layer_indices_by_name = {}
+    for index, layer in enumerate(layers):
+        layer_indices_by_name.setdefault(layer.get('name'), []).append(index)
+
+    residuals_by_layer = {}
+    for consumer_index, layer in enumerate(layers):
+        residual_inputs = list(layer.get('residual_inputs', []))
+        if not residual_inputs and layer.get('residual_input_stream_elems', 0):
+            # Compatibility with layer dictionaries produced before detailed
+            # residual-edge tracking was introduced.
+            residual_inputs = [{
+                'elems': layer['residual_input_stream_elems'],
+                'producer_name': layer.get('residual_producer_name'),
+            }]
+        residuals_by_layer[consumer_index] = residual_inputs
+
+    active_by_id = {}
+    active_by_storage = {}
+    records_by_producer_index = {}
+    input_record_indices_by_layer = {}
+    primary_input_resolved_by_layer = {}
+    primary_input_record_index_by_layer = {}
+    tensor_records = []
+    for layer_index, layer in enumerate(layers):
+        seen_records = set()
+        if 'input_producer_layer_indices' in layer:
+            input_records = [
+                records_by_producer_index.get(producer_index)
+                for producer_index in layer['input_producer_layer_indices']
+            ]
+        else:
+            input_ids = layer.get('input_tensor_ids', [])
+            input_storage_keys = layer.get('input_tensor_storage_keys', [])
+            input_records = []
+            for input_position in range(max(len(input_ids), len(input_storage_keys))):
+                tensor_id = input_ids[input_position] if input_position < len(input_ids) else None
+                storage_key = (
+                    input_storage_keys[input_position]
+                    if input_position < len(input_storage_keys) else None
+                )
+                record = active_by_id.get(tensor_id) if tensor_id is not None else None
+                if record is None and storage_key is not None:
+                    record = active_by_storage.get(storage_key)
+                input_records.append(record)
+
+        primary_input_resolved_by_layer[layer_index] = bool(
+            input_records and input_records[0] is not None
+        )
+        primary_input_record_index_by_layer[layer_index] = (
+            input_records[0]['record_index']
+            if input_records and input_records[0] is not None else None
+        )
+        for record in input_records:
+            if record is None or record['record_index'] in seen_records:
+                continue
+            if record['producer_layer_index'] >= layer_index:
+                continue
+            record['consumer_layer_indices'].append(layer_index)
+            record['consumers'].append(layer.get('name', 'unknown'))
+            seen_records.add(record['record_index'])
+        input_record_indices_by_layer[layer_index] = set(seen_records)
+
+        output_id = layer.get('output_tensor_id')
+        output_storage_key = layer.get('output_tensor_storage_key')
+        if output_id is None and output_storage_key is None:
+            continue
+        record = {
+            'record_index': len(tensor_records),
+            'tensor_id': output_id,
+            'storage_key': output_storage_key,
+            'producer': layer.get('name', 'unknown'),
+            'producer_layer_index': layer_index,
+            'elements': int(layer.get('output_elems', 0)),
+            'consumer_layer_indices': [],
+            'consumers': [],
+        }
+        tensor_records.append(record)
+        records_by_producer_index[layer_index] = record
+        if output_id is not None:
+            active_by_id[output_id] = record
+        if output_storage_key is not None:
+            active_by_storage[output_storage_key] = record
+
+    matched_residuals = set()
+    retained_tensors = []
+    for record in tensor_records:
+        for consumer_index in record['consumer_layer_indices']:
+            for residual_index, residual in enumerate(residuals_by_layer[consumer_index]):
+                id_matches = (
+                    residual.get('tensor_id') is not None
+                    and residual.get('tensor_id') == record['tensor_id']
+                )
+                storage_matches = (
+                    residual.get('storage_key') is not None
+                    and residual.get('storage_key') == record['storage_key']
+                )
+                if id_matches or storage_matches:
+                    record['is_residual'] = True
+                    matched_residuals.add((consumer_index, residual_index))
+
+        consumers = record['consumer_layer_indices']
+        has_non_adjacent_consumer = any(
+            consumer_index > record['producer_layer_index'] + 1
+            for consumer_index in consumers
+        )
+        if consumers and (
+            record.get('is_residual')
+            or len(consumers) > 1
+            or has_non_adjacent_consumer
+        ):
+            retained_tensors.append(record)
+
+    residual_connections = [
+        record for record in retained_tensors if record.get('is_residual')
+    ]
+    held_connections = [
+        record for record in retained_tensors if not record.get('is_residual')
+    ]
+
+    for residual_number, connection in enumerate(residual_connections):
+        connection['name'] = f"residual_{residual_number}"
+        connection['kind'] = 'residual'
+        connection['consumer_layer_index'] = max(connection['consumer_layer_indices'])
+
+    def _short_name(name: str) -> str:
+        short_name = str(name).rsplit('.', 1)[-1]
+        return ''.join(
+            character if character.isalnum() else '_'
+            for character in short_name
+        ).strip('_') or 'unknown'
+
+    for hold_number, connection in enumerate(held_connections):
+        consumer_names = []
+        for consumer in connection['consumers']:
+            short_consumer = _short_name(consumer)
+            if short_consumer not in consumer_names:
+                consumer_names.append(short_consumer)
+        consumer_label = '_'.join(consumer_names)
+        connection['name'] = (
+            f"hold_{hold_number}_{_short_name(connection['producer'])}"
+            f"_to_{consumer_label}"
+        )
+        connection['kind'] = 'hold'
+        connection['consumer_layer_index'] = max(connection['consumer_layer_indices'])
+
+    # Preserve residuals whose producer is outside the captured layer set,
+    # such as a model-input bypass around the first captured operation.
+    for consumer_index, residual_inputs in residuals_by_layer.items():
+        for residual_index, residual in enumerate(residual_inputs):
+            if (consumer_index, residual_index) in matched_residuals:
+                continue
+            producer_name = residual.get('producer_name')
+            producer_candidates = [
+                index for index in layer_indices_by_name.get(producer_name, [])
+                if index <= consumer_index
+            ]
+            producer_index = producer_candidates[-1] if producer_candidates else 0
+            residual_connections.append({
+                'name': f"residual_{len(residual_connections)}",
+                'kind': 'residual',
+                'producer': producer_name,
+                'consumers': [layers[consumer_index].get('name', 'unknown')],
+                'producer_layer_index': producer_index,
+                'consumer_layer_index': consumer_index,
+                'consumer_layer_indices': [consumer_index],
+                'elements': int(residual.get('elems', 0)),
+            })
+
+    connections = residual_connections + held_connections
+    columns = ['x_in', 'x_out', 'total_cache_needed_kb'] + [
+        connection['name'] for connection in connections
+    ]
+
+    records_by_index = {
+        record['record_index']: record for record in tensor_records
+    }
+
+    def _kb(elements: int):
+        if not elements:
+            return 0
+        return round(elements / 1_000.0, 3)
+
+    def _connection_is_visible(connection: dict, layer_index: int) -> bool:
+        # A captured tensor is displayed as x_out on its producer row, then
+        # moves into its named lifetime column on the following row. Legacy
+        # connections without a captured producer remain inclusive.
+        first_visible_layer = connection['producer_layer_index']
+        if connection.get('record_index') is not None:
+            first_visible_layer += 1
+        return first_visible_layer <= layer_index <= connection['consumer_layer_index']
+
+    rows = []
+    for layer_index, layer in enumerate(layers):
+        live_connections = [
+            connection for connection in connections
+            if _connection_is_visible(connection, layer_index)
+        ]
+        live_record_indices = set(input_record_indices_by_layer.get(layer_index, set()))
+        output_record = records_by_producer_index.get(layer_index)
+        if output_record is not None:
+            live_record_indices.add(output_record['record_index'])
+        for connection in live_connections:
+            if connection.get('record_index') is not None:
+                live_record_indices.add(connection['record_index'])
+
+        unique_allocations = {}
+        for record_index in live_record_indices:
+            record = records_by_index[record_index]
+            allocation_key = (
+                ('storage', record['storage_key'])
+                if record.get('storage_key') is not None
+                else ('record', record_index)
+            )
+            unique_allocations[allocation_key] = max(
+                unique_allocations.get(allocation_key, 0),
+                record['elements'],
+            )
+
+        total_cache_elements = sum(unique_allocations.values())
+        if not primary_input_resolved_by_layer.get(layer_index, False):
+            total_cache_elements += int(layer.get('input_elems', 0))
+        if output_record is None:
+            total_cache_elements += int(layer.get('output_elems', 0))
+        total_cache_elements += sum(
+            connection['elements'] for connection in live_connections
+            if connection.get('record_index') is None
+        )
+
+        live_connection_record_indices = {
+            connection['record_index'] for connection in live_connections
+            if connection.get('record_index') is not None
+        }
+        primary_input_is_held = (
+            primary_input_record_index_by_layer.get(layer_index)
+            in live_connection_record_indices
+        )
+
+        row = {
+            'layer': layer.get('name', 'unknown'),
+            'x_in': 0 if primary_input_is_held else _kb(int(layer.get('input_elems', 0))),
+            'x_out': _kb(int(layer.get('output_elems', 0))),
+            'total_cache_needed_kb': _kb(total_cache_elements),
+        }
+        for connection in connections:
+            is_live = _connection_is_visible(connection, layer_index)
+            row[connection['name']] = _kb(connection['elements']) if is_live else 0
+        rows.append(row)
+
+    return {
+        'columns': columns,
+        'residual_connections': residual_connections,
+        'held_connections': held_connections,
+        'connections': connections,
+        'unit': 'KB',
+        'kilobytes_per_element': 0.001,
+        'rows': rows,
+    }
+
+
+def print_cache_map(cache_map: dict):
+    """Print the cache map in decimal kilobytes."""
+    columns = cache_map['columns']
+    rows = cache_map['rows']
+    layer_width = max([len('Layer')] + [len(str(row['layer'])) for row in rows])
+    widths = {
+        column: max(
+            len(column),
+            max((len(str(row[column])) for row in rows), default=1),
+        )
+        for column in columns
+    }
+    header = f"{'Layer':<{layer_width}} | " + " | ".join(
+        f"{column:>{widths[column]}}" for column in columns
+    )
+    separator = '-' * len(header)
+    print(f"\nCache map ({cache_map.get('unit', 'KB')})\n{header}\n{separator}")
+    for row in rows:
+        values = " | ".join(
+            f"{row[column]:>{widths[column]}}" for column in columns
+        )
+        print(f"{row['layer']:<{layer_width}} | {values}")
+    print(separator)
+
+
+def save_cache_map_csv(cache_map: dict, path: str):
+    """Write the numeric cache-map matrix to CSV."""
+    fieldnames = ['layer'] + cache_map['columns']
+    with open(path, 'w', newline='') as csv_file:
+        writer = csv.DictWriter(
+            csv_file, fieldnames=fieldnames, lineterminator='\n'
+        )
+        writer.writeheader()
+        writer.writerows(cache_map['rows'])
 
 
 def run_simulation(args):
@@ -809,12 +1277,19 @@ def run_simulation(args):
         })
 
     total_models = len(models_to_run)
-    print(f"--- ASIC Cache Simulation ---")
-    print(f"Loaded {total_models} model(s) to simulate.")
-    print(f"Cache Size:    {fmt_elems(cache_elements)} elements  ({args.num_banks} banks × {fmt_elems(bank_size)} elements)")
-    print(f"Metadata Bits: {args.metadata_bits} per 128-bit chunk")
-    print(f"Batch Size:    {args.batch_size}")
-    print(f"-----------------------------")
+    cache_map_only = getattr(args, 'cache_map_only', False)
+    if cache_map_only:
+        print("--- ASIC Cache Map Trace ---")
+        print(f"Loaded {total_models} model(s) to trace.")
+        print(f"Batch Size: {args.batch_size}")
+        print("----------------------------")
+    else:
+        print("--- ASIC Cache Simulation ---")
+        print(f"Loaded {total_models} model(s) to simulate.")
+        print(f"Cache Size:    {fmt_elems(cache_elements)} elements  ({args.num_banks} banks × {fmt_elems(bank_size)} elements)")
+        print(f"Metadata Bits: {args.metadata_bits} per 128-bit chunk")
+        print(f"Batch Size:    {args.batch_size}")
+        print("-----------------------------")
 
     for idx, model_info in enumerate(models_to_run, 1):
         model_display_name = model_info['name']
@@ -822,11 +1297,15 @@ def run_simulation(args):
         model_cfg = model_info['model_cfg']
         adapter_cfg = model_info['adapter_cfg']
 
-        print(f"\n[{idx}/{total_models}] Simulating model: {model_display_name}" + (f" (from config: {config_path})" if config_path else ""))
+        action = "Tracing" if cache_map_only else "Simulating"
+        print(f"\n[{idx}/{total_models}] {action} model: {model_display_name}" + (f" (from config: {config_path})" if config_path else ""))
 
         try:
-            layers = analyze_model(model_cfg, args.batch_size, args.device, adapter_cfg,
-                                   cache_elements, bank_size, args.metadata_bits)
+            layers, cache_map_layers = analyze_model(
+                model_cfg, args.batch_size, args.device, adapter_cfg,
+                cache_elements, bank_size, args.metadata_bits,
+                return_cache_map_layers=True,
+            )
         except Exception as e:
             print(f"Error: Failed to analyze model {model_display_name}: {e}")
             import traceback
@@ -835,6 +1314,19 @@ def run_simulation(args):
 
         if not layers:
             print(f"No layers found to analyze for model {model_display_name}.")
+            continue
+
+        if cache_map_only:
+            cache_map = build_cache_map(cache_map_layers)
+            out_dir = os.path.dirname(os.path.abspath(__file__))
+            sanitized_model_name = "".join(
+                c if c.isalnum() else "_" for c in model_display_name
+            )
+            cache_map_path = os.path.join(
+                out_dir, f"cache_map_{sanitized_model_name}.csv"
+            )
+            save_cache_map_csv(cache_map, cache_map_path)
+            print(f"Cache map saved to {cache_map_path}")
             continue
 
         results = []
@@ -922,7 +1414,7 @@ def run_simulation(args):
             results.append({
                 'name':             layer['name'],
                 'type':             layer['type'],
-                'residual_connections': _quant_add_connection_count(layer),
+                'residual_connections': len(layer.get('residual_inputs', [])),
                 'input_elems':      input_elems,
                 'weight_elems':     weight_elems,
                 'output_elems':     output_elems,
@@ -1014,6 +1506,9 @@ def run_simulation(args):
         print(f"Layers marked QUANTIZE:    {quantize_count}")
         print(f"Layers FLAGGED (no rule):  {flagged_count}")
 
+        cache_map = build_cache_map(cache_map_layers)
+        print_cache_map(cache_map)
+
         # --- off_chip_layers: names only ---
         off_chip_layers = [res['name'] for res in results if not res['stay_on_chip']]
 
@@ -1038,6 +1533,7 @@ def run_simulation(args):
                 'flagged_count':  flagged_count,
             },
             'layers': results,
+            'cache_map': cache_map,
             'off_chip_layers': off_chip_layers,
             'rules': serialize_rules(),
         }
@@ -1054,8 +1550,14 @@ def run_simulation(args):
         out_path_model = os.path.join(out_dir, f"simulation_results_{sanitized_model_name}.json")
         with open(out_path_model, 'w') as f:
             json.dump(output, f, indent=2)
+
+        cache_map_path_std = os.path.join(out_dir, "cache_map.csv")
+        cache_map_path_model = os.path.join(out_dir, f"cache_map_{sanitized_model_name}.csv")
+        save_cache_map_csv(cache_map, cache_map_path_std)
+        save_cache_map_csv(cache_map, cache_map_path_model)
         
         print(f"\nResults saved to {out_path_model} and {out_path_std}")
+        print(f"Cache map saved to {cache_map_path_model} and {cache_map_path_std}")
 
         # Upload to DB
         try:
@@ -1082,6 +1584,8 @@ if __name__ == "__main__":
                         help="Memory bandwidth in bytes/cycle for BW-limitation analysis")
     parser.add_argument("--min_bits",      type=int,   default=3,
                         help="Minimum transfer bit width used by the bandwidth optimizer")
+    parser.add_argument("--cache_map_only", action="store_true",
+                        help="Only trace tensor sizes and write cache_map_<model>.csv; skip simulation JSON and database upload")
     parser.add_argument("--fold_layers", action="store_true", dest="fold_layers",
                         default=True,
                         help="Fold batchnorm/conv layers during model build")

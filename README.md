@@ -47,6 +47,19 @@ See [CONFIG_GUIDE.md](CONFIG_GUIDE.md) for a detailed reference.
 
 ## Usage
 
+### Dashboard
+
+The default dashboard is the original Streamlit application.
+
+```bash
+./dashboard.sh
+```
+
+It is available at `http://localhost:8501`. The rewritten Svelte/Node Dashboard 1
+remains available with `./dashboard.sh new`, or `./dashboard.sh dev` for frontend
+development. See [`dashboard1/README.md`](dashboard1/README.md) for its feature map
+and test commands.
+
 ### 1. Clone the Repository
 Start by cloning the repository and navigating into it:
 ```bash

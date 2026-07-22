@@ -7,7 +7,7 @@ This directory contains the core database and visualization components for track
 | File | Description |
 | :--- | :--- |
 | `handler.py` | Contains the `RunDatabase` class — the primary interface for logging and retrieving experiment data. |
-| `dashboard.py` | A **Streamlit**-based web application to visualize and compare results in real-time. |
+| `dashboard.py` | The retained **Streamlit** compatibility dashboard. The default optimized client lives in `dashboard2/`. |
 | `test_handler.py` | A verification script to ensure the database engine is functioning correctly. |
 
 ---
@@ -35,11 +35,19 @@ db.log_run(
 ```
 
 ### 2. Visualization: Running the Dashboard
-The dashboard provides a clean web interface to filter, search, and visualize accuracy trends. I have provided a wrapper script to handle the Apptainer environment and port mapping.
+The dashboard provides a clean web interface to filter, search, launch, and
+visualize experiments. The default implementation uses React and direct SQLite
+queries so interactions do not rerun the full Python application.
 
 ```bash
 # From the project root
-./run_dashboard.sh
+./dashboard.sh
+```
+
+To launch the original Streamlit implementation instead:
+
+```bash
+./dashboard.sh legacy
 ```
 
 ### 3. Verification
