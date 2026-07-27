@@ -61,7 +61,13 @@ def _format_kb(size_kb):
     return f"{size_kb:.3f}".rstrip('0').rstrip('.') or '0'
 
 
-GRAPH_SCHEMA_VERSION = 4
+def _format_scalar_compact(value):
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
+
+
+GRAPH_SCHEMA_VERSION = 7
 
 
 class CacheGraphValidationError(ValueError):
@@ -151,11 +157,33 @@ def validate_cache_trace(layers):
                     f"{consumer_index}"
                 )
 
-        if layer.get('type') == 'QuantAdd' and len(input_edges) < 2:
+        if (
+            layer.get('type') == 'QuantAdd'
+            and layer.get('operand_count') is None
+            and len(input_edges) < 2
+        ):
             errors.append(
                 f"{layer_name}: QuantAdd has {len(input_edges)} traced operand(s); "
                 "expected at least 2"
             )
+        if layer.get('type') in {
+            'QuantAdd', 'QuantSub', 'QuantMul', 'QuantDiv'
+        } and layer.get('operand_count') is not None:
+            operand_count = int(layer['operand_count'])
+            observed_operands = (
+                len(input_edges) + len(layer.get('constant_operands', []))
+            )
+            if operand_count != observed_operands:
+                errors.append(
+                    f"{layer_name}: arithmetic operand metadata reports "
+                    f"{operand_count}, but {observed_operands} tensor/constant "
+                    "operands were traced"
+                )
+            if operand_count < 2:
+                errors.append(
+                    f"{layer_name}: arithmetic operation requires at least 2 "
+                    f"operands, got {operand_count}"
+                )
 
         for residual in layer.get('residual_inputs', []):
             producer_index = residual.get('producer_layer_index')
@@ -287,13 +315,46 @@ def validate_cache_graph(elements, layers, cache_map):
     rows = cache_map.get('rows', [])
     for layer_index, layer in enumerate(layers):
         layer_name = layer.get('name', f'layer_{layer_index}')
-        expected_operands = len(_normalized_input_edges(layers, layer_index))
+        constant_operands = list(layer.get('constant_operands', []))
+        expected_operands = (
+            len(_normalized_input_edges(layers, layer_index))
+            + len(constant_operands)
+        )
         actual_operands = len(incoming_operands[layer_index])
         if expected_operands != actual_operands:
             errors.append(
                 f"{layer_name}: graph has {actual_operands} incoming operand "
                 f"arrow(s), trace has {expected_operands}"
             )
+        expected_constant_indices = sorted(
+            int(operand.get('input_index', index))
+            for index, operand in enumerate(constant_operands)
+        )
+        constant_edges = [
+            edge for edge in incoming_operands[layer_index]
+            if edge.get('connection_kind') == 'constant'
+        ]
+        actual_constant_indices = sorted(
+            int(edge.get('consumer_input_index', -1))
+            for edge in constant_edges
+        )
+        if expected_constant_indices != actual_constant_indices:
+            errors.append(
+                f"{layer_name}: graph constant operand indices "
+                f"{actual_constant_indices} do not match trace "
+                f"{expected_constant_indices}"
+            )
+        for edge in constant_edges:
+            if (
+                int(edge.get('tensor_elements', 0)) != 0
+                or float(edge.get('tensor_size_kb', 0)) != 0
+                or float(edge.get('stream_buffer_kb', 0)) != 0
+                or edge.get('streamed_out') is not False
+            ):
+                errors.append(
+                    f"{edge.get('id')}: constant operands must not consume "
+                    "cache or streaming banks"
+                )
         node = node_by_id.get(f'layer_{layer_index:04d}', {})
         active = node.get('active_cache_connections', {})
         expected_active = {
@@ -355,6 +416,31 @@ def _graph_operation_metadata(layer):
 
     input_shapes = layer.get('input_shapes') or []
     layer_type = str(layer.get('type', ''))
+    operand_count = layer.get('operand_count')
+    constant_operands = list(layer.get('constant_operands', []))
+    if operand_count is not None:
+        metadata['operand_count'] = int(operand_count)
+    if constant_operands:
+        metadata['constant_operands'] = [
+            f"input {int(operand.get('input_index', 0)) + 1} = "
+            f"{operand.get('value')} ({operand.get('type', 'constant')})"
+            for operand in constant_operands
+        ]
+        if len(input_shapes) == 1 and len(constant_operands) == 1:
+            operand = constant_operands[0]
+            value = operand.get('value')
+            symbol = {
+                'QuantMul': '×',
+                'QuantDiv': '÷',
+                'QuantAdd': '+',
+                'QuantSub': '−',
+            }.get(layer_type)
+            if symbol:
+                tensor_label = 'tensor'
+                if int(operand.get('input_index', 1)) == 0:
+                    metadata['operation'] = f"{value} {symbol} {tensor_label}"
+                else:
+                    metadata['operation'] = f"{tensor_label} {symbol} {value}"
     if len(input_shapes) > 1:
         metadata['input_count'] = len(input_shapes)
     if layer_type in ('QuantMatMul', 'QuantBMM') and input_shapes:
@@ -447,6 +533,8 @@ def generate_cache_map_graph_json(
 
     for layer_index, (layer, row) in enumerate(zip(layers, rows)):
         layer_type = str(layer.get('type', 'unknown'))
+        operation_metadata = _graph_operation_metadata(layer)
+        constant_operands = list(layer.get('constant_operands', []))
         input_shapes = [list(shape) for shape in layer.get('input_shapes', [])]
         output_shape = layer.get('output_shape')
         if isinstance(output_shape, tuple):
@@ -463,6 +551,7 @@ def generate_cache_map_graph_json(
             'data': {
                 'id': node_ids[layer_index],
                 'label': layer_type,
+                'operation_type': layer_type,
                 'type': 'node',
                 'color': '#a7f3d0' if 'quant' in layer_type.lower() else '#fde68a',
                 'var_name': layer.get('name', 'unknown'),
@@ -487,8 +576,9 @@ def generate_cache_map_graph_json(
                 ),
                 'cache_rule': row.get('cache_rule'),
                 'weight_streamed': weight_elements > 0,
+                'constant_operand_count': len(constant_operands),
                 'active_cache_connections': active_connections,
-                'operation_metadata': _graph_operation_metadata(layer),
+                'operation_metadata': operation_metadata,
                 'cache_green': (
                     layer_index in cache_map['optimization']['green_layer_indices']
                     if cache_map.get('optimization') else None
@@ -788,6 +878,67 @@ def generate_cache_map_graph_json(
         })
         edge_index += 1
 
+    # Scalar/immediate operands are part of the operation topology, but they
+    # do not occupy activation-cache banks. Render them like streamed weights
+    # so every arithmetic operand is visible without treating constants as a
+    # resident or streamed tensor.
+    for layer_index, layer in enumerate(layers):
+        constant_operands = list(layer.get('constant_operands', []))
+        input_count = (
+            len(_normalized_input_edges(layers, layer_index))
+            + len(constant_operands)
+        )
+        for constant_index, operand in enumerate(constant_operands):
+            input_index = int(operand.get('input_index', constant_index))
+            constant_value = operand.get('value')
+            constant_type = operand.get('type', 'constant')
+            constant_node_id = (
+                f'constant_{layer_index:04d}_{constant_index:02d}'
+            )
+            elements.append({
+                'classes': 'constant-operand',
+                'data': {
+                    'id': constant_node_id,
+                    'label': 'C',
+                    'type': 'node',
+                    'node_kind': 'constant_operand',
+                    'color': '#f3e8ff',
+                    'var_name': (
+                        f"{layer.get('name', 'unknown')} constant input "
+                        f"{input_index + 1}"
+                    ),
+                    'constant_value': constant_value,
+                    'constant_type': constant_type,
+                    'output_elements': 0,
+                    'output_size_kb': 0,
+                }
+            })
+            elements.append({
+                'classes': 'constant-input',
+                'data': {
+                    'id': f'e{edge_index}',
+                    'source': constant_node_id,
+                    'target': node_ids[layer_index],
+                    'producer_node': 'constant',
+                    'cache_allocation_id': None,
+                    'cache_map_column': 'constant',
+                    'connection_kind': 'constant',
+                    'consumer_nodes': [layer.get('name', 'unknown')],
+                    'consumer_input_index': input_index,
+                    'is_fanout': False,
+                    'is_multi_input': input_count > 1,
+                    'constant_value': constant_value,
+                    'constant_type': constant_type,
+                    'tensor_elements': 0,
+                    'tensor_size_kb': 0,
+                    'streamed_out': False,
+                    'stream_direction': None,
+                    'stream_buffer_kb': 0,
+                    'label': f"C = {_format_scalar_compact(constant_value)}",
+                }
+            })
+            edge_index += 1
+
     if include_weight_streams:
         for layer_index, layer in enumerate(layers):
             weight_elements = int(layer.get('weight_elems', 0) or 0)
@@ -1022,12 +1173,17 @@ def generate_graph_for_model(
             1 for element in parsed_json
             if element.get('data', {}).get('connection_kind') == 'weight_stream'
         )
+        num_constant_operands = sum(
+            1 for element in parsed_json
+            if element.get('data', {}).get('connection_kind') == 'constant'
+        )
 
         metadata = {
             'num_nodes': num_nodes,
             'num_quantized_layers': num_quantized,
             'num_streamed_edges': num_streamed_edges,
             'num_weight_streams': num_weight_streams,
+            'num_constant_operands': num_constant_operands,
             'graph_kind': graph_kind,
             'graph_schema_version': GRAPH_SCHEMA_VERSION,
             'generated_at': datetime.now().isoformat()

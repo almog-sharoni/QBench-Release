@@ -124,6 +124,10 @@ def generate_live_model_graph_bundle(model_name, graph_depth=12):
         1 for element in parsed_json
         if element.get('data', {}).get('connection_kind') == 'weight_stream'
     )
+    num_constant_operands = sum(
+        1 for element in parsed_json
+        if element.get('data', {}).get('connection_kind') == 'constant'
+    )
 
     return graph_json, {
         'model_name': model_name,
@@ -132,6 +136,7 @@ def generate_live_model_graph_bundle(model_name, graph_depth=12):
         'num_quantized_layers': num_quantized,
         'num_streamed_edges': num_streamed_edges,
         'num_weight_streams': num_weight_streams,
+        'num_constant_operands': num_constant_operands,
         'graph_depth': graph_depth,
         'graph_kind': 'cache_map_runtime',
         'graph_schema_version': GRAPH_SCHEMA_VERSION,

@@ -503,6 +503,22 @@ def test_operation_hover_metadata_is_specific_to_layer_type():
         'eps': 1e-6,
     }
     assert _graph_operation_metadata({
+        'type': 'QuantMul',
+        'input_shapes': [(4, 4, 256, 36)],
+        'operand_count': 2,
+        'constant_operands': [{
+            'input_index': 1,
+            'value': 1 / 6,
+            'type': 'float',
+        }],
+    }) == {
+        'operand_count': 2,
+        'constant_operands': [
+            'input 2 = 0.16666666666666666 (float)'
+        ],
+        'operation': 'tensor × 0.16666666666666666',
+    }
+    assert _graph_operation_metadata({
         'type': 'QuantConv2d',
         'fused_activations': [
             {'name': 'layer1.1.relu', 'type': 'QuantReLU'},
@@ -510,6 +526,72 @@ def test_operation_hover_metadata_is_specific_to_layer_type():
     }) == {
         'fused_activations': ['QuantReLU'],
     }
+
+
+def test_scalar_quantmul_shows_its_constant_as_an_auxiliary_operand():
+    layers = [{
+        'name': 'scale',
+        'type': 'QuantMul',
+        'input_elems': 16,
+        'output_elems': 16,
+        'input_shapes': [(1, 16)],
+        'output_shape': (1, 16),
+        'operand_count': 2,
+        'constant_operands': [{
+            'input_index': 1,
+            'value': 0.125,
+            'type': 'float',
+        }],
+        'input_edges': [{
+            'input_index': 0,
+            'elements': 16,
+            'producer_layer_index': None,
+            'is_model_input': True,
+            'is_model_state': False,
+        }],
+    }]
+
+    elements = json.loads(generate_cache_map_graph_json(layers))
+    node = next(
+        element['data'] for element in elements
+        if element['data'].get('execution_index') == 0
+    )
+    incoming = [
+        element['data'] for element in elements
+        if element['data'].get('target') == node['id']
+    ]
+
+    constant_node = next(
+        element for element in elements
+        if element['data'].get('node_kind') == 'constant_operand'
+    )
+    constant_edge = next(
+        edge for edge in incoming
+        if edge.get('connection_kind') == 'constant'
+    )
+
+    assert node['label'] == 'QuantMul'
+    assert node['operation_type'] == 'QuantMul'
+    assert node['constant_operand_count'] == 1
+    assert node['operation_metadata']['operation'] == 'tensor × 0.125'
+    assert node['operation_metadata']['constant_operands'] == [
+        'input 2 = 0.125 (float)'
+    ]
+    assert len(incoming) == 2
+    assert {edge['connection_kind'] for edge in incoming} == {
+        'input', 'constant'
+    }
+    assert constant_node.get('classes') == 'constant-operand'
+    assert constant_node['data']['label'] == 'C'
+    assert constant_node['data']['constant_value'] == 0.125
+    assert constant_edge['source'] == constant_node['data']['id']
+    assert constant_edge['consumer_input_index'] == 1
+    assert constant_edge['constant_value'] == 0.125
+    assert constant_edge['tensor_elements'] == 0
+    assert constant_edge['tensor_size_kb'] == 0
+    assert constant_edge['stream_buffer_kb'] == 0
+    assert constant_edge['streamed_out'] is False
+    assert constant_edge['label'] == 'C = 0.125'
 
 
 def test_legacy_cached_graph_is_detected_as_missing_runtime_hover_metadata():

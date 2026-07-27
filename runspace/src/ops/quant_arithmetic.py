@@ -6,6 +6,20 @@ from runspace.src.ops.quant_base import QuantizedLayerMixin
 
 class _QuantArithmeticBase(nn.Module, QuantizedLayerMixin):
     def _quantize_operands(self, operands, q_types=None):
+        self.last_operand_count = len(operands)
+        self.last_constant_operands = []
+        for input_index, operand in enumerate(operands):
+            if isinstance(operand, torch.Tensor):
+                continue
+            if isinstance(operand, (bool, int, float, str)) or operand is None:
+                value = operand
+            else:
+                value = repr(operand)
+            self.last_constant_operands.append({
+                'input_index': input_index,
+                'value': value,
+                'type': type(operand).__name__,
+            })
         q_types = q_types or [None] * len(operands)
         quantized = []
         captured_unscaled = []

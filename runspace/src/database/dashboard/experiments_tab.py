@@ -1035,7 +1035,9 @@ else:
                                         'width': 'label',
                                         'height': 'label',
                                         'padding': '10px',
-                                        'font-size': '12px'
+                                        'font-size': '12px',
+                                        'text-wrap': 'wrap',
+                                        'text-max-width': '150px'
                                     }}
                                 }},
                                 {{
@@ -1088,6 +1090,21 @@ else:
                                     }}
                                 }},
                                 {{
+                                    selector: 'node.constant-operand',
+                                    style: {{
+                                        'content': 'C',
+                                        'shape': 'ellipse',
+                                        'width': '18px',
+                                        'height': '18px',
+                                        'padding': '2px',
+                                        'font-size': '8px',
+                                        'font-weight': 'bold',
+                                        'background-color': '#f3e8ff',
+                                        'border-color': '#a855f7',
+                                        'border-width': 1
+                                    }}
+                                }},
+                                {{
                                     selector: 'edge.streamed-out',
                                     style: {{
                                         'line-color': '#ef4444',
@@ -1104,6 +1121,18 @@ else:
                                         'line-color': '#60a5fa',
                                         'target-arrow-color': '#60a5fa',
                                         'color': '#2563eb',
+                                        'line-style': 'dashed',
+                                        'width': 1,
+                                        'font-size': '8px',
+                                        'target-arrow-shape': 'triangle'
+                                    }}
+                                }},
+                                {{
+                                    selector: 'edge.constant-input',
+                                    style: {{
+                                        'line-color': '#c084fc',
+                                        'target-arrow-color': '#c084fc',
+                                        'color': '#7e22ce',
                                         'line-style': 'dashed',
                                         'width': 1,
                                         'font-size': '8px',
@@ -1145,6 +1174,15 @@ else:
                                         'line-color': '#2563eb',
                                         'target-arrow-color': '#2563eb',
                                         'color': '#1d4ed8',
+                                        'width': 4
+                                    }}
+                                }},
+                                {{
+                                    selector: 'edge.constant-input.cache-highlight',
+                                    style: {{
+                                        'line-color': '#9333ea',
+                                        'target-arrow-color': '#9333ea',
+                                        'color': '#7e22ce',
                                         'width': 4
                                     }}
                                 }},
@@ -1249,12 +1287,13 @@ else:
 
                         function nodeHasMetadata(node) {{
                             return !!node.data('var_name') &&
-                                node.data('node_kind') !== 'streamed_weight';
+                                node.data('node_kind') !== 'streamed_weight' &&
+                                node.data('node_kind') !== 'constant_operand';
                         }}
 
                         function metadataHtml(node) {{
                             var t = node.data('var_name') || node.data('label') || node.id();
-                            var layerType = node.data('label') || '-';
+                            var layerType = node.data('operation_type') || node.data('label') || '-';
                             var inS = node.data('input_shapes') || node.data('input_shape') || [];
                             var outS = node.data('output_shape') || [];
                             var opMeta = node.data('operation_metadata') || {{}};
@@ -1578,6 +1617,7 @@ else:
                             var hasXIn = Number(node.data('x_in_kb') || 0) > 0;
                             var hasXOut = Number(node.data('x_out_kb') || 0) > 0;
                             var hasWeightStream = Number(node.data('weight_stream_kb') || 0) > 0;
+                            var hasConstantOperand = Number(node.data('constant_operand_count') || 0) > 0;
 
                             return cy.edges().filter(function(edge) {{
                                 var column = edge.data('cache_map_column');
@@ -1587,6 +1627,10 @@ else:
                                 if (lifetimeColumn && activeColumns[lifetimeColumn]) return true;
                                 if (
                                     kind === 'weight_stream' && hasWeightStream &&
+                                    edge.target().id() === nodeId
+                                ) return true;
+                                if (
+                                    kind === 'constant' && hasConstantOperand &&
                                     edge.target().id() === nodeId
                                 ) return true;
                                 if (

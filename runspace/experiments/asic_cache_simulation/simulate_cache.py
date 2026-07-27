@@ -1502,6 +1502,11 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'output_tensor_storage_key': _tensor_storage_key(output) if isinstance(output, torch.Tensor) else None,
                 '_output_tensor': output if isinstance(output, torch.Tensor) else None,
             }
+            if hasattr(module, 'last_operand_count'):
+                info['operand_count'] = int(module.last_operand_count)
+                info['constant_operands'] = copy.deepcopy(
+                    getattr(module, 'last_constant_operands', [])
+                )
             if module.__class__.__name__ == 'QuantAdd' and len(input_tensors) >= 2:
                 resolved_producers = {
                     id(tensor): _find_tensor_producer(tensor)
