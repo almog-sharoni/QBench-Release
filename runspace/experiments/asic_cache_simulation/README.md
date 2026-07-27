@@ -27,7 +27,18 @@ Any allocation is rounded up to the nearest bank boundary.
 Layers are captured via forward hooks in execution order.  
 Captured types include **Conv**, **Linear**, pooling, normalization, residual skip entries, registered quantized ops, and supported functional arithmetic ops such as `QuantMatMul`, `QuantBMM`, `QuantAdd`, and `QuantCat`.
 
-Residual entries record the identity tensor (`xin`) that must be held in cache across the entire residual block, plus the merged output size.
+Every tensor operand records its runtime producer, consumer input index, size,
+storage identity, and whether it is an explicit model input or model state.
+Residual roles are classified after the complete graph is known, so projected
+skips and attention layout operations do not depend on hook execution order.
+
+Before a cache graph is stored, fail-fast validation rejects unresolved
+internal tensors, backward producer edges, incomplete `QuantAdd` operands,
+duplicate residual/hold lifetimes, edge-size drift, non-contiguous resident
+lifetimes, or an active cache column without a graph arrow to highlight. Only
+explicit forward inputs may produce an `Input` node. Stored graph metadata
+contains `graph_validation=passed` and `unresolved_internal_inputs=0`; older
+graph schema versions are regenerated automatically.
 
 Activations registered in `OpRegistry` are treated as pipeline operations for compute-cycle accounting. They still participate in tensor shape/output propagation, but they contribute `0` compute cycles. If an activation is collapsed into a previous layer, its collapsed compute contribution is also `0`.
 
@@ -53,46 +64,83 @@ The per-layer cycle estimate is:
 
 ---
 
-## Rule System
+## Producer-Consumer Lifetime Policy
 
-Decisions are made by a **priority-ordered rule cascade**. Each rule specifies:
+Cache placement uses the same explicit runtime graph as the cache map and
+dashboard architecture graph. It is not limited to the previous and next
+layer.
 
-| Field | Meaning |
-|---|---|
-| `on_chip` | `True` → output stays in cache after this layer; `False` → output streamed to external memory |
-| `xin_from_cache` | `True` → rule requires xin to be fully resident in cache; `False` → xin streamed from external via a 2-bank buffer |
-| `match` | predicate — when this rule can apply to a layer |
-| `stay` | capacity check — can the layer execute under this rule? |
-| `perm` | elements that must remain resident after execution (permanents for the next layer) |
+1. Each produced activation is allocated once.
+2. Its lifetime ends after its final consumer.
+3. A layer input that references a resident producer reuses that allocation;
+   it is not counted again as `x_in`.
+4. Fan-out values such as LayerNorm→Q/K/V and long residual skips remain live
+   through every consumer.
+5. When the live set exceeds capacity, the simulator evicts the buffer whose
+   next use is farthest in the future. Evicted values are written externally
+   and reloaded if a later consumer needs them.
+6. Model parameters and buffers are transfer costs, not long-lived activation
+   allocations.
 
-Rules are evaluated in order. A rule is **confirmed** only if:
-1. `match(layer)` is true, and
-2. `stay(layer)` is true, and
-3. The **next layer** has at least one compatible rule given the xin source implied by `on_chip` (1-level lookahead).
+`producer_consumer_resident` means the output survives all required cache
+decisions without an external write. `producer_consumer_spill` means it is
+written externally immediately, has no future consumer, or is evicted later.
+The JSON records the live producer indices, evictions, reloads, required cache,
+and resident cache before and after every layer.
 
-If no rule confirms → the layer is **FLAGGED** (cannot execute under any known schedule).
+### Rule-aware operator workspace
 
-### Rules (in priority order)
+Producer-consumer lifetimes are combined with the ordered hardware rules in
+`rules.py`. A rule may reuse an input allocation for the output only when the
+current layer is that tensor's final consumer. Convolution rules account for
+the shared input/output region, a read/write pipeline-boundary bank, and the
+full or scaled jumpback allocation. QuantAdd may overwrite the largest
+resident final-use operand. Streamed weights/model state use two banks. The
+greedy connection-placement pass evaluates every candidate against these
+rule-aware totals rather than `x_in + x_out` unconditionally.
 
-| Rule | `on_chip` | `xin_from_cache` | Condition | Notes |
-|---|---|---|---|---|
-| **r1_global_fit** | ✓ | ✓ | `xin + xout + 2 banks ≤ cache` | Everything fits; both tensors stay on chip |
-| **r2_residual** | ✓ | ✓ | Residual or downsample layer; `xin + 3 banks ≤ cache` | xin (skip tensor) in cache; x_residual + xout use 3 banks |
-| **r2_conv_output_dominated** | ✓ | ✓ | Conv2d, `xout ≥ xin`; `xout + weights + 2 banks ≤ cache` | xout is larger — hold xout + weights; xin read from cache and freed |
-| **r2_conv_input_dominated** | ✓ | ✓ | Conv2d, `xin > xout`; `xin + weights + 2 banks ≤ cache` | xin is larger — hold xin + weights across sliding-window sweep |
-| **r2_stream_xin_keep_xout** | ✓ | ✗ | Conv2d; `xout + weights + 2 banks ≤ cache` | xin arrives from external (previous layer evicted); xout still kept on chip |
-| **r3_weights_plus_4banks** | ✗ | ✗ | All layers; `weights + 4 banks ≤ cache` | Full streaming: xin and xout both via external; output is QUANTIZE |
+### Pointwise activation fusion
 
-> **Linear layers** intentionally skip rules 2a–2d and fall through directly to rule 3.
+Unary, shape-preserving pointwise activations such as ReLU, GELU, SiLU,
+Hardswish, Sigmoid, and Tanh are modeled as part of their direct producer's
+hardware pipeline. Their standalone row/node is removed, consumers are
+rewired to the producer's post-activation output, and the dashboard hover card
+lists the fused activation. Fusion is applied only when no other consumer
+needs the producer's raw pre-activation value. Normalization operations and
+Softmax remain explicit scheduled layers.
 
-### xin Source Propagation
+### Greedy cache-map residency selection
 
-`on_chip` from the current layer determines the xin source for the **next** layer:
+The generated cache-map CSV applies a second, connection-level greedy pass to
+the residual and `hold_N` lifetimes:
 
-- Current `on_chip=True` → next layer's xin comes from cache → next layer must match a `xin_from_cache=True` rule.
-- Current `on_chip=False` → next layer's xin comes from external → next layer must match a `xin_from_cache=False` rule.
+1. Round every activation allocation up to a whole cache bank.
+2. Reserve two banks for streamed weights/model state.
+3. Mark layers whose current bank requirement exceeds the configured cache as
+   red.
+4. Temporarily stream each remaining residual/hold candidate and count how many
+   currently red layers become green.
+5. Select the candidate solving the most layers. On a tie, select the smaller
+   bank-rounded tensor; if the sizes also tie, select the first cache-map
+   column.
+6. Replace the selected tensor's resident lifetime with a two-bank buffer at
+   its producer and at each required reload consumer, then repeat. For a
+   residual, the immediately adjacent pipeline consumer still receives the
+   producer's normal `x_out`→`x_in` handoff and is not falsely treated as a
+   residual reload.
+7. Stop when all layers fit or no remaining candidate solves a red layer.
 
-This is enforced by the 1-level lookahead in `evaluate_stay`.
+The connection column contains its full bank-rounded allocation while
+resident. For a selected streamed connection it contains two banks only on
+stream-out/stream-in rows and zero between them. `weight_stream` exposes the
+two-bank weight/model-state buffer, so `total_cache_needed_kb` reflects the
+optimized bank allocation.
+
+Dashboard red arrows combine these connection placements with the full
+producer-consumer cache plan. A direct output that cannot remain resident is
+marked as an `x_out` stream to the exact consumer that reloads it. A streamed
+residual marks only its residual add/reload arrow; it does not color an
+otherwise on-chip next-layer edge red.
 
 ---
 
@@ -108,20 +156,21 @@ Results are saved to `simulation_results.json` with these sections:
 | `cache_map` | Numeric matrix with one row per layer and fixed `x_in`, `x_out`, and `residual_N` columns |
 | `off_chip_layers` | Layer names whose outputs must be quantized for external memory |
 
-Console output columns: `Layer Name | Type | Input | Weights | Output | Banked | NextXin | OnChip | inB | wB | outB | Reason`
+Console output columns: `Layer Name | Type | Input | Weights | Output | Banked | Required | Resident | OnChip | inB | wB | outB | Reason`
 
 The cache map is also printed after the layer report and saved to
 `cache_map.csv` plus a model-specific `cache_map_<model>.csv`. Every numeric
 data cell is in decimal KB (`1 KB = 1,000 bytes`, and one FP8 element is one
-byte). `total_cache_needed_kb` reports unique physical tensor storage for the
-row, deduplicating tensors that also appear as `x_in`, `x_out`, residual, or
-hold values. A residual column contains its tensor size from the producer layer
-through the consuming add layer, and contains `0` on all other rows. Residual
+byte). In CLI-generated maps, values are whole-bank allocations and
+`total_cache_needed_kb` reports the optimized resident and streaming bank
+requirement. A resident residual column contains its tensor allocation from
+the producer layer through the consuming add layer and contains `0` elsewhere;
+a streamed residual instead contains two banks only at its transfer endpoints. Residual
 adds are identified from activation-tensor provenance, so
 the bypass operand may appear on either side of the add; static parameters such
 as ViT positional embeddings are excluded. The cache map retains explicit
-LayerNorm, activation, and softmax rows even when the main cache simulation
-folds those operations into adjacent layers.
+LayerNorm, activation, and softmax rows; the main simulation now uses this same
+un-collapsed runtime schedule.
 
 The tracer also creates `hold_N_<producer>_to_<consumer>` columns automatically
 for non-adjacent or multi-consumer activation tensors. Detection uses runtime

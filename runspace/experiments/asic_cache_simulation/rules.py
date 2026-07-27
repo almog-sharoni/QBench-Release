@@ -51,6 +51,7 @@ RULES = {
         'stay_condition': 'xin + 4 banks (2 xout, 2 x_residual) ≤ cache',
         'permanents':     'xin (skip tensor)',
         'notes':          'Skip tensor held in cache; x_residual + xout use 4 banks (2 xout, 2 x_residual), xout is written on xin.',
+        'reuse_input_for_output': True,
         'perm':  lambda ctx: ctx['input_banked'],
         'stay':  lambda ctx: (
             ctx['input_banked'] + 4 * ctx['bank_size']
@@ -65,6 +66,8 @@ RULES = {
         'stay_condition': 'xout + weights + 1 bank + jumpback ≤ cache',
         'permanents':     'weights + xout',
         'pipeline_banks': 1,
+        'reuse_input_for_output': True,
+        'jumpback_mode':  'full',
         'notes':          'xout is the larger tensor; xin is written onto xout\'s space. 1 bank + jumpback overhead for read/write pipeline boundary.',
         'perm':  lambda ctx: ctx['weight_banked'] + ctx['output_banked'],
         'stay':  lambda ctx: (
@@ -83,6 +86,8 @@ RULES = {
         'stay_condition': 'xin + weights + 1 bank + scaled_jumpback ≤ cache',
         'permanents':     'weights + xin',
         'pipeline_banks': 1,
+        'reuse_input_for_output': True,
+        'jumpback_mode':  'input_output_ratio',
         'notes':          'xin is the larger tensor; xout is written onto xin\'s space. 1 bank + scaled jumpback (scaled by input/output ratio) overhead for read/write pipeline boundary.',
         'perm':  lambda ctx: ctx['weight_banked'] + ctx['input_banked'],
         'stay':  lambda ctx: (

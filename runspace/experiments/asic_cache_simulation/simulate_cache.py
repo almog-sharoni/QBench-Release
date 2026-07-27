@@ -123,33 +123,113 @@ def evaluate_stay(layer: dict, ctx: dict,
     return False, 0, False, 'FLAGGED'
 
 
-def is_collapsible(layer_type: str) -> bool:
-    """Check if the layer is an activation, layer norm, or softmax that should be collapsed."""
-    _COLLAPSIBLE_TYPES = {
-        # Norm types
-        'QuantLayerNorm','LayerNorm', 'BatchNorm1d', 'BatchNorm2d', 'BatchNorm3d', 'GroupNorm',
-        # Softmax types
-        'Softmax', 'QuantSoftmax',
+def _rule_aware_workspace(
+    layer: dict,
+    input_banks: int,
+    output_banks: int,
+    bank_size: int,
+    *,
+    input_is_reusable: bool,
+    input_output_already_shared: bool = False,
+) -> dict:
+    """Select the first compatible hardware rule and its cache adjustment.
+
+    Producer-consumer lifetimes decide which tensors must remain live. The
+    selected rule only describes the current operator's workspace: whether a
+    final-use input can be overwritten by xout, plus pipeline/jumpback banks.
+    Capacity is evaluated later with all concurrent lifetimes included.
+    """
+    layer_type = layer.get('type', '__default__')
+    rule_keys = LAYER_RULES.get(layer_type, LAYER_RULES['__default__'])
+    ctx = {
+        'input_banked': int(input_banks) * int(bank_size),
+        'output_banked': int(output_banks) * int(bank_size),
+        'weight_banked': 0,
+        'cache_elements': 0,
+        'bank_size': int(bank_size),
+        'jump_back_size_in_banks': int(
+            layer.get('jump_back_size_in_banks', 0) or 0
+        ),
     }
-    if layer_type in _COLLAPSIBLE_TYPES:
-        return True
-    
-    # Check if registered as an activation in OpRegistry
+
+    for rule_name in rule_keys:
+        rule = RULES[rule_name]
+        guard = rule.get('ctx_guard')
+        if guard is not None and not guard(ctx):
+            continue
+        reuses_input = bool(rule.get('reuse_input_for_output'))
+        if reuses_input and not input_is_reusable:
+            continue
+
+        overlap_banks = 0
+        shared_banks = 0
+        pipeline_banks = 0
+        jumpback_banks = 0
+        if reuses_input:
+            shared_banks = min(int(input_banks), int(output_banks))
+            if not input_output_already_shared:
+                overlap_banks = shared_banks
+            pipeline_banks = int(rule.get('pipeline_banks', 0) or 0)
+            raw_jumpback_banks = math.ceil(
+                int(layer.get('jump_back_size_in_banks', 0) or 0)
+                / int(bank_size)
+            ) if bank_size else 0
+            if (
+                rule.get('jumpback_mode') == 'input_output_ratio'
+                and output_banks > 0
+            ):
+                raw_jumpback_banks = math.ceil(
+                    raw_jumpback_banks * input_banks / output_banks
+                )
+            jumpback_banks = raw_jumpback_banks
+
+        return {
+            'rule': rule_name,
+            'reuses_input': reuses_input,
+            'overlap_banks': overlap_banks,
+            'shared_banks': shared_banks,
+            'pipeline_boundary_banks': pipeline_banks,
+            'jumpback_banks': jumpback_banks,
+            'overhead_banks': pipeline_banks + jumpback_banks,
+        }
+
+    return {
+        'rule': 'producer_consumer_default',
+        'reuses_input': False,
+        'overlap_banks': 0,
+        'shared_banks': 0,
+        'pipeline_boundary_banks': 0,
+        'jumpback_banks': 0,
+        'overhead_banks': 0,
+    }
+
+
+def is_pipeline_fusable_activation(layer_type: str) -> bool:
+    """Whether a unary pointwise activation can share its producer pipeline."""
+    cleaned_type = str(layer_type).lower()
+    if cleaned_type.startswith('quant'):
+        cleaned_type = cleaned_type[5:]
+
+    # Reductions and normalization stages need their own scheduled/cache row.
+    if 'softmax' in cleaned_type or 'norm' in cleaned_type:
+        return False
+
     try:
         if OpRegistry.is_activation(layer_type):
             return True
     except Exception:
         pass
 
-    # Fallback to standard activation name patterns
-    act_names = {'relu', 'relu6', 'gelu', 'silu', 'hardswish', 'hardsigmoid', 'tanh', 'sigmoid', 'softmax'}
-    cleaned_type = layer_type.lower()
-    if cleaned_type.startswith("quant"):
-        cleaned_type = cleaned_type[5:]
-    if cleaned_type in act_names:
-        return True
-    
-    return False
+    return cleaned_type in {
+        'relu', 'relu6', 'gelu', 'silu', 'swish', 'mish',
+        'hardswish', 'hardsigmoid', 'leakyrelu', 'prelu', 'elu',
+        'selu', 'celu', 'tanh', 'sigmoid', 'softplus', 'softsign',
+    }
+
+
+def is_collapsible(layer_type: str) -> bool:
+    """Compatibility alias for hardware-pipeline activation fusion."""
+    return is_pipeline_fusable_activation(layer_type)
 
 
 def is_registry_activation(layer_type: str) -> bool:
@@ -171,6 +251,121 @@ def is_registry_activation(layer_type: str) -> bool:
     except Exception:
         pass
     return False
+
+
+def fuse_pipeline_activations(layers: list[dict]) -> list[dict]:
+    """Fold safe unary pointwise activations into their direct producer.
+
+    Fusion is deliberately conservative: the activation must be shape
+    preserving, immediately follow one captured producer, and be that
+    producer's only consumer. This prevents changing semantics when another
+    branch still needs the pre-activation value. Producer indices and tensor
+    identity are rewritten so the returned list remains a valid runtime
+    producer-consumer trace for both the cache map and dashboard graph.
+    """
+    source_layers = copy.deepcopy(layers)
+    consumers_by_producer = {index: set() for index in range(len(source_layers))}
+
+    def _producer_indices(layer):
+        indices = list(layer.get('input_producer_layer_indices', []))
+        if not indices:
+            indices = [
+                edge.get('producer_layer_index')
+                for edge in layer.get('input_edges', [])
+            ]
+        return [index for index in indices if index is not None]
+
+    for consumer_index, layer in enumerate(source_layers):
+        for producer_index in set(_producer_indices(layer)):
+            if 0 <= producer_index < consumer_index:
+                consumers_by_producer[producer_index].add(consumer_index)
+
+    fused_layers = []
+    old_to_new = {}
+    producer_name_aliases = {}
+
+    def _remap_producer_index(producer_index):
+        if producer_index is None:
+            return None
+        return old_to_new.get(producer_index, producer_index)
+
+    for old_index, layer in enumerate(source_layers):
+        original_producers = _producer_indices(layer)
+        if 'input_producer_layer_indices' in layer:
+            layer['input_producer_layer_indices'] = [
+                _remap_producer_index(index)
+                for index in layer.get('input_producer_layer_indices', [])
+            ]
+        for edge in layer.get('input_edges', []):
+            edge['producer_layer_index'] = _remap_producer_index(
+                edge.get('producer_layer_index')
+            )
+            producer_index = edge.get('producer_layer_index')
+            if producer_index is not None and 0 <= producer_index < len(fused_layers):
+                edge['producer_name'] = fused_layers[producer_index].get('name')
+
+        input_shapes = layer.get('input_shapes', [])
+        shape_preserving = (
+            int(layer.get('input_elems', 0)) == int(layer.get('output_elems', 0))
+            and (
+                not input_shapes
+                or not layer.get('output_shape')
+                or tuple(input_shapes[0]) == tuple(layer.get('output_shape'))
+            )
+        )
+        original_producer = original_producers[0] if len(original_producers) == 1 else None
+        remapped_producer = (
+            old_to_new.get(original_producer)
+            if original_producer is not None else None
+        )
+        safe_to_fuse = (
+            is_pipeline_fusable_activation(layer.get('type', ''))
+            and int(layer.get('weight_elems', 0) or 0) == 0
+            and len(input_shapes) <= 1
+            and shape_preserving
+            and original_producer is not None
+            and consumers_by_producer.get(original_producer) == {old_index}
+            and remapped_producer == len(fused_layers) - 1
+        )
+
+        if safe_to_fuse:
+            producer = fused_layers[remapped_producer]
+            producer.setdefault('fused_activations', []).append({
+                'name': layer.get('name', 'unknown'),
+                'type': layer.get('type', 'unknown'),
+            })
+            for key in (
+                'output_elems', 'output_shape', 'output_tensor_id',
+                'output_tensor_storage_key', '_output_tensor',
+            ):
+                if key in layer:
+                    producer[key] = layer[key]
+            if layer.get('residual_output_elems', 0):
+                producer['residual_output_elems'] = max(
+                    producer.get('residual_output_elems', 0),
+                    layer['residual_output_elems'],
+                )
+                producer.setdefault('residual_output_consumers', []).extend(
+                    layer.get('residual_output_consumers', [])
+                )
+            producer_name_aliases[layer.get('name')] = producer.get('name')
+            old_to_new[old_index] = remapped_producer
+            continue
+
+        old_to_new[old_index] = len(fused_layers)
+        fused_layers.append(layer)
+
+    for new_index, layer in enumerate(fused_layers):
+        layer['_execution_index'] = new_index
+        for residual in layer.get('residual_inputs', []):
+            residual['producer_layer_index'] = _remap_producer_index(
+                residual.get('producer_layer_index')
+            )
+            producer_name = residual.get('producer_name')
+            if producer_name in producer_name_aliases:
+                residual['producer_name'] = producer_name_aliases[producer_name]
+
+    return fused_layers
 
 
 # ---------------------------------------------------------------------------
@@ -256,10 +451,12 @@ def _residual_input_indices(input_tensors: list[torch.Tensor],
     """Identify bypass operands of an activation add from tensor provenance.
 
     Model parameters/buffers (for example a ViT positional embedding) are not
-    residuals.  Of the remaining activation operands, the most recently
-    produced tensor is the computed branch and every older operand is a bypass
-    that must remain live until the add.  This deliberately does not depend on
-    whether a model writes ``branch + skip`` or ``skip + branch``.
+    residuals.  Of the remaining activation operands, the tensor with the
+    deepest producer path is the computed branch and every shallower operand
+    is a bypass that must remain live until the add.  Execution order breaks
+    depth ties.  This handles projected ResNet skips, which execute after the
+    main branch despite being shallower, and does not depend on whether a
+    model writes ``branch + skip`` or ``skip + branch``.
     """
     activation_operands = []
     for input_index, tensor in enumerate(input_tensors):
@@ -269,22 +466,555 @@ def _residual_input_indices(input_tensors: list[torch.Tensor],
         producer_index = (
             producer.get('_execution_index') if producer is not None else None
         )
-        activation_operands.append((input_index, producer_index))
+        producer_depth = (
+            producer.get('_graph_depth', 0) if producer is not None else 0
+        )
+        activation_operands.append((input_index, producer_depth, producer_index))
 
     if len(activation_operands) < 2:
         return []
 
     produced_operands = [
-        operand for operand in activation_operands if operand[1] is not None
+        operand for operand in activation_operands if operand[2] is not None
     ]
     if not produced_operands:
         return []
 
-    branch_input_index, _ = max(produced_operands, key=lambda operand: operand[1])
+    branch_input_index, _, _ = max(
+        produced_operands,
+        key=lambda operand: (operand[1], operand[2]),
+    )
     return [
-        input_index for input_index, _ in activation_operands
+        input_index for input_index, _, _ in activation_operands
         if input_index != branch_input_index
     ]
+
+
+def _repair_unrecorded_layout_lineage(layers: list[dict]) -> int:
+    """Bridge a producer across an unrecorded shape/layout-only tensor chain.
+
+    A copying ``contiguous()`` breaks both Python identity and storage identity.
+    Repair only the unambiguous schedule case: every recorded input producer is
+    unresolved, the immediately preceding output has the same element count,
+    and that output otherwise has no recorded consumer.
+    """
+    consumed_producers = {
+        producer_index
+        for layer in layers
+        for producer_index in layer.get('input_producer_layer_indices', [])
+        if producer_index is not None
+    }
+    repaired = 0
+    for layer_index in range(1, len(layers)):
+        layer = layers[layer_index]
+        producers = list(layer.get('input_producer_layer_indices', []))
+        if not producers or any(index is not None for index in producers):
+            continue
+        producer_index = layer_index - 1
+        producer = layers[producer_index]
+        producer_elements = int(producer.get('output_elems', 0))
+        if (
+            producer_index in consumed_producers
+            or producer_elements <= 0
+            or producer_elements != int(layer.get('input_elems', 0))
+        ):
+            continue
+        producers[0] = producer_index
+        layer['input_producer_layer_indices'] = producers
+        layer['input_lineage_repaired_from'] = producer_index
+        input_edges = layer.get('input_edges', [])
+        if input_edges:
+            input_edges[0]['producer_layer_index'] = producer_index
+            input_edges[0]['producer_name'] = producer.get('name')
+            input_edges[0]['lineage_repaired'] = True
+        consumed_producers.add(producer_index)
+        repaired += 1
+    return repaired
+
+
+def _repair_lineage_from_prior_inputs(layers: list[dict]) -> int:
+    """Reuse producer knowledge learned at an earlier tensor consumer.
+
+    An unrecorded layout chain may copy a producer output, so the first
+    recorded consumer resolves through ``_base`` while a later residual use
+    no longer does.  Both consumers still receive the same copied tensor.
+    Remember the resolved producer by that input's runtime identity (or its
+    live storage plus shape) and apply it to later unresolved edges.
+
+    This is what connects MobileViT's unfolded transformer input to both its
+    first LayerNorm and the later attention residual add.
+    """
+    known_by_tensor = {}
+    known_by_storage = {}
+    repaired = 0
+
+    def _shape_key(shape):
+        return tuple(shape) if shape is not None else None
+
+    for consumer_index, layer in enumerate(layers):
+        input_edges = layer.get('input_edges', [])
+        producer_indices = list(
+            layer.get('input_producer_layer_indices', [])
+        )
+        for edge_position, edge in enumerate(input_edges):
+            if edge.get('is_model_state'):
+                continue
+            tensor_id = edge.get('tensor_id')
+            storage_key = edge.get('storage_key')
+            elements = int(edge.get('elements', 0) or 0)
+            shape = _shape_key(edge.get('shape'))
+            storage_identity = (
+                (tuple(storage_key), elements, shape)
+                if storage_key is not None else None
+            )
+            producer_index = edge.get('producer_layer_index')
+
+            if producer_index is None:
+                known = (
+                    known_by_tensor.get(tensor_id)
+                    if tensor_id is not None else None
+                )
+                if known is None and storage_identity is not None:
+                    known = known_by_storage.get(storage_identity)
+                if known is not None and known[0] < consumer_index:
+                    producer_index, producer_name = known
+                    edge['producer_layer_index'] = producer_index
+                    edge['producer_name'] = producer_name
+                    edge['lineage_repaired_from_prior_input'] = True
+                    input_index = int(edge.get('input_index', edge_position))
+                    while len(producer_indices) <= input_index:
+                        producer_indices.append(None)
+                    producer_indices[input_index] = producer_index
+                    repaired += 1
+
+            if (
+                isinstance(producer_index, int)
+                and 0 <= producer_index < consumer_index
+            ):
+                known = (
+                    producer_index,
+                    layers[producer_index].get('name'),
+                )
+                if tensor_id is not None:
+                    known_by_tensor[tensor_id] = known
+                if storage_identity is not None:
+                    known_by_storage[storage_identity] = known
+
+        if input_edges:
+            layer['input_producer_layer_indices'] = producer_indices
+    return repaired
+
+
+def _rebuild_residual_metadata_from_edges(layers: list[dict]) -> None:
+    """Classify residual operands after the complete runtime graph is known."""
+    residual_layer_keys = (
+        'residual_inputs', 'residual_input_elems',
+        'residual_input_stream_elems', 'residual_input_shape',
+        'residual_input_tensor_id', 'residual_producer_name',
+    )
+    for layer in layers:
+        for key in residual_layer_keys:
+            layer.pop(key, None)
+        layer.pop('residual_output_elems', None)
+        layer.pop('residual_output_consumers', None)
+
+    for layer_index, layer in enumerate(layers):
+        parent_depths = [
+            layers[producer_index].get('_graph_depth', 0)
+            for producer_index in layer.get('input_producer_layer_indices', [])
+            if producer_index is not None and producer_index < layer_index
+        ]
+        layer['_graph_depth'] = 1 + max(parent_depths, default=0)
+
+    for consumer_index, layer in enumerate(layers):
+        if layer.get('type') != 'QuantAdd':
+            continue
+        activation_edges = [
+            edge for edge in layer.get('input_edges', [])
+            if not edge.get('is_model_state')
+            and edge.get('producer_layer_index') is not None
+        ]
+        if len(activation_edges) < 2:
+            continue
+        main_edge = max(
+            activation_edges,
+            key=lambda edge: (
+                layers[edge['producer_layer_index']].get('_graph_depth', 0),
+                edge['producer_layer_index'],
+            ),
+        )
+        residual_edges = [edge for edge in activation_edges if edge is not main_edge]
+        residual_inputs = []
+        for edge in residual_edges:
+            producer_index = edge['producer_layer_index']
+            producer = layers[producer_index]
+            residual = {
+                'elems': int(edge.get('elements', 0)),
+                'shape': edge.get('shape'),
+                'tensor_id': edge.get('tensor_id'),
+                'storage_key': edge.get('storage_key'),
+                'producer_layer_index': producer_index,
+                'producer_name': producer.get('name'),
+            }
+            residual_inputs.append(residual)
+            producer['residual_output_elems'] = max(
+                producer.get('residual_output_elems', 0), residual['elems']
+            )
+            producer.setdefault('residual_output_consumers', []).append(
+                layer.get('name', 'unknown')
+            )
+        layer['residual_inputs'] = residual_inputs
+        layer['residual_input_elems'] = sum(
+            residual['elems'] for residual in residual_inputs
+        )
+        layer['residual_input_stream_elems'] = layer['residual_input_elems']
+        layer['residual_producer_name'] = residual_inputs[0]['producer_name']
+        if len(residual_inputs) == 1:
+            layer['residual_input_shape'] = residual_inputs[0]['shape']
+            layer['residual_input_tensor_id'] = residual_inputs[0]['tensor_id']
+
+
+def _producer_consumer_cache_plan(
+    layers: list[dict], cache_elements: int, bank_size: int, metadata_bits: int,
+    streaming_banks: int = 2,
+) -> dict:
+    """Simulate activation-cache residency from explicit tensor lifetimes.
+
+    Every captured layer output is one allocation.  It becomes live when its
+    producer executes and remains live through its final consumer.  A current
+    ``x_in`` that refers to a resident producer is therefore never allocated a
+    second time.  When all live buffers do not fit, a deterministic Belady-like
+    policy evicts the buffer whose next use is farthest in the future.
+
+    Model parameters/buffers are reported as transfers but are intentionally
+    excluded from activation-cache lifetimes, matching ``build_cache_map``.
+    """
+    layer_count = len(layers)
+    cache_elements = max(0, int(cache_elements))
+
+    def _banked(elements: int) -> int:
+        return round_to_banks(
+            get_footprint_elements(int(elements or 0), metadata_bits),
+            bank_size,
+        )
+
+    normalized_edges = []
+    consumers_by_producer = {index: [] for index in range(layer_count)}
+    for consumer_index, layer in enumerate(layers):
+        edges = list(layer.get('input_edges', []))
+        if not edges:
+            edges = [
+                {
+                    'input_index': input_index,
+                    'elements': layer.get('input_elems', 0),
+                    'producer_layer_index': producer_index,
+                    'producer_name': (
+                        layers[producer_index].get('name')
+                        if isinstance(producer_index, int)
+                        and 0 <= producer_index < consumer_index
+                        else None
+                    ),
+                    'is_model_state': False,
+                }
+                for input_index, producer_index in enumerate(
+                    layer.get('input_producer_layer_indices', [])
+                )
+            ]
+        clean_edges = []
+        for edge in edges:
+            edge = dict(edge)
+            producer_index = edge.get('producer_layer_index')
+            if not (
+                isinstance(producer_index, int)
+                and 0 <= producer_index < consumer_index
+            ):
+                producer_index = None
+            edge['producer_layer_index'] = producer_index
+            clean_edges.append(edge)
+            if producer_index is not None:
+                consumers_by_producer[producer_index].append(consumer_index)
+        normalized_edges.append(clean_edges)
+
+    for producer_index in consumers_by_producer:
+        consumers_by_producer[producer_index] = sorted(set(
+            consumers_by_producer[producer_index]
+        ))
+
+    output_banked = [
+        _banked(layer.get('output_elems', 0)) for layer in layers
+    ]
+    last_consumer = [
+        max(consumers_by_producer[index], default=index)
+        for index in range(layer_count)
+    ]
+
+    def _next_use(producer_index: int, after_index: int) -> float:
+        for consumer_index in consumers_by_producer[producer_index]:
+            if consumer_index > after_index:
+                return consumer_index
+        return math.inf
+
+    def _edge_identity(edge: dict, fallback_index: int):
+        storage_key = edge.get('storage_key')
+        if storage_key is not None:
+            return ('storage', tuple(storage_key))
+        tensor_id = edge.get('tensor_id')
+        if tensor_id is not None:
+            return ('tensor', tensor_id)
+        return ('input', fallback_index)
+
+    def _is_residual_edge(layer: dict, edge: dict) -> bool:
+        for residual in layer.get('residual_inputs', []):
+            if (
+                residual.get('tensor_id') is not None
+                and residual.get('tensor_id') == edge.get('tensor_id')
+            ):
+                return True
+            if (
+                residual.get('storage_key') is not None
+                and residual.get('storage_key') == edge.get('storage_key')
+            ):
+                return True
+            if (
+                residual.get('producer_name') is not None
+                and residual.get('producer_name') == edge.get('producer_name')
+            ):
+                return True
+        return False
+
+    resident = set()
+    external_backed = set()
+    output_spilled = [False] * layer_count
+    output_evicted_at = [None] * layer_count
+    steps = []
+
+    for layer_index, layer in enumerate(layers):
+        resident = {
+            producer_index for producer_index in resident
+            if last_consumer[producer_index] >= layer_index
+        }
+        resident_before = set(resident)
+        resident_before_execution_eviction = set(resident_before)
+
+        missing_producer_sizes = {}
+        missing_residual_producer_sizes = {}
+        external_input_sizes = {}
+        external_residual_sizes = {}
+        model_state_sizes = {}
+        for edge_index, edge in enumerate(normalized_edges[layer_index]):
+            elements = int(edge.get('elements', 0) or 0)
+            producer_index = edge.get('producer_layer_index')
+            if producer_index is not None:
+                if producer_index not in resident_before:
+                    target = (
+                        missing_residual_producer_sizes
+                        if _is_residual_edge(layer, edge)
+                        else missing_producer_sizes
+                    )
+                    target[producer_index] = max(
+                        target.get(producer_index, 0), elements
+                    )
+                    external_backed.add(producer_index)
+                continue
+
+            identity = _edge_identity(edge, edge_index)
+            if edge.get('is_model_state'):
+                model_state_sizes[identity] = max(
+                    model_state_sizes.get(identity, 0), elements
+                )
+            else:
+                target = (
+                    external_residual_sizes
+                    if _is_residual_edge(layer, edge)
+                    else external_input_sizes
+                )
+                target[identity] = max(target.get(identity, 0), elements)
+
+        logical_live_producers = [
+            producer_index for producer_index in range(layer_index + 1)
+            if output_banked[producer_index] > 0
+            and last_consumer[producer_index] >= layer_index
+        ]
+        external_input_banked = sum(
+            _banked(elements)
+            for elements in (
+                list(external_input_sizes.values())
+                + list(external_residual_sizes.values())
+            )
+        )
+        logical_required = (
+            sum(output_banked[index] for index in logical_live_producers)
+            + external_input_banked
+        )
+        reusable_input_banks = []
+        candidate_edges = (
+            normalized_edges[layer_index]
+            if layer.get('type') == 'QuantAdd'
+            else normalized_edges[layer_index][:1]
+        )
+        for edge in candidate_edges:
+            producer_index = edge.get('producer_layer_index')
+            if (
+                producer_index is not None
+                and last_consumer[producer_index] == layer_index
+            ):
+                reusable_input_banks.append(output_banked[producer_index] // bank_size)
+            elif (
+                producer_index is None
+                and not edge.get('is_model_state')
+                and edge is normalized_edges[layer_index][0]
+            ):
+                reusable_input_banks.append(
+                    _banked(edge.get('elements', layer.get('input_elems', 0)))
+                    // bank_size
+                )
+        workspace = _rule_aware_workspace(
+            layer,
+            max(reusable_input_banks or [
+                _banked(layer.get('input_elems', 0)) // bank_size
+            ]),
+            output_banked[layer_index] // bank_size,
+            bank_size,
+            input_is_reusable=bool(reusable_input_banks),
+        )
+        if workspace.get('reuses_input') and reusable_input_banks:
+            logical_required -= min(
+                max(reusable_input_banks),
+                output_banked[layer_index] // bank_size,
+            ) * bank_size
+            logical_required += workspace['overhead_banks'] * bank_size
+        has_streamed_model_data = bool(layer.get('weight_elems', 0)) or bool(
+            model_state_sizes
+        )
+        if has_streamed_model_data:
+            logical_required += int(streaming_banks) * int(bank_size)
+
+        # Spill background lifetimes before execution when the current
+        # rule-aware workspace would otherwise overflow. Current input
+        # producers are protected because this operator still consumes them.
+        current_input_producers = {
+            edge.get('producer_layer_index')
+            for edge in normalized_edges[layer_index]
+            if edge.get('producer_layer_index') is not None
+        }
+        execution_required = logical_required
+        execution_evicted = []
+        while execution_required > cache_elements:
+            victims = [
+                producer_index for producer_index in resident_before
+                if producer_index not in current_input_producers
+                and producer_index != layer_index
+            ]
+            if not victims:
+                break
+            victim = max(
+                victims,
+                key=lambda producer_index: (
+                    _next_use(producer_index, layer_index - 1),
+                    output_banked[producer_index],
+                    producer_index,
+                ),
+            )
+            resident_before.remove(victim)
+            resident.discard(victim)
+            execution_required -= output_banked[victim]
+            execution_evicted.append(victim)
+            if victim not in external_backed:
+                output_spilled[victim] = True
+                output_evicted_at[victim] = layer_index
+                external_backed.add(victim)
+
+        # After this layer has consumed its inputs, retain only tensors with a
+        # later use.  Reloaded fan-out inputs may be cached again for that use.
+        candidates = {
+            producer_index for producer_index in resident_before
+            if last_consumer[producer_index] > layer_index
+        }
+        candidates.update(
+            producer_index
+            for producer_index in (
+                list(missing_producer_sizes)
+                + list(missing_residual_producer_sizes)
+            )
+            if last_consumer[producer_index] > layer_index
+        )
+        if consumers_by_producer[layer_index]:
+            candidates.add(layer_index)
+
+        evicted = list(execution_evicted)
+        candidate_elements = sum(output_banked[index] for index in candidates)
+        while candidates and candidate_elements > cache_elements:
+            victim = max(
+                candidates,
+                key=lambda producer_index: (
+                    _next_use(producer_index, layer_index),
+                    output_banked[producer_index],
+                    producer_index,
+                ),
+            )
+            candidates.remove(victim)
+            candidate_elements -= output_banked[victim]
+            evicted.append(victim)
+            if victim not in external_backed:
+                output_spilled[victim] = True
+                output_evicted_at[victim] = layer_index
+                external_backed.add(victim)
+
+        if layer_index not in candidates:
+            output_spilled[layer_index] = True
+            external_backed.add(layer_index)
+
+        resident = candidates
+        steps.append({
+            'layer_index': layer_index,
+            'logical_live_producer_indices': logical_live_producers,
+            'logical_cache_required_elems': logical_required,
+            'execution_cache_required_elems': execution_required,
+            'logical_cache_fits': execution_required <= cache_elements,
+            'cache_rule': workspace.get('rule'),
+            'input_output_overlap_elems': (
+                workspace.get('shared_banks', 0) * bank_size
+                if workspace.get('reuses_input') else 0
+            ),
+            'pipeline_boundary_elems': (
+                workspace.get('pipeline_boundary_banks', 0) * bank_size
+            ),
+            'jumpback_elems': workspace.get('jumpback_banks', 0) * bank_size,
+            'resident_before_producer_indices': sorted(resident_before),
+            'resident_before_execution_eviction_indices': sorted(
+                resident_before_execution_eviction
+            ),
+            'resident_after_producer_indices': sorted(resident),
+            'resident_after_elems': candidate_elements,
+            'evicted_producer_indices': evicted,
+            'input_transfer_producer_indices': sorted(
+                set(missing_producer_sizes) | set(missing_residual_producer_sizes)
+            ),
+            'input_transfer_elems': (
+                sum(missing_producer_sizes.values())
+                + sum(missing_residual_producer_sizes.values())
+                + sum(external_input_sizes.values())
+                + sum(external_residual_sizes.values())
+            ),
+            'residual_input_transfer_elems': (
+                sum(missing_residual_producer_sizes.values())
+                + sum(external_residual_sizes.values())
+            ),
+            'model_state_transfer_elems': sum(model_state_sizes.values()),
+        })
+
+    for layer_index, step in enumerate(steps):
+        step['output_spilled'] = output_spilled[layer_index]
+        step['output_evicted_at'] = output_evicted_at[layer_index]
+        step['stay_on_chip'] = not output_spilled[layer_index]
+
+    return {
+        'steps': steps,
+        'consumers_by_producer': consumers_by_producer,
+        'last_consumer_by_producer': last_consumer,
+        'output_banked_elems': output_banked,
+        'policy': 'producer_consumer_lifetime_rule_aware_farthest_next_use',
+    }
 
 
 def _compute_layer_cycles(layer: dict) -> float:
@@ -358,7 +1088,8 @@ def optimize_layer_bits(layer: dict, bandwidth: float,
                         need_output_transfer: bool,
                         min_bits: int = 3, max_bits: int = 8,
                         fixed_transfers: list[dict] = None,
-                        forced_bits: dict = None):
+                        forced_bits: dict = None,
+                        input_transfer_elems: int = None):
     """
     Layer-wide bit-width optimization for BW-limited transfers.
 
@@ -411,7 +1142,11 @@ def optimize_layer_bits(layer: dict, bandwidth: float,
         elif name == 'input':
             if not need_input_transfer:
                 return 0.0
-            elems = layer.get('input_elems', 0)
+            elems = (
+                layer.get('input_elems', 0)
+                if input_transfer_elems is None
+                else input_transfer_elems
+            )
         elif name == 'output':
             if not need_output_transfer:
                 return 0.0
@@ -513,6 +1248,8 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
         id(tensor) for tensor in list(model.parameters()) + list(model.buffers())
     }
     model_state_storage_keys = set()
+    model_input_tensor_ids = set()
+    model_input_storage_keys = set()
     for tensor in list(model.parameters()) + list(model.buffers()):
         try:
             storage_key = _tensor_storage_key(tensor)
@@ -529,6 +1266,15 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
         except (AttributeError, RuntimeError):
             return False
         return storage_key is not None and storage_key in model_state_storage_keys
+
+    def _is_model_input_tensor(tensor: torch.Tensor) -> bool:
+        if id(tensor) in model_input_tensor_ids:
+            return True
+        storage_key = _tensor_storage_key(tensor)
+        return (
+            storage_key is not None
+            and storage_key in model_input_storage_keys
+        )
 
     execution_order = []
     hooks        = []
@@ -575,6 +1321,7 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
 
     # --- module recording hooks ---
     tensor_producers = {}
+    storage_producers = {}
 
     def _tensor_and_bases(tensor: torch.Tensor) -> list[torch.Tensor]:
         lineage = []
@@ -587,7 +1334,15 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
         return lineage
 
     def _find_tensor_producer(tensor: torch.Tensor):
-        """Resolve a tensor or any of its view bases to a captured producer."""
+        """Resolve a tensor, view base, or shared storage to its producer.
+
+        Some models build residual branches through an unrecorded chain of
+        ``reshape``/``transpose`` operations.  The final view does not always
+        retain the captured tensor as its direct ``_base`` (notably after a
+        container returns it), but it still refers to the same live storage.
+        Preserve that allocation identity so the later consumer is not
+        mistaken for a new external/model input.
+        """
         for current in _tensor_and_bases(tensor):
             entry = tensor_producers.get(id(current))
             if entry is None:
@@ -595,7 +1350,28 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
             tensor_ref, producer = entry
             if tensor_ref() is current:
                 return producer
+        storage_key = _tensor_storage_key(tensor)
+        if storage_key is not None:
+            storage_entry = storage_producers.get(storage_key)
+            if storage_entry is not None:
+                tensor_ref, producer = storage_entry
+                source_tensor = tensor_ref()
+                if (
+                    source_tensor is not None
+                    and source_tensor.numel() == tensor.numel()
+                    and _tensor_storage_key(source_tensor) == storage_key
+                ):
+                    return producer
         return None
+
+    def _remember_tensor_lineage(tensor: torch.Tensor, producer: dict) -> None:
+        for current in _tensor_and_bases(tensor):
+            tensor_producers[id(current)] = (weakref.ref(current), producer)
+            storage_key = _tensor_storage_key(current)
+            if storage_key is not None:
+                storage_producers[storage_key] = (
+                    weakref.ref(current), producer
+                )
 
     def _input_producer_layer_indices(value) -> list:
         return [
@@ -605,12 +1381,73 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
             )
         ]
 
+    def _input_edge_records(value) -> list[dict]:
+        """Record one explicit runtime edge for every tensor operand."""
+        records = []
+        for input_index, tensor in enumerate(_collect_tensors(value)):
+            producer = _find_tensor_producer(tensor)
+            records.append({
+                'input_index': input_index,
+                'elements': tensor.numel(),
+                'shape': tuple(tensor.shape),
+                'tensor_id': id(tensor),
+                'storage_key': _tensor_storage_key(tensor),
+                'producer_layer_index': (
+                    producer.get('_execution_index')
+                    if producer is not None else None
+                ),
+                'producer_name': (
+                    producer.get('name') if producer is not None else None
+                ),
+                'is_model_state': _is_model_state_tensor(tensor),
+                'is_model_input': _is_model_input_tensor(tensor),
+            })
+        return records
+
     def _remember_output_producer(info: dict):
         info['_execution_index'] = len(execution_order) - 1
+        parent_depths = [
+            execution_order[producer_index].get('_graph_depth', 0)
+            for producer_index in info.get('input_producer_layer_indices', [])
+            if producer_index is not None
+        ]
+        info['_graph_depth'] = 1 + max(parent_depths, default=0)
         output_tensor = info.pop('_output_tensor', None)
         if output_tensor is not None:
-            for tensor in _tensor_and_bases(output_tensor):
-                tensor_producers[id(tensor)] = (weakref.ref(tensor), info)
+            _remember_tensor_lineage(output_tensor, info)
+
+    lineage_container_starts = {}
+
+    def _lineage_container_pre_hook(module, _input):
+        lineage_container_starts[id(module)] = len(execution_order)
+        input_tensors = _collect_tensors(_input)
+        if len(input_tensors) != 1 or not execution_order:
+            return
+        input_tensor = input_tensors[0]
+        if _find_tensor_producer(input_tensor) is not None:
+            return
+        producer = execution_order[-1]
+        if input_tensor.numel() != producer.get('output_elems', 0):
+            return
+        # A container boundary is the one safe place to bridge an unrecorded
+        # layout/copy chain before its first recorded child runs.  MobileViT,
+        # for example, unfolds a Conv2d output into transformer tokens using
+        # reshape/transpose/reshape, with the last reshape sometimes copying.
+        _remember_tensor_lineage(input_tensor, producer)
+
+    def _lineage_container_hook(module, _input, output):
+        """Carry an inner producer across unrecorded layout/copy operations."""
+        start_index = lineage_container_starts.pop(id(module), len(execution_order))
+        if len(execution_order) <= start_index:
+            return
+        producer = execution_order[-1]
+        output_tensors = _collect_tensors(output)
+        if len(output_tensors) != 1:
+            return
+        output_tensor = output_tensors[0]
+        if output_tensor.numel() != producer.get('output_elems', 0):
+            return
+        _remember_tensor_lineage(output_tensor, producer)
 
     def _mark_residual_stream(info: dict, residual_input: torch.Tensor):
         residual_elems = residual_input.numel()
@@ -660,6 +1497,7 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'input_tensor_ids': _collect_tensor_ids(input),
                 'input_tensor_storage_keys': _collect_tensor_storage_keys(input),
                 'input_producer_layer_indices': _input_producer_layer_indices(input),
+                'input_edges': _input_edge_records(input),
                 'output_tensor_id': id(output) if isinstance(output, torch.Tensor) else None,
                 'output_tensor_storage_key': _tensor_storage_key(output) if isinstance(output, torch.Tensor) else None,
                 '_output_tensor': output if isinstance(output, torch.Tensor) else None,
@@ -690,7 +1528,11 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 info['out_channels']           = module.out_channels
                 info['filter_height']          = filter_height
                 info['filter_width']           = filter_width
-                info['kernel_size']            = ks[0] if isinstance(ks, tuple) else ks
+                info['kernel_size']            = ks
+                info['stride']                 = module.stride
+                info['padding']                = module.padding
+                info['dilation']               = module.dilation
+                info['padding_mode']           = module.padding_mode
                 info['groups']                 = module.groups
                 info['input_channel_height']   = in_t.shape[-2] if in_t is not None and in_t.ndim >= 4 else 0
                 info['input_channel_width']    = in_t.shape[-1] if in_t is not None and in_t.ndim >= 4 else 0
@@ -700,6 +1542,18 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
             elif isinstance(module, nn.Linear):
                 info['in_features']  = module.in_features
                 info['out_features'] = module.out_features
+            # Quantized pooling and normalization modules are included in
+            # ``quantized_types`` above, so collect their operation attributes
+            # here as well as in the plain PyTorch branches below.
+            for attribute in (
+                'kernel_size', 'stride', 'padding', 'dilation',
+                'padding_mode', 'groups', 'in_channels', 'out_channels',
+                'in_features', 'out_features', 'ceil_mode', 'output_size',
+                'normalized_shape', 'eps', 'num_features', 'num_groups',
+                'num_channels',
+            ):
+                if hasattr(module, attribute):
+                    info[attribute] = getattr(module, attribute)
             execution_order.append(info)
             _remember_output_producer(info)
         elif isinstance(module, _POOL_TYPES):
@@ -714,10 +1568,17 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'input_tensor_ids': _collect_tensor_ids(input),
                 'input_tensor_storage_keys': _collect_tensor_storage_keys(input),
                 'input_producer_layer_indices': _input_producer_layer_indices(input),
+                'input_edges': _input_edge_records(input),
                 'output_tensor_id': id(output) if isinstance(output, torch.Tensor) else None,
                 'output_tensor_storage_key': _tensor_storage_key(output) if isinstance(output, torch.Tensor) else None,
                 '_output_tensor': output if isinstance(output, torch.Tensor) else None,
             }
+            for attribute in (
+                'kernel_size', 'stride', 'padding', 'dilation',
+                'ceil_mode', 'output_size',
+            ):
+                if hasattr(module, attribute):
+                    info[attribute] = getattr(module, attribute)
             execution_order.append(info)
             _remember_output_producer(info)
         elif isinstance(module, _NORM_TYPES):
@@ -735,10 +1596,17 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
                 'input_tensor_ids': _collect_tensor_ids(input),
                 'input_tensor_storage_keys': _collect_tensor_storage_keys(input),
                 'input_producer_layer_indices': _input_producer_layer_indices(input),
+                'input_edges': _input_edge_records(input),
                 'output_tensor_id': id(output) if isinstance(output, torch.Tensor) else None,
                 'output_tensor_storage_key': _tensor_storage_key(output) if isinstance(output, torch.Tensor) else None,
                 '_output_tensor': output if isinstance(output, torch.Tensor) else None,
             }
+            for attribute in (
+                'normalized_shape', 'eps', 'num_features', 'num_groups',
+                'num_channels',
+            ):
+                if hasattr(module, attribute):
+                    info[attribute] = getattr(module, attribute)
             execution_order.append(info)
             _remember_output_producer(info)
 
@@ -755,6 +1623,7 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
             'input_tensor_ids': _collect_tensor_ids(input),
             'input_tensor_storage_keys': _collect_tensor_storage_keys(input),
             'input_producer_layer_indices': _input_producer_layer_indices(input),
+            'input_edges': _input_edge_records(input),
             'output_tensor_id': id(output) if isinstance(output, torch.Tensor) else None,
             'output_tensor_storage_key': _tensor_storage_key(output) if isinstance(output, torch.Tensor) else None,
             '_output_tensor': output if isinstance(output, torch.Tensor) else None,
@@ -785,6 +1654,17 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
         elif _residual_block_types and isinstance(module, tuple(_residual_block_types)):
             module.layer_name = name
             hooks.append(module.register_forward_hook(residual_hook_fn))
+        is_layout_lineage_container = (
+            type(module).__name__ in {
+                'AttentionWeightedValues', 'ScaledDotProduct'
+            }
+            # Recursive quantization flattens MobileViT's Sequential into a
+            # plain ``nn.Module`` container while preserving this name.
+            or name.rsplit('.', 1)[-1] == 'transformer'
+        )
+        if is_layout_lineage_container:
+            hooks.append(module.register_forward_pre_hook(_lineage_container_pre_hook))
+            hooks.append(module.register_forward_hook(_lineage_container_hook))
 
     # --- functional op patching ---
     # Patches Python-level calls to torch.matmul / torch.bmm / softmax.
@@ -797,6 +1677,12 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
         dummy_input = torch.randn(*input_shape).to(device)
     else:
         dummy_input = dummy_input.to(device)
+
+    for tensor in _collect_tensors(dummy_input):
+        model_input_tensor_ids.add(id(tensor))
+        storage_key = _tensor_storage_key(tensor)
+        if storage_key is not None:
+            model_input_storage_keys.add(storage_key)
 
     try:
         with torch.no_grad():
@@ -815,47 +1701,11 @@ def analyze_model(model_cfg_or_name, batch_size: int, device: str = "cpu", adapt
         for h in hooks:
             h.remove()
 
+    _repair_unrecorded_layout_lineage(execution_order)
+    _repair_lineage_from_prior_inputs(execution_order)
+    _rebuild_residual_metadata_from_edges(execution_order)
+    execution_order = fuse_pipeline_activations(execution_order)
     cache_map_order = copy.deepcopy(execution_order)
-    collapsed_order = []
-    residual_producer_aliases = {}
-    residual_producer_name_aliases = {}
-    for layer in execution_order:
-        if is_collapsible(layer['type']) and collapsed_order:
-            prev_layer = collapsed_order[-1]
-            prev_layer['output_elems'] = layer['output_elems']
-            prev_layer['output_tensor_id'] = layer.get('output_tensor_id')
-            prev_layer['weight_elems'] += layer.get('weight_elems', 0)
-            if layer.get('residual_output_elems', 0):
-                prev_layer['residual_output_elems'] = max(
-                    prev_layer.get('residual_output_elems', 0),
-                    layer['residual_output_elems'],
-                )
-                prev_layer.setdefault('residual_output_consumers', []).extend(
-                    layer.get('residual_output_consumers', [])
-                )
-                for consumer_name in layer.get('residual_output_consumers', []):
-                    residual_producer_aliases[consumer_name] = prev_layer['name']
-                residual_producer_name_aliases[layer['name']] = prev_layer['name']
-            if 'collapsed_layers' not in prev_layer:
-                prev_layer['collapsed_layers'] = []
-            prev_layer['collapsed_layers'].append({
-                'name': layer['name'],
-                'type': layer['type'],
-                'weight_elems': layer.get('weight_elems', 0),
-                'output_elems': layer['output_elems'],
-                'input_shapes': layer.get('input_shapes', []),
-                'output_shape': layer.get('output_shape'),
-            })
-        else:
-            collapsed_order.append(layer)
-    for layer in collapsed_order:
-        if layer['name'] in residual_producer_aliases:
-            layer['residual_producer_name'] = residual_producer_aliases[layer['name']]
-        for residual in layer.get('residual_inputs', []):
-            producer_name = residual.get('producer_name')
-            if producer_name in residual_producer_name_aliases:
-                residual['producer_name'] = residual_producer_name_aliases[producer_name]
-    execution_order = collapsed_order
 
     if return_cache_map_layers:
         return execution_order, cache_map_order
@@ -900,7 +1750,150 @@ def serialize_rules() -> list:
     return result
 
 
-def build_cache_map(layers: list[dict]) -> dict:
+def serialize_producer_consumer_policy() -> list:
+    """Return dashboard metadata for the lifetime-based cache policy."""
+    common = {
+        'applies_to': 'All runtime tensor producers',
+        'stay_condition': 'Live activation buffers fit after farthest-next-use eviction',
+        'permanents': 'Outputs with future consumers; released after final consumer',
+        'pipeline_banks': 0,
+    }
+    return [
+        {
+            'name': 'producer_consumer_resident',
+            'on_chip': True,
+            'xin_from_cache': True,
+            'notes': (
+                'Output remains resident through its consumers unless a later '
+                'capacity conflict evicts it.'
+            ),
+            **common,
+        },
+        {
+            'name': 'producer_consumer_spill',
+            'on_chip': False,
+            'xin_from_cache': False,
+            'notes': (
+                'Output is written externally because it has no future '
+                'consumer, exceeds capacity, or is selected for eviction.'
+            ),
+            **common,
+        },
+    ]
+
+
+def _greedy_stream_connections(
+    base_banks_by_layer: list[int],
+    connection_plans: list[dict],
+    capacity_banks: int,
+    streaming_banks: int = 2,
+    rule_workspaces: list[dict] = None,
+) -> dict:
+    """Greedily replace resident lifetimes with streaming buffers.
+
+    Candidates are ranked by the number of currently overflowing layers they
+    make fit, then by smaller bank-rounded allocation, then by original cache
+    map column order.
+    """
+    streamed = set()
+    choices = []
+    rule_workspaces = rule_workspaces or []
+
+    def _totals(streamed_indices: set[int]) -> list[int]:
+        totals = list(base_banks_by_layer)
+        for connection_index, connection in enumerate(connection_plans):
+            if connection_index in streamed_indices:
+                for layer_index in connection['stream_layer_indices']:
+                    totals[layer_index] += streaming_banks
+            else:
+                for layer_index in connection['resident_layer_indices']:
+                    totals[layer_index] += connection['bank_count']
+        for layer_index, workspace in enumerate(rule_workspaces):
+            available_candidates = []
+            for candidate in workspace.get('reuse_candidates', []):
+                connection_index = candidate.get('connection_index')
+                if connection_index is None:
+                    available_candidates.append(candidate)
+                    continue
+                if connection_index in streamed_indices:
+                    continue
+                if layer_index in connection_plans[connection_index][
+                    'resident_layer_indices'
+                ]:
+                    available_candidates.append(candidate)
+            if available_candidates:
+                selected_candidate = max(
+                    available_candidates,
+                    key=lambda candidate: candidate.get('shared_banks', 0),
+                )
+                totals[layer_index] += workspace.get('overhead_banks', 0)
+                totals[layer_index] -= selected_candidate.get(
+                    'shared_banks', 0
+                )
+        return totals
+
+    while True:
+        current_totals = _totals(streamed)
+        currently_red = {
+            layer_index for layer_index, total in enumerate(current_totals)
+            if total > capacity_banks
+        }
+        if not currently_red:
+            break
+
+        ranked_candidates = []
+        for connection_index, connection in enumerate(connection_plans):
+            if connection_index in streamed:
+                continue
+            trial_totals = _totals(streamed | {connection_index})
+            solved_layers = sorted(
+                layer_index for layer_index in currently_red
+                if trial_totals[layer_index] <= capacity_banks
+            )
+            if not solved_layers:
+                continue
+            ranked_candidates.append((
+                -len(solved_layers),
+                connection['bank_count'],
+                connection_index,
+                solved_layers,
+            ))
+
+        if not ranked_candidates:
+            break
+        _, _, selected_index, solved_layers = min(ranked_candidates)
+        streamed.add(selected_index)
+        choices.append({
+            'connection_index': selected_index,
+            'connection_name': connection_plans[selected_index]['name'],
+            'solved_layer_indices': solved_layers,
+            'solved_layer_count': len(solved_layers),
+            'bank_count': connection_plans[selected_index]['bank_count'],
+        })
+
+    final_totals = _totals(streamed)
+    return {
+        'streamed_connection_indices': sorted(streamed),
+        'choices': choices,
+        'total_banks_by_layer': final_totals,
+        'green_layer_indices': [
+            index for index, total in enumerate(final_totals)
+            if total <= capacity_banks
+        ],
+        'red_layer_indices': [
+            index for index, total in enumerate(final_totals)
+            if total > capacity_banks
+        ],
+    }
+
+
+def build_cache_map(
+    layers: list[dict],
+    cache_elements: int = None,
+    bank_size: int = None,
+    metadata_bits: int = 0,
+    streaming_banks: int = 2,
+) -> dict:
     """Build a layer-by-layer element-count matrix for activation streams.
 
     ``x_in`` and ``x_out`` are the current layer's tensor sizes. Residual skips
@@ -908,6 +1901,9 @@ def build_cache_map(layers: list[dict]) -> dict:
     non-adjacent consumers receives an automatically named ``hold_N`` column.
     Storage identity is used in addition to Python object identity so views
     such as reshaped/transposed Q, K, and V tensors keep their producer.
+
+    When cache and bank sizes are supplied, every allocation is rounded to a
+    whole bank and a greedy pass selects residual/hold lifetimes to stream.
     """
     layer_indices_by_name = {}
     for index, layer in enumerate(layers):
@@ -1005,8 +2001,22 @@ def build_cache_map(layers: list[dict]) -> dict:
                     residual.get('storage_key') is not None
                     and residual.get('storage_key') == record['storage_key']
                 )
-                if id_matches or storage_matches:
+                producer_matches = (
+                    residual.get('producer_layer_index')
+                    == record['producer_layer_index']
+                    if residual.get('producer_layer_index') is not None
+                    else (
+                        residual.get('producer_name') is not None
+                        and residual.get('producer_name') == record['producer']
+                    )
+                )
+                if id_matches or storage_matches or producer_matches:
                     record['is_residual'] = True
+                    residual_consumers = record.setdefault(
+                        'residual_consumer_layer_indices', []
+                    )
+                    if consumer_index not in residual_consumers:
+                        residual_consumers.append(consumer_index)
                     matched_residuals.add((consumer_index, residual_index))
 
         consumers = record['consumer_layer_indices']
@@ -1061,11 +2071,16 @@ def build_cache_map(layers: list[dict]) -> dict:
             if (consumer_index, residual_index) in matched_residuals:
                 continue
             producer_name = residual.get('producer_name')
-            producer_candidates = [
-                index for index in layer_indices_by_name.get(producer_name, [])
-                if index <= consumer_index
-            ]
-            producer_index = producer_candidates[-1] if producer_candidates else 0
+            producer_index = residual.get('producer_layer_index')
+            if producer_index is None:
+                producer_candidates = [
+                    index
+                    for index in layer_indices_by_name.get(producer_name, [])
+                    if index <= consumer_index
+                ]
+                producer_index = (
+                    producer_candidates[-1] if producer_candidates else 0
+                )
             residual_connections.append({
                 'name': f"residual_{len(residual_connections)}",
                 'kind': 'residual',
@@ -1098,9 +2113,37 @@ def build_cache_map(layers: list[dict]) -> dict:
         first_visible_layer = connection['producer_layer_index']
         if connection.get('record_index') is not None:
             first_visible_layer += 1
-        return first_visible_layer <= layer_index <= connection['consumer_layer_index']
+        is_visible = (
+            first_visible_layer
+            <= layer_index
+            <= connection['consumer_layer_index']
+        )
+        if not is_visible:
+            return False
+
+        # A projected ResNet skip is scheduled after the main branch. Keep the
+        # main result in a hold column while that projection runs, then display
+        # it as x_in at the add itself; the skip remains in residual_N.
+        is_primary_add_input = (
+            connection.get('kind') == 'hold'
+            and layer_index == connection['consumer_layer_index']
+            and layers[layer_index].get('type') == 'QuantAdd'
+            and connection.get('record_index')
+            == primary_input_record_index_by_layer.get(layer_index)
+        )
+        return not is_primary_add_input
 
     rows = []
+    baseline_bank_totals = []
+
+    def _bank_count(elements: int) -> int:
+        if not elements:
+            return 0
+        if not bank_size:
+            return 0
+        footprint = get_footprint_elements(int(elements), metadata_bits)
+        return math.ceil(footprint / bank_size)
+
     for layer_index, layer in enumerate(layers):
         live_connections = [
             connection for connection in connections
@@ -1127,15 +2170,24 @@ def build_cache_map(layers: list[dict]) -> dict:
                 record['elements'],
             )
 
-        total_cache_elements = sum(unique_allocations.values())
+        allocation_element_sizes = list(unique_allocations.values())
+        total_cache_elements = sum(allocation_element_sizes)
         if not primary_input_resolved_by_layer.get(layer_index, False):
-            total_cache_elements += int(layer.get('input_elems', 0))
+            unresolved_input_elements = int(layer.get('input_elems', 0))
+            total_cache_elements += unresolved_input_elements
+            allocation_element_sizes.append(unresolved_input_elements)
         if output_record is None:
-            total_cache_elements += int(layer.get('output_elems', 0))
-        total_cache_elements += sum(
-            connection['elements'] for connection in live_connections
-            if connection.get('record_index') is None
-        )
+            uncaptured_output_elements = int(layer.get('output_elems', 0))
+            total_cache_elements += uncaptured_output_elements
+            allocation_element_sizes.append(uncaptured_output_elements)
+        for connection in live_connections:
+            if connection.get('record_index') is None:
+                total_cache_elements += connection['elements']
+                allocation_element_sizes.append(connection['elements'])
+        if bank_size:
+            baseline_bank_totals.append(sum(
+                _bank_count(elements) for elements in allocation_element_sizes
+            ))
 
         live_connection_record_indices = {
             connection['record_index'] for connection in live_connections
@@ -1157,6 +2209,312 @@ def build_cache_map(layers: list[dict]) -> dict:
             row[connection['name']] = _kb(connection['elements']) if is_live else 0
         rows.append(row)
 
+    optimization = None
+    if cache_elements is not None and bank_size and bank_size > 0:
+        capacity_banks = max(0, int(cache_elements) // int(bank_size))
+        connection_plans = []
+        for connection_index, connection in enumerate(connections):
+            first_resident_layer = connection['producer_layer_index']
+            if connection.get('record_index') is not None:
+                first_resident_layer += 1
+            resident_layer_indices = list(range(
+                max(0, first_resident_layer),
+                min(len(layers), connection['consumer_layer_index'] + 1),
+            ))
+            stream_consumer_indices = (
+                connection.get('residual_consumer_layer_indices', [])
+                if connection.get('kind') == 'residual'
+                else connection.get('consumer_layer_indices', [])
+            )
+            stream_layer_indices = sorted({
+                layer_index for layer_index in (
+                    [connection['producer_layer_index']]
+                    + list(stream_consumer_indices)
+                )
+                if 0 <= layer_index < len(layers)
+            })
+            connection_plan = {
+                'name': connection['name'],
+                'connection_index': connection_index,
+                'bank_count': _bank_count(connection['elements']),
+                'resident_layer_indices': resident_layer_indices,
+                'stream_layer_indices': stream_layer_indices,
+            }
+            connection_plans.append(connection_plan)
+            connection['bank_count'] = connection_plan['bank_count']
+            connection['resident_layer_indices'] = resident_layer_indices
+            connection['stream_layer_indices'] = stream_layer_indices
+
+        connection_index_by_record = {
+            connection['record_index']: connection_index
+            for connection_index, connection in enumerate(connections)
+            if connection.get('record_index') is not None
+        }
+        rule_workspaces = []
+        for layer_index, layer in enumerate(layers):
+            primary_record_index = primary_input_record_index_by_layer.get(
+                layer_index
+            )
+            primary_record = records_by_index.get(primary_record_index)
+            output_record = records_by_producer_index.get(layer_index)
+            unresolved_primary_is_reusable = (
+                primary_record is None
+                and not primary_input_resolved_by_layer.get(layer_index, False)
+                and bool(layer.get('input_elems', 0))
+                and not (
+                    layer.get('input_edges')
+                    and layer['input_edges'][0].get('is_model_state')
+                )
+            )
+            possible_record_indices = (
+                input_record_indices_by_layer.get(layer_index, set())
+                if layer.get('type') == 'QuantAdd'
+                else {primary_record_index}
+            )
+            reuse_candidates = []
+            for record_index in possible_record_indices:
+                record = records_by_index.get(record_index)
+                consumers = (
+                    record.get('consumer_layer_indices', [])
+                    if record is not None else []
+                )
+                if not consumers or max(consumers) != layer_index:
+                    continue
+                reuse_candidates.append({
+                    'record_index': record_index,
+                    'connection_index': connection_index_by_record.get(
+                        record_index
+                    ),
+                    'shared_banks': min(
+                        _bank_count(record.get('elements', 0)),
+                        _bank_count(layer.get('output_elems', 0)),
+                    ),
+                })
+            if unresolved_primary_is_reusable:
+                reuse_candidates.append({
+                    'record_index': None,
+                    'connection_index': None,
+                    'shared_banks': min(
+                        _bank_count(layer.get('input_elems', 0)),
+                        _bank_count(layer.get('output_elems', 0)),
+                    ),
+                })
+
+            rule_input_banks = max(
+                [candidate['shared_banks'] for candidate in reuse_candidates]
+                or [_bank_count(layer.get('input_elems', 0))]
+            )
+            workspace = _rule_aware_workspace(
+                layer,
+                rule_input_banks,
+                _bank_count(layer.get('output_elems', 0)),
+                bank_size,
+                input_is_reusable=bool(reuse_candidates),
+                # Normalize trace aliases into independent input/output
+                # components below, then let the hardware rule add the
+                # permitted overlap back explicitly.
+                input_output_already_shared=False,
+            )
+            if not workspace.get('reuses_input'):
+                reuse_candidates = []
+
+            trace_shared_banks = 0
+            if output_record is not None:
+                for record_index in input_record_indices_by_layer.get(
+                    layer_index, set()
+                ):
+                    record = records_by_index.get(record_index)
+                    if (
+                        record is not None
+                        and record.get('storage_key') is not None
+                        and record.get('storage_key')
+                        == output_record.get('storage_key')
+                    ):
+                        trace_shared_banks = max(
+                            trace_shared_banks,
+                            min(
+                                _bank_count(record.get('elements', 0)),
+                                _bank_count(layer.get('output_elems', 0)),
+                            ),
+                        )
+            workspace.update({
+                'primary_record_index': primary_record_index,
+                'primary_connection_index': connection_index_by_record.get(
+                    primary_record_index
+                ),
+                'reuse_candidates': reuse_candidates,
+                'trace_shared_banks': trace_shared_banks,
+            })
+            rule_workspaces.append(workspace)
+
+        base_banks_by_layer = list(baseline_bank_totals)
+        for layer_index, workspace in enumerate(rule_workspaces):
+            base_banks_by_layer[layer_index] += workspace.get(
+                'trace_shared_banks', 0
+            )
+        for connection_plan in connection_plans:
+            for layer_index in connection_plan['resident_layer_indices']:
+                base_banks_by_layer[layer_index] = max(
+                    0,
+                    base_banks_by_layer[layer_index]
+                    - connection_plan['bank_count'],
+                )
+        for layer_index, layer in enumerate(layers):
+            has_streamed_model_data = bool(layer.get('weight_elems', 0)) or any(
+                edge.get('is_model_state')
+                for edge in layer.get('input_edges', [])
+            )
+            if has_streamed_model_data:
+                base_banks_by_layer[layer_index] += streaming_banks
+
+        optimization = _greedy_stream_connections(
+            base_banks_by_layer,
+            connection_plans,
+            capacity_banks,
+            streaming_banks=streaming_banks,
+            rule_workspaces=rule_workspaces,
+        )
+        streamed_indices = set(optimization['streamed_connection_indices'])
+
+        for connection_index, connection in enumerate(connections):
+            connection['placement'] = (
+                'streamed' if connection_index in streamed_indices else 'resident'
+            )
+        for choice in optimization['choices']:
+            choice['solved_layers'] = [
+                layers[index].get('name', 'unknown')
+                for index in choice['solved_layer_indices']
+            ]
+
+        def _bank_kb(bank_count: int):
+            return _kb(int(bank_count) * int(bank_size))
+
+        optimized_rows = []
+        for layer_index, layer in enumerate(layers):
+            primary_record_index = primary_input_record_index_by_layer.get(
+                layer_index
+            )
+            primary_connection_index = connection_index_by_record.get(
+                primary_record_index
+            )
+            primary_is_streamed = (
+                primary_connection_index in streamed_indices
+                if primary_connection_index is not None else False
+            )
+            primary_streams_here = (
+                primary_is_streamed
+                and layer_index in connection_plans[
+                    primary_connection_index
+                ]['stream_layer_indices']
+            )
+            primary_is_resident_connection = (
+                primary_connection_index is not None
+                and not primary_is_streamed
+                and _connection_is_visible(
+                    connections[primary_connection_index], layer_index
+                )
+            )
+            workspace = rule_workspaces[layer_index]
+            available_reuse_candidates = []
+            for candidate in workspace.get('reuse_candidates', []):
+                candidate_connection_index = candidate.get('connection_index')
+                if candidate_connection_index is None:
+                    available_reuse_candidates.append(candidate)
+                elif (
+                    candidate_connection_index not in streamed_indices
+                    and layer_index in connection_plans[
+                        candidate_connection_index
+                    ]['resident_layer_indices']
+                ):
+                    available_reuse_candidates.append(candidate)
+            selected_reuse_candidate = (
+                max(
+                    available_reuse_candidates,
+                    key=lambda candidate: candidate.get('shared_banks', 0),
+                )
+                if available_reuse_candidates else None
+            )
+            workspace_is_active = selected_reuse_candidate is not None
+            shared_banks = (
+                selected_reuse_candidate.get('shared_banks', 0)
+                if selected_reuse_candidate else 0
+            )
+            pipeline_boundary_banks = (
+                workspace.get('pipeline_boundary_banks', 0)
+                if workspace_is_active else 0
+            )
+            jumpback_banks = (
+                workspace.get('jumpback_banks', 0)
+                if workspace_is_active else 0
+            )
+            has_streamed_model_data = bool(layer.get('weight_elems', 0)) or any(
+                edge.get('is_model_state')
+                for edge in layer.get('input_edges', [])
+            )
+            optimized_row = {
+                'layer': layer.get('name', 'unknown'),
+                'x_in': (
+                    0 if primary_streams_here or primary_is_resident_connection
+                    else _bank_kb(_bank_count(layer.get('input_elems', 0)))
+                ),
+                'x_out': _bank_kb(_bank_count(layer.get('output_elems', 0))),
+                'total_cache_needed_kb': _bank_kb(
+                    optimization['total_banks_by_layer'][layer_index]
+                ),
+                'weight_stream': (
+                    _bank_kb(streaming_banks) if has_streamed_model_data else 0
+                ),
+                'pipeline_boundary': _bank_kb(pipeline_boundary_banks),
+                'jumpback': _bank_kb(jumpback_banks),
+                'input_output_overlap_kb': _bank_kb(shared_banks),
+                'cache_rule': (
+                    workspace.get('rule')
+                    if workspace_is_active
+                    else (
+                        'stream_xin_keep_xout'
+                        if workspace.get('reuses_input') and primary_streams_here
+                        else workspace.get('rule')
+                    )
+                ),
+            }
+            optimized_row['x_out'] = _bank_kb(max(
+                0,
+                _bank_count(layer.get('output_elems', 0)) - shared_banks,
+            ))
+            for connection_index, connection in enumerate(connections):
+                if connection_index in streamed_indices:
+                    active = (
+                        layer_index
+                        in connection_plans[connection_index][
+                            'stream_layer_indices'
+                        ]
+                    )
+                    bank_count = streaming_banks if active else 0
+                else:
+                    active = _connection_is_visible(connection, layer_index)
+                    bank_count = connection['bank_count'] if active else 0
+                optimized_row[connection['name']] = _bank_kb(bank_count)
+            optimized_rows.append(optimized_row)
+        rows = optimized_rows
+        columns = [
+            'x_in', 'x_out', 'total_cache_needed_kb', 'weight_stream',
+            'pipeline_boundary', 'jumpback'
+        ] + [connection['name'] for connection in connections]
+
+        optimization.update({
+            'capacity_banks': capacity_banks,
+            'bank_size_elements': int(bank_size),
+            'streaming_banks': int(streaming_banks),
+            'green_layers': [
+                layers[index].get('name', 'unknown')
+                for index in optimization['green_layer_indices']
+            ],
+            'red_layers': [
+                layers[index].get('name', 'unknown')
+                for index in optimization['red_layer_indices']
+            ],
+        })
+
     return {
         'columns': columns,
         'residual_connections': residual_connections,
@@ -1164,6 +2522,8 @@ def build_cache_map(layers: list[dict]) -> dict:
         'connections': connections,
         'unit': 'KB',
         'kilobytes_per_element': 0.001,
+        'bank_optimized': optimization is not None,
+        'optimization': optimization,
         'rows': rows,
     }
 
@@ -1191,6 +2551,25 @@ def print_cache_map(cache_map: dict):
         )
         print(f"{row['layer']:<{layer_width}} | {values}")
     print(separator)
+    print_cache_map_optimization(cache_map)
+
+
+def print_cache_map_optimization(cache_map: dict):
+    """Print the greedy bank-placement decisions without the full matrix."""
+    optimization = cache_map.get('optimization')
+    if optimization:
+        print(
+            "Cache-map bank optimization: "
+            f"{len(optimization['streamed_connection_indices'])} streamed, "
+            f"{len(optimization['green_layer_indices'])} green, "
+            f"{len(optimization['red_layer_indices'])} red"
+        )
+        for choice in optimization.get('choices', []):
+            print(
+                f"  stream {choice['connection_name']}: "
+                f"{choice['bank_count']} banks, solved "
+                f"{choice['solved_layer_count']} layer(s)"
+            )
 
 
 def save_cache_map_csv(cache_map: dict, path: str):
@@ -1198,7 +2577,10 @@ def save_cache_map_csv(cache_map: dict, path: str):
     fieldnames = ['layer'] + cache_map['columns']
     with open(path, 'w', newline='') as csv_file:
         writer = csv.DictWriter(
-            csv_file, fieldnames=fieldnames, lineterminator='\n'
+            csv_file,
+            fieldnames=fieldnames,
+            extrasaction='ignore',
+            lineterminator='\n',
         )
         writer.writeheader()
         writer.writerows(cache_map['rows'])
@@ -1317,7 +2699,12 @@ def run_simulation(args):
             continue
 
         if cache_map_only:
-            cache_map = build_cache_map(cache_map_layers)
+            cache_map = build_cache_map(
+                cache_map_layers,
+                cache_elements=cache_elements,
+                bank_size=bank_size,
+                metadata_bits=args.metadata_bits,
+            )
             out_dir = os.path.dirname(os.path.abspath(__file__))
             sanitized_model_name = "".join(
                 c if c.isalnum() else "_" for c in model_display_name
@@ -1326,13 +2713,22 @@ def run_simulation(args):
                 out_dir, f"cache_map_{sanitized_model_name}.csv"
             )
             save_cache_map_csv(cache_map, cache_map_path)
+            print_cache_map_optimization(cache_map)
             print(f"Cache map saved to {cache_map_path}")
             continue
 
+        # The simulation schedule must be the same explicit runtime schedule
+        # used by the cache map and architecture graph.  The older collapsed
+        # list is retained as analyze_model's compatibility return value, but
+        # it cannot express Q/K/V fan-out or arbitrary tensor lifetimes.
+        layers = cache_map_layers
+        cache_plan = _producer_consumer_cache_plan(
+            layers, cache_elements, bank_size, args.metadata_bits
+        )
         results = []
-        prev_stay_on_chip = False
 
         for i, layer in enumerate(layers):
+            cache_step = cache_plan['steps'][i]
             next_layer = layers[i + 1] if i + 1 < len(layers) else None
 
             weight_elems = get_footprint_elements(layer['weight_elems'], args.metadata_bits)
@@ -1349,31 +2745,29 @@ def run_simulation(args):
             weight_banked   = round_to_banks(weight_elems,   bank_size)
             next_xin_banked = round_to_banks(next_xin_elems, bank_size)
 
-            ctx = {
-                'input_banked':    input_banked,
-                'output_banked':   output_banked,
-                'weight_banked':   weight_banked,
-                'next_xin_banked': next_xin_banked,
-                'cache_elements':  cache_elements,
-                'bank_size':       bank_size,
-                'filter_height':   layer.get('filter_height', 0),
-                'filter_width':    layer.get('filter_width', 0),
-                'in_channels':     layer.get('in_channels', 0),
-                'out_channels':    layer.get('out_channels', 0),
-                'input_channel_height':  layer.get('input_channel_height', 0),
-                'input_channel_width':   layer.get('input_channel_width', 0),
-                'output_channel_height': layer.get('output_channel_height', 0),
-                'output_channel_width':  layer.get('output_channel_width', 0),
-                'jump_back_size_in_banks': layer.get('jump_back_size_in_banks', 0),
-            }
-
-            stay_on_chip, perm_elems, possible, rule_name = evaluate_stay(
-                layer, ctx, next_layer, args.metadata_bits, bank_size, cache_elements
+            stay_on_chip = cache_step['stay_on_chip']
+            perm_elems = cache_step['resident_after_elems']
+            possible = cache_step['logical_cache_fits']
+            rule_name = cache_step.get('cache_rule') or (
+                'producer_consumer_resident'
+                if stay_on_chip else 'producer_consumer_spill'
             )
-
-            rule_xin_from_cache = RULES.get(rule_name, {}).get('xin_from_cache', True)
-            need_input = (i == 0 or not prev_stay_on_chip or not rule_xin_from_cache)
-            need_output = not stay_on_chip
+            input_transfer_elems = cache_step['input_transfer_elems']
+            residual_input_transfer_elems = cache_step[
+                'residual_input_transfer_elems'
+            ]
+            main_input_transfer_elems = max(
+                0, input_transfer_elems - residual_input_transfer_elems
+            )
+            model_state_transfer_elems = cache_step[
+                'model_state_transfer_elems'
+            ]
+            need_input = main_input_transfer_elems > 0
+            need_weight = int(layer.get('weight_elems', 0) or 0) > 0
+            need_any_input = (
+                input_transfer_elems > 0 or model_state_transfer_elems > 0
+            )
+            need_output = cache_step['output_spilled']
             residual_bits = int(args.min_bits)
             residual_input_stream_elems = layer.get('residual_input_stream_elems', 0)
             residual_output_elems = layer.get('residual_output_elems', 0)
@@ -1385,30 +2779,31 @@ def run_simulation(args):
                 and residual_output_elems == layer.get('output_elems', 0)
             )
 
-            if residual_output_elems > 0:
-                if residual_output_uses_main_stream:
-                    forced_bits['output'] = residual_bits
-                else:
-                    fixed_transfers.append({
-                        'name': 'residual_output',
-                        'elems': residual_output_elems,
-                        'bits': residual_bits,
-                    })
-            if residual_input_stream_elems > 0:
+            if residual_output_uses_main_stream:
+                forced_bits['output'] = residual_bits
+            if residual_input_transfer_elems > 0:
                 fixed_transfers.append({
                     'name': 'residual_input',
-                    'elems': residual_input_stream_elems,
+                    'elems': residual_input_transfer_elems,
                     'bits': residual_bits,
+                })
+            if model_state_transfer_elems > 0:
+                fixed_transfers.append({
+                    'name': 'model_state_input',
+                    'elems': model_state_transfer_elems,
+                    'bits': 8,
                 })
 
             in_b, w_b, out_b, cycle_count = optimize_layer_bits(
-                layer, args.bandwidth, need_input, True, need_output, min_bits=args.min_bits,
-                fixed_transfers=fixed_transfers, forced_bits=forced_bits
+                layer, args.bandwidth, need_input, need_weight, need_output,
+                min_bits=args.min_bits,
+                fixed_transfers=fixed_transfers, forced_bits=forced_bits,
+                input_transfer_elems=main_input_transfer_elems,
             )
             compute_cycles = _compute_layer_cycles(layer)
 
             input_bw_limited  = need_input  and in_b < 8
-            weight_bw_limited = True         and w_b < 8
+            weight_bw_limited = need_weight and w_b < 8
             output_bw_limited = need_output and out_b < 8
 
             results.append({
@@ -1416,11 +2811,19 @@ def run_simulation(args):
                 'type':             layer['type'],
                 'residual_connections': len(layer.get('residual_inputs', [])),
                 'input_elems':      input_elems,
+                'input_transfer_elems': get_footprint_elements(
+                    input_transfer_elems, args.metadata_bits
+                ),
+                'model_state_transfer_elems': get_footprint_elements(
+                    model_state_transfer_elems, args.metadata_bits
+                ),
                 'weight_elems':     weight_elems,
                 'output_elems':     output_elems,
                 'residual_input_elems': (
-                    get_footprint_elements(residual_input_stream_elems, args.metadata_bits)
-                    if residual_input_stream_elems else 0
+                    get_footprint_elements(
+                        residual_input_transfer_elems, args.metadata_bits
+                    )
+                    if residual_input_transfer_elems else 0
                 ),
                 'residual_output_elems': (
                     get_footprint_elements(residual_output_elems, args.metadata_bits)
@@ -1428,11 +2831,35 @@ def run_simulation(args):
                 ),
                 'output_banked':    output_banked,
                 'perm_elems':       perm_elems,
+                'cache_required_elems': cache_step[
+                    'execution_cache_required_elems'
+                ],
+                'cache_resident_before_elems': sum(
+                    cache_plan['output_banked_elems'][producer_index]
+                    for producer_index in cache_step[
+                        'resident_before_producer_indices'
+                    ]
+                ),
+                'cache_resident_after_elems': cache_step[
+                    'resident_after_elems'
+                ],
+                'live_producer_layer_indices': cache_step[
+                    'logical_live_producer_indices'
+                ],
+                'evicted_producer_layer_indices': cache_step[
+                    'evicted_producer_indices'
+                ],
+                'input_transfer_producer_layer_indices': cache_step[
+                    'input_transfer_producer_indices'
+                ],
+                'output_evicted_at_layer_index': cache_step[
+                    'output_evicted_at'
+                ],
                 'next_xin_banked':  next_xin_banked,
                 'footprint_banks':  output_banked // bank_size,
                 'next_xin_banks':   next_xin_banked // bank_size,
                 'next_layer_name':  next_layer['name'] if next_layer else None,
-                'total_required':   output_banked + next_xin_banked,
+                'total_required':   cache_step['execution_cache_required_elems'],
                 'filter_height':    layer.get('filter_height', 0),
                 'filter_width':     layer.get('filter_width', 0),
                 'in_channels':      layer.get('in_channels', 0),
@@ -1442,13 +2869,17 @@ def run_simulation(args):
                 'output_channel_height': layer.get('output_channel_height', 0),
                 'output_channel_width':  layer.get('output_channel_width', 0),
                 'stay_on_chip':     stay_on_chip,
-                'xin_from_cache':   rule_xin_from_cache,
-                'need_input_transfer': need_input,
+                'xin_from_cache':   not need_any_input,
+                'need_input_transfer': need_any_input,
                 'rule':             rule_name,
+                'placement_policy': (
+                    'producer_consumer_resident'
+                    if stay_on_chip else 'producer_consumer_spill'
+                ),
                 'reason': (
-                    rule_name if stay_on_chip
-                    else f"no rule fits (flagged)" if rule_name == 'FLAGGED'
-                    else f"{rule_name} — output to external"
+                    'producer-consumer lifetime retained'
+                    if stay_on_chip else
+                    'producer-consumer lifetime spilled or evicted'
                 ),
                 'residual_producer_name': layer.get('residual_producer_name'),
                 'residual_output_consumers': layer.get('residual_output_consumers', []),
@@ -1456,17 +2887,23 @@ def run_simulation(args):
                 'input_bits':       in_b,
                 'weight_bits':      w_b,
                 'output_bits':      out_b,
-                'residual_input_bits': residual_bits if residual_input_stream_elems else None,
-                'residual_output_bits': residual_bits if residual_output_elems else None,
+                'residual_input_bits': (
+                    residual_bits if residual_input_transfer_elems else None
+                ),
+                'residual_output_bits': (
+                    residual_bits
+                    if residual_output_elems and need_output else None
+                ),
                 'input_bw_limited':   input_bw_limited,
                 'weight_bw_limited':  weight_bw_limited,
                 'output_bw_limited':  output_bw_limited,
-                'residual_input_bw_limited': residual_input_stream_elems > 0,
-                'residual_output_bw_limited': residual_output_elems > 0,
+                'residual_input_bw_limited': residual_input_transfer_elems > 0,
+                'residual_output_bw_limited': (
+                    residual_output_elems > 0 and need_output
+                ),
                 'compute_cycles':   compute_cycles,
                 'total_cycles':     cycle_count,
             })
-            prev_stay_on_chip = stay_on_chip
 
         # --- Console output ---
         COL = 11
@@ -1475,7 +2912,7 @@ def run_simulation(args):
             f"{'Layer Name':<45} | {'Type':<14}"
             f" | {'Input':>{COL}} | {'Weights':>{COL}}"
             f" | {'Output':>{COL}} | {'Banked':>{COL}}"
-            f" | {'NextXin':>{COL}} | {'OnChip':<7}"
+            f" | {'Required':>{COL}} | {'Resident':>{COL}} | {'OnChip':<7}"
             f" | {'inB':>{BWCOL}} | {'wB':>{BWCOL}} | {'outB':>{BWCOL}}"
             f" | Reason"
         )
@@ -1491,7 +2928,8 @@ def run_simulation(args):
                 f" | {fmt_elems(res['weight_elems']):>{COL}}"
                 f" | {fmt_elems(res['output_elems']):>{COL}}"
                 f" | {fmt_elems(res['output_banked']):>{COL}}"
-                f" | {fmt_elems(res['next_xin_banked']):>{COL}}"
+                f" | {fmt_elems(res['cache_required_elems']):>{COL}}"
+                f" | {fmt_elems(res['cache_resident_after_elems']):>{COL}}"
                 f" | {on_chip_str:<7}"
                 f" | {res['input_bits']:>{BWCOL}} | {res['weight_bits']:>{BWCOL}} | {res['output_bits']:>{BWCOL}}"
                 f" | {res['reason']}"
@@ -1506,7 +2944,12 @@ def run_simulation(args):
         print(f"Layers marked QUANTIZE:    {quantize_count}")
         print(f"Layers FLAGGED (no rule):  {flagged_count}")
 
-        cache_map = build_cache_map(cache_map_layers)
+        cache_map = build_cache_map(
+            cache_map_layers,
+            cache_elements=cache_elements,
+            bank_size=bank_size,
+            metadata_bits=args.metadata_bits,
+        )
         print_cache_map(cache_map)
 
         # --- off_chip_layers: names only ---
@@ -1525,6 +2968,7 @@ def run_simulation(args):
                 'batch_size':     args.batch_size,
                 'bandwidth':      args.bandwidth,
                 'min_bits':       args.min_bits,
+                'cache_policy':   cache_plan['policy'],
                 'timestamp':      datetime.utcnow().isoformat() + 'Z',
             },
             'summary': {
@@ -1535,7 +2979,7 @@ def run_simulation(args):
             'layers': results,
             'cache_map': cache_map,
             'off_chip_layers': off_chip_layers,
-            'rules': serialize_rules(),
+            'rules': serialize_producer_consumer_policy(),
         }
 
         out_dir  = os.path.dirname(os.path.abspath(__file__))

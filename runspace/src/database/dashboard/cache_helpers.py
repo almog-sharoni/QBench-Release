@@ -60,6 +60,43 @@ def _build_bank_states(layers, num_banks, bank_size, rule_meta=None):
         we   = int(layer.get('weight_elems', 0) or 0)
         ie   = int(layer.get('input_elems',  0) or 0)
 
+        if 'cache_resident_after_elems' in layer:
+            resident_elems = int(layer.get('cache_resident_after_elems', 0) or 0)
+            live_b = min(
+                num_banks,
+                math.ceil(resident_elems / bank_size) if resident_elems > 0 else 0,
+            )
+            requested_stream_b = (
+                (2 if layer.get('need_input_transfer') else 0)
+                + (2 if not stay else 0)
+            )
+            stream_b = min(requested_stream_b, max(0, num_banks - live_b))
+            free_b = max(0, num_banks - live_b - stream_b)
+            banks = (
+                [{'type': 'xout', 'label': 'live'} for _ in range(live_b)]
+                + [{'type': 'stream', 'label': '~'} for _ in range(stream_b)]
+                + [{'type': 'free', 'label': ''} for _ in range(free_b)]
+            )
+            states.append({
+                'name': layer.get('name', ''),
+                'type': layer.get('type', ''),
+                'rule': rule,
+                'reason': layer.get('reason', ''),
+                'stay': stay,
+                'xin_b': 0,
+                'xout_b': live_b,
+                'xr_b': 0,
+                'wt_b': 0,
+                'stream_b': stream_b,
+                'free_b': free_b,
+                'output': _fmt_e(oe),
+                'weights': _fmt_e(we),
+                'input': _fmt_e(ie),
+                'banks': banks,
+                'lifetime_policy': True,
+            })
+            continue
+
         ob = math.ceil(oe / bank_size) if oe > 0 else 0
         wb = math.ceil(we / bank_size) if we > 0 else 0
         ib = math.ceil(ie / bank_size) if ie > 0 else 0
@@ -259,7 +296,7 @@ def _render_bank_viz_html(states, num_banks, bank_size, cache_elements):
 
 <div id="legend">
   <div class="leg-item"><div class="leg-dot leg-xin"></div> xin (in cache)</div>
-  <div class="leg-item"><div class="leg-dot leg-xout"></div> xout (on-chip output)</div>
+  <div class="leg-item"><div class="leg-dot leg-xout"></div> resident activation</div>
   <div class="leg-item"><div class="leg-dot leg-xr"></div> x_r (residual stream)</div>
   <div class="leg-item"><div class="leg-dot leg-weights"></div> Weights</div>
   <div class="leg-item"><div class="leg-dot leg-stream"></div> Streaming buffer (~)</div>
@@ -279,7 +316,7 @@ def _render_bank_viz_html(states, num_banks, bank_size, cache_elements):
 
 <div id="stats">
   <div class="stat-box orange"><div class="stat-val" id="st-xin">0</div><div class="stat-lbl">xin banks</div></div>
-  <div class="stat-box green" ><div class="stat-val" id="st-xout">0</div><div class="stat-lbl">xout banks</div></div>
+    <div class="stat-box green" ><div class="stat-val" id="st-xout">0</div><div class="stat-lbl">resident banks</div></div>
   <div class="stat-box" id="xr-box" style="border-color:#c084fc;background:#faf5ff;display:none">
     <div class="stat-val" id="st-xr">0</div><div class="stat-lbl">x_r banks</div>
   </div>
@@ -379,5 +416,3 @@ setLayer(0);
 </script>
 </body>
 </html>"""
-
-

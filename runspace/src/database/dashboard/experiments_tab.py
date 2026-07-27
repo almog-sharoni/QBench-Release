@@ -822,9 +822,25 @@ else:
                 generated_date = graph_meta.get('generated_date')
                 if graph_meta.get('source') == 'cache' and generated_date:
                     st.caption(f"Loaded cached graph generated at {generated_date}")
+                if graph_meta.get('cache_size_m') is not None:
+                    st.caption(
+                        f"Cache placement: {graph_meta.get('cache_size_m')} MB, "
+                        f"{graph_meta.get('num_banks')} banks · "
+                        f"{graph_meta.get('num_streamed_edges', 0)} streamed edges · "
+                        f"{graph_meta.get('num_weight_streams', 0)} weight streams"
+                    )
         
-            st.markdown("**Green** = Quantized Layers ")
-            st.info("💡 **Interactive**: Click on dashed boxes (compound nodes) to collapse/expand them! Use mouse wheel to zoom.")
+            st.markdown(
+                "**Green nodes** = quantized layers · "
+                "**Amber arrows** = cache-resident paths for the selected layer · "
+                "**Red arrows** = streamed activation/residual connections · "
+                "**Blue dashed W arrows** = streamed weights"
+            )
+            st.info(
+                "💡 **Interactive**: Click a layer to pin its metadata and highlight every "
+                "arrow resident in cache at that stage. Click it again to clear. Use the "
+                "mouse wheel to zoom."
+            )
         
             import streamlit.components.v1 as components
         
@@ -905,7 +921,7 @@ else:
                     font-size: 11px;
                     color: #111827;
                     box-shadow: 0 6px 16px rgba(15, 23, 42, 0.18);
-                    max-width: 260px;
+                    max-width: 340px;
                     line-height: 1.25;
                 }}
                 #hover-tooltip {{
@@ -989,6 +1005,15 @@ else:
                         var FIT_PADDING = 80;
                         var currentMinZoom = ABS_ZOOM_MIN;
 
+                        // Reserve enough rank distance for the text printed on
+                        // each arrow. Dagre's minLen is measured in ranks, so
+                        // longer labels automatically receive longer edges.
+                        function edgeLabelMinLen(edge) {{
+                            var label = String(edge.data('label') || '');
+                            var estimatedLabelPixels = label.length * 7 + 20;
+                            return Math.max(1, Math.ceil(estimatedLabelPixels / 72));
+                        }}
+
                         var cy = cytoscape({{
                             container: document.getElementById('cy'),
                             elements: elements,
@@ -1033,11 +1058,101 @@ else:
                                 {{
                                     selector: 'edge',
                                     style: {{
+                                        'content': 'data(label)',
+                                        'font-size': '10px',
+                                        'color': '#475569',
+                                        'text-background-color': '#ffffff',
+                                        'text-background-opacity': 0.85,
+                                        'text-background-padding': '2px',
+                                        'text-rotation': 'autorotate',
                                         'curve-style': 'bezier',
                                         'target-arrow-shape': 'triangle',
                                         'line-color': '#cbd5e1',
                                         'target-arrow-color': '#cbd5e1',
                                         'width': 2
+                                    }}
+                                }},
+                                {{
+                                    selector: 'node.streamed-weight',
+                                    style: {{
+                                        'content': 'W',
+                                        'shape': 'ellipse',
+                                        'width': '18px',
+                                        'height': '18px',
+                                        'padding': '2px',
+                                        'font-size': '8px',
+                                        'font-weight': 'bold',
+                                        'background-color': '#dbeafe',
+                                        'border-color': '#60a5fa',
+                                        'border-width': 1
+                                    }}
+                                }},
+                                {{
+                                    selector: 'edge.streamed-out',
+                                    style: {{
+                                        'line-color': '#ef4444',
+                                        'target-arrow-color': '#ef4444',
+                                        'color': '#b91c1c',
+                                        'line-style': 'dashed',
+                                        'width': 3,
+                                        'font-weight': 'bold'
+                                    }}
+                                }},
+                                {{
+                                    selector: 'edge.weight-stream',
+                                    style: {{
+                                        'line-color': '#60a5fa',
+                                        'target-arrow-color': '#60a5fa',
+                                        'color': '#2563eb',
+                                        'line-style': 'dashed',
+                                        'width': 1,
+                                        'font-size': '8px',
+                                        'target-arrow-shape': 'triangle'
+                                    }}
+                                }},
+                                {{
+                                    selector: 'edge.cache-dimmed',
+                                    style: {{
+                                        'opacity': 0.1,
+                                        'text-opacity': 0.08
+                                    }}
+                                }},
+                                {{
+                                    selector: 'edge.cache-highlight',
+                                    style: {{
+                                        'line-color': '#f59e0b',
+                                        'target-arrow-color': '#f59e0b',
+                                        'color': '#92400e',
+                                        'width': 5,
+                                        'opacity': 1,
+                                        'text-opacity': 1,
+                                        'font-weight': 'bold',
+                                        'z-index': 9999
+                                    }}
+                                }},
+                                {{
+                                    selector: 'edge.streamed-out.cache-highlight',
+                                    style: {{
+                                        'line-color': '#ef4444',
+                                        'target-arrow-color': '#ef4444',
+                                        'color': '#b91c1c',
+                                        'width': 6
+                                    }}
+                                }},
+                                {{
+                                    selector: 'edge.weight-stream.cache-highlight',
+                                    style: {{
+                                        'line-color': '#2563eb',
+                                        'target-arrow-color': '#2563eb',
+                                        'color': '#1d4ed8',
+                                        'width': 4
+                                    }}
+                                }},
+                                {{
+                                    selector: 'node.cache-context-node',
+                                    style: {{
+                                        'border-color': '#f59e0b',
+                                        'border-width': 4
                                     }}
                                 }},
                                 {{
@@ -1054,15 +1169,21 @@ else:
                             layout: {{
                                 name: 'dagre',
                                 rankDir: 'TB',
-                                nodeSep: 50,
-                                edgeSep: 10,
-                                rankSep: 50
+                                nodeSep: 65,
+                                edgeSep: 30,
+                                rankSep: 72,
+                                minLen: edgeLabelMinLen
                             }}
                         }});
 
                         var api = cy.expandCollapse({{
                             layoutBy: {{
                                 name: "dagre",
+                                rankDir: 'TB',
+                                nodeSep: 65,
+                                edgeSep: 30,
+                                rankSep: 72,
+                                minLen: edgeLabelMinLen,
                                 animate: true,
                                 randomize: false,
                                 fit: false
@@ -1083,6 +1204,7 @@ else:
                         var fsBtn = document.getElementById('fullscreen-btn');
 
                         var pinnedCards = {{}};
+                        var activeCacheNodeId = null;
                         var showAllMetadata = false;
                         var boxZoomEnabled = false;
                         var rightDragActive = false;
@@ -1126,23 +1248,118 @@ else:
                         }}
 
                         function nodeHasMetadata(node) {{
-                            return !!node.data('var_name');
+                            return !!node.data('var_name') &&
+                                node.data('node_kind') !== 'streamed_weight';
                         }}
 
                         function metadataHtml(node) {{
                             var t = node.data('var_name') || node.data('label') || node.id();
-                            var inS = node.data('input_shape') || '-';
-                            var outS = node.data('output_shape') || '-';
-                            var args = node.data('module_args') || '';
-                            var argsHtml = args
-                                ? "<div style='margin-top:4px;color:#475569;font-size:11px;'>" + esc(args) + "</div>"
-                                : "";
-                            return "<div>" +
-                                "<div style='font-weight:700;color:#0f172a;'>" + esc(t) + "</div>" +
-                                argsHtml +
-                                "<div style='margin-top:6px;'><b>In:</b> " + esc(inS) + "</div>" +
-                                "<div><b>Out:</b> " + esc(outS) + "</div>" +
-                                "</div>";
+                            var layerType = node.data('label') || '-';
+                            var inS = node.data('input_shapes') || node.data('input_shape') || [];
+                            var outS = node.data('output_shape') || [];
+                            var opMeta = node.data('operation_metadata') || {{}};
+                            var activeConnections = node.data('active_cache_connections') || {{}};
+
+                            function fmtShape(value) {{
+                                if (!Array.isArray(value) || value.length === 0) return '-';
+                                var nested = value.some(function(item) {{ return Array.isArray(item); }});
+                                if (nested) {{
+                                    return value.map(fmtShape).join(' + ');
+                                }}
+                                return '[' + value.join(' × ') + ']';
+                            }}
+
+                            function fmtKb(value) {{
+                                var number = Number(value || 0);
+                                if (!isFinite(number)) return '-';
+                                return number.toFixed(3).replace(/\\.?0+$/, '') + ' KB';
+                            }}
+
+                            function prettyKey(key) {{
+                                return String(key).replace(/_/g, ' ').replace(/\\b\\w/g, function(c) {{
+                                    return c.toUpperCase();
+                                }});
+                            }}
+
+                            function fmtMetaValue(value) {{
+                                if (Array.isArray(value)) {{
+                                    var isShape = value.every(function(item) {{
+                                        return typeof item === 'number' || Array.isArray(item);
+                                    }});
+                                    return isShape ? fmtShape(value) : value.join(', ');
+                                }}
+                                if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+                                return value === undefined || value === null ? '-' : String(value);
+                            }}
+
+                            function row(label, value) {{
+                                return "<div style='display:flex;justify-content:space-between;gap:14px;margin-top:3px;'>" +
+                                    "<span style='color:#64748b;'>" + esc(label) + "</span>" +
+                                    "<span style='font-weight:600;text-align:right;'>" + esc(value) + "</span>" +
+                                    "</div>";
+                            }}
+
+                            var html = "<div>" +
+                                "<div style='font-weight:750;color:#0f172a;font-size:12px;'>" + esc(t) + "</div>" +
+                                "<div style='color:#475569;font-size:10px;margin-top:1px;'>" +
+                                    esc(layerType) + " · layer " + esc(node.data('execution_index')) +
+                                "</div>" +
+                                "<div style='border-top:1px solid #e2e8f0;margin-top:6px;padding-top:4px;'>" +
+                                row('Input', fmtShape(inS) + ' · ' + fmtKb(node.data('input_size_kb'))) +
+                                row('Output', fmtShape(outS) + ' · ' + fmtKb(node.data('output_size_kb')));
+
+                            if (Number(node.data('weight_elements') || 0) > 0) {{
+                                html += row(
+                                    'Weights',
+                                    fmtKb(node.data('weight_size_kb')) + ' · streamed via ' +
+                                    fmtKb(node.data('weight_stream_kb'))
+                                );
+                            }}
+
+                            var cacheState = node.data('cache_green');
+                            var cacheLabel = cacheState === true ? 'GREEN' : (cacheState === false ? 'RED' : '-');
+                            html += row(
+                                'Cache',
+                                'in ' + fmtKb(node.data('x_in_kb')) +
+                                ' · out ' + fmtKb(node.data('x_out_kb')) +
+                                ' · total ' + fmtKb(node.data('total_cache_needed_kb')) +
+                                ' · ' + cacheLabel
+                            );
+                            if (node.data('cache_rule')) {{
+                                html += row('Cache rule', prettyKey(node.data('cache_rule')));
+                            }}
+                            if (node.data('input_streamed') || node.data('output_streamed')) {{
+                                var transfers = [];
+                                if (node.data('input_streamed')) transfers.push('input streamed in');
+                                if (node.data('output_streamed')) transfers.push('output streamed out');
+                                html += row('Activation transfer', transfers.join(' · '));
+                            }}
+                            if (
+                                Number(node.data('pipeline_boundary_kb') || 0) > 0 ||
+                                Number(node.data('jumpback_kb') || 0) > 0
+                            ) {{
+                                html += row(
+                                    'Pipeline',
+                                    'boundary ' + fmtKb(node.data('pipeline_boundary_kb')) +
+                                    ' · jumpback ' + fmtKb(node.data('jumpback_kb')) +
+                                    ' · overlap ' + fmtKb(node.data('input_output_overlap_kb'))
+                                );
+                            }}
+
+                            var connectionCount = Object.keys(activeConnections).length;
+                            if (connectionCount > 0) {{
+                                html += row('Live connections', connectionCount);
+                            }}
+
+                            var opKeys = Object.keys(opMeta);
+                            if (opKeys.length > 0) {{
+                                html += "<div style='border-top:1px solid #e2e8f0;margin-top:6px;padding-top:3px;'>";
+                                opKeys.forEach(function(key) {{
+                                    html += row(prettyKey(key), fmtMetaValue(opMeta[key]));
+                                }});
+                                html += "</div>";
+                            }}
+                            return html + "</div></div>";
                         }}
 
                         function getPointerPosition(evt) {{
@@ -1336,6 +1553,71 @@ else:
                             if (!pinnedCards[nodeId]) return;
                             pinnedCards[nodeId].remove();
                             delete pinnedCards[nodeId];
+                            if (activeCacheNodeId === nodeId) {{
+                                clearCacheHighlight();
+                            }}
+                        }}
+
+                        function cacheEdgesForNode(node) {{
+                            var activeConnections = node.data('active_cache_connections') || {{}};
+                            if (typeof activeConnections === 'string') {{
+                                try {{
+                                    activeConnections = JSON.parse(activeConnections);
+                                }} catch (_error) {{
+                                    activeConnections = {{}};
+                                }}
+                            }}
+                            var activeColumns = {{}};
+                            Object.keys(activeConnections).forEach(function(column) {{
+                                if (Number(activeConnections[column] || 0) > 0) {{
+                                    activeColumns[column] = true;
+                                }}
+                            }});
+
+                            var nodeId = node.id();
+                            var hasXIn = Number(node.data('x_in_kb') || 0) > 0;
+                            var hasXOut = Number(node.data('x_out_kb') || 0) > 0;
+                            var hasWeightStream = Number(node.data('weight_stream_kb') || 0) > 0;
+
+                            return cy.edges().filter(function(edge) {{
+                                var column = edge.data('cache_map_column');
+                                var lifetimeColumn = edge.data('cache_lifetime_column');
+                                var kind = edge.data('connection_kind');
+                                if (column && activeColumns[column]) return true;
+                                if (lifetimeColumn && activeColumns[lifetimeColumn]) return true;
+                                if (
+                                    kind === 'weight_stream' && hasWeightStream &&
+                                    edge.target().id() === nodeId
+                                ) return true;
+                                if (
+                                    hasWeightStream && kind === 'model_state' &&
+                                    edge.target().id() === nodeId
+                                ) return true;
+                                if (
+                                    hasXIn && edge.target().id() === nodeId &&
+                                    (column === 'x_in' || kind === 'input')
+                                ) return true;
+                                if (
+                                    hasXOut && edge.source().id() === nodeId &&
+                                    kind !== 'weight_stream'
+                                ) return true;
+                                return false;
+                            }});
+                        }}
+
+                        function clearCacheHighlight() {{
+                            cy.edges().removeClass('cache-highlight cache-dimmed');
+                            cy.nodes().removeClass('cache-context-node');
+                            activeCacheNodeId = null;
+                        }}
+
+                        function highlightCacheForNode(node) {{
+                            clearCacheHighlight();
+                            var cacheEdges = cacheEdgesForNode(node);
+                            cy.edges().addClass('cache-dimmed');
+                            cacheEdges.removeClass('cache-dimmed').addClass('cache-highlight');
+                            node.addClass('cache-context-node');
+                            activeCacheNodeId = node.id();
                         }}
 
                         function positionPinnedCard(nodeId) {{
@@ -1465,6 +1747,7 @@ else:
                             hideHoverMetadata();
                             setShowAllMetadata(false);
                             clearPinnedCards();
+                            clearCacheHighlight();
                             refreshMinZoomToFitGraph();
                             cy.fit(cy.elements(), FIT_PADDING);
                             cy.zoom(clamp(cy.zoom(), currentMinZoom, ZOOM_MAX));
@@ -1488,7 +1771,17 @@ else:
                         cyContainer.addEventListener("mouseleave", hideHoverMetadata);
                         cy.on("tap", "node", function(evt) {{
                             hideHoverMetadata();
-                            togglePinnedCard(evt.target);
+                            var node = evt.target;
+                            if (!nodeHasMetadata(node)) return;
+                            var nodeId = node.id();
+                            if (activeCacheNodeId === nodeId && pinnedCards[nodeId]) {{
+                                removePinnedCard(nodeId);
+                                return;
+                            }}
+                            if (!pinnedCards[nodeId]) {{
+                                togglePinnedCard(node);
+                            }}
+                            highlightCacheForNode(node);
                         }});
                         cy.on("pan zoom resize render position", function() {{
                             constrainPan();

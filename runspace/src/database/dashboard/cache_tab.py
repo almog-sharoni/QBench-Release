@@ -790,7 +790,10 @@ def _render_cache_run_details(cache_sim_df):
             'name', 'type', 'stay_on_chip', 'rule', 'reason',
             'residual_connections',
             'input_elems', 'weight_elems', 'output_elems',
-            'output_banked', 'next_xin_banked', 'next_layer_name',
+            'input_transfer_elems', 'model_state_transfer_elems',
+            'output_banked', 'cache_required_elems',
+            'cache_resident_before_elems', 'cache_resident_after_elems',
+            'next_layer_name',
             'input_bits', 'weight_bits', 'output_bits',
             'residual_input_elems', 'residual_input_bits',
             'residual_output_elems', 'residual_output_bits',
@@ -802,8 +805,10 @@ def _render_cache_run_details(cache_sim_df):
         layers_viz = layers_df[display_cols].copy()
         for col in [
             'input_elems', 'weight_elems', 'output_elems',
+            'input_transfer_elems', 'model_state_transfer_elems',
             'residual_input_elems', 'residual_output_elems',
-            'output_banked', 'next_xin_banked',
+            'output_banked', 'cache_required_elems',
+            'cache_resident_before_elems', 'cache_resident_after_elems',
         ]:
             if col in layers_viz.columns:
                 layers_viz[col] = layers_viz[col].astype(float) / 1000.0
@@ -826,8 +831,12 @@ def _render_cache_run_details(cache_sim_df):
                 'input_elems':     st.column_config.NumberColumn("Input (K)",    format="%.1f K", width="small"),
                 'weight_elems':    st.column_config.NumberColumn("Weights (K)",  format="%.1f K", width="small"),
                 'output_elems':    st.column_config.NumberColumn("Output (K)",   format="%.1f K", width="small"),
+                'input_transfer_elems': st.column_config.NumberColumn("Input TX (K)", format="%.1f K", width="small"),
+                'model_state_transfer_elems': st.column_config.NumberColumn("State TX (K)", format="%.1f K", width="small"),
                 'output_banked':   st.column_config.NumberColumn("Banked (K)",   format="%.1f K", width="small"),
-                'next_xin_banked': st.column_config.NumberColumn("Next Xin (K)", format="%.1f K", width="small"),
+                'cache_required_elems': st.column_config.NumberColumn("Cache Required (K)", format="%.1f K", width="small"),
+                'cache_resident_before_elems': st.column_config.NumberColumn("Resident Before (K)", format="%.1f K", width="small"),
+                'cache_resident_after_elems': st.column_config.NumberColumn("Resident After (K)", format="%.1f K", width="small"),
                 'next_layer_name': st.column_config.TextColumn("Next Layer",   width="large"),
                 'input_bits':      st.column_config.NumberColumn("in Bits",      format="%d", width="small"),
                 'weight_bits':     st.column_config.NumberColumn("W Bits",       format="%d", width="small"),

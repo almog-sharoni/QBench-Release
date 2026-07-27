@@ -84,39 +84,60 @@ def get_architecture_graph_model_options(db_path, fm_db_path, models_config_path
 def generate_live_model_graph_bundle(model_name, graph_depth=12):
     if not TORCH_AVAILABLE:
         raise RuntimeError("torch is not available in this environment.")
-    if not GRAPH_VIZ_AVAILABLE:
-        raise RuntimeError("Graph visualization dependencies are not available.")
-
-    from runspace.src.utils.model_input_utils import resolve_model_input_size
-
-    adapter = GenericAdapter(
-        model_name=model_name,
-        quantized_ops=["all"],
-        input_quantization=False,
-        enable_fx_quantization=False,
-        skip_calibration=True,
+    from runspace.experiments.asic_cache_simulation.simulate_cache import (
+        analyze_model,
     )
-    model = adapter.model
-    model.eval()
-    input_size = resolve_model_input_size(model)
+    from runspace.src.database.generate_model_graphs import (
+        GRAPH_SCHEMA_VERSION,
+        generate_cache_map_graph_json,
+        resolve_graph_cache_config,
+        validate_cache_trace,
+    )
 
-    graph_json = generate_hierarchical_json(
-        model,
-        input_size=input_size,
-        model_name=model_name,
-        depth=graph_depth,
+    db = RunDatabase(db_path=DB_PATH)
+    cache_config = resolve_graph_cache_config(db, model_name)
+
+    _, cache_map_layers = analyze_model(
+        {'name': model_name, 'weights': None},
+        batch_size=1,
+        device='cpu',
+        adapter_cfg={'type': 'generic', 'build_quantized': True},
+        return_cache_map_layers=True,
+    )
+    trace_validation = validate_cache_trace(cache_map_layers)
+    graph_json = generate_cache_map_graph_json(
+        cache_map_layers,
+        cache_elements=cache_config['cache_elements'],
+        bank_size=cache_config['bank_size'],
+        metadata_bits=cache_config['metadata_bits'],
+        include_weight_streams=True,
     )
 
     parsed_json = json.loads(graph_json)
     num_nodes = sum(1 for e in parsed_json if e.get('data', {}).get('type') in ('node', 'compound'))
     num_quantized = sum(1 for e in parsed_json if '#a7f3d0' in str(e.get('data', {}).get('color', '')))
+    num_streamed_edges = sum(
+        1 for element in parsed_json
+        if element.get('data', {}).get('streamed_out') is True
+    )
+    num_weight_streams = sum(
+        1 for element in parsed_json
+        if element.get('data', {}).get('connection_kind') == 'weight_stream'
+    )
 
     return graph_json, {
         'model_name': model_name,
         'graph_size_original': len(graph_json.encode('utf-8')),
         'num_nodes': num_nodes,
         'num_quantized_layers': num_quantized,
+        'num_streamed_edges': num_streamed_edges,
+        'num_weight_streams': num_weight_streams,
         'graph_depth': graph_depth,
+        'graph_kind': 'cache_map_runtime',
+        'graph_schema_version': GRAPH_SCHEMA_VERSION,
+        'graph_validation': 'passed',
+        **trace_validation,
+        **cache_config,
         'generated_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'status': 'LIVE',
     }
@@ -134,7 +155,18 @@ def get_cached_model_graph_bundle(db_path, model_name):
 def load_or_generate_model_graph_bundle(model_name, use_cache=True, force_regenerate=False):
     if use_cache and not force_regenerate:
         graph_json, graph_meta = get_cached_model_graph_bundle(DB_PATH, model_name)
-        if graph_json:
+        from runspace.src.database.generate_model_graphs import (
+            GRAPH_SCHEMA_VERSION,
+            graph_json_has_runtime_hover_metadata,
+        )
+        cached_schema = int(
+            (graph_meta or {}).get('graph_schema_version') or 0
+        )
+        if (
+            graph_json
+            and cached_schema >= GRAPH_SCHEMA_VERSION
+            and graph_json_has_runtime_hover_metadata(graph_json)
+        ):
             return graph_json, graph_meta, "cache"
 
     graph_json, graph_meta = generate_live_model_graph_bundle(model_name)
