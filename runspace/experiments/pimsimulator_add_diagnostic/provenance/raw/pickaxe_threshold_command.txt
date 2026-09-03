@@ -1,0 +1,1 @@
+git log --all --format=fuller -S'expectPIMBench(2.0)' -p -- src/tests/PIMBenchTestCases.cpp

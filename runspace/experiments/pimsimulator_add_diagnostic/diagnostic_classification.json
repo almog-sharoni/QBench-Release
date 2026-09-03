@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "arm": "pimsimulator_add_post_validation_diagnostic",
+  "status": "COMPLETE_STOPPED_AFTER_CLASSIFICATION",
+  "classification": "UPSTREAM_PERFORMANCE_THRESHOLD_DEVIATION",
+  "classification_cardinality": 1,
+  "locked_commit": "3703d1f19c8f027360cc33a3243eb271e3bb6898",
+  "run_id": "add_diagnostic_20260823T163000Z",
+  "evidence_label": "SIMULATED_PIM_HBM2",
+  "assertion": {
+    "expression": "float(non_pim_cycles) / pim_cycles > 2.0",
+    "non_pim_cycles": 6651,
+    "pim_cycles": 3349,
+    "exact_real_ratio": 1.985965959988056,
+    "assertion_float_ratio": 1.9859659671783447,
+    "largest_passing_integer_pim_cycles": 3325,
+    "observed_excess_cycles": 24,
+    "exit_code": 1,
+    "preserved_as_failure": true
+  },
+  "functional_diagnostic": {
+    "built_in_test_exit_code": 0,
+    "elements_compared": 1048576,
+    "reference_fp16_bit_mismatches": 0,
+    "recomputed_fp16_bit_mismatches": 0,
+    "functional_failure_supported": false
+  },
+  "determinism_diagnostic": {
+    "repeat_count": 5,
+    "distinct_non_pim_cycle_counts": [6651],
+    "distinct_pim_cycle_counts": [3349],
+    "distinct_exit_codes": [1],
+    "unchanged_binary": true,
+    "nondeterministic_simulation_supported": false
+  },
+  "configuration_diagnostic": {
+    "device_configuration": "ini/HBM2_samsung_2M_16B_x64.ini",
+    "system_configuration": "system_hbm_64ch.ini",
+    "pim_channels": 64,
+    "pim_ranks": 1,
+    "matches_locked_benchmark_source": true,
+    "alternate_upstream_reference_configuration_found": false,
+    "configuration_mismatch_supported": false
+  },
+  "provenance_diagnostic": {
+    "threshold_origin_commit": "b00e73a3ca1a421eb10a96b0d2f5a0f1ef973ed8",
+    "all_bank_parkout_commit": "994d66bf7172903dd8d198dfe4313bcb4326738a",
+    "threshold_changed_after_origin": false,
+    "post_threshold_all_bank_parkout_change": true,
+    "cycles_after_largest_passing_cycle_are_final_parkout_tail": true
+  },
+  "recommendation": {
+    "may_enter_future_separately_reviewed_validation_stage": true,
+    "required_label": "VALIDATED_WITH_UPSTREAM_PERFORMANCE_THRESHOLD_DEVIATION",
+    "retain_observed_pim_cycles": 3349,
+    "claim_upstream_test_pass": false,
+    "launch_workload_adapter_now": false,
+    "launch_joint_optimization_now": false
+  },
+  "frozen_phase2_status_changed": false
+}

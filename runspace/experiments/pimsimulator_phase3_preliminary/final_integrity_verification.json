@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "verified_utc": "2026-08-23T17:34:42Z",
+  "authoritative_completion_manifest": {
+    "path": "phase3_full_spec_completion_manifest.json",
+    "sha256": "ac01cb655d54adc3faa4aed59655866a8f28de8c0f51acbd3611952261a88212"
+  },
+  "frozen_bundle_stream_verification": {
+    "hash_definition": "sha256sum_manifest_stream_v1",
+    "phase2_feasibility": {
+      "expected": "8f0709f39267e79414cf9b7c9b2bde675b42531ffa45d90c0c71b730ca50f97b",
+      "observed": "8f0709f39267e79414cf9b7c9b2bde675b42531ffa45d90c0c71b730ca50f97b",
+      "match": true
+    },
+    "add_diagnostic": {
+      "expected": "6d64351133f952431d478162f644b0ddab6b5a3fb3fca40190d0fb5dd7fc8e96",
+      "observed": "6d64351133f952431d478162f644b0ddab6b5a3fb3fca40190d0fb5dd7fc8e96",
+      "match": true
+    }
+  },
+  "formal_raw_run": {
+    "path": "raw/phase3_preliminary_20260823T165500Z",
+    "artifact_manifest_sha256": "4f8b53e454c28a28424bd06464bc47b2dd69f767b4000a135acef1c49c12d52d",
+    "sha256sum_check_exit_code": 0,
+    "verified": true
+  },
+  "source": {
+    "commit": "3703d1f19c8f027360cc33a3243eb271e3bb6898",
+    "working_tree_clean": true,
+    "upstream_patched": false
+  },
+  "artifact_audit": {
+    "required_artifact_count": 16,
+    "all_present_nonempty": true,
+    "required_hashes_match_completion_manifest": true,
+    "top_level_json_and_csv_parse": true,
+    "pdf_count_checked": 4,
+    "all_pdfs_single_page_and_text_readable": true,
+    "presentation_slide_visually_inspected": true,
+    "shell_syntax_valid": true,
+    "analysis_python_syntax_valid": true
+  },
+  "directional_record_audit": {
+    "logical_records": 83,
+    "unique_physical_runs": 76,
+    "reconstructed_directional_views": 8,
+    "independent_measurements_used": 0,
+    "independent_statistical_samples_used": 0,
+    "verified": true
+  },
+  "locked_final_evaluation_access": {
+    "opened": 0,
+    "decoded": 0,
+    "evaluated": 0,
+    "dataset_directory_enumerated": false
+  },
+  "final_decision": "STOPPED_FULL_SPEC_PROVENANCE_AND_PREREGISTRATION_FAILED",
+  "joint_optimizer_run": false,
+  "joint_gap": "NOT_EVALUATED",
+  "regime_claim_made": false
+}

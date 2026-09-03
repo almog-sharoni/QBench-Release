@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "status": "PREREGISTERED_BEFORE_PHASE3_SIMULATOR_EXECUTION",
+  "model": "ResNet-50",
+  "model_input_shape": [1, 3, 224, 224],
+  "shape_source": {
+    "path": "runspace/experiments/asic_cache_simulation/simulation_results_resnet50.json",
+    "sha256": "6a6a4bec2b90a791b92023382a5fbb45354a0c0e629e6c84164ee44b809fae2d",
+    "repository_commit": "295f0b3a14865496fd10405d4ea5ce0fb15f93b2"
+  },
+  "selected_after_joint_gap_observation": false,
+  "workloads": [
+    {
+      "id": "conv_layer4_0_conv2",
+      "coverage": "compute-heavy convolution/GEMM",
+      "model_node": "layer4.0.conv2",
+      "operation": "Conv2d",
+      "input_shape": [1, 512, 14, 14],
+      "weight_shape": [512, 512, 3, 3],
+      "output_shape": [1, 512, 7, 7],
+      "stride": [2, 2],
+      "padding": [1, 1],
+      "groups": 1,
+      "derivation": "ResNet-50 layer4.0 bottleneck conv2. Reduction K=512*3*3=4608; M=512 output channels; N=7*7=49 output positions; logical MACs=M*K*N=115605504.",
+      "simulator_mapping": "49 sequential batch-1 native GEMV invocations with one resident padded FP16 weight matrix; each result is read before result-location reuse",
+      "native_kernel": "GEMV",
+      "native_mapping_status": "SUPPORTED_KERNEL_WITH_EXTERNAL_IM2COL_ADDITION"
+    },
+    {
+      "id": "relu_layer1_0_post_add",
+      "coverage": "memory-heavy or low-arithmetic-intensity",
+      "model_node": "activation after layer1.0 residual add",
+      "operation": "ReLU",
+      "input_shape": [1, 256, 56, 56],
+      "output_shape": [1, 256, 56, 56],
+      "logical_elements": 802816,
+      "derivation": "First ResNet-50 bottleneck stage emits 256 channels at 56x56; 256*56*56=802816.",
+      "padded_elements": 917504,
+      "padding_overhead_elements": 114688,
+      "simulator_mapping": "native all-bank element-wise ReLU",
+      "native_kernel": "RELU",
+      "native_mapping_status": "SUPPORTED_WITH_REPORTED_TILE_PADDING"
+    },
+    {
+      "id": "add_layer3_0_residual",
+      "coverage": "element-wise operation",
+      "model_node": "add_7",
+      "operation": "ADD",
+      "input_shapes": [[1, 1024, 14, 14], [1, 1024, 14, 14]],
+      "output_shape": [1, 1024, 14, 14],
+      "logical_elements": 200704,
+      "derivation": "layer3.0 main and downsample branches both emit 1024 channels at 14x14; 1024*14*14=200704.",
+      "padded_elements": 262144,
+      "padding_overhead_elements": 61440,
+      "simulator_mapping": "native all-bank element-wise ADD",
+      "native_kernel": "ADD",
+      "native_mapping_status": "SUPPORTED_WITH_REPORTED_TILE_PADDING"
+    },
+    {
+      "id": "fc_classifier",
+      "coverage": "classifier GEMV",
+      "model_node": "fc",
+      "operation": "Linear",
+      "input_shape": [1, 2048],
+      "weight_shape": [1000, 2048],
+      "output_shape": [1, 1000],
+      "derivation": "Canonical 1000-class ResNet-50 classifier following global average pooling; GEMV M=1000, K=2048, vectors=1.",
+      "simulator_mapping": "native GEMV",
+      "native_kernel": "GEMV",
+      "native_mapping_status": "SUPPORTED_WITH_NATIVE_OUTPUT_TILE_PADDING_AND_PARTIAL_SUM_READBACK"
+    },
+    {
+      "id": "avgpool_global_control",
+      "coverage": "unsupported-control / memory reduction",
+      "model_node": "avgpool",
+      "operation": "AdaptiveAvgPool2d",
+      "input_shape": [1, 2048, 7, 7],
+      "output_shape": [1, 2048, 1, 1],
+      "derivation": "ResNet-50 layer4 output has 2048 channels at 7x7 and is reduced spatially to 1x1 before fc.",
+      "simulator_mapping": null,
+      "native_kernel": null,
+      "native_mapping_status": "UNSUPPORTED",
+      "reason": "The locked simulator provides no native pooling or general reduction kernel. No latency will be assigned."
+    }
+  ]
+}

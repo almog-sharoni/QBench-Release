@@ -1,0 +1,1 @@
+g++ -g -O2 -std=c++14 -Wall -Wno-reorder -Wno-sign-compare -Ilib -Isrc -Itools ../exact_compare/exact_add_compare.cpp libdramsim/libdramsim2.a -lgtest -lpthread -o ../exact_compare/exact_add_compare

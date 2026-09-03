@@ -1,0 +1,1 @@
+git show --format=fuller --stat --patch 994d66b

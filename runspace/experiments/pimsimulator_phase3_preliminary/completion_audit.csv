@@ -1,0 +1,28 @@
+requirement_id,requirement,evidence,status,decision
+3A-01,Simulator commit/configuration/classification frozen before capture,phase3_manifest.json,PROVEN,Exact commit and HBM2 FP16 configuration retained
+3A-02,Exact workload/model/checkpoint frozen before capture,phase3_manifest.json; workload_shape_manifest_preregistered_snapshot.json,INCOMPLETE,Model name is fixed but exact resolved checkpoint hash is absent
+3A-03,Development and locked simulator-shape split fixed,preregistration.json,PROVEN,Eleven development and four locked native cases
+3A-04,Locked 48000-image final split protected,locked_final_split_guard.json,PARTIAL,Zero samples accessed but required manifest hash unavailable
+3A-05,All required sensitivity/quality/residency/optimizer/tie/figure fields preregistered,preregistration_compliance_audit.csv,CONTRADICTED,Several required fields were missing before results
+3B-01,Representative operations selected before joint-gap observation,workload_shape_manifest_preregistered_snapshot.json,PROVEN,Five fixed workloads and no optimizer run
+3B-02,Required workload shape/traffic/residency metadata,workload_shape_manifest.json,PARTIAL,Completion metadata is descriptive and checkpoint provenance remains unresolved
+3C-01,Only simulator-supported operations mapped,adapter_mapping_report.md; supported_configuration_matrix.csv,PROVEN,ADD ReLU GEMV mapped and avgpool unsupported
+3C-02,All required host-PIM cost components separately attributed,full_specification_gap_report.md,CONTRADICTED,Several components are included only in aggregates or unavailable
+3D-01,Unsupported formats and provenance labels preserved,representation_validity_matrix.csv; provenance_and_claim_ledger.csv,PROVEN,No low-precision PIM cost or zero placeholder
+3E-01,Directional views preserved and clustered by physical run,physical_run_provenance.csv,PROVEN,83 logical records and 76 physical runs
+3E-02,Directional duplicates treated as independent measurements,same physical_run_provenance.csv,PROVEN_FALSE_USE,Zero records treated as independent Phase-3 samples
+3F-01,Raw outputs/configurations/traces/cycles/transactions/hashes/exits preserved,raw/phase3_preliminary_20260823T165500Z/artifact_sha256sums.txt,PROVEN,Raw native evidence manifest verifies
+3F-02,Instruction/mode/CRF/parkOut cycles separately preserved per workload,transaction_trace_summary.csv; full_specification_gap_report.md,INCOMPLETE,Command counts exist but per-component cycle attribution does not
+3F-03,Determinism verified without artificial averaging,simulator_measurements.csv,PROVEN,Two exact repeats per case and no statistical inflation
+3G-01,Development-only calibration and locked acceptance criterion,preregistration.json; analytical_model_coefficients.json,PROVEN,Locked cases excluded from fitting
+3G-02,Required errors/groupings and y=x plot with no outlier removal,analytical_validation_statistics.csv; analytical_vs_simulated_latency.pdf,PROVEN,Mean median worst operation and descriptive size groups reported
+3H-01,Host-versus-PIM stacked breakdown with explicit provenance,host_pim_cost_breakdown.pdf; provenance_and_claim_ledger.csv,STOPPED_OUTPUT,Available native aggregates shown and unavailable components explicitly marked
+3I-01,Joint and both converged sequential orders evaluated and exhaustively verified,gate_status.json,NOT_RUN,Forbidden by failed prerequisite gates
+3I-02,Positive zero negative inconclusive unsupported invalid counts,gate_status.json; joint_gap_cell_accounting.csv,STOPPED_OUTPUT,One inconclusive arm; unavailable optimizer-cell counts are null rather than false zeros
+3J-01,Mechanism ablations physically sourced and evaluated,mechanism_ablation.csv,DEFERRED,No ablation permitted after optimizer stop
+3K-01,All named preliminary bundle artifacts present,phase3_artifact_sha256sums.txt,PROVEN_AFTER_FINAL_HASH_CHECK,Stopped artifacts use required names
+3K-02,One presentation PDF and speaker script,phase3_preliminary_defense_slide.pdf; speaker_script.md,PROVEN,Visually inspected one-page slide
+HONESTY-01,Upstream ADD deviation unchanged,phase3_manifest.json; frozen diagnostic bundle,PROVEN,Exit 1 strict >2.0 6651/3349 and 24-cycle drain retained
+HONESTY-02,Frozen feasibility and diagnostic bundles unchanged,final_integrity_verification.json,PROVEN_AFTER_FINAL_HASH_CHECK,Full bundle streams must match exact locks
+HONESTY-03,No final-evaluation data opened or evaluated,locked_final_split_guard.json,PROVEN,Zero opened decoded and evaluated samples
+HONESTY-04,No joint-gap regime claim produced,joint_gap_regime_map.pdf; preliminary_results_summary.md,PROVEN,Conclusion is inconclusive and NOT_EVALUATED is not zero

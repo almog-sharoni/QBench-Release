@@ -1,0 +1,33 @@
+Note: Google Test filter = PIMBenchFixture.add
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PIMBenchFixture
+[ RUN      ] PIMBenchFixture.add
+>>Performance Test
+  ADD (PIM disabled)
+  Input/output data dimension : 1048576
+> Test Results 
+> Cycle : 6651
+
+  ADD (PIM enabled)
+  Input/output data dimension : 1048576
+> Test Results 
+> Cycle : 3349
+
+src/tests/PIMBenchTestCases.h:295: Failure
+Value of: (float)non_pim_cycle_ / pim_cycle_ > expected_perf_gain
+  Actual: false
+Expected: true
+1.9859659671783447
+
+> Speed-up : 1.98597
+[  FAILED  ] PIMBenchFixture.add (1646 ms)
+[----------] 1 test from PIMBenchFixture (1647 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1647 ms total)
+[  PASSED  ] 0 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] PIMBenchFixture.add
+
+ 1 FAILED TEST

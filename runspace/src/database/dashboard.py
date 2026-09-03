@@ -18,6 +18,7 @@ _DASHBOARD_PARTS = [
     "cache_helpers.py",
     "cache_tab.py",
     "run_models_tab.py",
+    "model_workbench_tab.py",
     "graph_tab.py",
     "chunk_layout_tab.py",
     "bwaware_best_weights_tab.py",

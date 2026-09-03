@@ -1,0 +1,17 @@
+3703d1f (HEAD -> dev, origin/dev, origin/HEAD) Update readme
+07bdec6 minor changes
+4851c8a Update debugging output format
+8a90a6e Reformat and some fixes
+8bc816a rename execute to sendToBank
+27b55d2 remove unused flag
+c0e2eab rename setCrf to setControl
+b464dde Modified the prerequisite installation method
+05b738e Deleted dummy code in PIMCRFcode(PIMCmdGen)
+fddc44a Deleted dummy code in PIMKernel
+994d66b Modified parkOut() to touch all banks. - Since parkOut() is called after changing to SB mode, all banks should be touched.
+9f9805e Modified address scheme config parser to case-insensitive.
+2efbd27 Modified to swap rows only for emulation paths
+d30f8bb Fixed duplicated behavior in test case
+44aba14 Fixed bank group bits in address mapping scheme 8
+6d8e5f9 correction of typo
+b00e73a Initial commit

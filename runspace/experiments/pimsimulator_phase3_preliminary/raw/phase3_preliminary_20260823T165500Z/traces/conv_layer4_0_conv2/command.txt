@@ -1,0 +1,1 @@
+/phase3/raw/phase3_preliminary_20260823T165500Z/build/phase3_runner --case-id conv_layer4_0_conv2 --kernel GEMV --output 512 --input 4608 --vectors 49 --verify 

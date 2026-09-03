@@ -1,0 +1,94 @@
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/README.md:12:PIMSimulator is a cycle accurate model that Single Instruction, Multiple Data (SIMD) execution units
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/README.md:13:that uses the bank-level parallelism in PIM Block to boost performance that would have otherwise used
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/README.md:111:  * Zero-cycle static branch: supports only a pre-programmed numbers of iterations
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/README.md:168:PIMBenchFixture.
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/README.md:183:# Running: performance test (GEMV)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/README.md:184:./sim --gtest_filter=PIMBenchFixture.gemv
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/README.md:186:# Running: performance test (ADD)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/README.md:187:./sim --gtest_filter=PIMBenchFixture.add
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/README.md:210:Highly recommend you to refer to `src/tests/*` (especially, `src/tests/PIMKernel.cpp` and `src/tests/PIMBenchTestCases.cpp`)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMKernel.h:41:          cycle_(0)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMKernel.h:66:    uint64_t getCycle();
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMKernel.h:110:    unsigned cycle_;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/TestCases.h:45:        cur_cycle = 0;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/TestCases.h:56:        printResult(cur_cycle);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/TestCases.h:59:    uint64_t measureCycle(bool is_write)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/TestCases.h:67:            cur_cycle++;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/TestCases.h:71:        return cur_cycle;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/TestCases.h:83:    void printResult(uint64_t cycle)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/TestCases.h:95:                      getConfigParam(UINT, "BL") / 8 / (cycle * getConfigParam(FLOAT, "tCK"));
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/TestCases.h:125:    uint64_t cur_cycle = 0;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/MemTestCases.cpp:26:    uint64_t bw = measureCycle(false);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/MemTestCases.cpp:34:    uint64_t bw = measureCycle(true);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:13:#include "tests/PIMBenchTestCases.h"
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:18: * PIMBenchTest:
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:19: * micro benchmark for performance comparison between w/ PIM and w/o PIM
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:24:TEST_F(PIMBenchFixture, gemv)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:26:    setPIMBenchTestCase(KernelType::GEMV, 4096, 4096);  // (KernelType, out_vec, in_vec)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:29:    expectPIMBench(2.0);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:32:TEST_F(PIMBenchFixture, mul)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:34:    setPIMBenchTestCase(KernelType::MUL, 2 * 1024 * 1024, 2 * 1024 * 1024);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:37:    expectPIMBench(2.0);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:40:TEST_F(PIMBenchFixture, add)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:42:    setPIMBenchTestCase(KernelType::ADD, 1024 * 1024, 1024 * 1024);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:45:    expectPIMBench(2.0);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:48:TEST_F(PIMBenchFixture, relu)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:50:    setPIMBenchTestCase(KernelType::RELU, 4 * 1024 * 1024, 4 * 1024 * 1024);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.cpp:53:    expectPIMBench(2.0);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:23:class PIMBenchTestCase
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:26:    PIMBenchTestCase(KernelType k, unsigned b, unsigned out, unsigned in)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:40:    virtual ~PIMBenchTestCase()
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:47:    virtual uint64_t measureCycle(bool is_pim_) = 0;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:49:    void run(shared_ptr<MultiChannelMemorySystem> mem_, uint64_t *cycle)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:54:            (*cycle)++;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:116:class GemvPIMBenchTest : public PIMBenchTestCase
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:119:    GemvPIMBenchTest(KernelType k, unsigned b, unsigned out, unsigned in)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:120:        : PIMBenchTestCase(k, b, out, in)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:124:    uint64_t measureCycle(bool is_pim_)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:126:        uint64_t cycle = 0;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:133:            cycle = kernel_->getCycle();
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:145:            run(mem_, &cycle);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:147:            run(mem_, &cycle);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:149:        return cycle;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:153:class EltPIMBenchTest : public PIMBenchTestCase
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:156:    EltPIMBenchTest(KernelType k, unsigned b, unsigned out, unsigned in)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:157:        : PIMBenchTestCase(k, b, out, in)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:164:    uint64_t measureCycle(bool is_pim_ = false)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:166:        uint64_t cycle = 0;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:174:            cycle = kernel_->getCycle();
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:186:            run(mem_, &cycle);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:188:            run(mem_, &cycle);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:190:        return cycle;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:200:class ActPIMBenchTest : public PIMBenchTestCase
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:203:    ActPIMBenchTest(KernelType k, unsigned b, unsigned out, unsigned in)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:204:        : PIMBenchTestCase(k, b, out, in)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:210:    uint64_t measureCycle(bool is_pim_ = false)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:212:        uint64_t cycle = 0;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:220:            cycle = kernel_->getCycle();
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:229:            run(mem_, &cycle);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:231:            run(mem_, &cycle);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:233:        return cycle;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:242:class PIMBenchFixture : public testing::Test
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:247:        pim_cycle_ = 0;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:248:        non_pim_cycle_ = 0;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:255:        printResult(non_pim_cycle_ / static_cast<float>(pim_cycle_));
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:259:    void setPIMBenchTestCase(KernelType k, unsigned out, unsigned in, unsigned batch = 1)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:263:            perfTest = new GemvPIMBenchTest(k, batch, out, in);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:267:            perfTest = new EltPIMBenchTest(k, batch, out, in);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:271:            perfTest = new ActPIMBenchTest(k, batch, out, in);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:282:        pim_cycle_ = perfTest->measureCycle(true);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:283:        printStats(pim_cycle_);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:289:        non_pim_cycle_ = perfTest->measureCycle(false);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:290:        printStats(non_pim_cycle_);
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:293:    void expectPIMBench(float expected_perf_gain)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:295:        EXPECT_TRUE((float)non_pim_cycle_ / pim_cycle_ > expected_perf_gain)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:296:            << (float)non_pim_cycle_ / pim_cycle_ << endl;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:301:        cout << ">>Performance Test" << endl;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:304:    void printStats(uint64_t cycle)
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:307:        cout << "> Cycle : " << cycle << endl;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:313:        cout << "> Speed-up : " << gain << endl;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:317:    uint64_t pim_cycle_, non_pim_cycle_;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMBenchTestCases.h:318:    PIMBenchTestCase *perfTest;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMKernel.cpp:25:        cycle_++;
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMKernel.cpp:30:uint64_t PIMKernel::getCycle()
+runspace/experiments/pimsimulator_add_diagnostic/source/PIMSimulator/src/tests/PIMKernel.cpp:32:    return cycle_;

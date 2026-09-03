@@ -1,0 +1,493 @@
+In file included from src/PIMCmd.cpp:13:
+src/PIMCmd.h:169:5: error: 'uint32_t' does not name a type
+  169 |     uint32_t bitmask(int bit) const
+      |     ^~~~~~~~
+src/PIMCmd.h:19:1: note: 'uint32_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+   18 | #include <sstream>
+  +++ |+#include <cstdint>
+   19 | #include <string>
+src/PIMCmd.h:174:5: error: 'uint32_t' does not name a type
+  174 |     uint32_t toBit(uint32_t val, int bit_len, int bit_pos) const
+      |     ^~~~~~~~
+src/PIMCmd.h:174:5: note: 'uint32_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+src/PIMCmd.h:178:5: error: 'uint32_t' does not name a type
+  178 |     uint32_t fromBit(uint32_t val, int bit_len, int bit_pos) const
+      |     ^~~~~~~~
+src/PIMCmd.h:178:5: note: 'uint32_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+src/PIMCmd.h:235:18: error: 'uint32_t' has not been declared
+  235 |     void fromInt(uint32_t val);
+      |                  ^~~~~~~~
+src/PIMCmd.h:237:5: error: 'uint32_t' does not name a type
+  237 |     uint32_t toInt() const;
+      |     ^~~~~~~~
+src/PIMCmd.h:237:5: note: 'uint32_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+src/PIMCmd.cpp: In function 'bool DRAMSim::operator==(const PIMCmd&, const PIMCmd&)':
+src/PIMCmd.cpp:19:16: error: 'const class DRAMSim::PIMCmd' has no member named 'toInt'; did you mean 'fromInt'?
+   19 |     return lhs.toInt() == rhs.toInt();
+      |                ^~~~~
+      |                fromInt
+src/PIMCmd.cpp:19:31: error: 'const class DRAMSim::PIMCmd' has no member named 'toInt'; did you mean 'fromInt'?
+   19 |     return lhs.toInt() == rhs.toInt();
+      |                               ^~~~~
+      |                               fromInt
+src/PIMCmd.cpp: In function 'bool DRAMSim::operator!=(const PIMCmd&, const PIMCmd&)':
+src/PIMCmd.cpp:24:16: error: 'const class DRAMSim::PIMCmd' has no member named 'toInt'; did you mean 'fromInt'?
+   24 |     return lhs.toInt() != rhs.toInt();
+      |                ^~~~~
+      |                fromInt
+src/PIMCmd.cpp:24:31: error: 'const class DRAMSim::PIMCmd' has no member named 'toInt'; did you mean 'fromInt'?
+   24 |     return lhs.toInt() != rhs.toInt();
+      |                               ^~~~~
+      |                               fromInt
+src/PIMCmd.cpp: At global scope:
+src/PIMCmd.cpp:27:6: error: variable or field 'fromInt' declared void
+   27 | void PIMCmd::fromInt(uint32_t val)
+      |      ^~~~~~
+src/PIMCmd.cpp:27:22: error: 'uint32_t' was not declared in this scope
+   27 | void PIMCmd::fromInt(uint32_t val)
+      |                      ^~~~~~~~
+src/PIMCmd.cpp:14:1: note: 'uint32_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+   13 | #include "PIMCmd.h"
+  +++ |+#include <cstdint>
+   14 | 
+src/PIMCmd.cpp:100:1: error: 'uint32_t' does not name a type
+  100 | uint32_t PIMCmd::toInt() const
+      | ^~~~~~~~
+src/PIMCmd.cpp:100:1: note: 'uint32_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+In file included from src/PIMCmd.cpp:13:
+src/PIMCmd.h:169:5: error: 'uint32_t' does not name a type
+  169 |     uint32_t bitmask(int bit) const
+      |     ^~~~~~~~
+src/PIMCmd.h:19:1: note: 'uint32_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+   18 | #include <sstream>
+  +++ |+#include <cstdint>
+   19 | #include <string>
+src/PIMCmd.h:174:5: error: 'uint32_t' does not name a type
+  174 |     uint32_t toBit(uint32_t val, int bit_len, int bit_pos) const
+      |     ^~~~~~~~
+src/PIMCmd.h:174:5: note: 'uint32_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+src/PIMCmd.h:178:5: error: 'uint32_t' does not name a type
+  178 |     uint32_t fromBit(uint32_t val, int bit_len, int bit_pos) const
+      |     ^~~~~~~~
+src/PIMCmd.h:178:5: note: 'uint32_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+src/PIMCmd.h:235:18: error: 'uint32_t' has not been declared
+  235 |     void fromInt(uint32_t val);
+      |                  ^~~~~~~~
+src/PIMCmd.h:237:5: error: 'uint32_t' does not name a type
+  237 |     uint32_t toInt() const;
+      |     ^~~~~~~~
+src/PIMCmd.h:237:5: note: 'uint32_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+src/PIMCmd.cpp: In function 'bool DRAMSim::operator==(const PIMCmd&, const PIMCmd&)':
+src/PIMCmd.cpp:19:16: error: 'const class DRAMSim::PIMCmd' has no member named 'toInt'; did you mean 'fromInt'?
+   19 |     return lhs.toInt() == rhs.toInt();
+      |                ^~~~~
+      |                fromInt
+src/PIMCmd.cpp:19:31: error: 'const class DRAMSim::PIMCmd' has no member named 'toInt'; did you mean 'fromInt'?
+   19 |     return lhs.toInt() == rhs.toInt();
+      |                               ^~~~~
+      |                               fromInt
+src/PIMCmd.cpp: In function 'bool DRAMSim::operator!=(const PIMCmd&, const PIMCmd&)':
+src/PIMCmd.cpp:24:16: error: 'const class DRAMSim::PIMCmd' has no member named 'toInt'; did you mean 'fromInt'?
+   24 |     return lhs.toInt() != rhs.toInt();
+      |                ^~~~~
+      |                fromInt
+src/PIMCmd.cpp:24:31: error: 'const class DRAMSim::PIMCmd' has no member named 'toInt'; did you mean 'fromInt'?
+   24 |     return lhs.toInt() != rhs.toInt();
+      |                               ^~~~~
+      |                               fromInt
+src/PIMCmd.cpp: At global scope:
+src/PIMCmd.cpp:27:6: error: variable or field 'fromInt' declared void
+   27 | void PIMCmd::fromInt(uint32_t val)
+      |      ^~~~~~
+src/PIMCmd.cpp:27:22: error: 'uint32_t' was not declared in this scope
+   27 | void PIMCmd::fromInt(uint32_t val)
+      |                      ^~~~~~~~
+src/PIMCmd.cpp:14:1: note: 'uint32_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+   13 | #include "PIMCmd.h"
+  +++ |+#include <cstdint>
+   14 | 
+src/PIMCmd.cpp:100:1: error: 'uint32_t' does not name a type
+  100 | uint32_t PIMCmd::toInt() const
+      | ^~~~~~~~
+src/PIMCmd.cpp:100:1: note: 'uint32_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+scons: *** [bin/PIMCmd.os] Error 1
+scons: *** [bin/PIMCmd.o] Error 1
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/BusPacket.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/BankState.h:34,
+                 from src/BankState.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/BankState.h:34,
+                 from src/BankState.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/BankState.h:34,
+                 from src/Bank.h:38,
+                 from src/Bank.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/BusPacket.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/BankState.h:34,
+                 from src/Bank.h:38,
+                 from src/Bank.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/BankState.h:34,
+                 from src/CommandQueue.h:36,
+                 from src/CommandQueue.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/BankState.h:34,
+                 from src/MemoryController.h:37,
+                 from src/MemoryController.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/PIMBlock.h:21,
+                 from src/PIMBlock.cpp:13:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/BankState.h:34,
+                 from src/CommandQueue.h:36,
+                 from src/CommandQueue.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/PIMBlock.h:21,
+                 from src/PIMBlock.cpp:13:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/BankState.h:34,
+                 from src/MemoryController.h:37,
+                 from src/MemoryController.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/MemorySystem.h:39,
+                 from src/MemorySystem.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:33:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   32 | #include <regex>
+  +++ |+#include <iterator>
+   33 | #include <sstream>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/PIMRank.h:19,
+                 from src/PIMRank.cpp:13:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:33:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   32 | #include <regex>
+  +++ |+#include <iterator>
+   33 | #include <sstream>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/Transaction.h:36,
+                 from src/MemoryObject.h:8,
+                 from src/MultiChannelMemorySystem.h:41,
+                 from src/MultiChannelMemorySystem.cpp:43:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:33:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   32 | #include <regex>
+  +++ |+#include <iterator>
+   33 | #include <sstream>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/MemorySystem.h:39,
+                 from src/MemorySystem.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:33:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   32 | #include <regex>
+  +++ |+#include <iterator>
+   33 | #include <sstream>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/BankState.h:34,
+                 from src/Bank.h:38,
+                 from src/Rank.h:37,
+                 from src/Rank.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:33:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   32 | #include <regex>
+  +++ |+#include <iterator>
+   33 | #include <sstream>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/Transaction.h:36,
+                 from src/Transaction.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/PIMRank.h:19,
+                 from src/PIMRank.cpp:13:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:33:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   32 | #include <regex>
+  +++ |+#include <iterator>
+   33 | #include <sstream>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/BankState.h:34,
+                 from src/Bank.h:38,
+                 from src/Rank.h:37,
+                 from src/Rank.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:33:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   32 | #include <regex>
+  +++ |+#include <iterator>
+   33 | #include <sstream>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/Transaction.h:36,
+                 from src/Transaction.cpp:31:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:37:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   36 | #include <unordered_map>
+  +++ |+#include <iterator>
+   37 | #include <vector>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/Transaction.h:36,
+                 from src/MemoryObject.h:8,
+                 from src/MultiChannelMemorySystem.h:41,
+                 from src/MultiChannelMemorySystem.cpp:43:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:33:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   32 | #include <regex>
+  +++ |+#include <iterator>
+   33 | #include <sstream>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+In file included from src/Burst.h:25,
+                 from src/BusPacket.h:36,
+                 from src/Transaction.h:36,
+                 from src/MemoryObject.h:8,
+                 from src/MultiChannelMemorySystem.h:41,
+                 from src/tests/PIMKernel.h:21,
+                 from src/tests/KernelAddrGen.cpp:16:
+lib/npy.h: In function 'std::string npy::pyparse::write_tuple(const std::vector<_RealType>&)':
+lib/npy.h:282:48: error: 'ostream_iterator' is not a member of 'std'
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                ^~~~~~~~~~~~~~~~
+lib/npy.h:33:1: note: 'std::ostream_iterator' is defined in header '<iterator>'; did you forget to '#include <iterator>'?
+   32 | #include <regex>
+  +++ |+#include <iterator>
+   33 | #include <sstream>
+lib/npy.h:282:66: error: expected primary-expression before '>' token
+  282 |         std::copy(v.begin(), v.end() - 1, std::ostream_iterator<T>(ss, delimiter.c_str()));
+      |                                                                  ^
+scons: *** [bin/BusPacket.os] Error 1
+scons: *** [bin/BankState.os] Error 1
+scons: *** [bin/BankState.o] Error 1
+scons: *** [bin/Bank.os] Error 1
+scons: *** [bin/BusPacket.o] Error 1
+scons: *** [bin/Bank.o] Error 1
+scons: *** [bin/PIMBlock.o] Error 1
+scons: *** [bin/PIMBlock.os] Error 1
+scons: *** [bin/PIMRank.o] Error 1
+scons: *** [bin/Transaction.o] Error 1
+scons: *** [bin/Transaction.os] Error 1
+scons: *** [bin/MemorySystem.o] Error 1
+scons: *** [bin/MultiChannelMemorySystem.os] Error 1
+scons: *** [bin/MemorySystem.os] Error 1
+scons: *** [bin/CommandQueue.o] Error 1
+scons: *** [bin/PIMRank.os] Error 1
+scons: *** [bin/CommandQueue.os] Error 1
+scons: *** [bin/MemoryController.os] Error 1
+scons: *** [bin/Rank.os] Error 1
+scons: *** [bin/MultiChannelMemorySystem.o] Error 1
+scons: *** [bin/Rank.o] Error 1
+scons: *** [bin/MemoryController.o] Error 1
+scons: *** [bin/tests/KernelAddrGen.o] Error 1

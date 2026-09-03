@@ -1,0 +1,1 @@
+rg -n -i 'speed.?up|performance|cycle|PIMBench|3349|6651|2\.0' README.md docs src/tests

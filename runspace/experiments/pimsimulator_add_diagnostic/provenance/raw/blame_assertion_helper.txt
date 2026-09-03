@@ -1,0 +1,5 @@
+^b00e73a (Sanghoon Cha 2022-11-21 18:06:06 +0900 293)     void expectPIMBench(float expected_perf_gain)
+^b00e73a (Sanghoon Cha 2022-11-21 18:06:06 +0900 294)     {
+^b00e73a (Sanghoon Cha 2022-11-21 18:06:06 +0900 295)         EXPECT_TRUE((float)non_pim_cycle_ / pim_cycle_ > expected_perf_gain)
+^b00e73a (Sanghoon Cha 2022-11-21 18:06:06 +0900 296)             << (float)non_pim_cycle_ / pim_cycle_ << endl;
+^b00e73a (Sanghoon Cha 2022-11-21 18:06:06 +0900 297)     }

@@ -1,0 +1,30 @@
+LOCKED_COMMIT=3703d1f19c8f027360cc33a3243eb271e3bb6898
+
+FILE=src/tests/PIMBenchTestCases.cpp
+FILE_SHA256=bd8358a8adbd3a8c95b3096400845ac7b1ae015a6ccad73695ea253a401797ab
+LINES=40-46
+TEST_F(PIMBenchFixture, add)
+{
+    setPIMBenchTestCase(KernelType::ADD, 1024 * 1024, 1024 * 1024);
+    executeKernel();
+    executePIMKernel();
+    expectPIMBench(2.0);
+}
+
+FILE=src/tests/PIMBenchTestCases.h
+FILE_SHA256=7daff037f77657aa81d57de64910d176fd048560c829be1843016385df133903
+LINES=293-297
+void expectPIMBench(float expected_perf_gain)
+{
+    EXPECT_TRUE((float)non_pim_cycle_ / pim_cycle_ > expected_perf_gain)
+        << (float)non_pim_cycle_ / pim_cycle_ << endl;
+}
+
+OBSERVED_NON_PIM_CYCLES=6651
+OBSERVED_PIM_CYCLES=3349
+EXPECTED_STRICT_SPEEDUP_GREATER_THAN=2.0
+EXACT_REAL_RATIO=1.985965959988056
+ASSERTION_PRINTED_FLOAT_RATIO=1.9859659671783447
+ASSERTION_EXIT_CODE=1
+
+INTERPRETATION=This is solely a strict performance-ratio assertion. It does not compare ADD output values and it is not a functionality assertion.

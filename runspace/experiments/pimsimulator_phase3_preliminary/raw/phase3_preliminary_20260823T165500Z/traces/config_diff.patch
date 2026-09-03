@@ -1,0 +1,19 @@
+--- /data/almog/Projects/QBench-Release/runspace/experiments/pimsimulator_phase3_preliminary/raw/phase3_preliminary_20260823T165500Z/build/source/system_hbm_64ch.ini	2024-07-01 11:48:44.000000000 +0000
++++ /data/almog/Projects/QBench-Release/runspace/experiments/pimsimulator_phase3_preliminary/raw/phase3_preliminary_20260823T165500Z/trace_source/system_hbm_64ch.ini	2026-08-23 17:06:41.076843071 +0000
+@@ -26,7 +26,7 @@
+ DEBUG_PIM_BLOCK=false
+ 
+ ; print options
+-SHOW_SIM_OUTPUT=false
++SHOW_SIM_OUTPUT=true
+ LOG_OUTPUT=false
+ SIM_TRACE_FILE=pim_trace.out
+ 
+@@ -43,5 +43,5 @@
+ VERIFICATION_OUTPUT=false           ; should be false for normal operation
+ TOTAL_ROW_ACCESSES=65535                ; maximum number of open page requests to send to the same row before forcing a row close (to prevent starvation)
+ 
+-PRINT_CHAN_STAT=true
+-PRINT_MEM_TRACE=true
++PRINT_CHAN_STAT=false
++PRINT_MEM_TRACE=false

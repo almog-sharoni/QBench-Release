@@ -1,0 +1,19 @@
+--- clean-build/system_hbm_64ch.ini
++++ trace-probe/system_hbm_64ch.ini
+@@ -26,7 +26,7 @@
+ DEBUG_PIM_BLOCK=false
+ 
+ ; print options
+-SHOW_SIM_OUTPUT=false
++SHOW_SIM_OUTPUT=true
+ LOG_OUTPUT=false
+ SIM_TRACE_FILE=pim_trace.out
+ 
+@@ -43,5 +43,5 @@
+ VERIFICATION_OUTPUT=false
+ TOTAL_ROW_ACCESSES=65535
+ 
+-PRINT_CHAN_STAT=true
+-PRINT_MEM_TRACE=true
++PRINT_CHAN_STAT=false
++PRINT_MEM_TRACE=false

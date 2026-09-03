@@ -1,0 +1,1 @@
+DIAGNOSTIC_CAPTURE_COMPLETE functional_exit=0 suite_exit=1

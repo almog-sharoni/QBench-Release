@@ -1,0 +1,1 @@
+git log --all --format='%H %ad %s' --date=iso -- src/tests/PIMKernel.cpp src/tests/PIMBenchTestCases.cpp src/tests/PIMBenchTestCases.h system_hbm_64ch.ini ini/HBM2_samsung_2M_16B_x64.ini

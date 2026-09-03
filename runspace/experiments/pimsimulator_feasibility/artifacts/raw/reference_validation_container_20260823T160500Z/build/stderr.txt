@@ -1,0 +1,4 @@
+INFO:    fuse2fs not found, will not be able to mount EXT3 filesystems
+INFO:    gocryptfs not found, will not be able to use gocryptfs
+FATAL:   failed to copy unix socket descriptor: file file+net rpc-socket: getsockopt: operation not permitted
+FATAL:   socket communication error: file file+net unix: getsockopt: operation not permitted

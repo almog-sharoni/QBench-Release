@@ -1,0 +1,4 @@
+The first sandboxed Apptainer invocation failed before compilation with a restricted Unix-socket error. The required escalated invocation then reached the linker but failed because the intended absolute Phase-3 output directory had not yet been created. After creating that directory under the Phase-3 arm, the same source and flags compiled successfully. No simulator source or configuration was changed.
+
+adapter_source_sha256=9ffe2119d022ad73cdc5d2f7f5c9e2f8e6ebc599916f715d91bf4c0673b6997a
+preflight_binary_sha256=b4bf0e6436174e59f432306647d8bd7bf19a6a562f2ad40224e4897963fc22fe

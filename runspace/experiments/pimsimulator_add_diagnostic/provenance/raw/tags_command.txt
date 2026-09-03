@@ -1,0 +1,1 @@
+git tag --list --format=%(refname:short) %(objectname)

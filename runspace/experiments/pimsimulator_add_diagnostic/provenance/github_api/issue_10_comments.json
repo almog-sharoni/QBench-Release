@@ -1,0 +1,49 @@
+[
+  {
+    "url": "https://api.github.com/repos/SAITPublic/PIMSimulator/issues/comments/2053653277",
+    "html_url": "https://github.com/SAITPublic/PIMSimulator/issues/10#issuecomment-2053653277",
+    "issue_url": "https://api.github.com/repos/SAITPublic/PIMSimulator/issues/10",
+    "id": 2053653277,
+    "node_id": "IC_kwDOIeUsGM56aEMd",
+    "user": {
+      "login": "iamshcha",
+      "id": 58418873,
+      "node_id": "MDQ6VXNlcjU4NDE4ODcz",
+      "avatar_url": "https://avatars.githubusercontent.com/u/58418873?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/iamshcha",
+      "html_url": "https://github.com/iamshcha",
+      "followers_url": "https://api.github.com/users/iamshcha/followers",
+      "following_url": "https://api.github.com/users/iamshcha/following{/other_user}",
+      "gists_url": "https://api.github.com/users/iamshcha/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/iamshcha/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/iamshcha/subscriptions",
+      "organizations_url": "https://api.github.com/users/iamshcha/orgs",
+      "repos_url": "https://api.github.com/users/iamshcha/repos",
+      "events_url": "https://api.github.com/users/iamshcha/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/iamshcha/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "created_at": "2024-04-13T13:54:21Z",
+    "updated_at": "2024-04-13T13:54:21Z",
+    "body": "The variety of cases is expected to arise based on the tiling method, the sequence of weight data reads by the xPU, and the management of intermediate results. These cases depend on the configuration of the xPU system, for example, the size of the SPM or the impact of on-chip caches can lead to different optimization techniques. For the non-PIM system, we used an oracle approach that  assumes sequential reads of the weight data(see `genMemTraffic()`), which hide the computational overhead, but note that unlike GEMV, this approach cannot be used for operations with high locality data.",
+    "author_association": "COLLABORATOR",
+    "pin": null,
+    "reactions": {
+      "url": "https://api.github.com/repos/SAITPublic/PIMSimulator/issues/comments/2053653277/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "performed_via_github_app": null,
+    "minimized": null
+  }
+]

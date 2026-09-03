@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "arm": "pimsimulator_phase3_workload_integration_preliminary",
+  "status": "PREREGISTERED_NO_PHASE3_SIMULATOR_RESULTS_OBSERVED",
+  "created_utc": "2026-08-23T16:48:02Z",
+  "repository_commit": "295f0b3a14865496fd10405d4ea5ce0fb15f93b2",
+  "accepted_authorization_label": "VALIDATED_WITH_UPSTREAM_PERFORMANCE_THRESHOLD_DEVIATION",
+  "immutable_upstream_failure": {
+    "test": "PIMBenchFixture.add",
+    "assertion": "float(non_pim_cycles) / pim_cycles > 2.0",
+    "exit_code": 1,
+    "non_pim_cycles": 6651,
+    "pim_cycles": 3349,
+    "final_all_bank_parkout_drain_cycles": 24,
+    "converted_to_pass": false
+  },
+  "bundle_hash_definition": {
+    "name": "sha256sum_manifest_stream_v1",
+    "algorithm": "SHA-256",
+    "definition": "Within the bundle root, sort all regular-file paths bytewise (LC_ALL=C), run sha256sum on each path using its ./relative path, concatenate the resulting LF-terminated manifest lines, and SHA-256 that byte stream. All regular files, including nested .git files, are included."
+  },
+  "frozen_inputs": [
+    {
+      "name": "phase2_feasibility",
+      "path": "runspace/experiments/pimsimulator_feasibility",
+      "file_count": 2506,
+      "byte_count": 644605039,
+      "bundle_sha256": "8f0709f39267e79414cf9b7c9b2bde675b42531ffa45d90c0c71b730ca50f97b",
+      "source_lock_sha256": "ce83b4e55a2c3be107515963bb872431bc18c01d46eb00ddda3d9388a3d59f12",
+      "validation_report_sha256": "ff859c545a01c04cdffe39ced132c82976edcbf78e4bb4d2dea32a86b8b5a6e0",
+      "read_only": true
+    },
+    {
+      "name": "post_validation_add_diagnostic",
+      "path": "runspace/experiments/pimsimulator_add_diagnostic",
+      "file_count": 539,
+      "byte_count": 608717419,
+      "bundle_sha256": "6d64351133f952431d478162f644b0ddab6b5a3fb3fca40190d0fb5dd7fc8e96",
+      "classification_json_sha256": "0ae1cc8beebf6cb0f72913f6d12211cd293d02106373adf544aeac83253a6bb1",
+      "diagnostic_report_sha256": "82abc2e7703300a11410a858a00ddc8c772513167aa628ff8858ab65c011e319",
+      "read_only": true
+    }
+  ],
+  "simulator_lock": {
+    "upstream_url": "https://github.com/SAITPublic/PIMSimulator.git",
+    "branch": "dev",
+    "commit": "3703d1f19c8f027360cc33a3243eb271e3bb6898",
+    "source_archive_sha256": "803b018642bd0858f56ead6c716ca6fba38c42c63459b0b402b2a54ad167f392",
+    "container_sha256": "5e9455a5c0cfdf9e68c818473f66498bc1b7e911850f85e5b30a40091ec12db4",
+    "device_config": "ini/HBM2_samsung_2M_16B_x64.ini",
+    "system_config": "system_hbm_64ch.ini",
+    "pim_precision": "FP16",
+    "pim_channels": 64,
+    "pim_ranks": 1,
+    "local_upstream_patches_allowed": false
+  },
+  "tracked_shape_provenance": {
+    "path": "runspace/experiments/asic_cache_simulation/simulation_results_resnet50.json",
+    "sha256": "6a6a4bec2b90a791b92023382a5fbb45354a0c0e629e6c84164ee44b809fae2d"
+  },
+  "quality_provenance_read_only": {
+    "path": "runspace/experiments/find_optimal_hybrid_quant/results/latest_db_results.json",
+    "sha256": "942093102afd8a850bfd790f41adc6c6617486379518dd5ee00e4ae056102501",
+    "database_path": "runspace/database/runs.db",
+    "database_sha256": "401a06b517765a9811a4f489ba9b7dde58a821dc40bb100d94ca27ff8660ca2b",
+    "cost_profile_authority": false,
+    "duplicate_policy": "Directional records sharing a physical run_id are reconstructed views and are never independent measurements or statistical samples."
+  },
+  "result_observation_at_lock": "NONE"
+}

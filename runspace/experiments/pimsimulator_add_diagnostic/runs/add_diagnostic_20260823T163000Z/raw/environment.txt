@@ -1,0 +1,17 @@
+run_id=add_diagnostic_20260823T163000Z
+started_utc=2026-08-23T16:21:27Z
+host_uname=Linux enics-h100 6.8.0-117-generic #117-Ubuntu SMP PREEMPT_DYNAMIC Tue May  5 19:26:24 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+source_commit=3703d1f19c8f027360cc33a3243eb271e3bb6898
+source_tree_sha256=803b018642bd0858f56ead6c716ca6fba38c42c63459b0b402b2a54ad167f392
+container_image=/data/almog/Projects/QBench-Release/runspace/experiments/pimsimulator_feasibility/dependencies/pimsimulator-ubuntu20.04.sif
+container_sha256=5e9455a5c0cfdf9e68c818473f66498bc1b7e911850f85e5b30a40091ec12db4
+compiler=g++ (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0
+scons=SCons by Steven Knight et al.:
+build-essential	12.8ubuntu1.1
+g++	4:9.3.0-1ubuntu2
+gcc	4:9.3.0-1ubuntu2
+googletest	1.10.0-2
+libc6-dev:amd64	2.31-0ubuntu9.18
+libgtest-dev:amd64	1.10.0-2
+scons	3.1.2-2
+finished_utc=2026-08-23T16:22:20Z

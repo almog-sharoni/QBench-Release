@@ -1,0 +1,105 @@
+commit b00e73a3ca1a421eb10a96b0d2f5a0f1ef973ed8
+Author:     Sanghoon Cha <s.h.cha@samsung.com>
+AuthorDate: Mon Nov 21 18:06:06 2022 +0900
+Commit:     Sanghoon Cha <s.h.cha@samsung.com>
+CommitDate: Mon Nov 21 18:06:06 2022 +0900
+
+    Initial commit
+    
+    Signed-off-by: Sanghoon Cha <s.h.cha@samsung.com>
+
+ .gitignore                          |   41 +
+ LICENSE-DRAMSIM2                    |   29 +
+ LICENSE-PIMSimulator                |   11 +
+ README.md                           |  310 +++
+ Sconstruct                          |   96 +
+ data/add/gen_np_resadd.py           |   19 +
+ data/add/resadd_input0_1048576.npy  |  Bin 0 -> 2097280 bytes
+ data/add/resadd_input1_1048576.npy  |  Bin 0 -> 2097280 bytes
+ data/add/resadd_output_1048576.npy  |  Bin 0 -> 2097280 bytes
+ data/gemv/gemv_input_4096x1024.npy  |  Bin 0 -> 2128 bytes
+ data/gemv/gemv_output_4096x1024.npy |  Bin 0 -> 8272 bytes
+ data/gemv/gemv_weight_4096x1024.npy |  Bin 0 -> 8388688 bytes
+ data/gemv/gen_gemv.py               |   42 +
+ data/mul/eltmul_input0_1048576.npy  |  Bin 0 -> 2097280 bytes
+ data/mul/eltmul_input1_1048576.npy  |  Bin 0 -> 2097280 bytes
+ data/mul/eltmul_output_1048576.npy  |  Bin 0 -> 2097280 bytes
+ data/mul/gen_np_eltmul.py           |   19 +
+ data/relu/gen_np_relu.py            |   29 +
+ data/relu/relu_input_1048576.npy    |  Bin 0 -> 2097280 bytes
+ data/relu/relu_output_1048576.npy   |  Bin 0 -> 2097280 bytes
+ dump/add/.keep                      |    0
+ dump/bn/.keep                       |    0
+ dump/gemv/.keep                     |    0
+ dump/mul/.keep                      |    0
+ dump/mul/input0_512KB.dat           |  Bin 0 -> 262144 bytes
+ dump/mul/input1_512KB.dat           |  Bin 0 -> 262144 bytes
+ dump/mul/output_512KB.dat           |  Bin 0 -> 262144 bytes
+ dump/relu/.keep                     |    0
+ ini/HBM2_samsung_2M_16B_x64.ini     |   64 +
+ lib/half.h                          | 4834 +++++++++++++++++++++++++++++++++++
+ lib/npy.h                           |  510 ++++
+ src/AddressMapping.cpp              |  208 ++
+ src/AddressMapping.h                |   79 +
+ src/Bank.cpp                        |  132 +
+ src/Bank.h                          |   72 +
+ src/BankState.cpp                   |  101 +
+ src/BankState.h                     |   71 +
+ src/Burst.h                         |  484 ++++
+ src/BusPacket.cpp                   |  143 ++
+ src/BusPacket.h                     |   81 +
+ src/CSVWriter.h                     |  240 ++
+ src/Callback.h                      |   79 +
+ src/ClockDomain.cpp                 |  134 +
+ src/ClockDomain.h                   |   73 +
+ src/CommandQueue.cpp                |  557 ++++
+ src/CommandQueue.h                  |  115 +
+ src/Configuration.h                 |  187 ++
+ src/ConfigurationDB.h               |  118 +
+ src/ConfigurationData.h             |  200 ++
+ src/FP16.cpp                        |   48 +
+ src/FP16.h                          |   49 +
+ src/MemoryController.cpp            |  823 ++++++
+ src/MemoryController.h              |  202 ++
+ src/MemoryObject.h                  |   25 +
+ src/MemorySystem.cpp                |  284 ++
+ src/MemorySystem.h                  |  102 +
+ src/MultiChannelMemorySystem.cpp    |  620 +++++
+ src/MultiChannelMemorySystem.h      |  131 +
+ src/PIMBlock.cpp                    |  120 +
+ src/PIMBlock.h                      |   55 +
+ src/PIMCmd.cpp                      |  199 ++
+ src/PIMCmd.h                        |  245 ++
+ src/PIMRank.cpp                     |  528 ++++
+ src/PIMRank.h                       |  113 +
+ src/ParameterReader.h               |  161 ++
+ src/PrintMacros.cpp                 |   31 +
+ src/PrintMacros.h                   |  126 +
+ src/Rank.cpp                        |  561 ++++
+ src/Rank.h                          |  116 +
+ src/SimulatorObject.cpp             |   39 +
+ src/SimulatorObject.h               |   49 +
+ src/SystemConfiguration.h           |  467 ++++
+ src/Transaction.cpp                 |   90 +
+ src/Transaction.h                   |   98 +
+ src/Utils.h                         |   44 +
+ src/tests/KernelAddrGen.cpp         |   71 +
+ src/tests/KernelAddrGen.h           |   95 +
+ src/tests/KernelTestCases.cpp       |  143 ++
+ src/tests/KernelTestCases.h         |  309 +++
+ src/tests/MainTest.cpp              |   41 +
+ src/tests/MemTestCases.cpp          |   37 +
+ src/tests/PIMBenchTestCases.cpp     |   53 +
+ src/tests/PIMBenchTestCases.h       |  325 +++
+ src/tests/PIMCmdGen.cpp             |   49 +
+ src/tests/PIMCmdGen.h               |  204 ++
+ src/tests/PIMKernel.cpp             |  633 +++++
+ src/tests/PIMKernel.h               |  123 +
+ src/tests/TestCases.h               |  385 +++
+ system_hbm.ini                      |   47 +
+ system_hbm_1ch.ini                  |   47 +
+ system_hbm_64ch.ini                 |   47 +
+ tools/emulator_api/PimSimulator.cpp |  239 ++
+ tools/emulator_api/PimSimulator.h   |   73 +
+ tools/emulator_api/README.md        |   14 +
+ 94 files changed, 17339 insertions(+)

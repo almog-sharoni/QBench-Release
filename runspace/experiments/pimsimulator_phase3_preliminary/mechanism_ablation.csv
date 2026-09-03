@@ -1,0 +1,10 @@
+mechanism,physical_source,provenance,ablation_status,unrelated_parameters_changed,joint_gap_before,joint_gap_after,joint_gap_change,causal_claim
+initial_and_persistent_residency,PIMSimulator initial residency; Stage-1 persistence policy not validated,SIMULATED_PIM_HBM2 / TRACE_DERIVED,DEFERRED_STOPPED_BEFORE_OPTIMIZATION,false,,,NOT_EVALUATED,NONE
+asymmetric_conversion_and_packing,No frozen host conversion/packing bundle was located,UNAVAILABLE_PROVENANCE,DEFERRED_STOPPED_BEFORE_OPTIMIZATION,false,,,NOT_EVALUATED,NONE
+placement_dependent_metadata_traffic,No supported low-precision PIM mapping,UNSUPPORTED_PIM_FORMAT,DEFERRED_STOPPED_BEFORE_OPTIMIZATION,false,,,NOT_EVALUATED,NONE
+format_feasibility,Only dense FP16 is simulator-validated,SIMULATED_PIM_HBM2,DEFERRED_STOPPED_BEFORE_OPTIMIZATION,false,,,NOT_EVALUATED,NONE
+pim_compute_ceilings,Native cycle observations exist; no alternate validated representation,SIMULATED_PIM_HBM2,DEFERRED_STOPPED_BEFORE_OPTIMIZATION,false,,,NOT_EVALUATED,NONE
+boundary_synchronization,Included in aggregate adapter phases but not separately cycle-attributed,SIMULATED_PIM_HBM2_NOT_SEPARABLE,DEFERRED_STOPPED_BEFORE_OPTIMIZATION,false,,,NOT_EVALUATED,NONE
+pim_mode_transitions,Commands preserved in traces; cycles not separately attributed,SIMULATED_PIM_HBM2_NOT_SEPARABLE,DEFERRED_STOPPED_BEFORE_OPTIMIZATION,false,,,NOT_EVALUATED,NONE
+all_bank_parkout_drain,24-cycle diagnostic source retained; per-workload contribution not separately attributed,SIMULATED_PIM_HBM2_DIAGNOSTIC,DEFERRED_STOPPED_BEFORE_OPTIMIZATION,false,,,NOT_EVALUATED,NONE
+capacity_constraints,No validated Stage-1 placement/capacity candidate space,UNAVAILABLE_PROVENANCE,DEFERRED_STOPPED_BEFORE_OPTIMIZATION,false,,,NOT_EVALUATED,NONE

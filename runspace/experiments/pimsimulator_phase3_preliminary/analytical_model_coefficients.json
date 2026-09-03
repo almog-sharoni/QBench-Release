@@ -1,0 +1,174 @@
+{
+  "fit_split": "development_only",
+  "locked_validation_used_for_fit": false,
+  "models": [
+    {
+      "kernel": "ADD",
+      "phase": "initial_residency",
+      "features": [
+        "constant",
+        "input_count_times_padded_bursts"
+      ],
+      "coefficients": [
+        13.333333333333176,
+        0.03240966796875001
+      ],
+      "rank": 2,
+      "observations": 3,
+      "singular_values": [
+        96929.05117824215,
+        0.8280786711088367
+      ]
+    },
+    {
+      "kernel": "ADD",
+      "phase": "kernel_execution",
+      "features": [
+        "constant",
+        "parallel_tiles"
+      ],
+      "coefficients": [
+        384.91666666666754,
+        409.25000000000006
+      ],
+      "rank": 2,
+      "observations": 3,
+      "singular_values": [
+        6.112083094222936,
+        0.8015237047737145
+      ]
+    },
+    {
+      "kernel": "ADD",
+      "phase": "result_readback",
+      "features": [
+        "constant",
+        "padded_bursts"
+      ],
+      "coefficients": [
+        -113.16666666666659,
+        0.042785644531249986
+      ],
+      "rank": 2,
+      "observations": 3,
+      "singular_values": [
+        48464.52560702813,
+        0.8280786708028716
+      ]
+    },
+    {
+      "kernel": "RELU",
+      "phase": "initial_residency",
+      "features": [
+        "constant",
+        "input_count_times_padded_bursts"
+      ],
+      "coefficients": [
+        15.250000000000089,
+        0.031890869140624986
+      ],
+      "rank": 2,
+      "observations": 3,
+      "singular_values": [
+        48464.52560702813,
+        0.8280786708028716
+      ]
+    },
+    {
+      "kernel": "RELU",
+      "phase": "kernel_execution",
+      "features": [
+        "constant",
+        "parallel_tiles"
+      ],
+      "coefficients": [
+        257.33333333333366,
+        295.00000000000006
+      ],
+      "rank": 2,
+      "observations": 3,
+      "singular_values": [
+        6.112083094222936,
+        0.8015237047737145
+      ]
+    },
+    {
+      "kernel": "RELU",
+      "phase": "result_readback",
+      "features": [
+        "constant",
+        "padded_bursts"
+      ],
+      "coefficients": [
+        171.2500000000003,
+        0.03128051757812498
+      ],
+      "rank": 2,
+      "observations": 3,
+      "singular_values": [
+        48464.52560702813,
+        0.8280786708028716
+      ]
+    },
+    {
+      "kernel": "GEMV",
+      "phase": "initial_residency",
+      "features": [
+        "constant",
+        "weight_bursts"
+      ],
+      "coefficients": [
+        363.19512195121104,
+        0.04210700058355566
+      ],
+      "rank": 2,
+      "observations": 5,
+      "singular_values": [
+        1441792.0000012638,
+        1.1642044068049522
+      ]
+    },
+    {
+      "kernel": "GEMV",
+      "phase": "kernel_execution",
+      "features": [
+        "constant",
+        "input_tiles",
+        "vectors",
+        "input_tiles_times_vectors"
+      ],
+      "coefficients": [
+        354.0285714285776,
+        -43.5642857142866,
+        443.9714285714299,
+        406.5642857142862
+      ],
+      "rank": 4,
+      "observations": 5,
+      "singular_values": [
+        298.4884116019836,
+        18.700081751100242,
+        1.6454188614776377,
+        0.5173766492721759
+      ]
+    },
+    {
+      "kernel": "GEMV",
+      "phase": "result_readback",
+      "features": [
+        "constant",
+        "partial_sum_bursts"
+      ],
+      "coefficients": [
+        1.2260425350600705,
+        0.2677736943996738
+      ],
+      "rank": 2,
+      "observations": 5,
+      "singular_values": [
+        5856.7488409280295,
+        1.4192562058136042
+      ]
+    }
+  ]
+}

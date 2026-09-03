@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "arm": "pimsimulator_hbm2_feasibility",
+  "status": "NOT_RUN_REFERENCE_VALIDATION_GATE_FAILED",
+  "model": "ResNet-50",
+  "preregistration_completed": false,
+  "shapes": [],
+  "reason": "The required unmodified reference suite failed at PIMBenchFixture.add. Shape selection and mapping stopped before observing any Stage 1 joint-gap outcome.",
+  "selection_after_joint_gap_observation": false,
+  "optimizer_consumption_authorized": false
+}

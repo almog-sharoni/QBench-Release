@@ -1,0 +1,8 @@
+classification_label=SIMULATED_PIM_HBM2
+elements_compared=1048576
+bursts_compared=65536
+reference_bit_mismatches=0
+recomputed_fp16_bit_mismatches=0
+first_reference_mismatch=NONE
+first_recomputed_mismatch=NONE
+simulated_cycles=9626

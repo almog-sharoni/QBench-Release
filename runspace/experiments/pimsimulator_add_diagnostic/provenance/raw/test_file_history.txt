@@ -1,0 +1,97 @@
+commit 8a90a6e6d1d7414ef818886c8ad97f7acf7d50b4
+Author:     Sanghoon Cha <s.h.cha@samsung.com>
+AuthorDate: Fri Jun 7 13:25:12 2024 +0900
+Commit:     Sanghoon Cha <s.h.cha@samsung.com>
+CommitDate: Fri Jun 7 13:25:12 2024 +0900
+
+    Reformat and some fixes
+    
+    * update cam mode
+    * change hardcorded reserved row address to varibales
+    * rename form isAccessibleRA() to isReservedRA()
+    * minor fixes
+    
+    Signed-off-by: Sanghoon Cha <s.h.cha@samsung.com>
+
+diff --git a/src/tests/PIMBenchTestCases.cpp b/src/tests/PIMBenchTestCases.cpp
+index daa05d8..382a10a 100644
+--- a/src/tests/PIMBenchTestCases.cpp
++++ b/src/tests/PIMBenchTestCases.cpp
+@@ -11,6 +11,7 @@
+  **************************************************************************************************/
+ 
+ #include "tests/PIMBenchTestCases.h"
++
+ #include "gtest/gtest.h"
+ 
+ /*
+
+commit b00e73a3ca1a421eb10a96b0d2f5a0f1ef973ed8
+Author:     Sanghoon Cha <s.h.cha@samsung.com>
+AuthorDate: Mon Nov 21 18:06:06 2022 +0900
+Commit:     Sanghoon Cha <s.h.cha@samsung.com>
+CommitDate: Mon Nov 21 18:06:06 2022 +0900
+
+    Initial commit
+    
+    Signed-off-by: Sanghoon Cha <s.h.cha@samsung.com>
+
+diff --git a/src/tests/PIMBenchTestCases.cpp b/src/tests/PIMBenchTestCases.cpp
+new file mode 100644
+index 0000000..daa05d8
+--- /dev/null
++++ b/src/tests/PIMBenchTestCases.cpp
+@@ -0,0 +1,53 @@
++/***************************************************************************************************
++ * Copyright (C) 2021 Samsung Electronics Co. LTD
++ *
++ * This software is a property of Samsung Electronics.
++ * No part of this software, either material or conceptual may be copied or distributed,
++ * transmitted, transcribed, stored in a retrieval system, or translated into any human
++ * or computer language in any form by any means,electronic, mechanical, manual or otherwise,
++ * or disclosed to third parties without the express written permission of Samsung Electronics.
++ * (Use of the Software is restricted to non-commercial, personal or academic, research purpose
++ * only)
++ **************************************************************************************************/
++
++#include "tests/PIMBenchTestCases.h"
++#include "gtest/gtest.h"
++
++/*
++ * PIMBenchTest:
++ * micro benchmark for performance comparison between w/ PIM and w/o PIM
++ */
++
++using namespace DRAMSim;
++
++TEST_F(PIMBenchFixture, gemv)
++{
++    setPIMBenchTestCase(KernelType::GEMV, 4096, 4096);  // (KernelType, out_vec, in_vec)
++    executeKernel();                                    // execute w/o PIM
++    executePIMKernel();                                 // execute w/ PIM
++    expectPIMBench(2.0);
++}
++
++TEST_F(PIMBenchFixture, mul)
++{
++    setPIMBenchTestCase(KernelType::MUL, 2 * 1024 * 1024, 2 * 1024 * 1024);
++    executeKernel();
++    executePIMKernel();
++    expectPIMBench(2.0);
++}
++
++TEST_F(PIMBenchFixture, add)
++{
++    setPIMBenchTestCase(KernelType::ADD, 1024 * 1024, 1024 * 1024);
++    executeKernel();
++    executePIMKernel();
++    expectPIMBench(2.0);
++}
++
++TEST_F(PIMBenchFixture, relu)
++{
++    setPIMBenchTestCase(KernelType::RELU, 4 * 1024 * 1024, 4 * 1024 * 1024);
++    executeKernel();
++    executePIMKernel();
++    expectPIMBench(2.0);
++}

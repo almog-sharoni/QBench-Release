@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "arm": "pimsimulator_phase3_workload_integration_preliminary",
+  "completed_utc": "2026-08-23T17:15:03Z",
+  "status": "STOPPED_BEFORE_JOINT_OPTIMIZATION",
+  "accepted_authorization_label": "VALIDATED_WITH_UPSTREAM_PERFORMANCE_THRESHOLD_DEVIATION",
+  "preregistration": {
+    "phase3_manifest_sha256": "c93e60bc9161a1015ebeebdcdd5a3eb376923001c8a42ca35047edb29a723848",
+    "preregistration_sha256": "b0d196037c59269506b637c807fffaca500eb751da356b82e0f2728582ee5a2a",
+    "workload_shape_manifest_sha256": "90535465871dedf3302570a61be4d76c2396639af4ecc5c97d20dd9f62920ac7",
+    "results_observed_before_lock": false
+  },
+  "frozen_bundle_references": {
+    "hash_definition": "sha256sum_manifest_stream_v1 as defined in phase3_manifest.json",
+    "feasibility_bundle_sha256": "8f0709f39267e79414cf9b7c9b2bde675b42531ffa45d90c0c71b730ca50f97b",
+    "diagnostic_bundle_sha256": "6d64351133f952431d478162f644b0ddab6b5a3fb3fca40190d0fb5dd7fc8e96",
+    "modified_by_phase3": false
+  },
+  "simulator": {
+    "upstream_url": "https://github.com/SAITPublic/PIMSimulator.git",
+    "commit": "3703d1f19c8f027360cc33a3243eb271e3bb6898",
+    "source_archive_sha256": "803b018642bd0858f56ead6c716ca6fba38c42c63459b0b402b2a54ad167f392",
+    "configuration": "Samsung HBM2, 64 channels, one rank, FP16",
+    "upstream_source_patched": false,
+    "adapter_sha256": "9ffe2119d022ad73cdc5d2f7f5c9e2f8e6ebc599916f715d91bf4c0673b6997a"
+  },
+  "preserved_upstream_deviation": {
+    "test": "PIMBenchFixture.add",
+    "exit_code": 1,
+    "assertion": "float(non_pim_cycles) / pim_cycles > 2.0",
+    "non_pim_cycles": 6651,
+    "pim_cycles": 3349,
+    "final_all_bank_parkout_drain_cycles": 24,
+    "converted_to_pass": false
+  },
+  "formal_run": {
+    "run_id": "phase3_preliminary_20260823T165500Z",
+    "raw_artifact_manifest_sha256": "4f8b53e454c28a28424bd06464bc47b2dd69f767b4000a135acef1c49c12d52d",
+    "artifact_manifest_verified": true,
+    "adapter_executions": 30,
+    "adapter_exit_zero": 30,
+    "exact_bit_mismatches": 0,
+    "repeat_count_per_case": 2,
+    "repeat_interpretation": "determinism checks, not independent samples",
+    "locked_transaction_trace_count": 4,
+    "evidence_label": "SIMULATED_PIM_HBM2"
+  },
+  "gate_decisions": {
+    "adapter": "PASS",
+    "analytical_validation": "PASS",
+    "provenance": "PASS",
+    "end_to_end_mapping": "FAIL",
+    "representation_support": "FAIL",
+    "joint_optimizer": "NOT_RUN"
+  },
+  "analytical_validation": {
+    "development_case_count": 11,
+    "locked_validation_case_count": 4,
+    "locked_validation_used_for_fit": false,
+    "locked_total_cycle_mape": 0.02557301891264668,
+    "locked_maximum_absolute_relative_error": 0.049226091763404846,
+    "post_result_refit": false
+  },
+  "joint_gap_status": {
+    "positive": "NOT_EVALUATED",
+    "zero": "NOT_EVALUATED",
+    "negative": "NOT_EVALUATED",
+    "reason": "End-to-end mapping and representation-support gates failed."
+  },
+  "quality_record_accounting": {
+    "directional_records_visible": 83,
+    "unique_physical_run_ids": 76,
+    "directional_records_used_as_independent_samples": 0,
+    "pim_costs_assigned_from_quality_records": false
+  },
+  "artifact_hashes": {
+    "exact_reproduction_sh": "16fca04b616c39a51a2775d1c8947ba8f04743c6120ea82d04a28473a08e51b9",
+    "analysis_script": "bba27b0240a9864173f98b62ee4a0e566d339e081452b25037443b7c304ee396",
+    "gate_status_json": "bee06b17124381140f5d386f3175d4f206ad8784b088fc9b355edf5b998a46fd",
+    "simulator_measurements_csv": "c8b1cf06704a32a736638206d25f143468721b7fab856dcc0616d03691ebc3ee",
+    "analytical_vs_simulator_validation_csv": "2f4c49dd8a7c8a00d4b549489c35421f2d418672fb00f33df8dccbab1659f03a",
+    "transaction_trace_summary_csv": "7bc3c06ac363dfbb2e95970686a4df7210556d556a04db80ba1429c4e30dedd8",
+    "preliminary_results_csv": "576e06bc1858d964fc45e1a9340fd00e3506416ba77315c3348b4ee141ef2e5b",
+    "workload_cycle_breakdown_png": "86bfbd13da6bc4209b838be94625eefba373c86b008759b0bc6ae714fafd06a0",
+    "locked_validation_error_png": "90a2429c9e9133adfddf21671317a4e62d74126302ad8dcf5e356074a2339699"
+  }
+}

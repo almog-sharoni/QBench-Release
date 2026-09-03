@@ -1,0 +1,58 @@
+Note: Google Test filter = PIMKernelFixture.*
+[==========] Running 5 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 5 tests from PIMKernelFixture
+[ RUN      ] PIMKernelFixture.gemv_tree
+>>PIM Kernel Accuraccy Test
+  Weight data dimension : 4096x1024
+  Input data dimension : 1024
+  Output data dimension : 4096
+
+> Test Result
+  simulated output comparison via pre-calculated values
+> passed : 4096
+> failed : 0
+[       OK ] PIMKernelFixture.gemv_tree (3472 ms)
+[ RUN      ] PIMKernelFixture.gemv
+>>PIM Kernel Accuraccy Test
+  Weight data dimension : 4096x1024
+  Input data dimension : 1024
+  Output data dimension : 4096
+
+> Test Result
+  simulated output comparison via pre-calculated values
+> passed : 4096
+> failed : 0
+[       OK ] PIMKernelFixture.gemv (2995 ms)
+[ RUN      ] PIMKernelFixture.mul
+>>PIM Kernel Accuraccy Test
+  Input/output data dimension : 1048576
+
+> Test Result
+  simulated output comparison via pre-calculated values
+> passed : 1048576
+> failed : 0
+[       OK ] PIMKernelFixture.mul (1576 ms)
+[ RUN      ] PIMKernelFixture.add
+>>PIM Kernel Accuraccy Test
+  Input/output data dimension : 1048576
+
+> Test Result
+  simulated output comparison via pre-calculated values
+> passed : 1048576
+> failed : 0
+[       OK ] PIMKernelFixture.add (1602 ms)
+[ RUN      ] PIMKernelFixture.relu
+>>PIM Kernel Accuraccy Test
+  Input/output data dimension : 1048576
+
+> Test Result
+  simulated output comparison via pre-calculated values
+> passed : 1048576
+> failed : 0
+[       OK ] PIMKernelFixture.relu (1258 ms)
+[----------] 5 tests from PIMKernelFixture (10903 ms total)
+
+[----------] Global test environment tear-down
+[==========] 5 tests from 1 test suite ran. (10903 ms total)
+[  PASSED  ] 5 tests.

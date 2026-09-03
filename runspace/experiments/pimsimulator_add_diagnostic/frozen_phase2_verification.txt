@@ -1,0 +1,7 @@
+verification_time_utc=2026-08-23T16:36:41Z
+frozen_arm=../pimsimulator_feasibility
+file_count=2506
+manifest=frozen_phase2_sha256sums.txt
+manifest_sha256=8f0709f39267e79414cf9b7c9b2bde675b42531ffa45d90c0c71b730ca50f97b
+command=cd ../pimsimulator_feasibility && sha256sum --quiet -c ../pimsimulator_add_diagnostic/frozen_phase2_sha256sums.txt
+result=PASS

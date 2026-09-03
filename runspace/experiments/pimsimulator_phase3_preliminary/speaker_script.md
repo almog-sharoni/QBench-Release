@@ -1,0 +1,5 @@
+# Speaker script for the Phase-3 preliminary slide
+
+“This feasibility arm asks whether Samsung’s HBM2 PIMSimulator can support our Stage-1 joint placement and representation study. For the exact locked commit and dense-FP16 configuration, the answer is partially yes: all thirty adapter runs were bit-exact and deterministic, and a development-only analytical fit predicted four locked simulator cases with 2.56 percent mean absolute relative error and 4.92 percent worst-case error.
+
+The important result is the boundary, not a manufactured joint gap. The convolution and classifier numbers cover only native GEMV portions; im2col, host reductions, and boundary costs are incomplete, avgpool is unsupported, and low-precision PIM formats are not validated. The broader provenance audit also could not locate the required frozen host, parametric, checkpoint, and final-split manifests. We therefore did not run joint or sequential optimization. The gap is not evaluated—not zero—and this arm makes no coupled-versus-separable regime claim.”

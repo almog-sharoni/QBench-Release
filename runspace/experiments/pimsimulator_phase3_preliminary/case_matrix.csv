@@ -1,0 +1,16 @@
+split,case_id,kernel,logical_elements,output_dim,input_dim,vectors,trace
+development,dev_add_1tile,ADD,131072,,,,false
+development,dev_add_3tile,ADD,393216,,,,false
+development,dev_add_5tile,ADD,655360,,,,false
+development,dev_relu_1tile,RELU,131072,,,,false
+development,dev_relu_3tile,RELU,393216,,,,false
+development,dev_relu_5tile,RELU,655360,,,,false
+development,dev_gemv_o512_i1024_v1,GEMV,,512,1024,1,false
+development,dev_gemv_o1000_i1024_v1,GEMV,,1000,1024,1,false
+development,dev_gemv_o512_i2048_v1,GEMV,,512,2048,1,false
+development,dev_gemv_o1000_i2048_v4,GEMV,,1000,2048,4,false
+development,dev_gemv_o512_i4608_v8,GEMV,,512,4608,8,false
+validation,add_layer3_0_residual,ADD,200704,,,,true
+validation,relu_layer1_0_post_add,RELU,802816,,,,true
+validation,fc_classifier,GEMV,,1000,2048,1,true
+validation,conv_layer4_0_conv2,GEMV,,512,4608,49,true

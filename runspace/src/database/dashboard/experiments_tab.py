@@ -185,8 +185,8 @@ st.sidebar.caption("Data updates on Streamlit reruns. Active run logs refresh in
 
 st.markdown("---")
 
-tab_exp, tab_cache, tab_runner, tab_graph, tab_chunk, tab_bwaware_best = st.tabs(
-    ["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph", "🧩 Chunk Layout", "🎯 BW-Aware Greedy Descent"]
+tab_exp, tab_cache, tab_runner, tab_workbench, tab_graph, tab_chunk, tab_bwaware_best = st.tabs(
+    ["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🧪 Model Workbench", "🏗️ Architecture Graph", "🧩 Chunk Layout", "🎯 BW-Aware Greedy Descent"]
 )
 
 import streamlit.components.v1 as _dashboard_components
@@ -194,7 +194,7 @@ _dashboard_components.html(
     """
     <script>
     (() => {
-      const labels = ["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🏗️ Architecture Graph", "🧩 Chunk Layout", "🎯 BW-Aware Greedy Descent"];
+      const labels = ["📊 Experiments", "🗄️ Cache Simulation", "🚀 Run Models", "🧪 Model Workbench", "🏗️ Architecture Graph", "🧩 Chunk Layout", "🎯 BW-Aware Greedy Descent"];
       const storageKey = "qbench-dashboard-active-tab";
       const doc = window.parent.document;
 

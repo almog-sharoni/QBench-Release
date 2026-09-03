@@ -1,0 +1,11 @@
+classification_label=SIMULATED_PIM_HBM2
+sim_binary_sha256=e348be1c030166f3ed6eee7f2632f996f21472c4aecdb2620797b4920944ae9b
+non_pim_cycles=6651
+pim_cycles=3349
+largest_passing_integer_pim_cycles_for_strict_2x=3325
+cycles_above_largest_passing_value=24
+final_end_park_out_bar_activate_cycle=3312
+final_bank15_park_out_read_cycle=3326
+post_threshold_precharge_cycles=3327,3330,3345
+queue_drained_cycle=3349
+interpretation=The PIM phase after cycle 3325 is the final all-bank parkOut drain tail. These cycles are retained, not subtracted.

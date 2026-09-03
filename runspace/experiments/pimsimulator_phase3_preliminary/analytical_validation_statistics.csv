@@ -1,0 +1,7 @@
+evaluation_split,group_type,group,case_count,mean_absolute_relative_error,median_absolute_relative_error,worst_absolute_relative_error,descriptive_grouping_preregistered,acceptance_test_role
+locked_validation,operation,ADD,1,0.049226091763404846,0.049226091763404846,0.049226091763404846,True,DESCRIPTIVE_ONLY
+locked_validation,operation,GEMV,2,0.003203072744774605,0.003203072744774605,0.0049922152180642615,True,DESCRIPTIVE_ONLY
+locked_validation,operation,RELU,1,0.04665983839763266,0.04665983839763266,0.04665983839763266,True,DESCRIPTIVE_ONLY
+locked_validation,overall,all,4,0.025573018912646676,0.02582602680784846,0.049226091763404846,True,OVERALL_ONLY
+locked_validation,tensor_size,GT_1_TO_32_MiB,3,0.03243328681084082,0.04665983839763266,0.049226091763404846,False,DESCRIPTIVE_ONLY
+locked_validation,tensor_size,GT_32_MiB,1,0.0049922152180642615,0.0049922152180642615,0.0049922152180642615,False,DESCRIPTIVE_ONLY

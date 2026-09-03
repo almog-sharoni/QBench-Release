@@ -1,0 +1,57 @@
+{
+  "run_id": "phase3_preliminary_20260823T165500Z",
+  "status": "STOPPED_BEFORE_JOINT_OPTIMIZATION",
+  "adapter_gate": {
+    "pass": true,
+    "all_exact_bit_mismatches_zero": true,
+    "two_repeat_cycle_and_output_determinism": true
+  },
+  "analytical_validation_gate": {
+    "pass": true,
+    "locked_validation_case_count": 4,
+    "mape": 0.02557301891264668,
+    "maximum_absolute_relative_error": 0.049226091763404846,
+    "mape_limit": 0.1,
+    "per_case_limit": 0.2,
+    "locked_validation_used_for_fit": false
+  },
+  "provenance_gate": {
+    "pass": true,
+    "expected": {
+      "phase2_bundle": "8f0709f39267e79414cf9b7c9b2bde675b42531ffa45d90c0c71b730ca50f97b",
+      "diagnostic_bundle": "6d64351133f952431d478162f644b0ddab6b5a3fb3fca40190d0fb5dd7fc8e96",
+      "shape_source": "6a6a4bec2b90a791b92023382a5fbb45354a0c0e629e6c84164ee44b809fae2d",
+      "quality_json": "942093102afd8a850bfd790f41adc6c6617486379518dd5ee00e4ae056102501",
+      "database": "401a06b517765a9811a4f489ba9b7dde58a821dc40bb100d94ca27ff8660ca2b"
+    },
+    "observed": {
+      "phase2_bundle": "8f0709f39267e79414cf9b7c9b2bde675b42531ffa45d90c0c71b730ca50f97b",
+      "diagnostic_bundle": "6d64351133f952431d478162f644b0ddab6b5a3fb3fca40190d0fb5dd7fc8e96",
+      "shape_source": "6a6a4bec2b90a791b92023382a5fbb45354a0c0e629e6c84164ee44b809fae2d",
+      "quality_json": "942093102afd8a850bfd790f41adc6c6617486379518dd5ee00e4ae056102501",
+      "database": "401a06b517765a9811a4f489ba9b7dde58a821dc40bb100d94ca27ff8660ca2b"
+    }
+  },
+  "end_to_end_mapping_gate": {
+    "pass": false,
+    "reason": "Conv im2col/patch packing and GEMV host partial-sum reductions are counted but have no validated cycle cost; avgpool is unsupported."
+  },
+  "representation_gate": {
+    "pass": false,
+    "validated_native_representations": [
+      "FP16_dense"
+    ],
+    "required_minimum": 2,
+    "reason": "FP8/INT8/INT4/block-scaled/sparse formats have no validated native mapping, packing, or datapath."
+  },
+  "joint_optimizer": {
+    "run": false,
+    "reason": "End-to-end mapping and representation gates failed. Unsupported cases are not converted to zero-cost or zero-gap results."
+  },
+  "quality_record_accounting": {
+    "directional_records_visible": 83,
+    "unique_physical_run_ids": 76,
+    "statistical_samples_used": 0
+  },
+  "trace_case_count": 4
+}

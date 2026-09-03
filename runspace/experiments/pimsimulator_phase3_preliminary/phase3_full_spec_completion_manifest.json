@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "arm": "pimsimulator_phase3_workload_integration_preliminary",
+  "completed_utc": "2026-08-23T17:32:36Z",
+  "status": "STOPPED_FULL_SPEC_PROVENANCE_AND_PREREGISTRATION_FAILED",
+  "conclusion_classification": "INCONCLUSIVE",
+  "regime_claim_made": false,
+  "accepted_authorization_label": "VALIDATED_WITH_UPSTREAM_PERFORMANCE_THRESHOLD_DEVIATION",
+  "supersedes": {
+    "manifest": "phase3_completion_manifest.json",
+    "sha256": "049687e9a914d4aa652d6d80d7b18811aa89c85e94039b0601c4b644d04b4082",
+    "reason": "The prior completion record covered only the narrower set of inputs named by the initial preregistration."
+  },
+  "pre_result_records": {
+    "phase3_manifest": {
+      "path": "phase3_manifest.json",
+      "sha256": "c93e60bc9161a1015ebeebdcdd5a3eb376923001c8a42ca35047edb29a723848"
+    },
+    "preregistration": {
+      "path": "preregistration.json",
+      "sha256": "b0d196037c59269506b637c807fffaca500eb751da356b82e0f2728582ee5a2a"
+    },
+    "workload_shape_manifest_snapshot": {
+      "path": "workload_shape_manifest_preregistered_snapshot.json",
+      "sha256": "90535465871dedf3302570a61be4d76c2396639af4ecc5c97d20dd9f62920ac7"
+    },
+    "results_observed_before_these_records": false,
+    "completeness_decision": "FAIL",
+    "audit": "preregistration_compliance_audit.csv"
+  },
+  "frozen_and_tracked_inputs": [
+    {
+      "id": "phase2_feasibility_bundle",
+      "path": "runspace/experiments/pimsimulator_feasibility",
+      "hash_definition": "sha256sum_manifest_stream_v1",
+      "sha256": "8f0709f39267e79414cf9b7c9b2bde675b42531ffa45d90c0c71b730ca50f97b",
+      "status": "AVAILABLE_AND_VERIFIED"
+    },
+    {
+      "id": "add_diagnostic_bundle",
+      "path": "runspace/experiments/pimsimulator_add_diagnostic",
+      "hash_definition": "sha256sum_manifest_stream_v1",
+      "sha256": "6d64351133f952431d478162f644b0ddab6b5a3fb3fca40190d0fb5dd7fc8e96",
+      "status": "AVAILABLE_AND_VERIFIED"
+    },
+    {
+      "id": "pimsimulator_source_archive",
+      "path": "https://github.com/SAITPublic/PIMSimulator.git@3703d1f19c8f027360cc33a3243eb271e3bb6898",
+      "sha256": "803b018642bd0858f56ead6c716ca6fba38c42c63459b0b402b2a54ad167f392",
+      "status": "AVAILABLE_AND_VERIFIED"
+    },
+    {
+      "id": "pimsimulator_container",
+      "path": "runspace/experiments/pimsimulator_feasibility/dependencies/pimsimulator-ubuntu20.04.sif",
+      "sha256": "5e9455a5c0cfdf9e68c818473f66498bc1b7e911850f85e5b30a40091ec12db4",
+      "status": "AVAILABLE_AND_VERIFIED"
+    },
+    {
+      "id": "resnet50_shape_trace",
+      "path": "runspace/experiments/asic_cache_simulation/simulation_results_resnet50.json",
+      "sha256": "6a6a4bec2b90a791b92023382a5fbb45354a0c0e629e6c84164ee44b809fae2d",
+      "status": "AVAILABLE_AND_VERIFIED"
+    },
+    {
+      "id": "model_list",
+      "path": "runspace/inputs/models.yaml",
+      "sha256": "427e6d3d3365a95162322a3a7055309f055a8fb0237264c67b6357f6d142ce2e",
+      "status": "AVAILABLE_BUT_CHECKPOINT_UNRESOLVED"
+    },
+    {
+      "id": "input_quant_quality_json",
+      "path": "runspace/experiments/find_optimal_input_quant/results/latest_db_results.json",
+      "sha256": "3721af0650cb30cf3caeb32978d063ae26e25480624653420470f271befe7975",
+      "status": "AVAILABLE_HASHED_NOT_CONSUMED"
+    },
+    {
+      "id": "weight_quant_quality_json",
+      "path": "runspace/experiments/find_optimal_weight_quant/results/latest_db_results.json",
+      "sha256": "f1c1830e5a859e312875523ce285f40b4c5fa4b9c3d8c03909e83c30b27b9198",
+      "status": "AVAILABLE_HASHED_NOT_CONSUMED"
+    },
+    {
+      "id": "hybrid_quant_quality_json",
+      "path": "runspace/experiments/find_optimal_hybrid_quant/results/latest_db_results.json",
+      "sha256": "942093102afd8a850bfd790f41adc6c6617486379518dd5ee00e4ae056102501",
+      "status": "AVAILABLE_HOST_PROVENANCE_UNRESOLVED"
+    },
+    {
+      "id": "runs_database",
+      "path": "runspace/database/runs.db",
+      "sha256": "401a06b517765a9811a4f489ba9b7dde58a821dc40bb100d94ca27ff8660ca2b",
+      "status": "AVAILABLE_HASHED_NOT_QUERIED"
+    },
+    {
+      "id": "frozen_l40s_bundle",
+      "path": null,
+      "sha256": null,
+      "status": "NOT_LOCATED_PROVENANCE_FAILURE"
+    },
+    {
+      "id": "frozen_h100_bundle",
+      "path": null,
+      "sha256": null,
+      "status": "NOT_LOCATED_PROVENANCE_FAILURE"
+    },
+    {
+      "id": "frozen_parametric_bundle",
+      "path": null,
+      "sha256": null,
+      "status": "NOT_LOCATED_PROVENANCE_FAILURE"
+    },
+    {
+      "id": "frozen_stage1_plan",
+      "path": null,
+      "sha256": null,
+      "status": "NOT_LOCATED_PROVENANCE_FAILURE"
+    },
+    {
+      "id": "locked_48000_image_final_split_manifest",
+      "path": null,
+      "sha256": null,
+      "status": "NOT_LOCATED_FINAL_DATA_NOT_OPENED"
+    },
+    {
+      "id": "exact_resnet50_checkpoint",
+      "path": null,
+      "sha256": null,
+      "status": "NOT_RESOLVED_PROVENANCE_FAILURE"
+    }
+  ],
+  "simulator_scope": {
+    "commit": "3703d1f19c8f027360cc33a3243eb271e3bb6898",
+    "architecture": "Samsung documented HBM2-PIM simulator model",
+    "configuration": "64 channels, one rank, FP16 dense",
+    "adapter_sha256": "9ffe2119d022ad73cdc5d2f7f5c9e2f8e6ebc599916f715d91bf4c0673b6997a",
+    "source_patched": false,
+    "evidence_label": "SIMULATED_PIM_HBM2"
+  },
+  "preserved_upstream_deviation": {
+    "test": "PIMBenchFixture.add",
+    "exit_code": 1,
+    "assertion": "float(non_pim_cycles) / pim_cycles > 2.0",
+    "non_pim_cycles": 6651,
+    "pim_cycles": 3349,
+    "final_all_bank_parkout_drain_cycles": 24,
+    "converted_to_pass": false
+  },
+  "native_results": {
+    "formal_run_id": "phase3_preliminary_20260823T165500Z",
+    "raw_artifact_manifest_sha256": "4f8b53e454c28a28424bd06464bc47b2dd69f767b4000a135acef1c49c12d52d",
+    "adapter_executions": 30,
+    "zero_exit_executions": 30,
+    "bit_mismatches": 0,
+    "determinism_repeats_per_case": 2,
+    "repeat_statistical_interpretation": "NOT_INDEPENDENT_SAMPLES",
+    "locked_trace_count": 4,
+    "development_fit_case_count": 11,
+    "locked_validation_case_count": 4,
+    "locked_validation_mape": 0.02557301891264668,
+    "locked_validation_median_absolute_relative_error": 0.02582602680784846,
+    "locked_validation_worst_absolute_relative_error": 0.049226091763404846,
+    "locked_validation_used_for_fit": false
+  },
+  "quality_record_accounting": {
+    "model": "resnet50",
+    "logical_directional_record_count": 83,
+    "unique_physical_run_count": 76,
+    "records_used_as_independent_phase3_samples": 0,
+    "pim_costs_assigned_from_directional_records": false,
+    "host_provenance": "UNRESOLVED_HOST_PROVENANCE"
+  },
+  "gate_decisions": {
+    "native_correctness_and_determinism": "PASS",
+    "native_analytical_validation": "PASS",
+    "limited_local_hash_guard": "PASS",
+    "full_input_provenance": "FAIL",
+    "preregistration_completeness": "FAIL",
+    "full_component_attribution": "FAIL",
+    "end_to_end_mapping": "FAIL",
+    "representation_support": "FAIL",
+    "joint_optimizer": "NOT_RUN",
+    "mechanism_ablation": "DEFERRED"
+  },
+  "joint_gap_status": {
+    "joint_optimum": null,
+    "placement_first_fixed_point": null,
+    "representation_first_fixed_point": null,
+    "best_sequential": null,
+    "absolute_gap": null,
+    "relative_gap": null,
+    "positive": "NOT_EVALUATED",
+    "zero": "NOT_EVALUATED",
+    "negative": "NOT_EVALUATED",
+    "unavailable_encoded_as_zero": false
+  },
+  "locked_final_evaluation_access": {
+    "samples_opened": 0,
+    "samples_decoded": 0,
+    "samples_evaluated": 0,
+    "dataset_directory_enumerated": false
+  },
+  "required_artifact_hashes": {
+    "preliminary_results_summary.md": "1ab5d9d4dcb1861100b15afd212b3759cec03c75ec78ea750ebb9f228ddcd67e",
+    "preliminary_results_table.csv": "c33bd1a1ac3a5c10dc1e4651b8a6914583dc3f8a30c922a5e17f09abbd3ba472",
+    "workload_shape_manifest.json": "7bd1cd55705e200bd8f904bf2c8b4ca80ec80ee70616b33d3817fae944580921",
+    "physical_run_provenance.csv": "98e7a6ca8e5373cb01ba811b78fd5b6862e752949e0e1ec402554d6cf54f75d1",
+    "supported_configuration_matrix.csv": "23f65aa32cb1a3631b63531b35fe0bef283841809caee172d3d92cd616734ed4",
+    "analytical_vs_simulated_validation.csv": "b13f54bd8bccf9f17140f830823da96891e7827a6cf9b69ff19a7d4be6e527a3",
+    "analytical_vs_simulated_latency.pdf": "a4aaba09a1df7ad2dfee50aaf71d6b7c90db70f4c6a0732b5219aeb4253c2c74",
+    "host_pim_cost_breakdown.pdf": "91019c4e214cf8768b35088b600a796a4f03be2bb57a0b666b15b28a35834d48",
+    "joint_gap_regime_map.pdf": "4443853a71ad321c1f2faba8180ca4ac6718e2933cb021ca019a2536fa448f06",
+    "mechanism_ablation.csv": "3ed3f158d10e24a3dfb790019355c8fcdc19750c3a9a70aba5cf603352bd14a9",
+    "provenance_and_claim_ledger.csv": "4dc7ec230051e6f64f88cb66b27064d9b76e4a983edb12866fd3e2e7cc4adac8",
+    "honesty_audit.md": "add734f4ceb3fdbe34064ae6e63c0615ea398df00edd8c4cdb13bf4041bd8bb3",
+    "limitations_and_unsupported_claims.md": "99c04b7f09e23a29ba4edcbff5964dbff6d27ad01026be6ab0ec086be0f469a9",
+    "exact_reproduction.sh": "8a774975249bdbcfa46bbcfec58bb0ba37376b75c9ba48630d6fd7cfb68e656f",
+    "phase3_preliminary_defense_slide.pdf": "3baa671e8b484bf1829f12f9895c3f474ac1fa376fc27a08471b9bcce1d957dc",
+    "speaker_script.md": "7bc9ef1099ef073f838d03a3daa118cf161c11ae2b29a8a112e14a4f9e4774fa"
+  },
+  "audit_artifact_hashes": {
+    "gate_status.json": "499f9a0c258e218f682513c559453e361218cf36c8937f6bfa8734c8bd9584d1",
+    "gate_status_native_scope.json": "bee06b17124381140f5d386f3175d4f206ad8784b088fc9b355edf5b998a46fd",
+    "frozen_input_provenance.csv": "3a592cae760f542765b5dac64a28376928a04cf96885c1f3dabce9487ade67ec",
+    "locked_final_split_guard.json": "9831b66617971aa4f4d3cfe40db67633cd71130a47c731be9d85e42fad12a50b",
+    "preregistration_compliance_audit.csv": "14d1d616bd85509ee500bc744609791b6d5085e99c955f1ecd96c2a4cd4073fd",
+    "completion_audit.csv": "8caaf580dd390f8f1fc323b8ef0ca12cc843af0289013f8118bb6451d581978f",
+    "joint_gap_cell_accounting.csv": "9f35b72a8cc352ab7796cbffba93f26d0fee523344d00d4c03e3b0b7c51531ad",
+    "full_specification_gap_report.md": "75f19e2652a29cb4492b5d346b63c41a71e5651ba35c3f9f7add66343d4ebfc6",
+    "representation_validity_matrix.csv": "26cc654b1648bfc3b4ac95c3eaf7c3cfc936d2d7990082da61c1571e05e689b3",
+    "analytical_validation_statistics.csv": "aa92bc96b6adadb7ef7c88feab1bedd713a00d661e1aadd95d45e064bb7cd562"
+  }
+}

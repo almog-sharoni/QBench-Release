@@ -1,0 +1,17 @@
+capture_date_utc=2026-08-23
+api_root=https://api.github.com/repos/SAITPublic/PIMSimulator
+GET /branches -> branches.json
+GET /tags -> tags.json
+GET /issues?state=all&per_page=100 -> issues.json
+GET /pulls?state=all&per_page=100 -> pulls.json
+GET /issues/3/comments?per_page=100 -> issue_3_comments.json
+GET /issues/8/comments?per_page=100 -> issue_8_comments.json
+GET /issues/10/comments?per_page=100 -> issue_10_comments.json
+GET /issues/15/comments?per_page=100 -> issue_15_comments.json
+GET /issues/16/comments?per_page=100 -> issue_16_comments.json
+GET /issues/28/comments?per_page=100 -> issue_28_comments.json
+GET https://github.com/SAITPublic/PIMSimulator/pull/4.diff -> pr_4.diff
+GET https://github.com/SAITPublic/PIMSimulator/pull/9.diff -> pr_9.diff
+GET https://github.com/SAITPublic/PIMSimulator/pull/19.diff -> pr_19.diff
+GET https://github.com/SAITPublic/PIMSimulator/pull/29.diff -> pr_29.diff
+note=Responses are preserved verbatim. The unusually large PR 29 diff is retained rather than truncated or removed.

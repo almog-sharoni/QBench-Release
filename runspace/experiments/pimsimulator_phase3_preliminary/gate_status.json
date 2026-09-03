@@ -1,0 +1,81 @@
+{
+  "run_id": "phase3_preliminary_20260823T165500Z",
+  "status": "STOPPED_FULL_SPEC_PROVENANCE_AND_PREREGISTRATION_FAILED",
+  "adapter_native_correctness_gate": {
+    "pass": true,
+    "all_exact_bit_mismatches_zero": true,
+    "two_repeat_cycle_and_output_determinism": true,
+    "scope": "Aggregate native FP16 residency/execution/readback phases only"
+  },
+  "adapter_full_component_attribution_gate": {
+    "pass": false,
+    "reason": "Mode-entry/exit, CRF, memory, compute, synchronization, and per-workload parkOut cycles are present only inside aggregate phases and are not separately attributed."
+  },
+  "analytical_validation_gate": {
+    "pass": true,
+    "locked_validation_case_count": 4,
+    "mape": 0.02557301891264668,
+    "maximum_absolute_relative_error": 0.049226091763404846,
+    "mape_limit": 0.1,
+    "per_case_limit": 0.2,
+    "locked_validation_used_for_fit": false,
+    "scope": "Native FP16 aggregate phases, not end-to-end host-PIM latency"
+  },
+  "limited_local_hash_gate": {
+    "pass": true,
+    "covered_inputs": ["feasibility bundle", "ADD diagnostic bundle", "shape source", "hybrid quality JSON", "runs database"]
+  },
+  "full_input_provenance_gate": {
+    "pass": false,
+    "missing_required_inputs": ["frozen L40S bundle", "frozen H100 bundle", "frozen parametric bundle", "frozen Stage-1 plan", "locked 48000-image split manifest", "exact ResNet-50 checkpoint hash"],
+    "evidence": "frozen_input_provenance.csv"
+  },
+  "preregistration_completeness_gate": {
+    "pass": false,
+    "missing_pre_result_fields": ["residency modes", "parameter sensitivity ranges", "quality constraints", "fixed-point convergence conditions", "tie-breaking rules", "required figures and reports"],
+    "evidence": "preregistration_compliance_audit.csv"
+  },
+  "end_to_end_mapping_gate": {
+    "pass": false,
+    "reason": "Conv im2col/patch packing and GEMV host partial-sum reductions are counted but have no validated cycle cost; avgpool is unsupported."
+  },
+  "representation_gate": {
+    "pass": false,
+    "validated_native_representations": ["FP16_dense"],
+    "required_minimum": 2,
+    "reason": "FP8/INT8/INT4/block-scaled/sparse formats have no validated native mapping, packing, or datapath."
+  },
+  "joint_optimizer": {
+    "run": false,
+    "reason": "Full provenance, preregistration completeness, component attribution, end-to-end mapping, and representation gates failed."
+  },
+  "joint_gap": {
+    "positive": "NOT_EVALUATED",
+    "zero": "NOT_EVALUATED",
+    "negative": "NOT_EVALUATED",
+    "inconclusive": 1,
+    "unsupported": "See supported_configuration_matrix.csv and representation_validity_matrix.csv",
+    "numerically_invalid": 0
+  },
+  "joint_gap_cell_counts": {
+    "total_optimizer_cells": null,
+    "evaluated_cells": 0,
+    "positive_gap_cells": null,
+    "zero_gap_cells": null,
+    "negative_gap_cells": null,
+    "inconclusive_arm_count": 1,
+    "unsupported_optimizer_cells": null,
+    "numerically_invalid_cells": 0,
+    "reason": "No preregistered feasible optimizer grid was constructed. Null counts are unavailable, not zero."
+  },
+  "quality_record_accounting": {
+    "logical_directional_records": 83,
+    "unique_physical_run_ids": 76,
+    "independent_statistical_samples_used": 0
+  },
+  "locked_final_evaluation": {
+    "samples_opened": 0,
+    "samples_decoded": 0,
+    "samples_evaluated": 0
+  }
+}

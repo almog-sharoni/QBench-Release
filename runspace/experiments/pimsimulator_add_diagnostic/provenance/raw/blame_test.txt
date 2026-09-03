@@ -1,0 +1,7 @@
+^b00e73a (Sanghoon Cha 2022-11-21 18:06:06 +0900 40) TEST_F(PIMBenchFixture, add)
+^b00e73a (Sanghoon Cha 2022-11-21 18:06:06 +0900 41) {
+^b00e73a (Sanghoon Cha 2022-11-21 18:06:06 +0900 42)     setPIMBenchTestCase(KernelType::ADD, 1024 * 1024, 1024 * 1024);
+^b00e73a (Sanghoon Cha 2022-11-21 18:06:06 +0900 43)     executeKernel();
+^b00e73a (Sanghoon Cha 2022-11-21 18:06:06 +0900 44)     executePIMKernel();
+^b00e73a (Sanghoon Cha 2022-11-21 18:06:06 +0900 45)     expectPIMBench(2.0);
+^b00e73a (Sanghoon Cha 2022-11-21 18:06:06 +0900 46) }

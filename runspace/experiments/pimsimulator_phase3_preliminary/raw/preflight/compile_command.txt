@@ -1,0 +1,1 @@
+apptainer exec --userns --bind PHASE3_ARM:/phase3 PINNED_CONTAINER g++ -g -O2 -std=c++14 -Wall -Wno-reorder -Wno-sign-compare -Ilib -Isrc -Itools /phase3/adapter/phase3_runner.cpp libdramsim/libdramsim2.a -lgtest -lpthread -o /phase3/raw/preflight/phase3_runner

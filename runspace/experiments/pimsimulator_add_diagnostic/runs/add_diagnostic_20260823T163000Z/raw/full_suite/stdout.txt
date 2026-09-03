@@ -1,0 +1,154 @@
+Note: Google Test filter = -*bw*.*
+[==========] Running 11 tests from 3 test suites.
+[----------] Global test environment set-up.
+[----------] 5 tests from PIMKernelFixture
+[ RUN      ] PIMKernelFixture.gemv_tree
+>>PIM Kernel Accuraccy Test
+  Weight data dimension : 4096x1024
+  Input data dimension : 1024
+  Output data dimension : 4096
+
+> Test Result
+  simulated output comparison via pre-calculated values
+> passed : 4096
+> failed : 0
+[       OK ] PIMKernelFixture.gemv_tree (3356 ms)
+[ RUN      ] PIMKernelFixture.gemv
+>>PIM Kernel Accuraccy Test
+  Weight data dimension : 4096x1024
+  Input data dimension : 1024
+  Output data dimension : 4096
+
+> Test Result
+  simulated output comparison via pre-calculated values
+> passed : 4096
+> failed : 0
+[       OK ] PIMKernelFixture.gemv (2920 ms)
+[ RUN      ] PIMKernelFixture.mul
+>>PIM Kernel Accuraccy Test
+  Input/output data dimension : 1048576
+
+> Test Result
+  simulated output comparison via pre-calculated values
+> passed : 1048576
+> failed : 0
+[       OK ] PIMKernelFixture.mul (1542 ms)
+[ RUN      ] PIMKernelFixture.add
+>>PIM Kernel Accuraccy Test
+  Input/output data dimension : 1048576
+
+> Test Result
+  simulated output comparison via pre-calculated values
+> passed : 1048576
+> failed : 0
+[       OK ] PIMKernelFixture.add (1522 ms)
+[ RUN      ] PIMKernelFixture.relu
+>>PIM Kernel Accuraccy Test
+  Input/output data dimension : 1048576
+
+> Test Result
+  simulated output comparison via pre-calculated values
+> passed : 1048576
+> failed : 0
+[       OK ] PIMKernelFixture.relu (1197 ms)
+[----------] 5 tests from PIMKernelFixture (10537 ms total)
+
+[----------] 2 tests from MemBandwidthFixture
+[ RUN      ] MemBandwidthFixture.hbm_read_bandwidth
+>> Bandwidth Test
+  Num. channels: 16
+  Num. ranks: 1
+  Num. banks: 16
+  Data size (byte): 8388608
+
+> Test Result 
+> BW (GB/s): 231
+[       OK ] MemBandwidthFixture.hbm_read_bandwidth (1375 ms)
+[ RUN      ] MemBandwidthFixture.hbm_write_bandwidth
+>> Bandwidth Test
+  Num. channels: 16
+  Num. ranks: 1
+  Num. banks: 16
+  Data size (byte): 16777216
+
+> Test Result 
+> BW (GB/s): 243
+[       OK ] MemBandwidthFixture.hbm_write_bandwidth (2192 ms)
+[----------] 2 tests from MemBandwidthFixture (3567 ms total)
+
+[----------] 4 tests from PIMBenchFixture
+[ RUN      ] PIMBenchFixture.gemv
+>>Performance Test
+  GEMV (PIM disabled)
+  Weight data dimension : 4096x4096
+  Input data dimension : 4096
+  Output data dimension : 4096
+> Test Results 
+> Cycle : 36082
+
+  GEMV (PIM enabled)
+  Weight data dimension : 4096x4096
+  Input data dimension : 4096
+  Output data dimension : 4096
+> Test Results 
+> Cycle : 13166
+
+> Speed-up : 2.74054
+[       OK ] PIMBenchFixture.gemv (8135 ms)
+[ RUN      ] PIMBenchFixture.mul
+>>Performance Test
+  MUL (PIM disabled)
+  Input/output data dimension : 2097152
+> Test Results 
+> Cycle : 13255
+
+  MUL (PIM enabled)
+  Input/output data dimension : 2097152
+> Test Results 
+> Cycle : 5926
+
+> Speed-up : 2.236753
+[       OK ] PIMBenchFixture.mul (3161 ms)
+[ RUN      ] PIMBenchFixture.add
+>>Performance Test
+  ADD (PIM disabled)
+  Input/output data dimension : 1048576
+> Test Results 
+> Cycle : 6651
+
+  ADD (PIM enabled)
+  Input/output data dimension : 1048576
+> Test Results 
+> Cycle : 3349
+
+src/tests/PIMBenchTestCases.h:295: Failure
+Value of: (float)non_pim_cycle_ / pim_cycle_ > expected_perf_gain
+  Actual: false
+Expected: true
+1.9859659671783447
+
+> Speed-up : 1.985966
+[  FAILED  ] PIMBenchFixture.add (1596 ms)
+[ RUN      ] PIMBenchFixture.relu
+>>Performance Test
+  RELU (PIM disabled)
+  Input/output data dimension : 4194304
+> Test Results 
+> Cycle : 17504
+
+  RELU (PIM enabled)
+  Input/output data dimension : 4194304
+> Test Results 
+> Cycle : 7665
+
+> Speed-up : 2.283627
+[       OK ] PIMBenchFixture.relu (4140 ms)
+[----------] 4 tests from PIMBenchFixture (17032 ms total)
+
+[----------] Global test environment tear-down
+[==========] 11 tests from 3 test suites ran. (31136 ms total)
+[  PASSED  ] 10 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] PIMBenchFixture.add
+
+ 1 FAILED TEST

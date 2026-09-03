@@ -1,0 +1,20 @@
+Bootstrap: docker
+From: ubuntu:20.04
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        libgtest-dev \
+        scons
+    rm -rf /var/lib/apt/lists/*
+
+%environment
+    export LC_ALL=C
+    export LANG=C
+
+%labels
+    Arm pimsimulator_hbm2_feasibility
+    Purpose unmodified_reference_validation

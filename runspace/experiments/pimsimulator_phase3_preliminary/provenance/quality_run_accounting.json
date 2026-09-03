@@ -1,0 +1,111 @@
+{
+  "model_name": "resnet50",
+  "source_path": "runspace/experiments/find_optimal_hybrid_quant/results/latest_db_results.json",
+  "source_sha256": "942093102afd8a850bfd790f41adc6c6617486379518dd5ee00e4ae056102501",
+  "directional_record_count": 83,
+  "unique_physical_run_id_count": 76,
+  "reconstructed_directional_record_count": 8,
+  "multi_view_run_ids": {
+    "1067": [
+      {
+        "selection_direction": "input_fixed",
+        "reconstructed_duplicate": true,
+        "weight_type": "fp8_e2m5",
+        "input_type": "fp8_e1m6"
+      },
+      {
+        "selection_direction": "weight_fixed",
+        "reconstructed_duplicate": true,
+        "weight_type": "fp8_e2m5",
+        "input_type": "fp8_e1m6"
+      }
+    ],
+    "1224": [
+      {
+        "selection_direction": "input_fixed",
+        "reconstructed_duplicate": true,
+        "weight_type": "opt_chunk_mse",
+        "input_type": "dyn_input_mse_7bit"
+      },
+      {
+        "selection_direction": "weight_fixed",
+        "reconstructed_duplicate": false,
+        "weight_type": "opt_chunk_mse",
+        "input_type": "dyn_input_mse_7bit"
+      }
+    ],
+    "1235": [
+      {
+        "selection_direction": "input_fixed",
+        "reconstructed_duplicate": true,
+        "weight_type": "fp6_e2m3",
+        "input_type": "fp6_e1m4"
+      },
+      {
+        "selection_direction": "weight_fixed",
+        "reconstructed_duplicate": false,
+        "weight_type": "fp6_e2m3",
+        "input_type": "fp6_e1m4"
+      }
+    ],
+    "1245": [
+      {
+        "selection_direction": "input_fixed",
+        "reconstructed_duplicate": true,
+        "weight_type": "opt_chunk_mse",
+        "input_type": "fp5_e1m3"
+      },
+      {
+        "selection_direction": "weight_fixed",
+        "reconstructed_duplicate": false,
+        "weight_type": "opt_chunk_mse",
+        "input_type": "fp5_e1m3"
+      }
+    ],
+    "1253": [
+      {
+        "selection_direction": "input_fixed",
+        "reconstructed_duplicate": true,
+        "weight_type": "opt_chunk_mse",
+        "input_type": "fp4_e1m2"
+      },
+      {
+        "selection_direction": "weight_fixed",
+        "reconstructed_duplicate": false,
+        "weight_type": "opt_chunk_mse",
+        "input_type": "fp4_e1m2"
+      }
+    ],
+    "1260": [
+      {
+        "selection_direction": "input_fixed",
+        "reconstructed_duplicate": true,
+        "weight_type": "opt_chunk_mse",
+        "input_type": "dyn_input_mse_3bit"
+      },
+      {
+        "selection_direction": "weight_fixed",
+        "reconstructed_duplicate": false,
+        "weight_type": "opt_chunk_mse",
+        "input_type": "dyn_input_mse_3bit"
+      }
+    ],
+    "1264": [
+      {
+        "selection_direction": "input_fixed",
+        "reconstructed_duplicate": true,
+        "weight_type": "opt_chunk_mse",
+        "input_type": "dyn_input_l1_2bit"
+      },
+      {
+        "selection_direction": "weight_fixed",
+        "reconstructed_duplicate": false,
+        "weight_type": "opt_chunk_mse",
+        "input_type": "dyn_input_l1_2bit"
+      }
+    ]
+  },
+  "statistical_sample_count_used_by_phase3": 0,
+  "pim_cost_assignment_from_quality_records": false,
+  "reason": "All sub-16-bit representations are unsupported by the locked native FP16 PIM mapping. Directional duplicates remain visible but are not measurements consumed by this arm."
+}

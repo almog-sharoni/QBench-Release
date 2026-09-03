@@ -1,0 +1,1 @@
+/phase3/raw/phase3_preliminary_20260823T165500Z/build/phase3_runner --case-id fc_classifier --kernel GEMV --output 1000 --input 2048 --vectors 1 --verify 

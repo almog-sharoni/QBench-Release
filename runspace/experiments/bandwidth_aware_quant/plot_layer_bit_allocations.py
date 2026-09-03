@@ -816,6 +816,110 @@ def plot_combined_allocations(
     return plot_path
 
 
+def export_combined_allocations_json(
+    model_name,
+    cache_size,
+    sim_layers,
+    allocations_by_kind,
+    output_dir,
+    bandwidth=1.0,
+):
+    """Save the exact shared bit-width curves used by the combined plot."""
+    allocations = allocations_by_kind["weight"]
+    thresholds = sorted(allocations)
+    if not thresholds:
+        return None
+
+    base_bits = allocations[thresholds[0]]["bits"]
+    plotted_bits = {
+        str(threshold): [max(bits, threshold) for bits in base_bits]
+        for threshold in thresholds
+    }
+    layers = []
+    for layer_index, layer in enumerate(sim_layers, start=1):
+        layers.append(
+            {
+                "index": layer_index,
+                "name": layer["name"],
+                "type": layer.get("type", ""),
+                "shared_bits": {
+                    str(threshold): plotted_bits[str(threshold)][layer_index - 1]
+                    for threshold in thresholds
+                },
+            }
+        )
+
+    payload = {
+        "schema_version": 1,
+        "model_name": model_name,
+        "cache_size_million_elements": cache_size,
+        "bandwidth_bytes_per_cycle": bandwidth,
+        "thresholds": thresholds,
+        "cycles_by_threshold": {
+            str(threshold): allocations[threshold]["cycles"]
+            for threshold in thresholds
+        },
+        "layers": layers,
+    }
+    filename = (
+        f"layer_shared_bits_cache_{sanitize_for_filename(cache_size)}.json"
+    )
+    json_path = os.path.join(output_dir, filename)
+    with open(json_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, allow_nan=False)
+        handle.write("\n")
+    return json_path
+
+
+def export_transfer_budget_json(
+    model_name,
+    cache_size,
+    sim_layers,
+    transfer_budget,
+    output_dir,
+    bandwidth=1.0,
+):
+    """Save the continuous transfer-budget values used by the combined plot."""
+    layers = []
+    for layer_index, layer in enumerate(sim_layers, start=1):
+        budget_bits = transfer_budget[layer["name"]]
+        finite_budget = (
+            budget_bits
+            if math.isfinite(budget_bits)
+            else None
+        )
+        layers.append(
+            {
+                "index": layer_index,
+                "name": layer["name"],
+                "type": layer.get("type", ""),
+                "continuous_transfer_budget_bits_per_element": finite_budget,
+                "equivalent_elements_per_second": (
+                    bandwidth * 8.0e9 / finite_budget
+                    if finite_budget is not None and finite_budget > 0
+                    else None
+                ),
+            }
+        )
+
+    payload = {
+        "schema_version": 1,
+        "model_name": model_name,
+        "cache_size_million_elements": cache_size,
+        "bandwidth_bytes_per_cycle": bandwidth,
+        "layers": layers,
+    }
+    filename = (
+        f"layer_transfer_budget_cache_{sanitize_for_filename(cache_size)}"
+        "_combined.json"
+    )
+    json_path = os.path.join(output_dir, filename)
+    with open(json_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, allow_nan=False)
+        handle.write("\n")
+    return json_path
+
+
 RESULTS_JSON_NAME = "bandwidth_aware_quant_results.json"
 
 
@@ -1060,6 +1164,26 @@ def main():
                     ),
                 )
                 print(f"  Saved {combined_path}")
+                if args.transfer_budget:
+                    transfer_budget_json_path = export_transfer_budget_json(
+                        model_name,
+                        cache_size,
+                        sim_layers,
+                        transfer_budget,
+                        out_dir,
+                        bandwidth=args.bandwidth,
+                    )
+                    print(f"  Saved {transfer_budget_json_path}")
+                else:
+                    combined_json_path = export_combined_allocations_json(
+                        model_name,
+                        cache_size,
+                        sim_layers,
+                        allocations_by_kind,
+                        out_dir,
+                        bandwidth=args.bandwidth,
+                    )
+                    print(f"  Saved {combined_json_path}")
 
             if args.list_elements_per_second_above is not None:
                 list_path = plot_layer_rate_metadata(

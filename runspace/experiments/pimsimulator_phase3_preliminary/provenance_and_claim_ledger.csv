@@ -1,0 +1,11 @@
+claim_id,claim,authoritative_artifact,provenance_label,admissibility,limitation_or_reason
+host_fp32_quality,Host FP32 quality exists in directional JSON,,UNRESOLVED_HOST_PROVENANCE,NOT_ADMISSIBLE,Frozen L40S bundle/hash and device evidence not located
+host_quantized_quality,Quantized host quality exists in directional JSON,,UNRESOLVED_HOST_PROVENANCE,NOT_ADMISSIBLE,Cannot prove EMULATED_HOST_L40S label from JSON alone
+tensor_shapes,Representative ResNet-50 shapes,workload_shape_manifest.json,TRACE_DERIVED,ADMISSIBLE_WITH_LIMITATION,Checkpoint identity is not fully frozen
+pim_native_cycles,ADD/ReLU/GEMV native phase cycles,simulator_measurements.csv,SIMULATED_PIM_HBM2,ADMISSIBLE,Exact locked commit/configuration only
+analytical_prediction,Development-fit native cycle model,analytical_vs_simulated_validation.csv,CALIBRATED_HYBRID_MODEL,ADMISSIBLE_NATIVE_SCOPE,Not end-to-end
+quantization_metadata,Low-precision scale/zero-point/block metadata,,ANALYTICAL_METADATA,UNAVAILABLE,No frozen format/packing mapping
+host_to_pim_boundary,Host-to-PIM transfer latency,,ASSUMED_PARAMETRIC,UNAVAILABLE,No frozen parametric bundle/hash located
+pim_to_host_boundary,PIM-to-host transfer latency,,ASSUMED_PARAMETRIC,UNAVAILABLE,No frozen parametric bundle/hash located
+low_precision_pim,FP8/INT8/INT4/block/sparse PIM cost,supported_configuration_matrix.csv,UNSUPPORTED_PIM_FORMAT,UNSUPPORTED,No validated datapath/ISA/packing
+joint_gap,Joint over converged sequential gap,joint_gap_regime_map.pdf,NOT_EVALUATED,NO_CLAIM,Prerequisite gates failed

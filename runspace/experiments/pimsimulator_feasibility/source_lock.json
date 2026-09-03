@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "arm": "pimsimulator_hbm2_feasibility",
+  "status": "STOPPED_REFERENCE_VALIDATION_FAILED",
+  "isolation_statement": "This arm is separate from and must not modify, overwrite, reinterpret, or mix with frozen L40S, H100, quantization-quality, or parametric result bundles.",
+  "locked_at_utc": "2026-08-23T15:55:36Z",
+  "upstream": {
+    "url": "https://github.com/SAITPublic/PIMSimulator.git",
+    "remote": "origin",
+    "branch": "dev",
+    "commit": "3703d1f19c8f027360cc33a3243eb271e3bb6898",
+    "commit_date": "2024-07-01T20:48:44+09:00",
+    "clone_command": "git clone --no-tags https://github.com/SAITPublic/PIMSimulator.git runspace/experiments/pimsimulator_feasibility/upstream/PIMSimulator",
+    "source_tree_sha256": {
+      "algorithm": "sha256",
+      "value": "803b018642bd0858f56ead6c716ca6fba38c42c63459b0b402b2a54ad167f392",
+      "definition": "SHA-256 of the byte stream produced by git archive --format=tar HEAD"
+    },
+    "working_tree_at_lock": "clean",
+    "working_tree_after_reference_validation": "clean",
+    "local_patches": []
+  },
+  "paths": {
+    "upstream_source": "runspace/experiments/pimsimulator_feasibility/upstream/PIMSimulator",
+    "generated_artifacts": "runspace/experiments/pimsimulator_feasibility/artifacts",
+    "raw_outputs": "runspace/experiments/pimsimulator_feasibility/artifacts/raw",
+    "successful_build_and_reference_attempt": "runspace/experiments/pimsimulator_feasibility/artifacts/raw/reference_validation_container_escalated_20260823T160700Z",
+    "raw_output_sha256_manifest": "runspace/experiments/pimsimulator_feasibility/raw_output_sha256sums.txt"
+  },
+  "raw_output_sha256_manifest_sha256": "db7279e0fc0dd8f0a0080dc4e234d874b25217ef76c6d003af55644c7df26735",
+  "clean_validation_environment": {
+    "container_runtime": "Apptainer 1.4.5 with --userns",
+    "definition_file": "pimsimulator_ubuntu20.def",
+    "definition_sha256": "11a13fc5c76147030d78cf7db61d04f523650e0989987ea0ea364fb572ca49d1",
+    "image": "dependencies/pimsimulator-ubuntu20.04.sif",
+    "image_sha256": "5e9455a5c0cfdf9e68c818473f66498bc1b7e911850f85e5b30a40091ec12db4",
+    "base_image": "ubuntu:20.04",
+    "compiler": "g++ (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0",
+    "dependencies": [
+      "build-essential=12.8ubuntu1.1",
+      "g++=4:9.3.0-1ubuntu2",
+      "gcc=4:9.3.0-1ubuntu2",
+      "googletest=1.10.0-2",
+      "libc6-dev:amd64=2.31-0ubuntu9.18",
+      "libgtest-dev:amd64=1.10.0-2",
+      "scons=3.1.2-2",
+      "python=3.8.10"
+    ],
+    "container_build_command": "apptainer build dependencies/pimsimulator-ubuntu20.04.sif pimsimulator_ubuntu20.def",
+    "simulator_build_command": "apptainer exec --userns dependencies/pimsimulator-ubuntu20.04.sif scons"
+  },
+  "preserved_attempts": [
+    {
+      "run_id": "reference_validation_20260823T155536Z",
+      "environment": "Ubuntu 24.04 host, GCC 13.3.0, isolated Noble SCons/gtest packages",
+      "outcome": "FAILED_BUILD",
+      "simulator_source_modified": false
+    },
+    {
+      "run_id": "reference_validation_gcc9_20260823T160000Z",
+      "environment": "Ubuntu 24.04 host with isolated GCC 9 packages selected through PATH",
+      "outcome": "FAILED_BUILD_COMPILER_SELECTION_IGNORED",
+      "simulator_source_modified": false
+    },
+    {
+      "run_id": "reference_validation_gcc9_explicit_20260823T160200Z",
+      "environment": "Ubuntu 24.04 host with isolated GCC 9 passed as a SCons construction variable",
+      "outcome": "FAILED_BUILD_COMPILER_SELECTION_IGNORED",
+      "simulator_source_modified": false
+    },
+    {
+      "run_id": "reference_validation_container_20260823T160500Z",
+      "environment": "Ubuntu 20.04 Apptainer image invoked inside restricted sandbox",
+      "outcome": "FAILED_CONTAINER_RUNTIME_SANDBOX",
+      "simulator_source_modified": false
+    },
+    {
+      "run_id": "reference_validation_container_notty_20260823T160600Z",
+      "environment": "Ubuntu 20.04 Apptainer image invoked inside restricted sandbox without TTY",
+      "outcome": "FAILED_CONTAINER_RUNTIME_SANDBOX",
+      "simulator_source_modified": false
+    },
+    {
+      "run_id": "reference_validation_container_escalated_20260823T160700Z",
+      "environment": "Pinned Ubuntu 20.04 Apptainer image outside restricted sandbox",
+      "outcome": "FAILED_REFERENCE_TESTS",
+      "build_exit_code": 0,
+      "test_discovery_exit_code": 0,
+      "reference_tests_passed": 10,
+      "reference_tests_failed": 1,
+      "failed_test": "PIMBenchFixture.add",
+      "simulator_source_modified": false
+    }
+  ],
+  "dependency_package_sha256": {
+    "cpp-9_9.5.0-6ubuntu2.1_amd64.deb": "2cd11ba67d4a0c3ae5a5598673b826a58313eebf32cb39c3ee6b785db999e3e5",
+    "g++-9_9.5.0-6ubuntu2.1_amd64.deb": "a5a53efd70c640381f8b503edc6e6c6379cdd97b1a9cd210575712a3899b2df2",
+    "gcc-9-base_9.5.0-6ubuntu2.1_amd64.deb": "0ef1d49dd21c1221752035d617b36e4a82dc30ed94da70f81964ef40ac880005",
+    "gcc-9_9.5.0-6ubuntu2.1_amd64.deb": "62a525e5cc1e4a3bbfa8673992bb87a34fa1bf816c726748977d7f47fd3fb04c",
+    "googletest_1.14.0-1_all.deb": "196b763a2539c117ee2bbd5878ffa33b00ce8017ca6b63b89245b74c8889f1d1",
+    "libgcc-9-dev_9.5.0-6ubuntu2.1_amd64.deb": "395209103dd7e244cccb469cfc6566559af75dad25a47fa74b11331cdf8446d4",
+    "libgtest-dev_1.14.0-1_amd64.deb": "c7dd1ecf6b816bf13ab6e1d8813d1ff0ae7a4fa09326a0cd467c3943d952117f",
+    "libstdc++-9-dev_9.5.0-6ubuntu2.1_amd64.deb": "20f27ce0ddacbbfc17abfaaee6d73e0d2e370957aadb558e7efb41594760737a",
+    "scons_4.5.2+dfsg-1_all.deb": "a349e0b0083db0f4aa13e85cd72358502be4fdafac42f59acf48a312eb20957a"
+  },
+  "validation_policy": {
+    "source_modification_allowed": false,
+    "all_required_reference_tests_must_pass": true,
+    "stop_on_any_reference_failure": true,
+    "gate_result": "FAIL",
+    "downstream_cost_profile_authorized": false,
+    "joint_optimizer_integration_authorized": false
+  }
+}

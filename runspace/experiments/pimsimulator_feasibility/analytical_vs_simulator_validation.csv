@@ -1,0 +1,2 @@
+split,kernel,shape,analytical_cycles,simulator_cycles,absolute_error_cycles,relative_error,error_decomposition,status,reason
+NOT_APPLICABLE,NOT_RUN,NOT_RUN,,,,,,GATE_FAILED,"Unmodified reference validation failed at PIMBenchFixture.add; no simulator cost profile or analytical calibration/validation was performed."

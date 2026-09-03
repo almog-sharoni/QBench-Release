@@ -1,0 +1,1 @@
+./sim --gtest_filter=PIMKernelFixture.add

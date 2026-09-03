@@ -749,6 +749,33 @@ class GenericAdapter(BaseAdapter):
             hasattr(module, "fc2") and isinstance(getattr(module, "fc2"), nn.Linear)
         )
 
+    @staticmethod
+    def _uses_registered_forward(module: nn.Module, original_cls: type) -> bool:
+        """Whether a subclass still executes the registered native forward.
+
+        A class swap is safe for the exact registered type and for transparent
+        subclasses which merely inherit its ``forward``.  An overridden forward
+        may contain additional arithmetic (for example linear -> relu -> scale),
+        so replacing the whole object would silently delete that behavior.
+        """
+        return (
+            type(module) is original_cls
+            or getattr(type(module), "forward", None)
+            is getattr(original_cls, "forward", None)
+        )
+
+    @classmethod
+    def _overrides_registered_forward(cls, module: nn.Module) -> bool:
+        """Return True for custom native-op subclasses with extra forward logic."""
+        for original_cls in OpRegistry.get_supported_ops():
+            if (
+                type(module) is not original_cls
+                and isinstance(module, original_cls)
+                and not cls._uses_registered_forward(module, original_cls)
+            ):
+                return True
+        return False
+
     def _create_quantized_module(self, module: nn.Module, QuantClass: type, name: str = "") -> nn.Module:
         """Creates a quantized module from the original module."""
         from ..ops.quant_base import QuantizedLayerMixin
@@ -899,12 +926,35 @@ class GenericAdapter(BaseAdapter):
                 self._recursive_replace(module, prefix=full_name)
                 continue
             
-            # Check if module type is supported (subclass-aware)
-            for original_cls, q_cls in supported_ops.items():
-                if isinstance(module, original_cls):
-                    quant_class = q_cls
+            # Prefer an explicit exact registration. Otherwise, a subclass may
+            # reuse a native replacement only when it inherits the native
+            # forward unchanged. Swapping a subclass that overrides forward
+            # would discard any extra operations implemented there; leave it in
+            # place so FX can expose and rewrite those operations individually.
+            exact_quant_class = supported_ops.get(type(module))
+            if exact_quant_class is not None:
+                quant_class = exact_quant_class
+                matched_original_name = type(module).__name__
+            else:
+                for original_cls, q_cls in supported_ops.items():
+                    if not isinstance(module, original_cls):
+                        continue
                     matched_original_name = original_cls.__name__
+                    if self._uses_registered_forward(module, original_cls):
+                        quant_class = q_cls
                     break
+
+            # Preserve the existing explicit converter for timm's fused
+            # BatchNormAct2d. Its overridden forward is intentionally handled
+            # by QuantBatchNormAct2d.from_native rather than generic class swap.
+            if (
+                quant_class is None
+                and isinstance(module, nn.BatchNorm2d)
+                and type(module) is not nn.BatchNorm2d
+                and (hasattr(module, "act") or hasattr(module, "drop"))
+            ):
+                from ..ops.quant_bn import QuantBatchNormAct2d
+                quant_class = QuantBatchNormAct2d
 
             if quant_class is not None:
                 requested_names = {matched_op_name}
@@ -1202,6 +1252,8 @@ class GenericAdapter(BaseAdapter):
         
         import operator
         func_map = {
+            F.linear: "QuantLinear",
+            torch._C._nn.linear: "QuantLinear",
             F.relu: "QuantReLU",
             torch.relu: "QuantReLU",
             F.relu6: "QuantReLU6",
@@ -1337,13 +1389,45 @@ class GenericAdapter(BaseAdapter):
                     if layer_conf.get('skip_quantization') is True:
                         continue
 
-                new_mod = QuantClass(**kwargs)
+                if op_name == "QuantLinear":
+                    linear_parts = self._functional_linear_parts(gm, node)
+                    if linear_parts is None:
+                        # Functional linear replacement is only safe when its
+                        # parameters are statically owned by the traced module.
+                        continue
+                    linear_input, weight, bias = linear_parts
+                    native_linear = nn.Linear(
+                        in_features=weight.shape[1],
+                        out_features=weight.shape[0],
+                        bias=bias is not None,
+                        device=weight.device,
+                        dtype=weight.dtype,
+                    )
+                    with torch.no_grad():
+                        native_linear.weight.copy_(weight.detach())
+                        if bias is not None:
+                            native_linear.bias.copy_(bias.detach())
+                    native_linear.weight.requires_grad_(weight.requires_grad)
+                    if bias is not None:
+                        native_linear.bias.requires_grad_(bias.requires_grad)
+                    native_linear.train(module.training)
+                    new_mod = self._create_quantized_module(
+                        native_linear,
+                        QuantClass,
+                        name=qualified_name,
+                    )
+                    new_mod.layer_name = qualified_name
+                    new_mod.run_id = getattr(self, 'run_id', 'default')
+                    fwd_args = (linear_input,)
+                    fwd_kwargs = {}
+                else:
+                    new_mod = QuantClass(**kwargs)
                 gm.add_module(new_mod_name, new_mod)
 
                 # Propagate runtime config (mirrors _create_quantized_module for
                 # in-place class swaps).  Without these, mode='chunk' layers hit
                 # input_chunk_size=None at the codec entry guard.
-                fx_settings = self._layer_quant_settings(new_mod_name)
+                fx_settings = self._layer_quant_settings(qualified_name)
                 new_mod.input_q_type = self._effective_input_q_type(fx_settings)
                 new_mod.input_quantization = self.input_quantization
                 new_mod.weight_quantization = self.weight_quantization
@@ -1374,6 +1458,48 @@ class GenericAdapter(BaseAdapter):
             gm.recompile()
         return gm, modified
 
+    @staticmethod
+    def _resolve_fx_get_attr(gm: torch.fx.GraphModule, value_node):
+        """Resolve an FX get_attr node without accepting dynamic parameters."""
+        if not isinstance(value_node, torch.fx.Node) or value_node.op != "get_attr":
+            return None, False
+
+        value = gm
+        try:
+            for atom in str(value_node.target).split("."):
+                value = getattr(value, atom)
+        except AttributeError:
+            return None, False
+        return value, True
+
+    @classmethod
+    def _functional_linear_parts(cls, gm: torch.fx.GraphModule, node: torch.fx.Node):
+        """Extract input and owned parameters from an FX functional linear node."""
+        linear_input = node.args[0] if node.args else node.kwargs.get("input")
+        weight_node = node.args[1] if len(node.args) > 1 else node.kwargs.get("weight")
+        bias_node = node.args[2] if len(node.args) > 2 else node.kwargs.get("bias")
+
+        if not isinstance(linear_input, torch.fx.Node):
+            return None
+
+        weight, has_weight = cls._resolve_fx_get_attr(gm, weight_node)
+        if not has_weight or not isinstance(weight, torch.Tensor) or weight.ndim != 2:
+            return None
+
+        if bias_node is None:
+            bias = None
+        else:
+            bias, has_bias = cls._resolve_fx_get_attr(gm, bias_node)
+            if (
+                not has_bias
+                or not isinstance(bias, torch.Tensor)
+                or bias.ndim != 1
+                or bias.shape[0] != weight.shape[0]
+            ):
+                return None
+
+        return linear_input, weight, bias
+
     def _validate_fx_model(self, fx_model: nn.Module, reference_model: nn.Module):
         # The CUDA codec is the only supported backend for the standard
         # `quantize_tensor` path, so the validation forward must run on CUDA
@@ -1395,6 +1521,22 @@ class GenericAdapter(BaseAdapter):
         except StopIteration:
             device = torch.device("cpu")
 
+        # Pure MLP/custom-linear models do not consume image-shaped inputs.
+        # Infer their feature width so FX validation does not reject an
+        # otherwise valid decomposition solely because of the ImageNet fallback.
+        if not any(isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Conv3d)) for module in model.modules()):
+            first_linear = next(
+                (module for module in model.modules() if isinstance(module, nn.Linear)),
+                None,
+            )
+            if first_linear is not None:
+                return torch.zeros(
+                    1,
+                    first_linear.in_features,
+                    device=device,
+                    dtype=first_linear.weight.dtype,
+                )
+
         _, c, h, w = resolve_model_input_size(model)
         return torch.zeros(1, c, h, w, device=device)
 
@@ -1414,8 +1556,13 @@ class GenericAdapter(BaseAdapter):
             return False
         if module_name == "runspace.src.ops.observed_ops":
             return False
-        # Need children — leaf custom modules can't host inline ops to rewrite.
-        if next(iter(module.children()), None) is None:
+        # Most custom leaves cannot host useful inline ops. A registered native
+        # subclass with an overridden forward is the important exception: its
+        # body is precisely what must be traced to preserve extra operations.
+        if (
+            next(iter(module.children()), None) is None
+            and not self._overrides_registered_forward(module)
+        ):
             return False
 
         # Accept any remaining custom composite (timm Block/Attention/Mlp,

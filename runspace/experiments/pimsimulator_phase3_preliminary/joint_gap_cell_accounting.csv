@@ -1,0 +1,2 @@
+scope,candidate_space_status,total_optimizer_cells,evaluated_cells,positive_gap_cells,zero_gap_cells,negative_gap_cells,inconclusive_cells,unsupported_cells,numerically_invalid_cells,interpretation
+phase3_arm,NOT_CONSTRUCTED_PREREQUISITE_GATES_FAILED,,0,,,,1,,0,"Positive/zero/negative and unsupported optimizer-cell counts are unavailable because no preregistered feasible optimizer grid was constructed; blanks are not zeros."

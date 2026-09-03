@@ -1,0 +1,8 @@
+run_id=reference_validation_20260823T155536Z
+started_utc=2026-08-23T15:57:39Z
+host_uname=Linux enics-h100 6.8.0-117-generic #117-Ubuntu SMP PREEMPT_DYNAMIC Tue May  5 19:26:24 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+compiler=g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+python=Python 3.12.3
+scons_package=4.5.2+dfsg-1
+libgtest_dev_package=1.14.0-1
+googletest_package=1.14.0-1

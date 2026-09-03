@@ -1,0 +1,1 @@
+apptainer exec --userns --bind DIAGNOSTIC_ARM:/diagnostic CONTAINER /diagnostic/runs/add_diagnostic_20260823T163000Z/build/exact_compare/exact_add_compare

@@ -1,0 +1,5 @@
+case_id,kernel,trace_sha256,compressed_bytes,uncompressed_bytes,line_count,command_lines,read_commands,write_commands,activate_commands,precharge_commands,tagged_park_commands,tagged_program_crf_commands,tagged_compute_commands,maximum_command_cycle,result_marker_found
+add_layer3_0_residual,ADD,a706bc1da317d51cc51203ff5833849fcde60af9443d0829e7a7ac760e55e312,226283,3740524,71169,64512,18432,33152,6464,6464,2048,64,256,2995,True
+relu_layer1_0_post_add,RELU,e59b4491513d46daf4afa996f7ccd8c70660cb5431317ff6d716e18feded2edc,460735,7754092,149441,134144,59392,57728,8512,8512,2048,64,896,5838,True
+fc_classifier,GEMV,8ee36a777f69e7585b32145e33aa84dcd49c55a51078a409cf1c2ba7a1dcd955,1975391,35553027,657251,573410,3048,524672,22845,22845,2048,64,2112,29253,True
+conv_layer4_0_conv2,GEMV,3e04f3ac079a11d149db2e5677b2164d9e0bb6563e0c046f4144ce90c3768eae,38165278,822963305,11462017,2360448,125440,1198464,518272,518272,100352,3136,235968,790507,True

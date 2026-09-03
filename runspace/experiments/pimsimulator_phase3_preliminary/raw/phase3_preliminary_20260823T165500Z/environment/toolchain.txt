@@ -1,0 +1,13 @@
+run_id=phase3_preliminary_20260823T165500Z
+started_utc=2026-08-23T16:58:14Z
+host_uname=Linux enics-h100 6.8.0-117-generic #117-Ubuntu SMP PREEMPT_DYNAMIC Tue May  5 19:26:24 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+compiler=g++ (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0
+scons=SCons by Steven Knight et al.:
+build-essential	12.8ubuntu1.1
+g++	4:9.3.0-1ubuntu2
+gcc	4:9.3.0-1ubuntu2
+googletest	1.10.0-2
+libc6-dev:amd64	2.31-0ubuntu9.18
+libgtest-dev:amd64	1.10.0-2
+scons	3.1.2-2
+finished_utc=2026-08-23T17:10:17Z

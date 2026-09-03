@@ -109,6 +109,15 @@ x-axis is layer number, the y-axis is the per-layer bit-width, and each line is
 a minimum bit threshold. The lowest threshold is plotted last as a solid black
 line so it stays visually in front; the other thresholds are dashed.
 
+With `--bit_kind all --combined_plot`, the command also writes
+`layer_shared_bits_cache_*.json` beside each combined PNG. Each JSON file
+contains the ordered layers, the exact shared bit-width curve for every
+threshold, and the corresponding total cycle counts.
+
+Adding `--transfer_budget` instead writes
+`layer_transfer_budget_cache_*_combined.json`, containing each layer's
+continuous break-even bit budget and equivalent element throughput.
+
 ### Options:
 - `--model_name`: Model name (e.g. `resnet18`) or path to a YAML file containing a list of models.
 - `--bandwidth`: Memory bandwidth in bytes/cycle (default: `1.0`).
