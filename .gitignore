@@ -50,3 +50,13 @@ paper_draft/
 **/.pylibs
 # Bandwidth-aware descent experiment outputs (regenerable)
 runspace/experiments/bandwidth_aware_quant/results_descent/
+
+# Heavy files purged from git history (kept on disk, too large for GitHub)
+**/node_modules/
+/runspace/experiments/pimsimulator_add_diagnostic/provenance/github_api/pr_29.diff
+/runspace/experiments/pseudo_mse/pseudo_mse_hw_vectors.csv
+/runspace/experiments/pseudo_mse/pseudo_mse_hw_vectors.txt
+/runspace/experiments/pseudo_mse2/pseudo_mse2.csv
+/runspace/experiments/pseudo_mse3/pseudo_mse3_compare.csv
+/runspace/experiments/pimsimulator_phase3_preliminary/raw/phase3_preliminary_20260823T165500Z/traces/conv_layer4_0_conv2/stdout.txt.gz
+/runspace/experiments/pimsimulator_feasibility/dependencies/
